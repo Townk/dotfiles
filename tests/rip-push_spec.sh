@@ -125,11 +125,17 @@ EOF
     The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist
   End
 
+  # Goes through the REAL bin (not a bare function call): executable_rip-
+  # push sources rip.zsh under `set -eu -o pipefail`, and rip::push_worker's
+  # own rsync-into-a-loop pipeline has the identical shape as
+  # rip::pipeline_worker's (see that suite's regression-guard comment) — a
+  # bare function call never exercises the outer errexit that used to skip
+  # this function's rc-capture/cleanup.
   It 'worker propagates rsync failure'
     mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
     printf '#!/bin/sh\nexit 23\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-push" --worker music
     The status should equal 23
     The stderr should include "rip"
     The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist

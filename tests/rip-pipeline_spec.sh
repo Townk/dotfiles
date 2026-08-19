@@ -42,6 +42,8 @@ case "$*" in *-rcn*) exit "${RIP_FAKE_VERIFY_RC:-0}" ;; *) exit "${RIP_FAKE_RSYN
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    # the bins under test must source the SOURCE-TREE lib, not ~/.local/lib
+    export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
   }
   cleanup() { rm -rf "$RIP_SANDBOX"; }
   BeforeEach 'setup'
@@ -70,13 +72,23 @@ EOF
     The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
   End
 
-  It 'encode failure keeps the intermediate and skips the push'
+  # Goes through the REAL bin (not a bare function call): executable_rip-
+  # pipeline sources rip.zsh under `set -eu -o pipefail`, and a bare
+  # HandBrakeCLI-into-a-loop pipeline's non-zero status under pipefail used
+  # to trigger errexit BEFORE rip::pipeline_worker's own rc-capture/cleanup
+  # ever ran — skipping the rm/rmdir/log_error entirely and leaving an
+  # orphaned movies/<Title>/ dir behind. A bare function call (no outer
+  # set -e) never exercised that failure mode, so it slipped past the unit
+  # suite once already; this is the regression guard for it.
+  It 'encode failure keeps the intermediate, skips the push, and leaves no orphan dir'
     export RIP_FAKE_HB_RC=1
-    When run zsh -c "source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
+      --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
     The status should equal 1
     The stderr should include "encode failed"
     The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should not be exist
+    The path "$RIP_STAGING_ROOT/movies/A Movie (2001)" should not be exist
   End
 
   It 'verify failure keeps intermediate and encode'

@@ -75,6 +75,15 @@ rip::push_enqueue() {
 # cantina with live progress, then (Task 3) verify and clean. Exit code is
 # rsync's own; on ANY non-zero, nothing local is touched.
 rip::push_worker() {
+  # The real rip-push bin sources this under `set -eu -o pipefail`; a bare
+  # rsync-into-a-loop pipeline's non-zero status would trigger errexit
+  # BEFORE the next line (`local rc=$pipestatus[1]`) ever runs, skipping
+  # this function's own rc-capture/cleanup entirely (live-verified:
+  # rip::pipeline_worker's twin bug left an orphaned output dir and no
+  # error log). localoptions scopes the override to this function only —
+  # the job.zsh precedent (job::watch's `setopt localoptions noerrexit`
+  # for the same class of problem).
+  setopt localoptions noerrexit nopipefail
   local type="$1"
   rip::_check_type "$type" || return 2
   local src dest rsync_bin="${RIP_RSYNC_BIN:-rsync}"
@@ -159,6 +168,11 @@ rip::_check_title() {
 # re-encode); full success → rm intermediate (push_worker already
 # removed the verified encode).
 rip::pipeline_worker() {
+  # See rip::push_worker's identical comment: the real rip-pipeline bin
+  # sources this under `set -eu -o pipefail`, and this function's own
+  # HandBrakeCLI pipeline needs to own its error handling (rc capture +
+  # cleanup) regardless of the caller's options.
+  setopt localoptions noerrexit nopipefail
   local input="$1" title="$2"
   rip::_check_title "$title" || return 2
   [ -f "$input" ] || { log_error "rip: no such input: $input"; return 1 }
