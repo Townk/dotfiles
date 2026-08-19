@@ -184,6 +184,25 @@ SH
     The stdout should equal ''
   End
 
+  # --- the enqueued command must not re-enqueue (fork-bomb regression) ------
+  # Phase 1.5 made backgrounding the DEFAULT. The enqueued command was
+  # `share send …` with no mode flag, so when the job ran it, dispatch_send saw
+  # no preference, found pueue available, and enqueued ANOTHER job — each
+  # generation appending one more --secret-file and minting one more phrase.
+  # An infinite fork bomb that fired a notification per round. Observed live:
+  # 50 job dirs, 115 orphaned secret files, a command line dozens of arguments
+  # long.
+  #
+  # NOTHING IN THE SUITE COULD CATCH IT: the fake pueue records the enqueued
+  # command and never runs it, so the recursion was impossible by construction.
+  # The second example below closes that hole by EXECUTING what was recorded.
+
+  It 'enqueues a command that will not background again'
+    share::send_background --store "$SB/Report.pdf" >/dev/null 2>&1
+    When call grep -o 'share send --foreground' "$SB/pueue-calls"
+    The output should equal 'share send --foreground'
+  End
+
   # --- --for-face (phase 3 F3) ----------------------------------------------
   # The parent spec's Ctrl-S rule is emphatic: "the clipboard is never modified —
   # a clipboard entry is a file clipboard and stays one". Phase 1.5 then made

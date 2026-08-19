@@ -231,6 +231,22 @@ SH
     The output should not include 'd.example.com/s/abc'
   End
 
+  # --- the fork-bomb regression (phase 1.5) -------------------------------
+  # Backgrounding became the DEFAULT, and share::send_background enqueued
+  # `share send …` with no mode flag. When the job ran it, dispatch_send saw no
+  # preference, found pueue available, and enqueued ANOTHER job — each round
+  # appending a --secret-file, minting a phrase and firing a notification.
+  # Observed live: 50 job dirs, 115 orphaned secret files.
+  #
+  # This asserts the property that stops it: --foreground enqueues NOTHING.
+  # Tested through the CLI subprocess, which inherits this spec's exported
+  # fakes and therefore cannot reach the live daemon.
+  It 'enqueues nothing at all when told to run in the foreground'
+    "$SHARE_BIN" send --foreground --store "$SB/Report.pdf" >/dev/null 2>&1 || :
+    When call test -s "$SB/pueue-calls"
+    The status should be failure
+  End
+
   # --- --for-face through the CLI (the path a face actually uses) ----------
   # FOUND IN LIVE TESTING. --for-face was tested at the LIBRARY level only, and
   # the CLI — the only path pick-clipboard uses — never learned about it. It

@@ -1254,9 +1254,23 @@ share::send_background() {
   local -a modal=()
   (( watch )) && modal=(--modal)
   local jid
+  # --foreground on the ENQUEUED command is load-bearing, not tidiness.
+  #
+  # Phase 1.5 made backgrounding the DEFAULT. Without this flag the job runs
+  # `share send …`, dispatch_send sees no preference, finds pueue available,
+  # and enqueues ANOTHER job — which does the same. Each generation appends one
+  # more --secret-file to the command and mints one more phrase, so it is an
+  # infinite fork bomb that also fires a notification per round. Observed live:
+  # 50 job dirs, 115 orphaned secret files, a command line dozens of
+  # --secret-file arguments long.
+  #
+  # No test caught it because the fake pueue used throughout the suite RECORDS
+  # the enqueued command and never executes it — so the recursion could not
+  # happen in a test by construction. The receive half (share::get_background)
+  # already passed --foreground; the send half did not.
   jid="$(job::start "${modal[@]}" \
     --group "$SHARE_JOB_GROUP" --title "$title" --icon "$SHARE_JOB_ICON" \
-    -- share send "${extra[@]}" "${send_args[@]}")" || return 1
+    -- share send --foreground "${extra[@]}" "${send_args[@]}")" || return 1
   # Under --for-face the line has already gone to stdout and the id would
   # corrupt it; the job is still in the HUD and the statusbar either way.
   (( for_face )) || print -r -- "$jid"
