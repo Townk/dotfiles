@@ -156,6 +156,17 @@ cask 'zoom'                         # Meetings
 # Media ripping (spec: chezmoi 2026-08-19-rip-push-design.md; server half
 # is the fleet's cantina). GUI apps do the human-judgment steps; the
 # handbrake FORMULA provides HandBrakeCLI for the automated encode.
+#
+# WARNING: `makemkv` and `xld` are both Homebrew-deprecated (fail the
+# macOS Gatekeeper check) and slated to be DISABLED 2026-09-01 — after
+# that, `brew bundle` against this file will hard-fail on these two lines
+# with no further explanation. When that happens: download MakeMKV
+# directly from https://www.makemkv.com/ and XLD from its official site
+# (https://tmkk.undo.jp/xld/index_e.html), then remove/comment the two
+# cask lines below so `brew bundle` stops trying them.
+# As of this writing, `makemkv`'s cask install is also separately blocked
+# by a makemkv.com outage (Cloudflare 525 on the download URL) — unrelated
+# to the Gatekeeper deprecation above; retry once the site recovers.
 cask 'makemkv'                      # DVD rip (title selection stays human)
 cask 'handbrake-app'                # Encoder GUI (manual fallback path)
 brew 'handbrake'                    # HandBrakeCLI — the pipeline's encoder
