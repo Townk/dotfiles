@@ -29,6 +29,13 @@ out=""
 prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
 [ -n "${RIP_FAKE_HB_RC:-}" ] && exit "$RIP_FAKE_HB_RC"
+# slow mode: lay down a PARTIAL output, then hang — the shape a cancel
+# interrupts (a real x265 encode writes the container as it goes).
+if [ -n "${RIP_FAKE_HB_SLEEP:-}" ]; then
+  printf 'partial' > "$out"
+  sleep "$RIP_FAKE_HB_SLEEP"
+  exit 0
+fi
 printf 'Encoding: task 1 of 1, 42.50 %%\r'
 printf 'Encoding: task 1 of 1, 100.00 %%\n'
 printf 'encoded' > "$out"
@@ -38,12 +45,31 @@ EOF
     export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
     cat > "$RIP_SANDBOX/rsync" <<'EOF'
 #!/bin/sh
-case "$*" in *-rcn*) exit "${RIP_FAKE_VERIFY_RC:-0}" ;; *) exit "${RIP_FAKE_RSYNC_RC:-0}" ;; esac
+case "$*" in
+  *-rcn*) exit "${RIP_FAKE_VERIFY_RC:-0}" ;;
+  *) [ -n "${RIP_FAKE_RSYNC_SLEEP:-}" ] && sleep "$RIP_FAKE_RSYNC_SLEEP"
+     exit "${RIP_FAKE_RSYNC_RC:-0}" ;;
+esac
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
     # the bins under test must source the SOURCE-TREE lib, not ~/.local/lib
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+    # cancel-drive — reproduce `pueue kill` faithfully: pueue signals the
+    # task's whole PROCESS GROUP, so the encoder dies alongside the worker
+    # and the worker's TERM trap gets to run. macOS ships no setsid(1), and
+    # `setopt monitor` is refused in a non-interactive shell without a tty,
+    # so perl's POSIX::setsid makes the child a group leader we can `kill --`.
+    cat > "$RIP_SANDBOX/cancel-drive.zsh" <<'EOF'
+#!/usr/bin/env zsh
+perl -e 'use POSIX; POSIX::setsid(); exec @ARGV or die' "$@" &
+pid=$!
+sleep 2
+kill -TERM -$pid 2>/dev/null
+wait $pid
+exit $?
+EOF
+    chmod +x "$RIP_SANDBOX/cancel-drive.zsh"
   }
   cleanup() { rm -rf "$RIP_SANDBOX"; }
   BeforeEach 'setup'
@@ -89,6 +115,43 @@ EOF
     The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should not be exist
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)" should not be exist
+  End
+
+  # Cancelling `rip: <title>` from the HUD is `pueue kill` → SIGTERM to the
+  # task's process group, which kills the worker where it stands — mid-encode,
+  # the cleanup lines below the pipeline never reach. Live-verified: that left
+  # a PARTIAL movies/<Title>/<Title>.mkv on disk, and a later manual
+  # `rip-push movies` would rsync that corrupt file to the server and then
+  # verified-DELETE the local copy. Only the ENCODE stage needs this guard:
+  # a cancel during the push is already safe (rsync --partial resumes, and the
+  # verify gate refuses to delete anything until a checksum pass is clean), and
+  # by then the encode is complete rather than partial — the spec's cleanup
+  # rules say a completed encode is kept for re-push.
+  It 'cancel mid-encode removes the partial encode and keeps the intermediate'
+    export RIP_FAKE_HB_SLEEP=30
+    When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
+      zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
+      --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
+    The status should equal 130
+    The stderr should include "cancelled"
+    The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should not be exist
+    The path "$RIP_STAGING_ROOT/movies/A Movie (2001)" should not be exist
+    The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
+  End
+
+  # The other half of the contract: the trap is disarmed the moment the
+  # encode is known good, so a cancel during the PUSH keeps the finished
+  # encode (and the intermediate) for a plain `rip-push movies` retry — no
+  # re-encode. Guards against a future edit widening the trap's scope and
+  # silently throwing away an hour of x265.
+  It 'cancel mid-push keeps the finished encode and the intermediate'
+    export RIP_FAKE_RSYNC_SLEEP=30
+    When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
+      zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
+      --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
+    The status should equal 143
+    The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should be exist
+    The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
   End
 
   It 'verify failure keeps intermediate and encode'
