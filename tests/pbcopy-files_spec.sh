@@ -81,6 +81,37 @@ Describe 'copy: file mode at the machine'
     The status should be success
   End
 
+  # 6c: the sitting machine's pointer push. With a session open TO a peer,
+  # the 2491 LocalForward answers — here stood in by the recorder's own
+  # public port — and a local file copy mirrors its manifest there,
+  # pointer-only, after the local clip.set.files. The recorder plays both
+  # machines (same caveat as the over-SSH Describe below); the script is
+  # re-read per connection, so one `ok` answers both exchanges.
+  It 'pushes the pointer to the visited peer after the local set'
+    f1="$SHELLSPEC_TMPBASE/vis.txt"; touch "$f1"
+    visited() {
+      recob_script 'ok'
+      CLIPBOARD_BRIDGE_VISITED_PORT="$CLIPBOARD_BRIDGE_PORT" "$CLIENT" copy "$f1"
+      printf 'exit=%s|ops=%s|%s,%s|host=%s|' "$?" "$(recob_count)" \
+        "$(recob_endpoint 1)" "$(recob_endpoint 2)" "$(recob_field 2 host)"
+      recob_ops | tr '\n' ','
+    }
+    When call visited
+    The output should equal \
+      "exit=0|ops=2|trusted,public|host=recob-spec-host|clip.set.files,store.persist.files,"
+  End
+
+  It 'stays purely local when nothing listens on the visited port'
+    f1="$SHELLSPEC_TMPBASE/solo.txt"; touch "$f1"
+    solo() {
+      "$CLIENT" copy "$f1"
+      printf 'exit=%s|ops=%s|' "$?" "$(recob_count)"
+      recob_ops | tr '\n' ','
+    }
+    When call solo
+    The output should equal "exit=0|ops=1|clip.set.files,"
+  End
+
   # No local-tool fallback exists for a file clip, so the reply is the whole
   # verdict: a refusing bridge must fail the command rather than be shrugged off.
   It 'fails loudly (exit 1, message to stderr) when the bridge answers with an error'

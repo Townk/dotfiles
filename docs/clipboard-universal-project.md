@@ -1444,6 +1444,44 @@ offline"). A *refused* tunnel degrades to the own clipboard; any slower
 failure is still loud. Clock skew between machines remains the documented
 accepted hazard.
 
+### 22.10 Phase 6c — the visited direction: pointer push at copy time
+
+> **The ruling, refined:** what stays pull-only sitting→remote is the BYTES.
+> Metadata and pointers may push — which is exactly what the other direction
+> has always done. 6c mirrors it, so Cmd+V in the visited machine's Finder is
+> native in both directions.
+
+- **Port convention completed:** 2489 my own bridge, 2490 the machine
+  visiting me (`RemoteForward`), **2491 the machine I am visiting** — a
+  `LocalForward 127.0.0.1:2491 127.0.0.1:2489` now rendered into the same
+  `config.d` clipboard block by `system-onboard`. Same single-peer
+  assumption as 2490. (`cli::visited_port`, env
+  `CLIPBOARD_BRIDGE_VISITED_PORT`; the spec suite pins it CLOSED in
+  `recob_start` so tests can never push at a live session.)
+- **Credential, mirrored:** `ssh-prepare-connection` now also FETCHES the
+  remote's `accepted-token` back into this machine's
+  `tunnel-tokens/<peer-host>` (umask-first, 600), so pushes on 2491 can
+  answer the visited daemon's challenge. Existing token-offering client
+  code needed no change.
+- **Two push sites, both send-side; the receiving daemon is unchanged:**
+  - `pbcopy <paths>` at the machine (`system-clip`, the yazi path): after
+    the trusted `clip.set.files`, best-effort `store.persist.files{host,
+    paths}` on 2491 — the visited daemon's existing §23.3 mount enrichment
+    turns it into `mnt/<us>/…` file URLs on its pasteboard.
+  - **the capture loop** (`recobd`, Finder Cmd+C and every other native
+    copy): a freshly STORED local capture fires `visited::push_capture` —
+    text as `clip.set{origin_host}` (sets the visited pasteboard + records
+    provenance in one op), files as `store.persist.files`. Transport is a
+    spawned `system-bridge call` (the clipboard-mount shell-out pattern;
+    client auth reused verbatim), behind a 250 ms dial so the no-session
+    case costs one refused connect and no process. Loop-safe by
+    construction: `capture::decide` refuses remote-origin pasteboard
+    contents, and the visited daemon's tracker suppresses its own write's
+    echo.
+- **Best-effort everywhere:** no forward / refused / dead token → the local
+  copy already succeeded and nothing else happens. The 6b pull surfaces
+  (pickers, newer-wins paste) remain the fallback whenever 2491 is down.
+
 ---
 
 ## 23. Remote-copy provenance

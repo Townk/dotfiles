@@ -120,6 +120,11 @@ recob_start() {
   # the pid collides with the previous example's daemon if it outlived its
   # kill. Draw one at random and retry on a bind failure, so a collision costs a
   # retry rather than an unexplained red.
+  # 6c sandboxing: the visited-direction port defaults CLOSED (nothing binds
+  # :1) so no test's copy can ever pointer-push to a REAL peer session that
+  # happens to be live on the machine running the suite. Examples that test
+  # the push point this at the recorder's own port explicitly.
+  export CLIPBOARD_BRIDGE_VISITED_PORT=1
   _attempt=0
   while [ "$_attempt" -lt 8 ]; do
     _attempt=$((_attempt + 1))
