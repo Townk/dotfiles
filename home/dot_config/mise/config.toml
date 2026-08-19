@@ -26,7 +26,19 @@ cargo-binstall = "latest"  # prebuilt-binary installer; lets the Cargofile worke
 # croc — the transfer engine behind `share`. mise (aqua:schollz/croc) rather
 # than Homebrew so every profile including Linux gets the same static binary
 # from one declaration; the upstream release is a single CGO-free executable.
-croc = "latest"
+#
+# PINNED, NOT "latest", and this one matters more than most. croc chooses its
+# public relay by HASHING THE CODE PHRASE — "code maps to public relay index N"
+# — and the pool and the mapping differ between versions. Two machines on
+# different versions therefore pick DIFFERENT relays from the same phrase, land
+# in rooms on different servers, and hang forever at "securing channel..." with
+# no error on either side.
+#
+# That is not hypothetical: `latest` had resolved to 11.1.1 on the mini, 11.1.2
+# in the drop container and something newer on the laptop, and a mini→laptop
+# transfer stalled exactly there. "latest" means "whatever was current when
+# THIS machine last installed", which is drift by construction.
+croc = "11.2.1"
 # cmake is OS-specific — see conf.d/cmake.toml.tmpl (source build on macOS,
 # prebuilt binary elsewhere).
 just = "latest"
