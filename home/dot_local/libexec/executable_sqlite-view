@@ -27,6 +27,12 @@ from urllib.parse import quote
 # untinted config copy. THEME_PYLIB_DIR overrides the lib dir (the test suite
 # points it at the repo copy). Read at import, so a theme override is picked up
 # on the next invocation.
+# Never drop __pycache__ next to the deployed module: ~/.local/lib is
+# chezmoi-managed and .chezmoiremove sweeps the cache dir, so every preview
+# regenerating it made every later `chezmoi apply` stop and prompt (bit on
+# two machines, 2026-08-18). Bytecode caching buys nothing for a one-shot
+# viewer anyway.
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ.get("THEME_PYLIB_DIR", os.path.expanduser("~/.local/lib")))
 from theme_palette import palette_type
 
