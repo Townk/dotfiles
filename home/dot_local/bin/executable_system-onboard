@@ -259,6 +259,10 @@ readonly CLIPBOARD_LOCAL_PORT=2489
 # 6c: the LocalForward counterpart — the machine I'm VISITING, reachable from
 # here on :2491 so copies made on this machine push their pointer at copy time.
 readonly CLIPBOARD_VISITED_PORT=2491
+# 6c part 2: the visiting machine's read-only file plane (clipboard-file-serve
+# on ITS loopback :2492), forwarded to the visited machine so Finder paste of
+# our file clips streams bytes lazily through a reverse mount.
+readonly CLIPBOARD_FILES_PORT=2492
 
 # gpg-agent forward — rendered when `prepare` implies gpg (contains `gpg`, or is
 # `all`). The remote bind path carries the remote uid + gpgconf's homedir hash,
@@ -460,6 +464,9 @@ write_ssh_conf() {
       print -r -- "    # …and the visited direction (6c): a route to $alias's own bridge, so"
       print -r -- "    # copies made HERE push their pointer there at copy time (Cmd+V native)."
       print -r -- "    LocalForward 127.0.0.1:$CLIPBOARD_VISITED_PORT 127.0.0.1:$CLIPBOARD_LOCAL_PORT"
+      print -r -- "    # …and this machine's read-only file plane (6c part 2), so $alias can"
+      print -r -- "    # reverse-mount our file clips and Finder-paste them natively."
+      print -r -- "    RemoteForward 127.0.0.1:$CLIPBOARD_FILES_PORT 127.0.0.1:$CLIPBOARD_FILES_PORT"
     fi
     if ((want_gpg)); then
       print -r -- "    # gpg agent-socket forward — the remote bind path (remote uid + gpgconf"

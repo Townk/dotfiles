@@ -325,8 +325,29 @@ cm::ensure() {
   fi
   mkdir -p "$mp" 2>/dev/null || { print -u2 -- "clipboard-mount: cannot create $mp"; return 1 }
 
+  # Backend choice (6c part 2). A host that VISITS us has no ssh route from
+  # here — but it pushed a mount-serve token (ssh-prepare-connection), and
+  # its read-only file plane rides the session's RemoteForward at loopback
+  # :2492 (clipboard-file-serve). Token present → mount THAT directly; the
+  # token is also the identity proof: if a different visitor currently holds
+  # the forward, its serve rejects this token and the mount fails closed.
+  # No token → the original external-ssh backend (a host WE can reach).
+  local mtoken="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/mount-tokens/$host"
+  local backend
+  if [[ -s "$mtoken" ]]; then
+    local vport="${CLIPBOARD_FILE_SERVE_PORT:-2492}" opass
+    # rclone connection-string passwords must be obscured; the output is
+    # base64-shaped (no quotes), so the single-quoted value below is safe.
+    opass=$("$rclone_bin" obscure "$(<"$mtoken")" 2>/dev/null) || opass=""
+    [[ -n "$opass" ]] ||
+      { print -u2 -- "clipboard-mount: cannot obscure the mount token for '$host'"; return 1 }
+    backend=":sftp,host=127.0.0.1,port=${vport},user=recob,pass='${opass}':/"
+  else
+    backend=":sftp,ssh='ssh -o ControlPath=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 ${alias}':/"
+  fi
+
   if ! _SYNCREMOTE=1 "$rclone_bin" mount \
-      ":sftp,ssh='ssh -o ControlPath=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 ${alias}':/" \
+      "$backend" \
       "$mp" \
       --daemon --daemon-wait 5s --daemon-timeout 10s \
       --read-only --vfs-cache-mode off \

@@ -233,6 +233,26 @@ step_mount() {
     fi
   fi
 
+  # Mount-serve token push (6c part 2): the visited machine reverse-mounts
+  # OUR read-only file plane (clipboard-file-serve on loopback :2492, ridden
+  # by the fragment's RemoteForward), and its rclone must answer our serve's
+  # challenge -- so push the serve's dedicated token, keyed by our identity,
+  # with the tunnel-token discipline (umask before, chmod after). Fail-soft:
+  # no serve running here yet simply means no token file and no push.
+  local serve_token="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard/mount-serve-token"
+  if [[ -r "$serve_token" ]]; then
+    local serve_owner
+    serve_owner="$(scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null)"
+    if [[ "$serve_owner" == [A-Za-z0-9][A-Za-z0-9.-]# ]]; then
+      ssh -o ControlPath=none -o ClearAllForwardings=yes \
+        -o BatchMode=yes -o ConnectTimeout=5 "$target" \
+        "umask 077; d=\"\${XDG_STATE_HOME:-\$HOME/.local/state}/clipboard/mount-tokens\";
+         mkdir -p \"\$d\" && chmod 700 \"\$d\" &&
+         cat > \"\$d/${serve_owner}\" && chmod 600 \"\$d/${serve_owner}\"" \
+        < "$serve_token" >/dev/null 2>&1 &!
+    fi
+  fi
+
   # Credential FETCH (6c, the mirror of the push above): pointer pushes from
   # THIS machine to the one it is visiting dial the 2491 LocalForward, whose
   # far end is the remote's own public bridge -- which challenges with the

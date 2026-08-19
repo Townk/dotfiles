@@ -74,6 +74,27 @@ error_log_path = "~/.cache/clipboard-bridge/listener.log"
 # no sqlite3 binary is involved anymore.
 PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
 
+# clipboard-file-serve -- the visited-peer file plane (6c part 2): this
+# machine's files, read-only, over SFTP on loopback :2492 -- reachable from
+# another machine ONLY through the RemoteForward a live outgoing ssh session
+# carries. A machine we visit reverse-mounts it (clipboard-mount's
+# token-keyed backend) so Finder-pasting our file clips streams bytes lazily
+# at paste time. Credential: the dedicated mount-serve token the script
+# mints on first run and ssh-prepare-connection pushes per-connect.
+[clipboard-file-serve]
+description    = "read-only SFTP serve of this machine's files for visited peers' reverse mounts"
+cmd            = ["{{ .chezmoi.homeDir }}/.local/libexec/clipboard-file-serve"]
+keep_alive     = true
+run_at_load    = true
+log_path       = "~/.cache/clipboard-bridge/file-serve.log"
+error_log_path = "~/.cache/clipboard-bridge/file-serve.log"
+
+[clipboard-file-serve.env]
+# rclone resolves shim-first inside the script, but the shim dispatches via
+# mise, which needs a sane PATH; mirror clipboard-bridge's.
+PATH = "~/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin"
+
+
 # clipboard-mount-sweep — belt-and-braces reaper for clipboard peer mounts
 # (clipboard-mount spec §3.3): every 60s, force-unmount any rclone SFTP mount
 # under ~/.local/state/clipboard/mnt that stopped answering (peer asleep,

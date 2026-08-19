@@ -1,0 +1,61 @@
+#!/usr/bin/env zsh
+# clipboard-file-serve — the visited-peer file plane (6c part 2).
+#
+# Serves THIS machine's files read-only over SFTP on loopback :2492, so a
+# machine this one is VISITING can `clipboard-mount` them back through the
+# session's RemoteForward and Finder-paste file clips natively — bytes
+# streaming lazily at paste time, never staged. Published nowhere else:
+# loopback-only bind, and the only route to it from another machine is the
+# reverse forward that exists exactly as long as the user's own ssh session
+# does.
+#
+# Credential: a dedicated random token (NOT the clipboard tunnel token —
+# independently revocable: rotate this file or stop this service without
+# touching the clipboard plane). ssh-prepare-connection pushes it to each
+# visited machine as mount-tokens/<our-host>; the token doubles as identity
+# proof when two visitors race for one forward — the wrong machine's serve
+# rejects the other's token and the mount fails closed.
+#
+# Run as a launchd/systemd service (services.toml [clipboard-file-serve]).
+set -eu
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard"
+TOKEN_FILE="${CLIPBOARD_FILE_SERVE_TOKEN:-$STATE_DIR/mount-serve-token}"
+PORT="${CLIPBOARD_FILE_SERVE_PORT:-2492}"
+
+mkdir -p "$STATE_DIR"
+chmod 700 "$STATE_DIR" 2>/dev/null || :
+
+# First run mints the token: 64 hex chars, never world-readable for an
+# instant (umask before, chmod after — the tunnel-token discipline).
+if [[ ! -s "$TOKEN_FILE" ]]; then
+  (
+    umask 077
+    head -c 32 /dev/urandom | xxd -p | tr -d '\n' > "$TOKEN_FILE"
+  )
+  chmod 600 "$TOKEN_FILE"
+fi
+
+# rclone resolution: shim first, PATH second — the same rule and the same
+# reason as clipboard-mount (launchd's PATH has no mise shims; brew's rclone
+# build is fine for `serve`, but one resolution rule everywhere beats two).
+RCLONE_SHIM="${CLIPBOARD_MOUNT_RCLONE_SHIM:-$HOME/.local/share/mise/shims/rclone}"
+if [[ -x "$RCLONE_SHIM" ]]; then
+  rclone_bin="$RCLONE_SHIM"
+elif rclone_bin=$(command -v rclone 2>/dev/null); then
+  :
+else
+  print -u2 -- "clipboard-file-serve: rclone not installed (mise)"
+  exit 1
+fi
+
+# --read-only is the whole contract: a visited peer sees, never touches.
+# Serving / mirrors the forward direction's mount of the peer's / — the
+# manifests carry absolute paths. vfs flags stay default: `serve sftp` reads
+# straight off the local fs.
+export _SYNCREMOTE=1
+exec "$rclone_bin" serve sftp / \
+  --addr "127.0.0.1:$PORT" \
+  --user recob --pass "$(<"$TOKEN_FILE")" \
+  --read-only \
+  --log-level NOTICE

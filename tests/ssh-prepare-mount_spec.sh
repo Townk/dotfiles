@@ -30,7 +30,7 @@ Describe 'ssh-prepare-connection: mount step'
     CONF="$SHELLSPEC_TMPBASE/mini.conf"
     rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/ssh-calls" \
       "$SHELLSPEC_TMPBASE/ssh-stdin" "$SHELLSPEC_TMPBASE/ssh-token-stdin" \
-      "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin"
+      "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin"
     # The credential push (RECOB §9.2) fires only when this machine HAS a
     # token, so every example gets its own empty state dir: without this the
     # step's behavior here would depend on whether recobd had ever run on the
@@ -52,8 +52,8 @@ Describe 'ssh-prepare-connection: mount step'
     # step_mount makes three ssh calls now (identity, peer-term, credential),
     # so the stub keeps their stdin apart -- each push is recognizable by its
     # remote command, and every example's assertions stay unambiguous.
-    printf '#!/bin/sh\ncase "$*" in *tunnel-tokens*) cat > "%s/ssh-token-stdin" ;; *accepted-token*) printf %%s bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;; *rm\\ -f*peer-term*) : ;; *peer-term*) cat > "%s/ssh-peerterm-stdin" ;; *) cat > "%s/ssh-stdin" ;; esac\necho "$*" >> "%s/ssh-calls"\n' \
-      "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
+    printf '#!/bin/sh\ncase "$*" in *mount-tokens*) cat > "%s/ssh-mount-token-stdin" ;; *tunnel-tokens*) cat > "%s/ssh-token-stdin" ;; *accepted-token*) printf %%s bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ;; *rm\\ -f*peer-term*) : ;; *peer-term*) cat > "%s/ssh-peerterm-stdin" ;; *) cat > "%s/ssh-stdin" ;; esac\necho "$*" >> "%s/ssh-calls"\n' \
+      "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" > "$STUBS/ssh"
     # The peer-term push reads the REAL terminal's fingerprints; the suite
     # may itself run inside one, so every example starts undetectable and
     # the ones that test detection set exactly what they mean.
@@ -114,6 +114,28 @@ Describe 'ssh-prepare-connection: mount step'
   no_fetch_call() {
     grep -c 'accepted-token' "$SHELLSPEC_TMPBASE/ssh-calls" 2>/dev/null || echo 0
   }
+
+  # 6c part 2: the mount-serve token push -- the visited machine's reverse
+  # mount answers OUR serve's challenge with this token, so step_mount ships
+  # it per-connect, keyed by our identity, mode-600 discipline remote-side.
+  It 'pushes the mount-serve token to the visited machine when the serve has minted one'
+    write_conf thiago-mac-mini 1
+    printf '%s' "$(printf 'c%.0s' $(seq 64))" > "$XDG_STATE_HOME/clipboard/mount-serve-token"
+    wait_mount_token() {
+      run_and_wait
+      i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+      cat "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin" 2>/dev/null
+    }
+    When call wait_mount_token
+    The output should include 'cccccccc'
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include 'mount-tokens'
+  End
+
+  It 'skips the mount-serve push silently when no serve token exists'
+    write_conf thiago-mac-mini 1
+    When call run_and_wait
+    The path "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin" should not be exist
+  End
 
   It 'the credential fetch also respects the unsafe-hostname gate'
     write_conf "../evil" 1

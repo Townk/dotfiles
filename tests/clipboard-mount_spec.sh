@@ -331,6 +331,7 @@ Describe 'clipboard-mount: ensure'
     # <remote> <mountpoint> ...).
     cat > "$STUBS/rclone" <<STUB
 #!/bin/sh
+case "\$1" in obscure) printf 'OBSC-%s' "\$2"; exit 0 ;; esac
 printf '%s\n' "\$@" > "$SHELLSPEC_TMPBASE/rclone-argv"
 printf '%s\n' "\${_SYNCREMOTE:-}" > "$SHELLSPEC_TMPBASE/rclone-env"
 echo "mini-clip on \$3 (macfuse, nodev)" >> "$SHELLSPEC_TMPBASE/mount-table"
@@ -358,6 +359,20 @@ STUB
     The status should be success
     The line 2 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal ":sftp,ssh='ssh -o ControlPath=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 mini':/"
     The line 3 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal "$MNT_ROOT/peer-mini"
+  End
+
+  # 6c part 2: a host that VISITS us -- no ssh route, but its mount-serve
+  # token was pushed and its file plane rides the session forward at
+  # loopback :2492. Token present -> the direct-sftp backend, obscured pass
+  # (the stub's `obscure` arm is the deterministic stand-in).
+  It 'reverse-mounts a visiting host via its mount-serve token'
+    mkdir -p "$XDG_STATE_HOME/clipboard/mount-tokens"
+    printf '%s' "visitor-token" > "$XDG_STATE_HOME/clipboard/mount-tokens/lap-top"
+    When run command zsh -f "$CM" ensure lap-top
+    The status should be success
+    The line 2 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal ":sftp,host=127.0.0.1,port=2492,user=recob,pass='OBSC-visitor-token':/"
+    The line 3 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal "$MNT_ROOT/lap-top"
+    The contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should include "--read-only"
   End
 
   It 'is a no-op when already healthy (rclone not re-invoked)'
@@ -505,5 +520,55 @@ STUB
     The status should be failure
     The stderr should include "failed"
     The path "$MNT_ROOT/peer-mini" should not be exist
+  End
+End
+
+# --- clipboard-file-serve (6c part 2): the sitting machine's file plane -----
+Describe 'clipboard-file-serve'
+  SRV="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-file-serve"
+
+  setup() {
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/serve-state"
+    rm -rf "$XDG_STATE_HOME"
+    SSTUBS="$SHELLSPEC_TMPBASE/serve-bin"; mkdir -p "$SSTUBS"
+    rm -f "$SHELLSPEC_TMPBASE/serve-argv"
+    cat > "$SSTUBS/rclone" <<STUB
+#!/bin/sh
+printf '%s\n' "\$@" > "$SHELLSPEC_TMPBASE/serve-argv"
+STUB
+    chmod +x "$SSTUBS/rclone"
+    # The script resolves shim-first; point the shim at the recorder so no
+    # real rclone (or mise state) is ever involved.
+    export CLIPBOARD_MOUNT_RCLONE_SHIM="$SSTUBS/rclone"
+  }
+  BeforeEach 'setup'
+
+  It 'mints a 600-mode 64-hex token once and serves it read-only on loopback'
+    minted() {
+      zsh -f "$SRV" || return 1
+      tok="$XDG_STATE_HOME/clipboard/mount-serve-token"
+      printf '%s|%s|' "$(wc -c < "$tok" | tr -d ' ')" \
+        "$(stat -f %Lp "$tok" 2>/dev/null || stat -c %a "$tok" 2>/dev/null)"
+      grep -c "$(cat "$tok")" "$SHELLSPEC_TMPBASE/serve-argv"
+    }
+    When call minted
+    The output should equal '64|600|1'
+    The line 1 of contents of file "$SHELLSPEC_TMPBASE/serve-argv" should equal "serve"
+    The line 2 of contents of file "$SHELLSPEC_TMPBASE/serve-argv" should equal "sftp"
+    The line 3 of contents of file "$SHELLSPEC_TMPBASE/serve-argv" should equal "/"
+    The contents of file "$SHELLSPEC_TMPBASE/serve-argv" should include "127.0.0.1:2492"
+    The contents of file "$SHELLSPEC_TMPBASE/serve-argv" should include "recob"
+    The contents of file "$SHELLSPEC_TMPBASE/serve-argv" should include "--read-only"
+  End
+
+  It 'reuses an existing token verbatim across restarts'
+    mkdir -p "$XDG_STATE_HOME/clipboard"
+    printf '%s' "keepme-token" > "$XDG_STATE_HOME/clipboard/mount-serve-token"
+    reused() {
+      zsh -f "$SRV" >/dev/null 2>&1
+      grep -c 'keepme-token' "$SHELLSPEC_TMPBASE/serve-argv"
+    }
+    When call reused
+    The output should equal '1'
   End
 End
