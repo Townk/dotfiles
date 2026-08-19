@@ -1,21 +1,21 @@
 [[plugin.deps]]
 use = "yazi-rs/plugins:full-border"
-rev = "6f26ae0"
+rev = "213f300"
 hash = "f281261ff04ad7ec867c3f802a50835f"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:toggle-pane"
-rev = "6f26ae0"
+rev = "213f300"
 hash = "5b2fbef7d1513ce38ff72623a071a5e"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:git"
-rev = "6f26ae0"
+rev = "213f300"
 hash = "ce345e7e8baed03a2561b314fa85e59a"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:mactag"
-rev = "6f26ae0"
+rev = "213f300"
 hash = "34e3e12060f833cc21446f23a7ced8d1"
 
 [[plugin.deps]]
@@ -30,12 +30,12 @@ hash = "3c66d95bf63fa16178e98967fbae9429"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"
-rev = "6f26ae0"
+rev = "213f300"
 hash = "45a533508a9840cc5a10cf6129f63e6a"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:types"
-rev = "6f26ae0"
+rev = "213f300"
 hash = "ff056b5acd05d915dc3a3936cb0cfd3e"
 
 [[plugin.deps]]
