@@ -1,0 +1,36 @@
+#!/usr/bin/env zsh
+# vnc-companion-resolve <screen-sharing-window-title>
+#
+# Maps a Screen Sharing window title to the ssh alias of a bootstrapped
+# machine, so the VNC companion (hammerspoon) can raise the same ssh carrier
+# an interactive session would. The truth source is the onboarded fragments'
+# `Host` lines (alias + peer hostname + .local form, written by
+# system-onboard): if any of those names appears in the title
+# (case-insensitive), the FIRST token — the canonical alias, the one the
+# Match hook and forwards are keyed to — is printed. rc 1 = not one of ours
+# (an ad-hoc VNC target gets no companion, silently).
+set -eu
+
+title="${1:-}"
+[[ -n "$title" ]] || exit 1
+title="${title:l}"
+
+confdir="${VNC_COMPANION_CONF_DIR:-$HOME/.ssh/config.d}"
+[[ -d "$confdir" ]] || exit 1
+
+local conf line alias name
+for conf in "$confdir"/*.conf(N); do
+  while IFS= read -r line; do
+    [[ "$line" == Host\ * ]] || continue
+    local -a names=(${=line})
+    alias="${names[2]:-}"
+    [[ -n "$alias" ]] || continue
+    for name in "${names[@]:1}"; do
+      if [[ "$title" == *"${name:l}"* ]]; then
+        print -r -- "$alias"
+        exit 0
+      fi
+    done
+  done < "$conf"
+done
+exit 1
