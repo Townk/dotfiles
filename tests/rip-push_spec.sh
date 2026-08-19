@@ -157,6 +157,39 @@ EOF
     The path "$RIP_STAGING_ROOT/music" should be exist
   End
 
+  # TOCTOU guard. The verify pass blesses the tree as the push found it, but
+  # the delete runs moments later. Anything that lands in that window — a
+  # track XLD finishes, or an encode the pipeline publishes while a hand-run
+  # `rip-push movies` is in flight, since heavy and transfer are separate
+  # groups that DO run concurrently — was never pushed, so deleting it would
+  # destroy the only digital copy. The fake drops exactly such a file in
+  # from its verify branch, i.e. after the transfer has already finished.
+  It 'keeps a file that lands after the push started'
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    export RIP_FAKE_LATE_FILE="$RIP_STAGING_ROOT/music/C/Late/02 Late.flac"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *-rcn*)
+    mkdir -p "$(dirname "$RIP_FAKE_LATE_FILE")"
+    printf 'late' > "$RIP_FAKE_LATE_FILE"
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # what the push actually covered is gone…
+    The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should not be exist
+    The path "$RIP_STAGING_ROOT/music/B" should not be exist
+    # …and the late arrival, with the directory holding it, survives
+    The path "$RIP_FAKE_LATE_FILE" should be exist
+    The path "$RIP_STAGING_ROOT/music/C/Late" should be exist
+  End
+
   It 'worker keeps everything when the verify pass finds differences'
     mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
     cat > "$RIP_SANDBOX/rsync" <<'EOF'

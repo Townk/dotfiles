@@ -91,9 +91,22 @@ rip::push_worker() {
   dest="$(rip::remote_base)/$type/"
   [ -d "$src" ] || { log_error "rip: no staging dir $src"; return 1 }
 
+  # Stamp the moment the transfer begins. The verify pass blesses the tree
+  # as the push found it, but the delete runs moments later — a track XLD
+  # finishes in that window, or an encode the pipeline publishes while a
+  # hand-run `rip-push movies` is in flight (heavy and transfer are separate
+  # groups and DO run concurrently), was never pushed and must not be
+  # deleted. _verify_and_clean removes only what is no newer than this.
+  # The marker lives in .work, a sibling of every pushed tree, so it is
+  # itself never shipped and never shows up in the verify diff.
+  local marker; marker="$(rip::staging_root)/.work/push-$type.stamp"
+  mkdir -p "${marker:h}" && touch -- "$marker" || {
+    log_error "rip: cannot stamp the push marker at $marker"; return 1
+  }
+
   rip::_progress 0 "pushing $type"
   local line pct file
-  "$rsync_bin" -a --partial --info=progress2,name1 "$src/" "$dest" \
+  "$rsync_bin" -a --partial --exclude=.DS_Store --info=progress2,name1 "$src/" "$dest" \
     | tr '\r' '\n' \
     | while IFS= read -r line; do
         case "$line" in
@@ -109,20 +122,24 @@ rip::push_worker() {
     log_error "rip: rsync failed (rc=$rc) for $type — keeping local files"
     return $rc
   fi
-  rip::_verify_and_clean "$type" "$src" "$dest"
+  rip::_verify_and_clean "$type" "$src" "$dest" "$marker"
 }
 
-# rip::_verify_and_clean <type> <src> <dest> — deleting the only digital
-# copy demands more than "rsync exited 0": a checksum dry-run must report
-# ZERO differences before anything local is removed. A difference (e.g. a
-# rip that landed mid-push) keeps EVERYTHING and fails the job — the next
-# run pushes it. Never uses --delete: the server never loses files
-# because staging emptied.
+# rip::_verify_and_clean <type> <src> <dest> <marker> — deleting the only
+# digital copy demands more than "rsync exited 0": a checksum dry-run must
+# report ZERO differences before anything local is removed. A difference
+# (e.g. a rip that landed mid-push) keeps EVERYTHING and fails the job —
+# the next run pushes it. Never uses --delete: the server never loses files
+# because staging emptied. <marker> is push_worker's start-of-transfer
+# stamp; nothing newer than it is ever deleted.
 rip::_verify_and_clean() {
-  local type="$1" src="$2" dest="$3"
+  local type="$1" src="$2" dest="$3" marker="$4"
   local rsync_bin="${RIP_RSYNC_BIN:-rsync}"
   local diffs
-  if ! diffs="$("$rsync_bin" -rcn --out-format='%n' "$src/" "$dest" 2>&1)"; then
+  # The verify must see exactly the tree the push shipped, so the two rsync
+  # calls have to agree on --exclude; otherwise the excluded files show up
+  # as differences and the clean never runs.
+  if ! diffs="$("$rsync_bin" -rcn --exclude=.DS_Store --out-format='%n' "$src/" "$dest" 2>&1)"; then
     log_error "rip: verify pass failed to run for $type — keeping local files"
     return 1
   fi
@@ -132,8 +149,27 @@ rip::_verify_and_clean() {
   fi
   print -r -- "rip: $type verified on cantina — cleaning staging"
   rip::_progress 100 "verified — cleaning $type staging"
-  find "$src" -type f -delete
-  find "$src" -mindepth 1 -type d -empty -delete
+  # Refuse to delete anything if the stamp is gone (a Hammerspoon reload
+  # sweeping .work mid-push would do it): without a reference point we
+  # cannot tell pushed files from ones that arrived since, and the
+  # doctrine's answer to "not sure" is always "keep it".
+  if [[ ! -f "$marker" ]]; then
+    log_error "rip: push marker missing for $type — keeping local files"
+    return 1
+  fi
+  # Snapshot the directories the push covered BEFORE removing any file:
+  # deleting a file bumps its parent's mtime, so after the delete every
+  # emptied directory would look newer than the marker and nothing would
+  # ever be pruned. Directories created since the push started (a brand
+  # new album dir XLD is still filling) are absent from this list and so
+  # survive even while momentarily empty.
+  local -a pushed_dirs
+  pushed_dirs=(${(f)"$(find "$src" -mindepth 1 -type d ! -newer "$marker" 2>/dev/null)"})
+  find "$src" -type f ! -newer "$marker" -delete
+  local d
+  for d in ${(Oa)pushed_dirs}; do          # deepest first
+    [[ -n "$d" ]] && rmdir -- "$d" 2>/dev/null
+  done
   return 0
 }
 
