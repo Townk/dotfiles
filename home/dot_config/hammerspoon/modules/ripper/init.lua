@@ -9,6 +9,10 @@
 --   * music/: XLD writes an album over minutes; any event just re-arms a
 --     quiet-period timer that fires `rip-push music` (incremental and
 --     skip-if-empty, so late or duplicate fires are harmless).
+--   * hs.pathwatcher only fires on new filesystem events, so a rip that
+--     finished while Hammerspoon was down (or reloading) would otherwise
+--     sit unnoticed forever: M.start() sweeps both trees once at startup
+--     to pick up whatever is already sitting there.
 
 local M = {}
 
@@ -91,6 +95,55 @@ local function considerMovie(path)
 	end)
 end
 
+local function armMusicTimer()
+	if musicTimer then
+		musicTimer:stop()
+	end
+	musicTimer = hs.timer.doAfter(MUSIC_QUIET_SECS, function()
+		enqueue(RIP_PUSH, { "music" }, "rip-push")
+	end)
+end
+
+-- hs.pathwatcher only sees events after it starts; sweep once at startup
+-- so a rip that finished while Hammerspoon was down/reloading isn't
+-- stranded. considerMovie already filters non-.mkv and zero-size entries,
+-- and the stability timer handles a file still mid-write.
+local function sweepIntermediate()
+	local iter, dir = hs.fs.dir(INTERMEDIATE)
+	if not iter then
+		return
+	end
+	local found = 0
+	for name in iter, dir do
+		if name ~= "." and name ~= ".." then
+			if name:match("%.mkv$") then
+				found = found + 1
+			end
+			considerMovie(INTERMEDIATE .. "/" .. name)
+		end
+	end
+	if found > 0 then
+		log.f("sweep: %d existing .mkv file(s) in intermediate at startup", found)
+	end
+end
+
+-- Same startup gap for music: any pre-existing content arms the same
+-- quiet-period debounce an event would. rip-push music is skip-if-empty
+-- and incremental, so a false-positive sweep is harmless.
+local function sweepMusic()
+	local iter, dir = hs.fs.dir(MUSIC)
+	if not iter then
+		return
+	end
+	for name in iter, dir do
+		if name ~= "." and name ~= ".." then
+			log.f("sweep: existing music content at startup, arming quiet-period timer")
+			armMusicTimer()
+			return
+		end
+	end
+end
+
 function M.start()
 	for _, d in ipairs({ ROOT, INTERMEDIATE, MUSIC, ROOT .. "/movies" }) do
 		hs.fs.mkdir(d)
@@ -100,14 +153,9 @@ function M.start()
 			considerMovie(f)
 		end
 	end):start()
-	M.musicWatcher = hs.pathwatcher.new(MUSIC, function()
-		if musicTimer then
-			musicTimer:stop()
-		end
-		musicTimer = hs.timer.doAfter(MUSIC_QUIET_SECS, function()
-			enqueue(RIP_PUSH, { "music" }, "rip-push")
-		end)
-	end):start()
+	M.musicWatcher = hs.pathwatcher.new(MUSIC, armMusicTimer):start()
+	sweepIntermediate()
+	sweepMusic()
 	log.f("watching %s", ROOT)
 	return M
 end
