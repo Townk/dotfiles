@@ -167,7 +167,12 @@ cask 'zoom'                         # Meetings
 # As of this writing, `makemkv`'s cask install is also separately blocked
 # by a makemkv.com outage (Cloudflare 525 on the download URL) — unrelated
 # to the Gatekeeper deprecation above; retry once the site recovers.
-cask 'makemkv'                      # DVD rip (title selection stays human)
+# cask 'makemkv'                    # DVD rip — COMMENTED OUT 2026-08-19: the
+                                    # makemkv.com download URL 525s (their
+                                    # origin outage), which fails the whole
+                                    # `brew bundle` run. Re-enable (or direct-
+                                    # download, see WARNING above) once
+                                    # https://www.makemkv.com recovers.
 cask 'handbrake-app'                # Encoder GUI (manual fallback path)
 brew 'handbrake'                    # HandBrakeCLI — the pipeline's encoder
 cask 'xld'                          # CD -> FLAC with MusicBrainz tagging
