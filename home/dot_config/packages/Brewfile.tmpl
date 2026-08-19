@@ -175,6 +175,12 @@ cask 'zoom'                         # Meetings
                                     # https://www.makemkv.com recovers.
 cask 'handbrake-app'                # Encoder GUI (manual fallback path)
 brew 'handbrake'                    # HandBrakeCLI — the pipeline's encoder
+brew 'libdvdcss'                    # CSS decryption — lets HandBrake read
+                                    # most DVDs directly (no MakeMKV needed
+                                    # except for ARccOS/RipGuard discs and
+                                    # Blu-ray). HandBrake.app loads it from
+                                    # ~/lib/libdvdcss.2.dylib (symlink to
+                                    # the brew lib; set up 2026-08-19)
 cask 'xld'                          # CD -> FLAC with MusicBrainz tagging
 {{- end }}
 
