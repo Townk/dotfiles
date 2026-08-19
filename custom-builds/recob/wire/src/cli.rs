@@ -31,6 +31,17 @@ pub fn bridge_port() -> u16 {
         .unwrap_or(2490)
 }
 
+/// The machine this one is VISITING (6c): the `LocalForward` counterpart of
+/// 2490's reverse forward — 2489 is my own bridge, 2490 the machine visiting
+/// me, 2491 the machine I am visiting. Pointer pushes at copy time dial it
+/// best-effort; nothing listening simply means no session is up.
+pub fn visited_port() -> u16 {
+    std::env::var("CLIPBOARD_BRIDGE_VISITED_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2491)
+}
+
 pub fn trusted_socket_path() -> PathBuf {
     std::env::var_os("CLIPBOARD_BRIDGE_LOCAL_SOCKET")
         .map(PathBuf::from)
@@ -106,7 +117,13 @@ pub enum PublicBridge {
 /// failure other than a refused connect is loud and final (§5.2). The
 /// session's §7.1 side is the tunnel's, because that is what this port names.
 pub fn public_session(program: &str) -> Result<PublicBridge, String> {
-    let port = bridge_port();
+    public_session_at(program, bridge_port())
+}
+
+/// The same establishment against an explicit port — 6c's pointer pushes dial
+/// `visited_port()` with it; the default-port wrapper above keeps every
+/// existing caller unchanged.
+pub fn public_session_at(program: &str, port: u16) -> Result<PublicBridge, String> {
     match dial("127.0.0.1", port, std::time::Duration::from_secs(2)) {
         Dial::Refused => Ok(PublicBridge::Absent),
         Dial::Failed(e) => Err(format!(

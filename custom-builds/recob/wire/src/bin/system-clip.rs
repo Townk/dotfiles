@@ -21,7 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use recob_wire::cli::{
-    bridge_port, home, is_ssh, public_session, self_host, trusted_session, PublicBridge,
+    bridge_port, home, is_ssh, public_session, public_session_at, self_host, trusted_session,
+    visited_port, PublicBridge,
 };
 use recob_wire::client::{ClientStream, Session};
 use recob_wire::paste_files;
@@ -309,11 +310,18 @@ fn pbcopy_files(paths: &[String]) -> ExitCode {
         };
         let request = Fields::new()
             .with("op", b"clip.set.files".to_vec())
-            .with("paths", joined.into_bytes());
-        return match exchange_ok(&mut session, &request, false, "pbcopy") {
-            Ok(_) => ExitCode::SUCCESS,
-            Err(e) => fail(e),
-        };
+            .with("paths", joined.clone().into_bytes());
+        if let Err(e) = exchange_ok(&mut session, &request, false, "pbcopy") {
+            return fail(e);
+        }
+        // 6c: the sitting machine's pointer push. If a session to a visited
+        // peer is up (the 2491 LocalForward), mirror the manifest there —
+        // pointer only, bytes stay pull-only — so the visited machine's
+        // daemon can enrich its pasteboard with mount file-URLs and Cmd+V is
+        // native over there. Silently best-effort: no forward listening is
+        // simply "no session", and the local copy already succeeded.
+        push_pointer_files_to_visited(&joined);
+        return ExitCode::SUCCESS;
     }
 
     // Over SSH: the local manifest record is the primary action and fails
@@ -355,6 +363,28 @@ fn pbcopy_files(paths: &[String]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// 6c: best-effort pointer push of a NUL-joined manifest to the machine this
+/// one is VISITING (`visited_port()`, the 2491 LocalForward). Everything is
+/// quiet except a genuinely failing established session: no listener is the
+/// normal no-session state, and this must never affect the local copy's
+/// outcome (it already succeeded).
+fn push_pointer_files_to_visited(joined: &str) {
+    let Some(host) = self_host() else { return };
+    match public_session_at("pbcopy", visited_port()) {
+        Ok(PublicBridge::Session(mut peer)) => {
+            let request = Fields::new()
+                .with("op", b"store.persist.files".to_vec())
+                .with("host", host.as_bytes().to_vec())
+                .with("paths", joined.as_bytes().to_vec());
+            if let Err(e) = peer.exchange(&request, false) {
+                eprintln!("pbcopy: visited machine not notified -- {e}");
+            }
+        }
+        Ok(PublicBridge::Absent) => {}
+        Err(_) => {}
+    }
 }
 
 fn pbcopy_content(args: &[String]) -> ExitCode {
@@ -514,10 +544,11 @@ path lines) instead of its text.
 
 --files [--from-peer] [--force] [--quiet|--progress|--porcelain] [dir]:
 materialize the current file clip into dir (default: cwd). Refuses existing
-names unless --force. Same-host files copy locally; SSH clients stream
-authorized files; a local Mac reads remote manifests through its healthy
-peer mount. --from-peer forces the peer endpoint when the environment can't
-answer (the picker's live-row restore) — tunnel down is then a hard error.
+names unless --force. Same-host files copy locally;
+SSH clients stream authorized files;
+a local Mac reads remote manifests through its healthy peer mount.
+--from-peer forces the peer endpoint when the environment can't answer (the
+picker's live-row restore) — tunnel down is then a hard error.
 
 Usage: text=$(pbpaste)
        pbpaste --manifest

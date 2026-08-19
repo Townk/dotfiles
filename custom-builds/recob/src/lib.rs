@@ -20,6 +20,7 @@ pub mod registry;
 pub mod session;
 pub mod store;
 pub mod validate;
+pub mod visited;
 
 // The shared halves live in `recob-wire` (§8: the clients are built from the
 // codec crate and must not inherit this crate's AppKit linkage). Re-exported

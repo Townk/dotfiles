@@ -356,13 +356,14 @@ fn run_capture(
     *last_cc.lock().unwrap() = Some(last);
     loop {
         std::thread::sleep(config.poll);
-        last = capture_step(
+        last = capture_step_with_push(
             &pasteboard,
             &mut store,
             tracker,
             &host,
             last,
             &frontmost_app,
+            &|capture, host| crate::visited::push_capture(capture, host),
         );
         *last_cc.lock().unwrap() = Some(last);
     }
@@ -370,7 +371,10 @@ fn run_capture(
 
 /// One observation step, extracted so the macOS tests can drive it
 /// deterministically against a private pasteboard. Returns the `changeCount`
-/// the next step should compare against.
+/// the next step should compare against. Tests use this no-push form; the
+/// production loop wires `visited::push_capture` through the variant below —
+/// keeping the push OUT of the shared signature means no test can ever
+/// accidentally dial a live visited peer.
 pub fn capture_step(
     pasteboard: &Pasteboard,
     store: &mut Store,
@@ -378,6 +382,23 @@ pub fn capture_step(
     host: &HostIdentity,
     last: isize,
     frontmost: &dyn Fn() -> Option<FrontmostApp>,
+) -> isize {
+    capture_step_with_push(pasteboard, store, tracker, host, last, frontmost, &|_, _| {})
+}
+
+/// The full step: on a successfully STORED local capture, `push` fires with
+/// the capture and this machine's identity (6c's pointer push — see
+/// `crate::visited`). `capture::decide` has already refused remote-origin
+/// pasteboard contents by this point, so a push can never loop.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_step_with_push(
+    pasteboard: &Pasteboard,
+    store: &mut Store,
+    tracker: &RegtypeTracker,
+    host: &HostIdentity,
+    last: isize,
+    frontmost: &dyn Fn() -> Option<FrontmostApp>,
+    push: &dyn Fn(&capture::Capture, &str),
 ) -> isize {
     let change_count = pasteboard.change_count();
     if change_count == last {
@@ -395,6 +416,8 @@ pub fn capture_step(
             let host = host.current().unwrap_or_default();
             if let Err(e) = store.write_capture(&capture, &host, true, store::now_ts()) {
                 log!("capture: store write failed: {e}");
+            } else {
+                push(&capture, &host);
             }
         }
         Err(_skip) => {
