@@ -166,8 +166,8 @@ rip::_check_title() {
 # rules (spec): encode fail → rm partial output, keep intermediate;
 # push/verify fail → keep encode AND intermediate (re-push needs no
 # re-encode); full success → rm intermediate (push_worker already
-# removed the verified encode); cancelled mid-encode → same as encode
-# fail, via the TERM/INT trap below.
+# removed the verified encode); cancelled or killed mid-encode → nothing
+# under movies/ at all, intermediate kept (see the .work staging note).
 rip::pipeline_worker() {
   # See rip::push_worker's identical comment: the real rip-pipeline bin
   # sources this under `set -eu -o pipefail`, and this function's own
@@ -178,40 +178,48 @@ rip::pipeline_worker() {
   rip::_check_title "$title" || return 2
   [ -f "$input" ] || { log_error "rip: no such input: $input"; return 1 }
   local hb_bin="${RIP_HANDBRAKE_BIN:-HandBrakeCLI}"
-  local out_dir out
+  local out_dir out work_dir out_tmp
   out_dir="$(rip::staging_root)/movies/$title"
   out="$out_dir/$title.mkv"
-  mkdir -p "$out_dir"
+  # Kill-proof by construction. The encoder writes into .work/ and the
+  # result is RENAMED into movies/<Title>/ only after it exits 0, so
+  # movies/ only ever holds COMPLETE encodes. This is what makes an
+  # untrappable death safe: plain `pueue kill` sends SIGKILL on pueue 4.x
+  # (live-verified — no TERM trap can run), and a worker killed at any
+  # point mid-encode leaves its debris in .work, which nothing ships.
+  #
+  # INVARIANT this rests on: only intermediate/ and music/ are watched,
+  # and rip-push only ever ships movies/ and music/ — so a dotted sibling
+  # of those directories is reachable by nothing but this function.
+  #
+  # One deterministic temp name is safe because the pipeline runs in the
+  # `heavy` group at parallelism 1: there is never a second encode to
+  # collide with. The rm below clears whatever a killed predecessor left.
+  work_dir="$(rip::staging_root)/.work"
+  out_tmp="$work_dir/encode.mkv"
+  mkdir -p "$work_dir"
+  rm -f -- "$out_tmp"
 
   rip::_progress 0 "encoding — $title"
-  # Cancel contract. A signalled cancel must not orphan a PARTIAL <Title>.mkv:
-  # a later manual `rip-push movies` would rsync that corrupt file to the
-  # server and then verified-DELETE the local copy, leaving the physical disc
-  # as the only master (live-verified). The signal reaches the task's whole
-  # process group, so the encoder dies too, the pipeline ends, and zsh
-  # dispatches this trap before the push stage ever starts.
-  #
-  # CAVEAT (live-verified, pueue 4.0.4): plain `pueue kill` — what job::cancel
-  # and therefore the HUD's cancel button issue today — sends SIGKILL, not
-  # SIGTERM, so this trap CANNOT run on that path and the orphan survives.
-  # `pueue kill --signal sigterm` does fire it (task ends Failed(130) rather
-  # than Killed). This guard is the worker's half of the contract job::cancel
-  # already documents ("the task's own TERM trap keeps its contract"); until
-  # job::cancel switches signals it earns its keep on the paths that DO send
-  # TERM/INT — Ctrl-C on a hand-run `rip-pipeline --worker`, `pueue kill
-  # --signal sigterm`, and logout/shutdown.
+  # Correctness no longer depends on this trap — .work already guarantees
+  # nothing pushable survives a death of any kind. It buys the two things a
+  # SIGKILL cannot: the temp goes away immediately rather than waiting for
+  # the next run to sweep it, and the job says WHY it stopped and ends 130
+  # instead of looking like a crash. It fires on every signal path that is
+  # catchable at all — Ctrl-C on a hand-run `rip-pipeline --worker`,
+  # `pueue kill --signal sigterm`, logout/shutdown. It cannot rmdir out_dir
+  # because out_dir is not created until the encode has succeeded.
   #
   # Scoped to the encode ONLY (`trap -` below, once rc says the encode is
   # good): a cancel during the push is already safe — rsync --partial resumes
   # next run and the verify gate deletes nothing until a checksum pass is
   # clean — and by then the encode is COMPLETE, which the spec's cleanup rules
   # say to keep for re-push rather than throw away.
-  trap 'rm -f -- "$out"
-        rmdir -- "$out_dir" 2>/dev/null || :
+  trap 'rm -f -- "$out_tmp"
         log_error "rip: cancelled during encode — partial removed, intermediate kept: $input"
         exit 130' TERM INT
   local line pct
-  "$hb_bin" "${RIP_HB_ARGS[@]}" -i "$input" -o "$out" 2>&1 \
+  "$hb_bin" "${RIP_HB_ARGS[@]}" -i "$input" -o "$out_tmp" 2>&1 \
     | tr '\r' '\n' \
     | while IFS= read -r line; do
         case "$line" in
@@ -225,14 +233,23 @@ rip::pipeline_worker() {
       done
   local rc=$pipestatus[1]
   if (( rc != 0 )); then
-    rm -f -- "$out"
-    rmdir -- "$out_dir" 2>/dev/null || :
+    rm -f -- "$out_tmp"
     log_error "rip: encode failed (rc=$rc) — intermediate kept: $input"
-    trap - TERM INT   # $out/$out_dir go out of scope with this return
+    trap - TERM INT   # $out_tmp goes out of scope with this return
     return $rc
   fi
   # The encode is complete: from here a cancel must LEAVE it alone.
   trap - TERM INT
+
+  # Publish it: same filesystem, so the rename is atomic — movies/<Title>/
+  # springs into existence already holding a whole file, never a growing
+  # one. This is the moment the encode becomes visible to `rip-push movies`.
+  if ! { mkdir -p "$out_dir" && mv -f -- "$out_tmp" "$out" }; then
+    rm -f -- "$out_tmp"
+    rmdir -- "$out_dir" 2>/dev/null || :
+    log_error "rip: could not publish the encode to $out — intermediate kept: $input"
+    return 1
+  fi
 
   RIP_PROGRESS_BASE=85 RIP_PROGRESS_SPAN=15 rip::push_worker movies || return $?
 

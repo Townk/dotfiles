@@ -56,16 +56,19 @@ EOF
     # the bins under test must source the SOURCE-TREE lib, not ~/.local/lib
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
     # cancel-drive — reproduce `pueue kill` faithfully: pueue signals the
-    # task's whole PROCESS GROUP, so the encoder dies alongside the worker
-    # and the worker's TERM trap gets to run. macOS ships no setsid(1), and
-    # `setopt monitor` is refused in a non-interactive shell without a tty,
-    # so perl's POSIX::setsid makes the child a group leader we can `kill --`.
+    # task's whole PROCESS GROUP, so the encoder dies alongside the worker.
+    # macOS ships no setsid(1), and `setopt monitor` is refused in a
+    # non-interactive shell without a tty, so perl's POSIX::setsid makes the
+    # child a group leader we can `kill --`. CANCEL_SIGNAL picks the signal:
+    # TERM is the graceful path (the worker's trap runs); KILL is what plain
+    # `pueue kill` actually sends on pueue 4.x — untrappable, and therefore
+    # the case the .work staging design has to survive on its own.
     cat > "$RIP_SANDBOX/cancel-drive.zsh" <<'EOF'
 #!/usr/bin/env zsh
 perl -e 'use POSIX; POSIX::setsid(); exec @ARGV or die' "$@" &
 pid=$!
 sleep 2
-kill -TERM -$pid 2>/dev/null
+kill -${CANCEL_SIGNAL:-TERM} -$pid 2>/dev/null
 wait $pid
 exit $?
 EOF
@@ -117,23 +120,39 @@ EOF
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)" should not be exist
   End
 
-  # Cancelling `rip: <title>` from the HUD is `pueue kill` → SIGTERM to the
-  # task's process group, which kills the worker where it stands — mid-encode,
-  # the cleanup lines below the pipeline never reach. Live-verified: that left
-  # a PARTIAL movies/<Title>/<Title>.mkv on disk, and a later manual
-  # `rip-push movies` would rsync that corrupt file to the server and then
-  # verified-DELETE the local copy. Only the ENCODE stage needs this guard:
-  # a cancel during the push is already safe (rsync --partial resumes, and the
-  # verify gate refuses to delete anything until a checksum pass is clean), and
-  # by then the encode is complete rather than partial — the spec's cleanup
-  # rules say a completed encode is kept for re-push.
-  It 'cancel mid-encode removes the partial encode and keeps the intermediate'
+  # Cancelling `rip: <title>` from the HUD kills the worker where it stands,
+  # mid-encode. The encode therefore never writes into movies/ at all: it
+  # writes .work/encode.mkv and is RENAMED into place only once the encoder
+  # has exited 0. Nothing reads .work — rip-push only ships movies/ and
+  # music/ — so however hard the worker dies, no partial can ever reach the
+  # server. This example covers the graceful (TERM) half: the trap also
+  # cleans the temp and reports itself.
+  It 'cancel mid-encode leaves nothing under movies/ and keeps the intermediate'
     export RIP_FAKE_HB_SLEEP=30
     When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
       zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
       --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
     The status should equal 130
     The stderr should include "cancelled"
+    The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should not be exist
+    The path "$RIP_STAGING_ROOT/movies/A Movie (2001)" should not be exist
+    The path "$RIP_STAGING_ROOT/.work/encode.mkv" should not be exist
+    The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
+  End
+
+  # The case no trap can ever cover: plain `pueue kill` sends SIGKILL on
+  # pueue 4.x (live-verified — a TERM/INT trap simply never runs), so the
+  # worker gets no chance to clean up after itself. Safety here comes from
+  # the layout alone: the half-written encode is in .work, which nothing
+  # pushes and which the next worker run clears. No exit status is asserted
+  # beyond SIGKILL's own 137 — the point of this example is the filesystem.
+  It 'SIGKILL mid-encode still leaves nothing pushable under movies/'
+    export RIP_FAKE_HB_SLEEP=30
+    export CANCEL_SIGNAL=KILL
+    When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
+      zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
+      --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
+    The status should equal 137
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should not be exist
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)" should not be exist
     The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
