@@ -1,0 +1,30 @@
+#!/usr/bin/env zsh
+# rip-pipeline — encode a MakeMKV intermediate, push it to cantina,
+# verify, and clean the staging, as ONE observable job:: job. Invoked by
+# the Hammerspoon ripper module after the Title (Year) prompt; usable by
+# hand for special cases. Thin by design: behavior lives in rip.zsh.
+#
+#   rip-pipeline <input.mkv> "<Title (Year)>"     enqueue
+#   rip-pipeline --worker <input> <title>         internal: the job body
+
+set -eu -o pipefail
+
+RIP_LIB_DIR="${RIP_LIB_DIR:-$HOME/.local/lib}"
+source "$RIP_LIB_DIR/rip.zsh" || {
+  print -ru2 -- "rip-pipeline: cannot source rip.zsh from $RIP_LIB_DIR"
+  exit 1
+}
+
+case "${1:-}" in
+  --worker)
+    shift
+    rip::pipeline_worker "${1:?input required}" "${2:?title required}"
+    ;;
+  "" | --help)
+    print -ru2 -- 'usage: rip-pipeline <input.mkv> "<Title (Year)>"'
+    exit 2
+    ;;
+  *)
+    rip::pipeline_enqueue "${1:?input required}" "${2:?title required}"
+    ;;
+esac

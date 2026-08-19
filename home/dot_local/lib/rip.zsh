@@ -118,3 +118,83 @@ rip::_verify_and_clean() {
   find "$src" -mindepth 1 -type d -empty -delete
   return 0
 }
+
+# --- pipeline: encode → push → cleanup, one JOB_ID ------------------------
+
+# The whole encode policy in one place (spec rev 4: flags, not a preset
+# file — preset JSON can only be exported from the GUI, and hand-authored
+# JSON is unverifiable). DVD-era sources: x265 10-bit RF 20 is visually
+# transparent; audio is COPIED (never re-encode lossy AC-3/DTS), subs ride
+# along as soft subs.
+typeset -ga RIP_HB_ARGS=(
+  -f av_mkv -e x265_10bit -q 20
+  --all-audio -E copy
+  --audio-copy-mask aac,ac3,eac3,dts,dtshd,truehd,mp3,flac
+  --audio-fallback ca_aac
+  --all-subtitles --subtitle-default=none
+)
+
+rip::_check_title() {
+  case "$1" in
+    "" ) log_error "rip: empty title"; return 2 ;;
+    */*) log_error "rip: title may not contain a slash: $1"; return 2 ;;
+  esac
+  return 0
+}
+
+# rip::pipeline_worker <input> <title> — the enqueued body. Encode owns
+# 0–85% of the capsule, the push stage 85–100 (rescaled via the
+# RIP_PROGRESS_BASE/SPAN seam rip::_progress already honors). Cleanup
+# rules (spec): encode fail → rm partial output, keep intermediate;
+# push/verify fail → keep encode AND intermediate (re-push needs no
+# re-encode); full success → rm intermediate (push_worker already
+# removed the verified encode).
+rip::pipeline_worker() {
+  local input="$1" title="$2"
+  rip::_check_title "$title" || return 2
+  [ -f "$input" ] || { log_error "rip: no such input: $input"; return 1 }
+  local hb_bin="${RIP_HANDBRAKE_BIN:-HandBrakeCLI}"
+  local out_dir out
+  out_dir="$(rip::staging_root)/movies/$title"
+  out="$out_dir/$title.mkv"
+  mkdir -p "$out_dir"
+
+  rip::_progress 0 "encoding — $title"
+  local line pct
+  "$hb_bin" "${RIP_HB_ARGS[@]}" -i "$input" -o "$out" 2>&1 \
+    | tr '\r' '\n' \
+    | while IFS= read -r line; do
+        case "$line" in
+          *Encoding:*%*)
+            pct="${line%\%*}"; pct="${pct##*, }"; pct="${pct%%.*}"; pct="${pct// /}"
+            [[ "$pct" == <-> ]] \
+              && RIP_PROGRESS_BASE=0 RIP_PROGRESS_SPAN=85 \
+                 rip::_progress "$pct" "encoding — $title"
+            ;;
+        esac
+      done
+  local rc=$pipestatus[1]
+  if (( rc != 0 )); then
+    rm -f -- "$out"
+    rmdir -- "$out_dir" 2>/dev/null || :
+    log_error "rip: encode failed (rc=$rc) — intermediate kept: $input"
+    return $rc
+  fi
+
+  RIP_PROGRESS_BASE=85 RIP_PROGRESS_SPAN=15 rip::push_worker movies || return $?
+
+  rm -f -- "$input"
+  rip::_progress 100 "done — $title"
+  return 0
+}
+
+# rip::pipeline_enqueue <input> <title> — one heavy-group job per movie
+# (parallelism 1: two concurrent x265 encodes would thrash the laptop).
+rip::pipeline_enqueue() {
+  local input="$1" title="$2"
+  rip::_check_title "$title" || return 2
+  [ -f "$input" ] || { log_error "rip: no such input: $input"; return 1 }
+  rip::_load_jobs || { log_error "rip: job runner unavailable"; return 1 }
+  job::start --group heavy --title "rip: $title" --icon "$RIP_JOB_ICON" \
+    -- rip-pipeline --worker "$input" "$title"
+}
