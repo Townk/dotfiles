@@ -23,8 +23,10 @@ local MUSIC_QUIET_SECS = 60
 
 local log = hs.logger.new("ripper", "info")
 local declined = {} -- path -> size at decline time
-local pending = {} -- path -> true while a stability timer runs
+local pending = {} -- path -> stability timer object while one runs (anchors it against GC)
 local musicTimer = nil
+local tasks = {} -- id -> hs.task object while running (anchors it against GC)
+local nextTaskId = 0
 
 local function fileSize(p)
 	local a = hs.fs.attributes(p)
@@ -32,11 +34,16 @@ local function fileSize(p)
 end
 
 local function enqueue(bin, args, what)
-	hs.task.new(bin, function(rc, _, stderr)
+	nextTaskId = nextTaskId + 1
+	local id = nextTaskId
+	local t = hs.task.new(bin, function(rc, _, stderr)
+		tasks[id] = nil
 		if rc ~= 0 then
 			log.ef("%s enqueue failed rc=%d: %s", what, rc, stderr or "")
 		end
-	end, args):start()
+	end, args)
+	tasks[id] = t
+	t:start()
 end
 
 local function promptFor(path)
@@ -70,8 +77,7 @@ local function considerMovie(path)
 	if pending[path] then
 		return
 	end
-	pending[path] = true
-	hs.timer.doAfter(STABLE_SECS, function()
+	pending[path] = hs.timer.doAfter(STABLE_SECS, function()
 		pending[path] = nil
 		local now = fileSize(path)
 		if not now then
