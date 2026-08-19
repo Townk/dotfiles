@@ -1,0 +1,22 @@
+#!/usr/bin/env zsh
+# rip-push — push staged rips to cantina as a job:: job, checksum-verify,
+# and clean the staging. Thin by design: behavior lives in rip.zsh.
+#
+#   rip-push               enqueue movies + music (each skipped if empty)
+#   rip-push movies|music  one type
+#   rip-push --worker <t>  internal: the enqueued body
+
+set -eu -o pipefail
+
+RIP_LIB_DIR="${RIP_LIB_DIR:-$HOME/.local/lib}"
+source "$RIP_LIB_DIR/rip.zsh" || {
+  print -ru2 -- "rip-push: cannot source rip.zsh from $RIP_LIB_DIR"
+  exit 1
+}
+
+case "${1:-}" in
+  --worker) shift; rip::push_worker "${1:?rip-push --worker: type required}" ;;
+  movies | music) rip::push_enqueue "$1" ;;
+  "") rip::push_enqueue movies && rip::push_enqueue music ;;
+  *) print -ru2 -- "usage: rip-push [movies|music]"; exit 2 ;;
+esac
