@@ -2620,7 +2620,7 @@ clip::cache_sweep
 
 # The markdown accept's "label" is the 󰽛 markdown glyph (U+F0F5B), not a word —
 # it rides the label slot so it takes the hint/description foreground.
-hints="$(pick::hints "󰌑" paste "󰘵 󰌑" $'\U000F0F5B' "󰘴 O" sticky "󰘴 Y" copy "󰘴 D" remove "󰘴 P" pin)"
+hints="$(pick::hints "󰌑" paste "󰘵 󰌑" $'\U000F0F5B' "󰘴 O" sticky "󰘴 Y" copy "󰘴 S" share "󰘴 D" remove "󰘴 P" pin)"
 
 pick_args=(
   --header "Clipboard history"

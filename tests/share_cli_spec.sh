@@ -12,7 +12,7 @@ Describe 'share CLI'
     export SHARE_STATE_DIR="$SB/state"
     export SHARE_PROFILE=personal
     export SHARE_LIB_DIR="$PWD/home/dot_local/lib"
-    printf '[drop]\nstore = "https://d.example.com"\nweb = true\nprofiles = ["personal"]\ndefault_for = ["personal"]\n' \
+    printf '[drop]\nstore = "https://d.example.com"\nweb = true\nprofiles = ["personal"]\ndefault_for = ["personal"]\n[lan]\nrelay = ""\nlocal_only = true\nweb = false\nprofiles = ["personal"]\n' \
       >"$SHARE_ENDPOINTS_FILE"
     printf 'x' >"$SB/Report.pdf"
     cat >"$SB/bin/croc" <<'SH'
@@ -229,6 +229,32 @@ SH
     The status should be success
     The output should include 'queued as job'
     The output should not include 'd.example.com/s/abc'
+  End
+
+  # --- --for-face through the CLI (the path a face actually uses) ----------
+  # FOUND IN LIVE TESTING. --for-face was tested at the LIBRARY level only, and
+  # the CLI — the only path pick-clipboard uses — never learned about it. It
+  # captured share::send_background's stdout (which under --for-face is the
+  # LINE, not a job id) and wrapped it in `log_ok "queued as job $id"`. log_ok
+  # writes to STDOUT, so the picker injected
+  #   "✓ queued as job R.pdf (1 B) — receive with:  croc …"
+  # into the pane instead of the line.
+
+  It 'prints the bare pasteable line for a face, with no decoration'
+    When run script "$SHARE_BIN" send --for-face --to lan "$SB/Report.pdf"
+    The status should be success
+    The output should include 'receive with:  croc'
+    The output should not include 'queued as job'
+    The lines of output should equal 1
+  End
+
+  # The contrast: a human still gets the friendly form, and the job id it names
+  # is an ID rather than a line of prose.
+  It 'still reports a job id to a human'
+    When run script "$SHARE_BIN" --background --store "$SB/Report.pdf"
+    The status should be success
+    The output should include 'queued as job'
+    The output should not include 'receive with'
   End
 
   # --- F4 fix: --force needs BOTH the flag AND an interactive confirmation --

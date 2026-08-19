@@ -103,6 +103,22 @@ SHARE_LIVE_DEADLINE="${SHARE_LIVE_DEADLINE:-86400}"
 # here yet", so this is about not spinning, not about load.
 SHARE_LIVE_BACKOFF_BASE="${SHARE_LIVE_BACKOFF_BASE:-5}"
 
+# What separates "interrupted" from "never got started".
+#
+# The retry exists for exactly two things: the peer is not here yet, and a
+# connection a laptop sleep dropped. NEITHER of those fails instantly — croc
+# sits waiting, or it dies mid-transfer after running for a while. A croc that
+# exits in under SHARE_LIVE_MIN_RUN seconds never connected at all, which is a
+# reachability or configuration problem, and retrying cannot fix either.
+#
+# The original policy had this backwards: retry EVERYTHING, stop only on one
+# hard-coded string ("bad password"). An unreachable relay therefore became a
+# 24-hour storm — measured at 3 attempts in 20s, continuing until the deadline,
+# doing nothing each time. Live testing found it; no unit test was looking,
+# because each individual retry was behaving exactly as designed.
+SHARE_LIVE_MIN_RUN="${SHARE_LIVE_MIN_RUN:-5}"
+SHARE_LIVE_FAST_FAILS="${SHARE_LIVE_FAST_FAILS:-3}"
+
 # share::croc_secret_write <code> [<pass>] [<relay>] — write the file; print
 # its path. The receive half uses this too (it already HAS a phrase, from a
 # pasted chat line, and needs it carried to a background job the same way).
@@ -370,7 +386,7 @@ share::croc_send() {
   # — which is what keeps a line already pasted into someone's chat valid
   # across a laptop sleep. Switching either is forbidden (D8): we cannot edit
   # a message that has already been sent.
-  local -i deadline=0 attempt=0 wait_s=0
+  local -i deadline=0 attempt=0 wait_s=0 fast_fails=0 started=0 ran=0
   if [[ "$mode" == live && -n "${JOB_ID:-}" ]]; then
     deadline=$(( EPOCHSECONDS + SHARE_LIVE_DEADLINE ))
   fi
@@ -381,6 +397,7 @@ share::croc_send() {
     # which as a standalone command is exit status 1, and this library is
     # sourced by a CLI running under `set -e`. It aborted every live send.
     attempt=$(( attempt + 1 ))
+    started=$EPOCHSECONDS
     if (( ${#envp} )); then
       env "${envp[@]}" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
       rc=${pipestatus[1]}
@@ -389,6 +406,7 @@ share::croc_send() {
       rc=${pipestatus[1]}
     fi
     out="$(<"$tmp")"
+    ran=$(( EPOCHSECONDS - started ))
     (( rc == 0 )) && break
     (( deadline > 0 )) || break
     # A rejected relay password fails identically forever; looping on it for a
@@ -396,6 +414,21 @@ share::croc_send() {
     if share::croc_fatal "$out"; then
       log_error "share: croc failed in a way retrying cannot fix"
       break
+    fi
+    # Judge by DURATION, not by message. A croc that ran a while and then died
+    # was interrupted — retry it. One that exited immediately never connected,
+    # and a few of those in a row mean the relay is unreachable or misconfigured,
+    # which no amount of waiting repairs.
+    if (( ran < SHARE_LIVE_MIN_RUN )); then
+      fast_fails=$(( fast_fails + 1 ))
+      if (( fast_fails >= SHARE_LIVE_FAST_FAILS )); then
+        log_error "share: croc failed immediately $fast_fails times — the relay is unreachable or misconfigured; not retrying"
+        break
+      fi
+    else
+      # It got somewhere before dying: the next attempt is worth making, and
+      # this run does not count against the fast-failure budget.
+      fast_fails=0
     fi
     if (( EPOCHSECONDS >= deadline )); then
       log_error "share: nobody collected this transfer before the deadline"

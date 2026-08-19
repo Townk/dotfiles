@@ -401,6 +401,68 @@ SH
     The output should equal '1'
   End
 
+  # FOUND IN LIVE TESTING, and the reason the policy is now duration-based. The
+  # original rule retried EVERYTHING and stopped only on one hard-coded string,
+  # so an unreachable relay became a 24-hour storm: croc exited in well under a
+  # second, we slept 5s, and repeated — measured at 3 attempts in 20s, doing
+  # nothing each time, until the deadline a day later.
+  It 'stops after a few INSTANT failures instead of retrying for a day'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
+printf '%s' "$((n + 1))" >"$SB_TRIES"
+echo "could not connect to relay: connection refused"
+exit 1
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    SB_TRIES="$SB/tries"; export SB_TRIES
+    JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 SHARE_LIVE_FAST_FAILS=3 SHARE_LIVE_DEADLINE=3 SHARE_LIVE_MIN_RUN=5       share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null || :
+    When call cat "$SB/tries"
+    The output should equal '3'
+  End
+
+  It 'says the relay is unreachable rather than failing silently'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+echo "could not connect to relay: connection refused"
+exit 1
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    fast_fail() {
+      JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 SHARE_LIVE_FAST_FAILS=2 SHARE_LIVE_DEADLINE=3 SHARE_LIVE_MIN_RUN=5         share::croc_send lab live '' '' "$SB/Report.pdf"
+    }
+    When run fast_fail
+    The status should be failure
+    The stderr should include 'unreachable or misconfigured'
+    The stdout should equal ''
+  End
+
+  # The other half of the rule, and the one that keeps sleep-recovery working: a
+  # croc that RAN for a while before dying was interrupted, not misconfigured,
+  # so it must not consume the fast-failure budget. Without this the fix would
+  # trade a 24-hour storm for giving up on the case the retry exists for.
+  It 'does not count a failure that ran for a while against the budget'
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
+n=$((n + 1)); printf '%s' "$n" >"$SB_TRIES"
+sleep 2                      # ran a while: an interruption, not a bad config
+[ "$n" -ge 3 ] && { echo "Sending 'Report.pdf' (1 B)"; exit 0; }
+echo "connection lost"
+exit 1
+SH
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"
+    SB_TRIES="$SB/tries"; export SB_TRIES
+    # MIN_RUN=1 so the 2s runs count as "ran a while"; a budget of 2 would have
+    # aborted at attempt 2 if these were miscounted as instant failures.
+    JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 SHARE_LIVE_FAST_FAILS=2 SHARE_LIVE_DEADLINE=30 SHARE_LIVE_MIN_RUN=1       share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null || :
+    When call cat "$SB/tries"
+    The output should equal '3'
+  End
+
   It 'does not retry outside a job — a foreground send has a human watching'
     cat >"$SB/bin/croc" <<'SH'
 #!/bin/sh

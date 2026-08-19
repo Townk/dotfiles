@@ -165,7 +165,7 @@ dispatch_send() {
   # (amendment D1), so the three states have to stay distinguishable: an
   # explicit --background deserves a warning when the job runner is missing,
   # while the default silently running in the foreground does not.
-  local -i background=-1
+  local -i background=-1 for_face=0
   # Every value-consuming flag must be guarded before it ever reaches a bare
   # `shift`: none of --background/--watch/--force take a value, so there is
   # nothing to guard here, but the *shape* still applies to any flag added
@@ -175,6 +175,11 @@ dispatch_send() {
     case "$1" in
       --background) background=1; shift ;;
       --foreground) background=0; shift ;;
+      # Recorded here AND passed through: share::send / share::send_background
+      # both need it, and so does the reporting below. Without this the CLI
+      # wrapped the pasteable line in "queued as job …" — and log_ok writes to
+      # STDOUT, so a face captured the wrapper instead of the line.
+      --for-face)   for_face=1; rest+=("$1"); shift ;;
       --watch)      watch=1; background=1; shift ;;
       --force)      force=1; shift ;;
       *)            rest+=("$1"); shift ;;
@@ -201,9 +206,16 @@ dispatch_send() {
     if share::jobs_available; then
       local -a wflag=()
       (( watch )) && wflag=(--watch)
-      local id
-      id="$(run_send "$force" share::send_background "${wflag[@]}" "${rest[@]}")"
-      log_ok "queued as job $id"
+      local out
+      out="$(run_send "$force" share::send_background "${wflag[@]}" "${rest[@]}")"
+      if (( for_face )); then
+        # A face gets the LINE, bare, and nothing else: its stdout IS the
+        # thing that gets injected into a pane. Any decoration here ends up
+        # pasted into somebody's chat window.
+        [[ -n "$out" ]] && print -r -- "$out"
+      else
+        log_ok "queued as job $out"
+      fi
       return 0
     fi
     # Only narrate the fallback when it was actually asked for. Backgrounding
