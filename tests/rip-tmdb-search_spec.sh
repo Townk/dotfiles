@@ -29,8 +29,11 @@ EOF
   End
 
   It 'exits 3 without a key'
+    # zsh -f: skip ~/.zshenv, which re-injects the real TMDB_API_KEY from
+    # system-secrets now that the operator has registered one (2026-08-20)
+    # — a bare unset stopped being hermetic the day the key existed.
     unset TMDB_API_KEY
-    When run zsh "$BIN" heat
+    When run zsh -f "$BIN" heat
     The status should equal 3
     The stderr should include "TMDB_API_KEY"
   End
