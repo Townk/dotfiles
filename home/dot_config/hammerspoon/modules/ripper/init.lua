@@ -34,12 +34,20 @@
 --     `rip-disc "<Title (Year)>"` enqueue — the disc itself is never
 --     touched by Lua; makemkvcon and the rest of the chain live in
 --     rip.zsh.
+--   * M.preview(<fixture>) opens the Rip Session Review panel
+--     (ripper/session-dialog.lua) — the webview that will eventually
+--     REPLACE the chooser above — on a canned session, with stub callbacks
+--     that only print and toast. It is a UI harness: no disc is read and
+--     nothing is ever enqueued. See the Mode B section near the bottom.
 --   * The volume watcher only sees mounts that happen after M.start()
 --     runs, so a disc already sitting in the drive at launch/reload needs
 --     a manual nudge: M.ripDisc() rescans /Volumes for a VIDEO_TS/ dir,
 --     clears its declined flag, and re-runs the same consent flow.
 
 local M = {}
+
+local osd = require("osd")
+local session = require("ripper.session-dialog")
 
 local HOME = os.getenv("HOME")
 local ROOT = HOME .. "/Depot/Rips"
@@ -71,6 +79,7 @@ local chooser = nil -- open TMDB hs.chooser (anchors it against GC while shown)
 local chooserDebounce = nil -- debounce timer for the chooser's queryChangedCallback
 local tasks = {} -- id -> hs.task object while running (anchors it against GC)
 local nextTaskId = 0
+local previewTimer = nil -- M.preview("scanning")'s populate timer (anchors it against GC)
 
 local function fileSize(p)
 	local a = hs.fs.attributes(p)
@@ -356,6 +365,165 @@ function M.ripDisc()
 		end
 	end
 	hs.alert.show("No DVD volume found")
+end
+
+--------------------------------------------------------------------------------
+-- Rip Session Review — Mode B preview harness
+--------------------------------------------------------------------------------
+-- The session dialog (ripper/session-dialog.lua) is the replacement for the
+-- hs.chooser naming step above, but it is NOT wired into the consent/rip
+-- flow yet: this harness exists so the panel can be judged on feel — layout,
+-- keyboard, the live TMDB typeahead — without a disc in the drive and
+-- without enqueueing anything. `M.preview()` opens it on a fixture with stub
+-- callbacks that only print and toast.
+--
+-- The consent/chooser/watcher flow above is deliberately untouched; when the
+-- integration lands it replaces tmdbNameAndRip's chooser, not this harness.
+
+-- Fixture sessions, one per mockup shape. Built fresh on each call so a
+-- previous preview can never leak state into the next one.
+local function previewData(name)
+	local u2Library = {
+		{ title = "U2 360° at the Rose Bowl", year = 2010 },
+		{ title = "Elvis: That's the Way It Is", year = 1970 },
+	}
+	if name == "single" then
+		-- FastPath mockup: one title, nothing to decide but the movie.
+		return {
+			volume = "INCEPTION",
+			kind = "DVD",
+			titles = {
+				{ no = 0, duration = "1:51:47", seconds = 6707, size = "5.6 GB" },
+			},
+			library = u2Library,
+		}
+	elseif name == "extras" then
+		-- ExtrasOnly mockup: the feature is already on the server, so the
+		-- longest title defaults to Skip and the session has no Feature row
+		-- at all — the two remaining titles are extras looking for a movie
+		-- to attach to.
+		return {
+			volume = "ELVIS_TTWII",
+			kind = "DVD",
+			titles = {
+				{
+					no = 0,
+					duration = "1:37:02",
+					seconds = 5822,
+					size = "5.8 GB",
+					inLibrary = "Elvis: That's the Way It Is (1970)",
+				},
+				{ no = 1, duration = "0:57:20", seconds = 3440, size = "2.6 GB" },
+				{ no = 2, duration = "0:12:05", seconds = 725, size = "520 MB" },
+			},
+			library = u2Library,
+		}
+	end
+	-- Main mockup (default): feature + two extras + one sub-2-minute title
+	-- that defaults to Skip.
+	return {
+		volume = "U2_360_ROSE_BOWL",
+		kind = "DVD",
+		titles = {
+			{ no = 0, duration = "1:58:12", seconds = 7092, size = "6.9 GB" },
+			{ no = 1, duration = "0:26:14", seconds = 1574, size = "1.1 GB" },
+			{ no = 2, duration = "0:07:41", seconds = 461, size = "340 MB" },
+			{ no = 3, duration = "0:01:12", seconds = 72, size = "58 MB" },
+		},
+		library = u2Library,
+	}
+end
+
+local function previewSummary(plan)
+	local parts = {}
+	if plan.feature then
+		table.insert(parts, "1 movie")
+	end
+	local n = #plan.extras
+	if n > 0 then
+		table.insert(parts, string.format("%d extra%s", n, n == 1 and "" or "s"))
+	end
+	if #parts == 0 then
+		return "nothing"
+	end
+	return table.concat(parts, " + ")
+end
+
+-- Stub callbacks: they print and toast, and that is ALL they do. Nothing
+-- here enqueues a job, spawns rip-disc, or touches the disc.
+local previewCallbacks = {
+	onStart = function(plan)
+		hs.printf("ripper.preview: START (nothing enqueued)")
+		if plan.feature then
+			hs.printf("ripper.preview:   feature  title=%s  movie=%s", tostring(plan.feature.no), plan.feature.movie)
+		end
+		for _, e in ipairs(plan.extras) do
+			hs.printf(
+				"ripper.preview:   extra    title=%s  name=%s  attach=%s",
+				tostring(e.no),
+				e.name,
+				tostring(e.attachTo)
+			)
+		end
+		for _, no in ipairs(plan.skipped) do
+			hs.printf("ripper.preview:   skip     title=%s", tostring(no))
+		end
+		osd.notify("glyph:nf-md-movie_open", "preview: would rip " .. previewSummary(plan), "Frog")
+	end,
+	onDismiss = function()
+		hs.printf("ripper.preview: dismissed — nothing enqueued")
+	end,
+}
+
+--- Open the Rip Session Review panel on a fixture. Mode B validation only:
+--- no disc is read and no job is ever enqueued.
+--- @param name string|nil "u2" (default) | "single" | "extras" | "scanning"
+function M.preview(name)
+	name = name or "u2"
+
+	if name == "scanning" then
+		-- The scanning -> populated transition: open with no titles, then
+		-- hand the same panel a full session 2.5s later (session.show
+		-- re-renders in place rather than rebuilding the webview).
+		session.show({ volume = "U2_360_ROSE_BOWL", kind = "DVD", scanning = true }, previewCallbacks)
+		if previewTimer then
+			previewTimer:stop()
+			previewTimer = nil
+		end
+		-- Anchored in a module-local against GC, and cleared through an
+		-- identity check rather than a bare `previewTimer = nil` — the same
+		-- discipline pending[path] and tmdbChoices' `thisTask` already use
+		-- above, so a second M.preview("scanning") started while this one is
+		-- still counting down can't have its anchor cleared by the older
+		-- timer's callback.
+		local thisTimer
+		thisTimer = hs.timer.doAfter(2.5, function()
+			if previewTimer == thisTimer then
+				previewTimer = nil
+			end
+			session.show(previewData("u2"), previewCallbacks)
+		end)
+		previewTimer = thisTimer
+		return
+	end
+
+	if name ~= "u2" and name ~= "single" and name ~= "extras" then
+		hs.printf("ripper.preview: unknown fixture %q (u2 | single | extras | scanning)", tostring(name))
+		return
+	end
+	session.show(previewData(name), previewCallbacks)
+end
+
+-- Teardown for the session panel's webview. Not registered anywhere yet —
+-- ripper has no lifecycle cleanup of its own, and the root init.lua is out
+-- of this task's scope; add `lifecycle.registerCleanup(ripper.cleanup)` there
+-- when the dialog is wired into the real flow.
+function M.cleanup()
+	if previewTimer then
+		previewTimer:stop()
+		previewTimer = nil
+	end
+	session.cleanup()
 end
 
 function M.start()

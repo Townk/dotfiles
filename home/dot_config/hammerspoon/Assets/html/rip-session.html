@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+%%CSS%%
+</style>
+</head>
+<body>
+  <div class="panel" id="panel">
+    <div class="hdr">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="rgb(203,166,247)" stroke-width="1.6"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="2.6"></circle></svg>
+      <span class="vol" id="vol"></span>
+      <span class="meta" id="hdrMeta"></span>
+      <span class="spacer"></span>
+      <span class="meta">Rip this disc?</span>
+    </div>
+    <div class="rows" id="rows"></div>
+    <div class="footer">
+      <span id="summary"></span>
+      <span class="spacer"></span>
+      <span class="btn-ghost" id="btnDismiss">Not now</span>
+      <span class="btn-primary" id="btnStart">Start Rip</span>
+    </div>
+    <div class="hints" id="hints"></div>
+    <!-- Lives OUTSIDE .rows on purpose: .rows scrolls, and a dropdown
+         hanging below its row would be clipped by that overflow. Positioned
+         per-open from the anchor's rect (placeDropdown). -->
+    <div class="dropdown hidden" id="dropdown"></div>
+  </div>
+
+  <!-- Diagnostic trap, deliberately its OWN script element and first on the
+       page — same reason clipboard-picker.html carries one: a parse error in
+       the main block below aborts that block whole, silently, and WebKit
+       reports it nowhere Hammerspoon can see. -->
+  <script>
+    window.__lastError = null;
+    window.onerror = function (msg, src, line, col) {
+      window.__lastError = String(msg) + " @" + String(line) + ":" + String(col);
+    };
+  </script>
+  <script>
+  (function () {
+    'use strict';
+
+    // The session as Lua built it (session-dialog.lua's session_payload,
+    // embedded through json_for_script — see that function's comment for why
+    // every '<' is <-escaped). Re-delivered whole by __setSession when
+    // the scan finishes and real titles replace the "reading titles…" line.
+    var SESSION = %%SESSION_JSON%%;
+
+    //----------------------------------------------------------------------
+    // Inline SVG icons. No Nerd Font / @font-face anywhere in this panel
+    // (unlike the clipboard picker): every glyph below is markup, lifted
+    // from the mockups verbatim, so nothing here can race document.fonts.
+    //----------------------------------------------------------------------
+    var SVG_FILM = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 5v14M17 5v14M3 9h4M3 15h4M17 9h4M17 15h4"></path></svg>';
+    var SVG_FILM_LG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M7 5v14M17 5v14M3 9h4M3 15h4M17 9h4M17 15h4"></path></svg>';
+    var SVG_CHECK = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgb(166,227,161)" stroke-width="2.2"><path d="M4 12l5 5L20 7"></path></svg>';
+    var SVG_CHECK_SM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgb(166,227,161)" stroke-width="2.2"><path d="M4 12l5 5L20 7"></path></svg>';
+    var SVG_CLEAR = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(150,150,150,0.8)" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"></path></svg>';
+    var SVG_SEARCH = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="rgb(137,180,250)" stroke-width="2"><circle cx="11" cy="11" r="6"></circle><path d="M15.5 15.5L20 20"></path></svg>';
+
+    //----------------------------------------------------------------------
+    // State
+    //----------------------------------------------------------------------
+    // One entry per disc title, carrying both the disc facts (no, duration,
+    // seconds, size, inLibrary) and the operator's decisions (role, movie,
+    // name, attachTo). The plan posted back to Lua is derived from this
+    // array alone.
+    var rows = [];
+    var library = [];
+    var focusIdx = 0;
+
+    // The attach target new/unset extras inherit. Set by the FIRST library
+    // pick in an extras-only session; the feature's own pick takes
+    // precedence over it whenever a Feature row exists (attachFor below).
+    var defaultAttach = null;
+
+    // Dropdown: one shared element serving both the TMDB typeahead and the
+    // library picker. mode is 'tmdb' | 'lib' | null (closed).
+    var dd = { mode: null, row: -1, items: [], idx: 0, anchor: null };
+
+    // TMDB search: 250ms debounce, min 2 chars, monotonic seq. The seq
+    // travels to Lua and back so a slow reply for an older query can never
+    // paint over a newer one (Lua ALSO terminates the previous hs.task —
+    // belt and braces, same bug class the ripper chooser guards with its
+    // identity check).
+    var searchTimer = null;
+    var searchSeq = 0;
+
+    function post(action, extra) {
+      var msg = Object.assign({ action: action }, extra || {});
+      try { webkit.messageHandlers.ripSession.postMessage(msg); } catch (e) {}
+    }
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function arr(v) { return Array.isArray(v) ? v : []; }
+
+    //----------------------------------------------------------------------
+    // Session -> rows (default roles)
+    //----------------------------------------------------------------------
+    // Defaults: the longest title is the Feature; anything under two minutes
+    // is a Skip; everything else is an Extra. A title the server already has
+    // (inLibrary) is always a Skip — and if THAT is the longest title, the
+    // session has no Feature at all (an extras-only disc: the movie is
+    // already on the server, only its bonus content is missing).
+    function initRows(session) {
+      library = arr(session && session.library);
+      rows = [];
+      defaultAttach = null;
+      var titles = arr(session && session.titles);
+      var longest = -1, longestSecs = -1;
+      for (var i = 0; i < titles.length; i++) {
+        var secs = Number(titles[i].seconds) || 0;
+        if (secs > longestSecs) { longestSecs = secs; longest = i; }
+      }
+      for (var j = 0; j < titles.length; j++) {
+        var t = titles[j];
+        var role;
+        if (t.inLibrary) role = 'skip';
+        else if (j === longest) role = 'feature';
+        else if ((Number(t.seconds) || 0) < 120) role = 'skip';
+        else role = 'extra';
+        rows.push({
+          no: Number(t.no),
+          duration: t.duration || '',
+          seconds: Number(t.seconds) || 0,
+          size: t.size || '',
+          inLibrary: t.inLibrary || null,
+          role: role,
+          movie: null,     // {title, name, year, poster} once picked
+          query: '',       // the feature row's live search text
+          name: '',        // an extra's name
+          attachTo: null   // an extra's explicit library pick
+        });
+      }
+      focusIdx = 0;
+      for (var k = 0; k < rows.length; k++) {
+        if (rows[k].role === 'feature') { focusIdx = k; break; }
+      }
+    }
+
+    function featureRow() {
+      for (var i = 0; i < rows.length; i++) if (rows[i].role === 'feature') return rows[i];
+      return null;
+    }
+
+    function featureTitle() {
+      var f = featureRow();
+      return (f && f.movie) ? f.movie.title : null;
+    }
+
+    // Explicit per-extra pick wins; otherwise the session default — the
+    // feature's own pick when a Feature row exists, else the first library
+    // pick made in this session.
+    function attachFor(r) {
+      return r.attachTo || featureTitle() || defaultAttach || null;
+    }
+
+    // Mirrors rip::_check_extra_name (home/dot_local/lib/rip.zsh): non-empty,
+    // no slash (it becomes a filename component), never "." or "..". Slashes
+    // are stripped as they are typed (onNameInput); this is the verdict.
+    function nameValid(n) {
+      n = String(n || '').trim();
+      return n !== '' && n !== '.' && n !== '..' && n.indexOf('/') === -1;
+    }
+
+    //----------------------------------------------------------------------
+    // Render
+    //----------------------------------------------------------------------
+    function segHtml(r, i) {
+      function cell(role, label) {
+        var on = r.role === role ? ' class="on-' + role + '"' : '';
+        return '<span' + on + ' data-role="' + role + '" data-idx="' + i + '">' + label + '</span>';
+      }
+      return '<div class="seg">' + cell('feature', 'Feature') + cell('extra', 'Extra') + cell('skip', 'Skip') + '</div>';
+    }
+
+    function posterHtml(cls, url, placeholder) {
+      var img = url ? '<img src="' + esc(url) + '" onerror="this.remove()">' : '';
+      return '<div class="' + cls + '">' + placeholder + img + '</div>';
+    }
+
+    function detailHtml(r, i) {
+      if (r.role === 'skip') {
+        if (!r.inLibrary) return '';
+        return '<div class="detail"><div class="have">' + SVG_CHECK_SM
+          + '<span>already in your library &mdash; ' + esc(r.inLibrary) + '</span></div></div>';
+      }
+      if (r.role === 'feature') {
+        if (r.movie) {
+          return '<div class="detail"><div class="chip-movie">'
+            + posterHtml('poster', r.movie.poster, SVG_FILM)
+            + '<span class="chip-title">' + esc(r.movie.name || r.movie.title) + '</span>'
+            + (r.movie.year ? '<span class="meta">' + esc(r.movie.year) + '</span>' : '')
+            + SVG_CHECK
+            + '<span class="chip-clear" data-clear="' + i + '">' + SVG_CLEAR + '</span>'
+            + '</div></div>';
+        }
+        return '<div class="detail"><div class="search-field">' + SVG_SEARCH
+          + '<input id="featureSearch" type="text" autocomplete="off" spellcheck="false"'
+          + ' placeholder="Search TMDB for the movie…" value="' + esc(r.query) + '"></div></div>';
+      }
+      // extra
+      var target = attachFor(r);
+      var chip = target
+        ? '<span class="attach" data-attach="' + i + '">&rarr; ' + esc(target) + '</span>'
+        : (featureRow()
+          ? '<span class="attach" data-attach="' + i + '">&rarr; feature</span>'
+          : '<span class="attach open" data-attach="' + i + '">&rarr; choose movie&hellip;</span>');
+      var bad = (r.name !== '' && !nameValid(r.name)) ? ' invalid' : '';
+      return '<div class="detail">'
+        + '<input class="name-input' + bad + '" type="text" data-name="' + i + '"'
+        + ' autocomplete="off" spellcheck="false" placeholder="Extra name…" value="' + esc(r.name) + '">'
+        + chip + '</div>';
+    }
+
+    function renderRows() {
+      var el = document.getElementById('rows');
+      if (SESSION.scanning) {
+        el.innerHTML = '<div class="scanning">reading titles…</div>';
+        return;
+      }
+      if (rows.length === 0) {
+        el.innerHTML = '<div class="scanning">no titles on this disc</div>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var cls = 'row' + (r.role === 'feature' ? ' feature' : '') + (r.role === 'skip' ? ' skip' : '')
+          + (i === focusIdx ? ' focused' : '');
+        html += '<div class="' + cls + '" data-row="' + i + '">'
+          + '<div class="rowline">'
+          + '<span class="tno">Title ' + esc(r.no) + '</span>'
+          + '<span class="dur">' + esc(r.duration) + '</span>'
+          + '<span class="size">' + esc(r.size) + '</span>'
+          + '<span class="spacer"></span>'
+          + segHtml(r, i)
+          + '</div>'
+          + detailHtml(r, i)
+          + '</div>';
+      }
+      el.innerHTML = html;
+    }
+
+    function renderHeader() {
+      document.getElementById('vol').textContent = SESSION.volume || '';
+      var n = rows.length;
+      var bits = [];
+      if (SESSION.kind) bits.push(SESSION.kind);
+      bits.push(SESSION.scanning ? 'reading…' : (n + ' title' + (n === 1 ? '' : 's')));
+      document.getElementById('hdrMeta').innerHTML = esc(bits.join(' · '));
+    }
+
+    // What the plan would be, right now, plus whether Start may fire.
+    function planState() {
+      var feat = null, extras = [], skipped = [], libSkips = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (r.role === 'feature') feat = r;
+        else if (r.role === 'extra') extras.push(r);
+        else { skipped.push(r); if (r.inLibrary) libSkips++; }
+      }
+      var ok = true, reason = null;
+      if (SESSION.scanning) { ok = false; reason = 'reading the disc…'; }
+      else if (!feat && extras.length === 0) { ok = false; reason = 'nothing selected — pick a feature or an extra'; }
+      else if (feat && !feat.movie) { ok = false; reason = 'pick the feature to enable Start'; }
+      else {
+        for (var j = 0; j < extras.length; j++) {
+          if (!nameValid(extras[j].name)) { ok = false; reason = 'name every extra to enable Start'; break; }
+          if (!attachFor(extras[j])) { ok = false; reason = 'choose the movie each extra attaches to'; break; }
+        }
+      }
+      return { feature: feat, extras: extras, skipped: skipped, libSkips: libSkips, ok: ok, reason: reason };
+    }
+
+    function renderFooter() {
+      var st = planState();
+      var sumEl = document.getElementById('summary');
+      var btn = document.getElementById('btnStart');
+      if (!st.ok) {
+        sumEl.innerHTML = '<span class="meta">' + esc(st.reason) + '</span>';
+        btn.classList.add('disabled');
+        return;
+      }
+      btn.classList.remove('disabled');
+      var parts = [];
+      if (st.feature) parts.push('1 movie');
+      if (st.extras.length) parts.push(st.extras.length + ' extra' + (st.extras.length === 1 ? '' : 's'));
+      var tail = '&rarr; rip, encode &amp; push';
+      if (!st.feature && st.libSkips > 0 && st.skipped.length === st.libSkips) {
+        tail += ' &middot; feature already on the server';
+      } else if (st.skipped.length) {
+        tail += ' &middot; ' + st.skipped.length + ' skipped';
+      }
+      sumEl.innerHTML = '<span class="sum-strong">' + esc(parts.join(' + ')) + '</span> <span class="meta">' + tail + '</span>';
+    }
+
+    // The hints line is state-dependent, exactly as the mockups drew it:
+    // the dropdown's own keys while one is open, the panel's otherwise.
+    function renderHints() {
+      var el = document.getElementById('hints');
+      var html;
+      if (dd.mode === 'tmdb') {
+        html = hint('&uarr;&darr;', 'Result') + hint('&crarr;', 'Pick movie') + hint('esc', 'Close search');
+      } else if (dd.mode === 'lib') {
+        html = hint('&uarr;&darr;', 'Movie') + hint('&crarr;', 'Attach') + hint('esc', 'Close');
+      } else {
+        html = hint('&crarr;', 'Start rip') + hint('esc', 'Not now')
+          + hint('&larr;&rarr;', 'Role') + hint('&uarr;&darr;', 'Row');
+      }
+      el.innerHTML = html;
+      function hint(k, label) { return '<span><b>' + k + '</b>' + label + '</span>'; }
+    }
+
+    function render() {
+      renderHeader();
+      renderRows();
+      renderFooter();
+      renderHints();
+      scrollFocusedIntoView();
+    }
+
+    function scrollFocusedIntoView() {
+      var el = document.querySelector('.row.focused');
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    }
+
+    function focusFeatureSearch() {
+      var el = document.getElementById('featureSearch');
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    }
+
+    //----------------------------------------------------------------------
+    // Roles
+    //----------------------------------------------------------------------
+    // Feature is a RADIO; Extra and Skip are plain per-row toggles
+    // (operator's rule, 2026-08-20). Promoting a row to Feature demotes
+    // whichever row held it to Extra — with an empty name, because a movie
+    // pick is not an extra name — and the newly-promoted row always starts
+    // with an empty TMDB field rather than inheriting anything.
+    function setRole(i, role) {
+      var r = rows[i];
+      if (!r || r.role === role) { focusIdx = i; render(); return; }
+      if (role === 'feature') {
+        for (var j = 0; j < rows.length; j++) {
+          if (j !== i && rows[j].role === 'feature') {
+            rows[j].role = 'extra';
+            rows[j].movie = null;
+            rows[j].query = '';
+            rows[j].name = '';
+            rows[j].attachTo = null;
+          }
+        }
+        r.movie = null;
+        r.query = '';
+      }
+      r.role = role;
+      focusIdx = i;
+      closeDropdown(true);
+      render();
+      if (role === 'feature') focusFeatureSearch();
+    }
+
+    var ROLES = ['feature', 'extra', 'skip'];
+    function cycleRole(delta) {
+      var r = rows[focusIdx];
+      if (!r) return;
+      var at = ROLES.indexOf(r.role);
+      var next = Math.max(0, Math.min(ROLES.length - 1, at + delta));
+      if (next !== at) setRole(focusIdx, ROLES[next]);
+    }
+
+    function moveFocus(delta) {
+      if (rows.length === 0) return;
+      focusIdx = Math.max(0, Math.min(rows.length - 1, focusIdx + delta));
+      render();
+    }
+
+    //----------------------------------------------------------------------
+    // Dropdown (shared by the TMDB typeahead and the library picker)
+    //----------------------------------------------------------------------
+    function dropdownEl() { return document.getElementById('dropdown'); }
+
+    function closeDropdown(skipHints) {
+      dd.mode = null; dd.row = -1; dd.items = []; dd.idx = 0; dd.anchor = null;
+      var el = dropdownEl();
+      el.classList.add('hidden');
+      el.innerHTML = '';
+      if (!skipHints) renderHints();
+    }
+
+    function renderDropdown() {
+      var el = dropdownEl();
+      var html = '';
+      if (dd.mode === 'lib') html += '<div class="lib-hint">YOUR LIBRARY</div>';
+      if (dd.items.length === 0) {
+        html += '<div class="dropdown-empty">' + esc(dd.emptyText || 'no matches') + '</div>';
+      }
+      for (var i = 0; i < dd.items.length; i++) {
+        var it = dd.items[i];
+        var sel = (i === dd.idx) ? ' selected' : '';
+        if (dd.mode === 'lib') {
+          html += '<div class="result lib' + sel + '" data-res="' + i + '">' + SVG_FILM_LG
+            + '<span class="r-title">' + esc(it.name) + '</span>'
+            + (it.year ? '<span class="meta">' + esc(it.year) + '</span>' : '')
+            + '</div>';
+        } else {
+          html += '<div class="result' + sel + '" data-res="' + i + '">'
+            + posterHtml('poster-lg', it.poster, SVG_FILM_LG)
+            + '<div class="result-text">'
+            + '<div><span class="r-title">' + esc(it.name) + '</span>'
+            + (it.year ? ' <span class="meta">' + esc(it.year) + '</span>' : '') + '</div>'
+            + (it.overview ? '<div class="r-blurb">' + esc(it.overview) + '</div>' : '')
+            + '</div></div>';
+        }
+      }
+      el.innerHTML = html;
+      el.classList.remove('hidden');
+      placeDropdown();
+      var selEl = el.querySelector('.result.selected');
+      if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    // Absolute placement inside .panel, from the anchor's live rect: below
+    // the anchor normally, flipped above it when it would not fit. (The
+    // mockups hardcode a top/left; a real panel cannot.)
+    function placeDropdown() {
+      var el = dropdownEl();
+      var anchor = dd.anchor;
+      if (!anchor || !anchor.isConnected) { closeDropdown(); return; }
+      var pr = document.getElementById('panel').getBoundingClientRect();
+      var ar = anchor.getBoundingClientRect();
+      var left = Math.max(8, ar.left - pr.left);
+      if (dd.mode === 'lib') {
+        el.style.width = '290px';
+        left = Math.min(left, pr.width - 290 - 8);
+      } else {
+        el.style.width = Math.max(240, pr.width - left - 24) + 'px';
+      }
+      el.style.left = Math.max(8, left) + 'px';
+      var below = ar.bottom - pr.top + 4;
+      el.style.top = below + 'px';
+      var h = el.offsetHeight;
+      if (below + h > pr.height - 8) {
+        el.style.top = Math.max(8, ar.top - pr.top - h - 4) + 'px';
+      }
+    }
+
+    function openLibrary(i) {
+      if (library.length === 0) return;
+      var anchor = document.querySelector('.attach[data-attach="' + i + '"]');
+      if (!anchor) return;
+      dd.mode = 'lib';
+      dd.row = i;
+      dd.anchor = anchor;
+      dd.emptyText = 'no library entries';
+      dd.items = library.map(function (m) {
+        return { name: m.title, year: m.year, title: m.year ? (m.title + ' (' + m.year + ')') : m.title };
+      });
+      dd.idx = 0;
+      renderDropdown();
+      renderHints();
+    }
+
+    function pickResult() {
+      var it = dd.items[dd.idx];
+      if (!it) return;
+      if (dd.mode === 'lib') {
+        var r = rows[dd.row];
+        if (r) {
+          r.attachTo = it.title;
+          // The first library pick becomes the default for every other
+          // extra that has not chosen one of its own.
+          if (!defaultAttach) defaultAttach = it.title;
+          focusIdx = dd.row;
+        }
+        closeDropdown(true);
+        render();
+        return;
+      }
+      var f = rows[dd.row];
+      if (f) { f.movie = it; f.query = ''; focusIdx = dd.row; }
+      closeDropdown(true);
+      render();
+    }
+
+    function clearMovie(i) {
+      var r = rows[i];
+      if (!r) return;
+      r.movie = null;
+      r.query = '';
+      focusIdx = i;
+      closeDropdown(true);
+      render();
+      focusFeatureSearch();
+    }
+
+    //----------------------------------------------------------------------
+    // TMDB typeahead
+    //----------------------------------------------------------------------
+    function onSearchInput(el) {
+      // The search field only ever exists on the Feature row; find it by
+      // role rather than trusting focusIdx, which a click could have moved.
+      var r = featureRow();
+      if (!r) return;
+      r.query = el.value;
+      if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+      var q = el.value.trim();
+      if (q.length < 2) { closeDropdown(); return; }
+      searchTimer = setTimeout(function () {
+        searchTimer = null;
+        searchSeq++;
+        // The anchor must be resolved at SEND time, not reply time: the
+        // field is what the results hang under, and it is still on screen.
+        dd.anchor = document.getElementById('featureSearch');
+        post('search', { q: q, seq: searchSeq });
+      }, 250);
+    }
+
+    // Lua -> JS (session-dialog.lua's search handler). `seq` is the stale
+    // guard: a reply for anything but the newest query is dropped on the
+    // floor, even though Lua also terminates the previous task.
+    window.__setResults = function (payload) {
+      if (!payload || Number(payload.seq) !== searchSeq) return;
+      var f = featureRow();
+      if (!f || f.movie) return; // the operator picked (or the role changed) meanwhile
+      var idx = -1;
+      for (var i = 0; i < rows.length; i++) if (rows[i] === f) { idx = i; break; }
+      dd.mode = 'tmdb';
+      dd.row = idx;
+      dd.anchor = document.getElementById('featureSearch');
+      if (!dd.anchor) { closeDropdown(); return; }
+      dd.emptyText = payload.noKey ? 'no TMDB key configured' : 'no matches';
+      dd.items = arr(payload.results).map(function (m) {
+        return {
+          title: m.title || '',            // "Name (Year)" — what the plan carries
+          name: m.name || m.title || '',   // bare name, for the chip/result line
+          year: m.year || '',
+          overview: m.overview || '',
+          poster: m.poster || ''
+        };
+      });
+      dd.idx = 0;
+      renderDropdown();
+      renderHints();
+    };
+
+    // Lua -> JS: replace the whole session in place (the scanning -> titles
+    // transition). Deliberately a full reset: the previous state described a
+    // disc we had not read yet, so there is nothing worth preserving.
+    window.__setSession = function (data) {
+      if (!data) return;
+      SESSION = data;
+      closeDropdown(true);
+      initRows(SESSION);
+      render();
+      var f = featureRow();
+      if (f && !f.movie) focusFeatureSearch();
+    };
+
+    //----------------------------------------------------------------------
+    // Start / dismiss
+    //----------------------------------------------------------------------
+    function start() {
+      var st = planState();
+      if (!st.ok) return;
+      var plan = { extras: [], skipped: [] };
+      if (st.feature) plan.feature = { no: st.feature.no, movie: st.feature.movie.title };
+      for (var i = 0; i < st.extras.length; i++) {
+        var r = st.extras[i];
+        plan.extras.push({ no: r.no, name: String(r.name).trim(), attachTo: attachFor(r) });
+      }
+      for (var j = 0; j < st.skipped.length; j++) plan.skipped.push(st.skipped[j].no);
+      post('start', { plan: plan });
+    }
+
+    function dismiss() { post('dismiss'); }
+
+    //----------------------------------------------------------------------
+    // Events
+    //----------------------------------------------------------------------
+    // Bound ONCE on the containers, which render() never replaces — only
+    // their innerHTML (same delegation reason as clipboard-picker.html).
+    function bindEvents() {
+      var rowsEl = document.getElementById('rows');
+
+      rowsEl.addEventListener('mousedown', function (e) {
+        var t = e.target;
+        var seg = closestAttr(t, 'data-role');
+        if (seg) { e.preventDefault(); setRole(parseInt(seg.getAttribute('data-idx'), 10), seg.getAttribute('data-role')); return; }
+        var clear = closestAttr(t, 'data-clear');
+        if (clear) { e.preventDefault(); clearMovie(parseInt(clear.getAttribute('data-clear'), 10)); return; }
+        var attach = closestAttr(t, 'data-attach');
+        if (attach) { e.preventDefault(); openLibrary(parseInt(attach.getAttribute('data-attach'), 10)); return; }
+        // Anywhere else on a row: move the keyboard focus there, but do NOT
+        // preventDefault — a click on a text field must still focus it.
+        var row = closestAttr(t, 'data-row');
+        if (row) {
+          var i = parseInt(row.getAttribute('data-row'), 10);
+          if (i !== focusIdx) {
+            focusIdx = i;
+            // Repaint only the focus ring; a full render() here would blow
+            // away the input the click is on its way to focusing.
+            var all = rowsEl.querySelectorAll('.row');
+            for (var k = 0; k < all.length; k++) all[k].classList.remove('focused');
+            row.classList.add('focused');
+          }
+        }
+      });
+
+      // `input` bubbles, so one delegated listener covers both the feature
+      // search field and every extra's name field. Neither branch calls
+      // render(): rebuilding the rows mid-keystroke would destroy the very
+      // input being typed into (and its caret).
+      rowsEl.addEventListener('input', function (e) {
+        var t = e.target;
+        if (t.id === 'featureSearch') { onSearchInput(t); return; }
+        var idxAttr = t.getAttribute && t.getAttribute('data-name');
+        if (idxAttr == null) return;
+        var r = rows[parseInt(idxAttr, 10)];
+        if (!r) return;
+        // Strip slashes as they are typed (rip::_check_extra_name would
+        // reject the name outright); "." / ".." can only be judged once
+        // typing stops, so those just mark the field invalid.
+        var cleaned = t.value.replace(/\//g, '');
+        if (cleaned !== t.value) {
+          var caret = Math.max(0, (t.selectionStart || 1) - 1);
+          t.value = cleaned;
+          t.setSelectionRange(caret, caret);
+        }
+        r.name = t.value;
+        t.classList.toggle('invalid', r.name !== '' && !nameValid(r.name));
+        renderFooter();
+      });
+
+      dropdownEl().addEventListener('mousedown', function (e) {
+        var res = closestAttr(e.target, 'data-res');
+        if (!res) return;
+        e.preventDefault();
+        dd.idx = parseInt(res.getAttribute('data-res'), 10);
+        pickResult();
+      });
+
+      document.getElementById('btnStart').addEventListener('mousedown', function (e) { e.preventDefault(); start(); });
+      document.getElementById('btnDismiss').addEventListener('mousedown', function (e) { e.preventDefault(); dismiss(); });
+
+      document.addEventListener('keydown', onKeyDown);
+    }
+
+    function closestAttr(node, attr) {
+      while (node && node.getAttribute) {
+        if (node.getAttribute(attr) != null) return node;
+        node = node.parentNode;
+      }
+      return null;
+    }
+
+    function onKeyDown(e) {
+      var t = e.target;
+      var inText = !!(t && t.tagName === 'INPUT');
+
+      // Dropdown open: it owns the arrows, Enter and Escape. Escape closes
+      // the dropdown ONLY — it must never dismiss the panel from here (the
+      // mockups' own hint line says "esc — Close search").
+      if (dd.mode) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); dd.idx = Math.min(dd.items.length - 1, dd.idx + 1); renderDropdown(); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); dd.idx = Math.max(0, dd.idx - 1); renderDropdown(); return; }
+        if (e.key === 'Enter') { e.preventDefault(); pickResult(); return; }
+        if (e.key === 'Escape') { e.preventDefault(); closeDropdown(); return; }
+        // anything else falls through to normal typing
+      }
+
+      if (e.key === 'Escape') { e.preventDefault(); dismiss(); return; }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (inText) { t.blur(); return; } // commit the field; a second Enter starts
+        start();
+        return;
+      }
+
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (inText) t.blur(); moveFocus(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); if (inText) t.blur(); moveFocus(-1); return; }
+
+      // Role keys never fire while typing: left/right must move the caret,
+      // and f/e/s are ordinary letters in a name.
+      if (inText) return;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); cycleRole(-1); return; }
+      if (e.key === 'ArrowRight') { e.preventDefault(); cycleRole(1); return; }
+      if (e.key === 'f') { e.preventDefault(); setRole(focusIdx, 'feature'); return; }
+      if (e.key === 'e') { e.preventDefault(); setRole(focusIdx, 'extra'); return; }
+      if (e.key === 's') { e.preventDefault(); setRole(focusIdx, 'skip'); return; }
+    }
+
+    //----------------------------------------------------------------------
+    // Boot
+    //----------------------------------------------------------------------
+    bindEvents();
+    initRows(SESSION);
+    render();
+    var boot = featureRow();
+    if (boot && !boot.movie) focusFeatureSearch();
+  })();
+  </script>
+</body>
+</html>

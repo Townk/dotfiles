@@ -1,4 +1,6 @@
-# rip-tmdb-search — TMDB typeahead backend for the ripper chooser.
+# rip-tmdb-search — TMDB typeahead backend for the ripper's chooser and for
+# the Rip Session Review webview (which needs the bare name and a one-line
+# overview alongside the composed "Name (Year)" title the chooser uses).
 Describe 'rip-tmdb-search'
   BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-tmdb-search"
 
@@ -7,7 +9,7 @@ Describe 'rip-tmdb-search'
     cat > "$TS_SANDBOX/curl" <<'EOF'
 #!/bin/sh
 cat <<'JSON'
-{"results":[{"title":"Heat","release_date":"1995-12-15","poster_path":"/a.jpg"},
+{"results":[{"title":"Heat","release_date":"1995-12-15","poster_path":"/a.jpg","overview":"Obsessive master thief."},
 {"title":"Heat","release_date":"2013-06-01","poster_path":null}]}
 JSON
 EOF
@@ -26,6 +28,19 @@ EOF
     The line 1 of output should include 'image.tmdb.org/t/p/w92/a.jpg'
     The line 2 of output should include '"title":"Heat (2013)"'
     The line 2 of output should not include 'image.tmdb.org'
+  End
+
+  # The webview's result rows render the name and the year in separate
+  # spans, so the bare name has to travel alongside the composed title
+  # rather than being re-derived by stripping " (YYYY)" client-side.
+  It 'carries the bare name and the one-line overview'
+    When run zsh "$BIN" heat
+    The status should equal 0
+    The line 1 of output should include '"name":"Heat"'
+    The line 1 of output should include '"overview":"Obsessive master thief."'
+    # A result TMDB has no overview for still carries the key, empty — the
+    # client tests it for truthiness and simply omits the blurb line.
+    The line 2 of output should include '"overview":""'
   End
 
   It 'exits 3 without a key'

@@ -1,7 +1,14 @@
 #!/usr/bin/env zsh
 # rip-tmdb-search — TMDB movie search as JSON lines, for the ripper
-# module's hs.chooser typeahead. One line per result:
-#   {"title":"Heat (1995)","year":"1995","poster":"https://…/w92/x.jpg"}
+# module's typeaheads. One line per result:
+#   {"title":"Heat (1995)","year":"1995","poster":"https://…/w92/x.jpg",
+#    "name":"Heat","overview":"Obsessive master thief…"}
+# `title` (the composed "Name (Year)" the pipeline consumes), `year` and
+# `poster` are the original contract the hs.chooser consumer parses — never
+# reorder or drop those. `name` (the bare title, no year) and `overview`
+# were ADDED for the Rip Session Review webview, whose result rows show the
+# name and year in separate spans above a one-line blurb; the chooser
+# ignores the extra keys.
 # The API key comes from the environment (system-secrets); it never
 # appears in code or on the process command line of the curl call's URL —
 # it rides a --data-urlencode pair, which is still argv-visible locally
@@ -24,8 +31,9 @@ base="${RIP_TMDB_URL:-https://api.themoviedb.org/3}"
   | jq -c '.results[]
       | {year: ((.release_date // "")[:4]),
          poster: (if .poster_path then "https://image.tmdb.org/t/p/w92\(.poster_path)" else "" end),
-         t: .title}
+         t: .title,
+         overview: (.overview // "")}
       | {title: (if .year != "" then "\(.t) (\(.year))" else .t end),
-         year, poster}
+         year, poster, name: .t, overview}
       | if .poster == "" then del(.poster) else . end' \
   | head -12
