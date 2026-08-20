@@ -130,6 +130,18 @@ EOF
     The stderr should include "title"
   End
 
+  It 'rejects a movie title of ".." (bare path-segment escape)'
+    When run zsh -c "source $RIPLIB && rip::extra_enqueue 2 '..' 'Trailer'"
+    The status should equal 2
+    The stderr should include ".."
+  End
+
+  It 'rejects an extra name of ".." (defense-in-depth, hygiene)'
+    When run zsh -c "source $RIPLIB && rip::extra_enqueue 2 'A Movie (2001)' '..'"
+    The status should equal 2
+    The stderr should include ".."
+  End
+
   # --- worker happy path ---------------------------------------------------
 
   It 'worker happy path: encodes direct from disc, publishes, pushes, and cleans'
@@ -194,6 +206,26 @@ EOF
     The stderr should include "extra encode failed"
     The path "$RIP_STAGING_ROOT/.work/.extra-encode.mkv" should not be exist
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)" should not be exist
+  End
+
+  # --- push failure ------------------------------------------------------
+
+  # Mirrors the encode-failure test above, but the encode SUCCEEDS and the
+  # subsequent push fails: the already-published extra must stay exactly
+  # where it is (movies/<Movie>/extras/<Name>.mkv), kept for a plain
+  # `rip-push movies` retry with no re-encode — the same cleanup contract
+  # rip::pipeline_worker documents for its own push/verify failure. Nothing
+  # may land server-side. The fake rsync forced to fail unconditionally
+  # (rc 23) is the same idiom rip-push_spec.sh's "worker propagates rsync
+  # failure" example uses.
+  It 'push failure: encode published, rsync fails, extra kept locally, nothing server-side'
+    printf '#!/bin/sh\nexit 23\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    The status should equal 23
+    The stderr should include "rsync failed"
+    The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/extras/Behind the Scenes.mkv" should be exist
+    The path "$RIP_SANDBOX/server/movies/A Movie (2001)/extras/Behind the Scenes.mkv" should not be exist
   End
 
   # --- enqueue shape ---------------------------------------------------------

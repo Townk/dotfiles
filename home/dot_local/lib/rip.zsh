@@ -683,6 +683,12 @@ rip::_check_title() {
   case "$1" in
     "" ) log_error "rip: empty title"; return 2 ;;
     */*) log_error "rip: title may not contain a slash: $1"; return 2 ;;
+    # A bare "." or ".." composes as a path segment ($staging/movies/<title>
+    # or …/movies/<title>/extras): "." is a no-op segment (harmless but
+    # meaningless as a title) and ".." walks back up a level — a title of
+    # ".." makes $staging/movies/../extras, escaping the movies/ subtree
+    # entirely. Reject both outright rather than let either compose.
+    . | ..) log_error "rip: title may not be . or ..: $1"; return 2 ;;
   esac
   return 0
 }
@@ -929,17 +935,28 @@ rip::_dvd_volume() {
 
 # rip::_hb_dvd <hb_bin> <args…> — run HandBrakeCLI directly against the
 # optical drive (a --scan, or a -t <n> encode) with
-# DYLD_FALLBACK_LIBRARY_PATH exported ahead of exec, inside a bare `sh -c`
-# — the proven pattern (see the disc worker) for HandBrakeCLI invoked
-# outside a full shell login environment: pueue snapshots the ENQUEUING
+# DYLD_FALLBACK_LIBRARY_PATH exported ahead of exec, inside a bare `sh -c`.
+# The export has to happen INSIDE the child `sh -c` — not in this
+# function's own environment before exec'ing HandBrakeCLI directly —
+# because SIP strips DYLD_* from the environment of protected parent
+# processes; only a freshly-spawned, unprotected `sh -c` can carry it
+# through to HandBrakeCLI. libdvdcss itself lives at /opt/homebrew/lib
+# (brew). This is the FIRST use of this technique anywhere in this repo —
+# no disc worker or any other code here does this, despite what an earlier
+# version of this comment claimed — and it has NOT yet been exercised
+# against a real disc; manual live-disc verification is an outstanding
+# follow-up. The actual precedent is the runbook (fleet repo,
+# runbooks/rip-media.md), which documents this same CLI+DYLD fact for
+# manual/watcher-down use. Separately: pueue snapshots the ENQUEUING
 # process's environment (not a login shell's), and a hand-run `rip-extra
-# --list` straight from Hammerspoon has the same gap, so its own dylibs go
-# unfound on the default search path without this. RIP_DYLD_FALLBACK_PATH
-# is the seam (defaults to Homebrew's own lib dir); the fake HandBrakeCLI in
-# tests ignores the environment entirely, so no test needs to touch it.
-# Args ride through sh -c's own positional "$@" mechanism rather than being
-# string-interpolated into the script text, so a volume path or extra name
-# containing spaces or shell metacharacters is safe.
+# --list` straight from Hammerspoon has the same gap, so HandBrakeCLI's own
+# dylibs go unfound on the default search path without this either way.
+# RIP_DYLD_FALLBACK_PATH is the seam (defaults to Homebrew's own lib dir);
+# the fake HandBrakeCLI in tests ignores the environment entirely, so no
+# test needs to touch it. Args ride through sh -c's own positional "$@"
+# mechanism rather than being string-interpolated into the script text, so
+# a volume path or extra name containing spaces or shell metacharacters is
+# safe.
 rip::_hb_dvd() {
   local hb_bin="$1"; shift
   local dyld="${RIP_DYLD_FALLBACK_PATH:-/opt/homebrew/lib}"
@@ -997,6 +1014,13 @@ rip::_check_extra_name() {
   case "$1" in
     "") log_error "rip: empty extra name"; return 2 ;;
     */*) log_error "rip: extra name may not contain a slash: $1"; return 2 ;;
+    # Same defense-in-depth as rip::_check_title, for consistency: a name
+    # of "." or ".." isn't actually a traversal here (the ".mkv" suffix
+    # composes it into "..mkv" or "...mkv" respectively — harmless garbage,
+    # not a path escape), but rejecting it outright is simpler than
+    # explaining why it's fine, and it matches the title rule's shape
+    # exactly.
+    . | ..) log_error "rip: extra name may not be . or ..: $1"; return 2 ;;
   esac
   return 0
 }
