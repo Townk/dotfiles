@@ -1,0 +1,31 @@
+#!/usr/bin/env zsh
+# rip-tmdb-search — TMDB movie search as JSON lines, for the ripper
+# module's hs.chooser typeahead. One line per result:
+#   {"title":"Heat (1995)","year":"1995","poster":"https://…/w92/x.jpg"}
+# The API key comes from the environment (system-secrets); it never
+# appears in code or on the process command line of the curl call's URL —
+# it rides a --data-urlencode pair, which is still argv-visible locally
+# but never lands in a committed file. Exit 3 = no key (the module
+# degrades to a plain prompt on that code specifically).
+
+set -eu -o pipefail
+
+query="${1:-}"
+[ -n "$query" ] || { print -ru2 -- "usage: rip-tmdb-search <query>"; exit 2 }
+[ -n "${TMDB_API_KEY:-}" ] || { print -ru2 -- "rip-tmdb-search: TMDB_API_KEY is not set (system-secrets)"; exit 3 }
+
+curl_bin="${RIP_CURL_BIN:-curl}"
+base="${RIP_TMDB_URL:-https://api.themoviedb.org/3}"
+
+"$curl_bin" -sf -G "$base/search/movie" \
+    --data-urlencode "query=$query" \
+    --data-urlencode "api_key=$TMDB_API_KEY" \
+    --data-urlencode "include_adult=false" \
+  | jq -c '.results[]
+      | {year: ((.release_date // "")[:4]),
+         poster: (if .poster_path then "https://image.tmdb.org/t/p/w92\(.poster_path)" else "" end),
+         t: .title}
+      | {title: (if .year != "" then "\(.t) (\(.year))" else .t end),
+         year, poster}
+      | if .poster == "" then del(.poster) else . end' \
+  | head -12
