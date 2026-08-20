@@ -262,6 +262,31 @@ rip::_track_meta() {
   printf '%s\t%s\t%s\t%s\n' "$artist" "$album" "$title" "$dur"
 }
 
+# rip::_mb_call <curl_bin> <jq_filter> <curl args…> — MusicBrainz rate-
+# limits to ~1 req/s; a request arriving right behind another of OUR OWN
+# calls (e.g. the artist-image step's MB lookup right after the cover
+# step's own MB lookup for the same run) gets 503'd, and `curl -sf` fails
+# silently — the caller would otherwise honestly report a miss on data
+# that's really there (live-caught 2026-08-20: the chain missed on a real
+# push while succeeding standalone). Sleeps RIP_MB_PAUSE_S before the
+# request to space it from whatever MB call came before, then — only if
+# the parse comes back empty — retries ONCE after RIP_MB_RETRY_PAUSE_S.
+# Deezer/Wikidata/Commons don't rate-limit at our volumes, so this wrapper
+# is MB-only. Both pauses are seams (defaults 1s / 3s) so the test suite
+# can zero them out and stay fast.
+rip::_mb_call() {
+  local curl_bin="$1" jq_filter="$2"; shift 2
+  local pause="${RIP_MB_PAUSE_S:-1}" retry_pause="${RIP_MB_RETRY_PAUSE_S:-3}"
+  local result
+  (( pause > 0 )) && sleep "$pause"
+  result="$("$curl_bin" "$@" 2>/dev/null | jq -r "$jq_filter")"
+  if [[ -z "$result" || "$result" == null ]]; then
+    (( retry_pause > 0 )) && sleep "$retry_pause"
+    result="$("$curl_bin" "$@" 2>/dev/null | jq -r "$jq_filter")"
+  fi
+  print -r -- "$result"
+}
+
 rip::_fetch_cover() {
   local artist="$1" album="$2" out="$3"
   local curl_bin="${RIP_CURL_BIN:-curl}"
@@ -269,10 +294,10 @@ rip::_fetch_cover() {
   local caa="${RIP_CAA_URL:-https://coverartarchive.org}"
   local itunes="${RIP_ITUNES_URL:-https://itunes.apple.com}"
   local mbid
-  mbid="$("$curl_bin" -sf -A 'fleet-rip/2.0' -G "$mb/release/" \
+  mbid="$(rip::_mb_call "$curl_bin" '(.releases // [])[0].id // empty' \
+      -sf -A 'fleet-rip/2.0' -G "$mb/release/" \
       --data-urlencode "query=release:\"$album\" AND artist:\"$artist\"" \
-      --data-urlencode fmt=json --data-urlencode limit=1 2>/dev/null \
-    | jq -r '(.releases // [])[0].id // empty')"
+      --data-urlencode fmt=json --data-urlencode limit=1)"
   if [[ -n "$mbid" ]]; then
     "$curl_bin" -sfL -o "$out" "$caa/release/$mbid/front-500" 2>/dev/null \
       && [[ -s "$out" ]] && return 0
@@ -350,15 +375,15 @@ rip::_fetch_artist_image() {
   fi
   # Fallback: MusicBrainz artist search → url-rels → Wikidata P18 → Commons.
   local mbid
-  mbid="$("$curl_bin" -sf -A 'fleet-rip/2.0' -G "$mb/artist/" \
+  mbid="$(rip::_mb_call "$curl_bin" '(.artists // [])[0].id // empty' \
+      -sf -A 'fleet-rip/2.0' -G "$mb/artist/" \
       --data-urlencode "query=artist:\"$artist\"" \
-      --data-urlencode fmt=json --data-urlencode limit=1 2>/dev/null \
-    | jq -r '(.artists // [])[0].id // empty')"
+      --data-urlencode fmt=json --data-urlencode limit=1)"
   [[ -n "$mbid" ]] || return 1
   local resource wikidata_id
-  resource="$("$curl_bin" -sf -A 'fleet-rip/2.0' \
-      "$mb/artist/$mbid?inc=url-rels&fmt=json" 2>/dev/null \
-    | jq -r '[(.relations // [])[] | select((.url.resource // "") | test("wikidata\\.org"))][0].url.resource // empty')"
+  resource="$(rip::_mb_call "$curl_bin" \
+      '[(.relations // [])[] | select((.url.resource // "") | test("wikidata\\.org"))][0].url.resource // empty' \
+      -sf -A 'fleet-rip/2.0' "$mb/artist/$mbid?inc=url-rels&fmt=json")"
   wikidata_id="${resource##*/}"
   [[ -n "$wikidata_id" ]] || return 1
   local filename
@@ -472,9 +497,25 @@ rip::_enrich_music() {
     meta="$(rip::_track_meta "${flacs[1]}")"
     artist="${meta%%$'\t'*}"
     album="$(print -r -- "$meta" | cut -f2)"
-    # cover: fetch once per album, embed where absent, ship cover.jpg
+    # cover: fetch once per album, embed where absent, ship cover.jpg.
+    # Source priority when cover.jpg doesn't exist yet: an embedded
+    # PICTURE block on the album's first listed track wins over any
+    # external fetch — XLD matched it against the actual disc, so it's
+    # the most trustworthy source there is. An external search can be
+    # fooled by an ambiguous title (live-bitten 2026-08-20: "MTV ao Vivo"
+    # matched the wrong release) and Navidrome's default
+    # CoverArtPriority puts cover.* ABOVE embedded art, so a wrong
+    # external fetch would win the display even though per-track
+    # idempotency correctly left the good embedded art alone. Only fall
+    # through to the external MB/CAA→iTunes chain when no listed track
+    # in the album carries embedded art at all.
     local cover="$abs/cover.jpg" have_cover=0
     [[ -s "$cover" ]] && have_cover=1
+    if (( ! have_cover )) \
+        && [[ -n "$("$mf" --list --block-type=PICTURE "${flacs[1]}" 2>/dev/null)" ]]; then
+      "$mf" --export-picture-to="$cover" "${flacs[1]}" 2>/dev/null \
+        && [[ -s "$cover" ]] && have_cover=1
+    fi
     if (( ! have_cover )) && [[ -n "$artist" && -n "$album" ]]; then
       rip::_fetch_cover "$artist" "$album" "$cover" && have_cover=1 || failed=1
     fi

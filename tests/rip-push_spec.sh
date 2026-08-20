@@ -6,7 +6,7 @@ Describe 'rip.zsh push'
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
   setup() {
-    RIP_SANDBOX=$(mktemp -d)
+    export RIP_SANDBOX=$(mktemp -d)
     export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
     export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
     export JOB_STATE_ROOT="$RIP_SANDBOX/state"
@@ -28,6 +28,12 @@ EOF
     # it suite-wide; the three age-gate examples below re-export the real
     # default themselves since gating behavior is exactly what they test.
     export RIP_PUSH_MIN_AGE_S=0
+    # MusicBrainz rate-limit pacing (rip::_mb_call): zero both pauses so
+    # the suite stays fast — the retry-behavior examples below assert the
+    # RETRY happens (fake curl fails once, succeeds the second call), not
+    # that any particular delay elapses.
+    export RIP_MB_PAUSE_S=0
+    export RIP_MB_RETRY_PAUSE_S=0
   }
   cleanup() { rm -rf "$RIP_SANDBOX"; }
   BeforeEach 'setup'
@@ -46,6 +52,13 @@ EOF
     local -a f=("$RIP_STAGING_ROOT"/.work/push-*.list(N))
     print -r -- "${#f}"
   }
+
+  # mb_*_call_count() — read back the counter files the MB-retry regression
+  # tests' fake curl scripts bump on each call to the given endpoint, so an
+  # example can assert the retry actually fired (count 2) rather than just
+  # that the end result happened to land.
+  mb_release_call_count() { cat "$RIP_SANDBOX/mb_release_count" 2>/dev/null; }
+  mb_artist_call_count() { cat "$RIP_SANDBOX/mb_artist_count" 2>/dev/null; }
 
   It 'rejects an unknown type'
     When run zsh -c "source $RIPLIB && rip::push_enqueue books"
@@ -385,6 +398,10 @@ EOF
 printf '%s\n' "$*" >> "$RIP_FAKE_MF_LOG"
 case "$*" in
   *--list*PICTURE*) echo "METADATA block #2"; echo "  type: 6 (PICTURE)" ;;
+  *--export-picture-to=*)
+    out=""
+    for a in "$@"; do case "$a" in --export-picture-to=*) out="${a#--export-picture-to=}";; esac; done
+    [ -n "$out" ] && printf 'EMBEDDEDJPEG' > "$out" ;;
   *--show-tag=LYRICS*) echo "LYRICS=already here" ;;
   *--show-tag=ARTIST*) echo "ARTIST=Art" ;;
   *--show-tag=ALBUM*) echo "ALBUM=Alb" ;;
@@ -397,6 +414,51 @@ EOF
     The output should include "verified"
     The contents of file "$RIP_FAKE_MF_LOG" should not include "--import-picture-from"
     The contents of file "$RIP_FAKE_MF_LOG" should not include "--set-tag-from-file"
+    # embedded art won — no external cover search was needed
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "coverartarchive"
+  End
+
+  # Live defect (root-caused by the controller, 2026-08-20): an album where
+  # XLD had already embedded correct cover art still got a WRONG cover.jpg
+  # fetched externally — an ambiguous title ("MTV ao Vivo") matched another
+  # release. Navidrome's default CoverArtPriority puts cover.* ABOVE
+  # embedded, so the wrong external fetch won the display even though
+  # per-track idempotency correctly left the good embedded art alone. Fix:
+  # when cover.jpg is absent, an embedded PICTURE block on the album's
+  # FIRST listed track — the most trustworthy source, since XLD matched it
+  # against the actual disc — is exported to cover.jpg and used, and the
+  # external MB/CAA→iTunes chain is only tried when no listed track
+  # carries embedded art at all. (The live album itself was already
+  # corrected server-side by the controller; this is the systemic fix.)
+  It 'cover: an embedded PICTURE block on the album — first track wins over any external fetch'
+    enrich_setup
+    cat > "$RIP_SANDBOX/metaflac" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_MF_LOG"
+case "$*" in
+  *--list*PICTURE*) echo "METADATA block #2"; echo "  type: 6 (PICTURE)" ;;
+  *--export-picture-to=*)
+    out=""
+    for a in "$@"; do case "$a" in --export-picture-to=*) out="${a#--export-picture-to=}";; esac; done
+    [ -n "$out" ] && printf 'EMBEDDEDJPEG' > "$out" ;;
+  *--show-tag=LYRICS*) exit 0 ;;
+  *--show-tag=ARTIST*) echo "ARTIST=Art" ;;
+  *--show-tag=ALBUM*) echo "ALBUM=Alb" ;;
+  *--show-tag=TITLE*) echo "TITLE=Song" ;;
+  *--show-total-samples*) echo 8820000 ;;
+  *--show-sample-rate*) echo 44100 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/metaflac"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_FAKE_MF_LOG" should include "--export-picture-to"
+    # no external cover source was ever consulted
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "coverartarchive"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "itunes"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "/release/"
   End
 
   # Regression guard (final-review finding 1): rip::_enrich_music used to
@@ -787,5 +849,94 @@ EOF
     # syntax error), so the fetch chain proceeded normally
     The contents of file "$RIP_SANDBOX/ssh.log" should include "RC=1"
     The contents of file "$RIP_SANDBOX/curl.log" should include "search/artist"
+  End
+
+  # Live defect (root-caused by the controller, 2026-08-20): the
+  # artist-image chain missed on a real push while the SAME chain
+  # succeeded standalone. MusicBrainz rate-limits to ~1 req/s; the
+  # enrichment pass had just made its own MB cover-lookup call, so the
+  # artist-image step's MB search landed right behind it and got 503'd —
+  # `curl -sf` fails silently and the chain honestly reported a miss on
+  # data that was really there. rip::_mb_call now paces every MB call and
+  # retries once (both suite-wide zeroed via RIP_MB_PAUSE_S /
+  # RIP_MB_RETRY_PAUSE_S in setup() so this stays fast).
+
+  It 'cover: MusicBrainz release search retries once after a transient rate-limit failure, then lands the cover'
+    enrich_setup
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *musicbrainz*/release/)
+    n=0
+    [ -f "$RIP_SANDBOX/mb_release_count" ] && n=$(cat "$RIP_SANDBOX/mb_release_count")
+    n=$((n+1))
+    echo "$n" > "$RIP_SANDBOX/mb_release_count"
+    [ "$n" -eq 1 ] && exit 22   # simulate a 503: curl -sf fails silently
+    echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *coverartarchive*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'JPEGDATA' > "$out" ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+  *deezer*) echo '{"data":[]}' ;;
+  *inc=url-rels*) echo '{"relations":[]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[]}' ;;
+  *wikidata*) echo '{"claims":{}}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_FAKE_MF_LOG" should include "--import-picture-from"
+    # proves the retry actually fired — not just that the end state happened
+    The result of function mb_release_call_count should equal "2"
+  End
+
+  It 'artist image: MusicBrainz artist search retries once after a transient rate-limit failure, then still lands the image'
+    enrich_setup
+    fake_copy_rsync
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *musicbrainz*artist/)
+    n=0
+    [ -f "$RIP_SANDBOX/mb_artist_count" ] && n=$(cat "$RIP_SANDBOX/mb_artist_count")
+    n=$((n+1))
+    echo "$n" > "$RIP_SANDBOX/mb_artist_count"
+    [ "$n" -eq 1 ] && exit 22   # simulate a 503: curl -sf fails silently
+    echo '{"artists":[{"id":"mbid-artist-1"}]}' ;;
+  *inc=url-rels*) echo '{"relations":[{"url":{"resource":"https://www.wikidata.org/wiki/Q42"}}]}' ;;
+  *musicbrainz*) echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *deezer*) echo '{"data":[]}' ;;
+  *wikidata*api.php*) echo '{"claims":{"P18":[{"mainsnak":{"datavalue":{"value":"Some Artist.jpg"}}}]}}' ;;
+  *commons*Special:FilePath*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'COMMONSJPEG' > "$out" ;;
+  *coverartarchive*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'JPEGDATA' > "$out" ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The path "$RIP_SANDBOX/server/music/Art/artist.jpg" should be exist
+    The contents of file "$RIP_SANDBOX/server/music/Art/artist.jpg" should equal "COMMONSJPEG"
+    The result of function mb_artist_call_count should equal "2"
   End
 End
