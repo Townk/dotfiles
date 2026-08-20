@@ -288,6 +288,113 @@ rip::_fetch_cover() {
   rm -f -- "$out"; return 1
 }
 
+# Deezer's empty-image placeholder cover, keyed by MD5 (live-discovered
+# 2026-08-20): any picture_xl containing this must be rejected outright.
+RIP_ARTIST_IMAGE_PLACEHOLDER_MD5='d41d8cd98f00b204e9800998ecf8427e'
+
+# rip::_remote_has_artist_image <artist_reldir> — existence check on the
+# server, ahead of any fetch (idempotency, per operator requirement). If
+# rip::remote_base contains a ':' it's `user@host:path`: shell out to `ssh
+# <host> test -f …`. No ':' (the hermetic tests use a plain local dir): a
+# direct filesystem test. Returns 0 exists / 1 confirmed absent / 2 unknown
+# (the ssh call itself failed to run — e.g. the host is unreachable — rc
+# 255 on a real ssh; distinct from the remote `test -f` legitimately
+# reporting rc 1). The caller treats 2 exactly like "unknown": never block,
+# never refetch blindly, just skip the fetch this run and log one line.
+rip::_remote_has_artist_image() {
+  local artist_rel="$1"
+  local base; base="$(rip::remote_base)"
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    "$ssh_bin" "$host" "test -f '$rpath/music/$artist_rel/artist.jpg'" 2>/dev/null
+    local rc=$?
+    (( rc == 0 )) && return 0
+    (( rc == 1 )) && return 1
+    return 2
+  fi
+  [[ -f "$base/music/$artist_rel/artist.jpg" ]] && return 0
+  return 1
+}
+
+# rip::_fetch_artist_image <artist> <out> — keyless fetch chain: Deezer
+# first (REJECT any picture_xl containing Deezer's empty-image placeholder
+# MD5, live-discovered 2026-08-20), then Wikimedia via MusicBrainz→Wikidata
+# as fallback. rc 1 on a total miss (best-effort; caller never fails the
+# push over this).
+rip::_fetch_artist_image() {
+  local artist="$1" out="$2"
+  local curl_bin="${RIP_CURL_BIN:-curl}"
+  local deezer="${RIP_DEEZER_URL:-https://api.deezer.com}"
+  local mb="${RIP_MB_URL:-https://musicbrainz.org/ws/2}"
+  local wikidata="${RIP_WIKIDATA_URL:-https://www.wikidata.org}"
+  local commons="${RIP_COMMONS_URL:-https://commons.wikimedia.org}"
+  local pic_url
+  pic_url="$("$curl_bin" -sf -A 'fleet-rip/2.0' -G "$deezer/search/artist" \
+      --data-urlencode "q=$artist" 2>/dev/null \
+    | jq -r '(.data // [])[0].picture_xl // empty')"
+  if [[ -n "$pic_url" && "$pic_url" != *"$RIP_ARTIST_IMAGE_PLACEHOLDER_MD5"* ]]; then
+    "$curl_bin" -sfL -o "$out" "$pic_url" 2>/dev/null && [[ -s "$out" ]] && return 0
+    rm -f -- "$out"
+  fi
+  # Fallback: MusicBrainz artist search → url-rels → Wikidata P18 → Commons.
+  local mbid
+  mbid="$("$curl_bin" -sf -A 'fleet-rip/2.0' -G "$mb/artist/" \
+      --data-urlencode "query=artist:\"$artist\"" \
+      --data-urlencode fmt=json --data-urlencode limit=1 2>/dev/null \
+    | jq -r '(.artists // [])[0].id // empty')"
+  [[ -n "$mbid" ]] || return 1
+  local resource wikidata_id
+  resource="$("$curl_bin" -sf -A 'fleet-rip/2.0' \
+      "$mb/artist/$mbid?inc=url-rels&fmt=json" 2>/dev/null \
+    | jq -r '[(.relations // [])[] | select((.url.resource // "") | test("wikidata\\.org"))][0].url.resource // empty')"
+  wikidata_id="${resource##*/}"
+  [[ -n "$wikidata_id" ]] || return 1
+  local filename
+  filename="$("$curl_bin" -sf -G "$wikidata/w/api.php" \
+      --data-urlencode action=wbgetclaims \
+      --data-urlencode "entity=$wikidata_id" \
+      --data-urlencode property=P18 \
+      --data-urlencode format=json 2>/dev/null \
+    | jq -r '(.claims.P18 // [])[0].mainsnak.datavalue.value // empty')"
+  [[ -n "$filename" ]] || return 1
+  local encoded; encoded="$(jq -rn --arg s "$filename" '$s|@uri')"
+  "$curl_bin" -sfL -o "$out" "$commons/wiki/Special:FilePath/$encoded?width=1000" 2>/dev/null \
+    && [[ -s "$out" ]] && return 0
+  rm -f -- "$out"
+  return 1
+}
+
+# rip::_ensure_artist_image <src> <artist_reldir> <artist> <listfile> —
+# idempotent per-artist image: skip the fetch if the image already exists
+# locally OR on the server; a failed/unknown remote check also skips the
+# fetch (never block, never refetch blindly). On any local file (freshly
+# fetched, or already sitting there — the "local but not remote" edge),
+# ensure it's on the push list so it ships and is cleaned this run.
+# Best-effort: a total miss just logs and returns — never fails the push.
+rip::_ensure_artist_image() {
+  local src="$1" artist_rel="$2" artist="$3" listfile="$4"
+  local out="$src/$artist_rel/artist.jpg"
+  if [[ ! -s "$out" ]]; then
+    local remote_rc
+    rip::_remote_has_artist_image "$artist_rel"
+    remote_rc=$?
+    case $remote_rc in
+      0) return 0 ;;   # server already has it
+      1) ;;             # confirmed absent — proceed to fetch
+      *)
+        print -r -- "rip: artist image remote check unreachable — skipping fetch this run: $artist"
+        return 0 ;;
+    esac
+    if ! rip::_fetch_artist_image "$artist" "$out"; then
+      print -r -- "rip: no artist image found — $artist"
+      return 0
+    fi
+  fi
+  grep -qxF "$artist_rel/artist.jpg" "$listfile" || print -r -- "$artist_rel/artist.jpg" >> "$listfile"
+  return 0
+}
+
 rip::_fetch_lyrics() {
   local artist="$1" album="$2" title="$3" dur="$4"
   local curl_bin="${RIP_CURL_BIN:-curl}"
@@ -306,8 +413,12 @@ rip::_fetch_lyrics() {
 
 # rip::_enrich_music <src> <listfile> — per album dir holding listed .flac
 # files: embed cover art into each track (+ cover.jpg beside them, appended
-# to the list so it ships THIS run) and embed LYRICS per track. rc 1 if any
-# sub-step failed (caller logs and pushes anyway).
+# to the list so it ships THIS run), embed LYRICS per track, and (once per
+# unique artist touched this run) fetch a per-artist artist.jpg into the
+# artist's staging dir, appended to the list the same way. rc 1 if any
+# sub-step failed (caller logs and pushes anyway) — the artist-image step
+# itself is pure best-effort and never contributes to that rc (a fetch miss
+# just logs and moves on; see rip::_ensure_artist_image).
 rip::_enrich_music() {
   setopt localoptions noerrexit nopipefail
   local src="$1" listfile="$2"
@@ -323,6 +434,13 @@ rip::_enrich_music() {
   # gate already admitted into <listfile> may be touched. Values are
   # newline-joined relpaths (not space-joined: filenames carry spaces).
   local -A album_files=()
+  # Artists whose per-artist image step has already run THIS invocation —
+  # dedup across every album touched this run (a multi-album session for
+  # the same artist must only fetch once). Keyed by the artist's staging
+  # dir relative to $src (the album dir's parent), derived from the SAME
+  # listfile-based album map above — never a directory glob, same
+  # discipline as album_files itself.
+  local -A artist_seen=()
   while IFS= read -r rel; do
     [[ "$rel" == *.flac ]] || continue
     adir="${rel:h}"
@@ -371,6 +489,13 @@ rip::_enrich_music() {
         print -r -- "rip: no lyrics found — $artist / $title"
       fi
     done
+    # artist image: once per unique artist dir touched this run — the
+    # artist staging dir is the album dir's PARENT ($src/<Artist>).
+    local artist_rel="${adir:h}"
+    if [[ -n "$artist" && -z "${artist_seen[$artist_rel]:-}" ]]; then
+      artist_seen[$artist_rel]=1
+      rip::_ensure_artist_image "$src" "$artist_rel" "$artist" "$listfile"
+    fi
   done
   (( failed )) && { log_error "rip: enrich pass had failures (see above)"; return 1 }
   return 0

@@ -295,12 +295,23 @@ exit 0
 EOF
     chmod +x "$RIP_SANDBOX/metaflac"
     export RIP_METAFLAC_BIN="$RIP_SANDBOX/metaflac"
+    export RIP_FAKE_CURL_LOG="$RIP_SANDBOX/curl.log"
     cat > "$RIP_SANDBOX/curl" <<'EOF'
 #!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
 url=""
 for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
 case "$url" in
+  # the artist-image chain's MB/Deezer/Wikidata lookups: graceful empty
+  # results so no jq parse-error noise leaks into tests that don't care
+  # about artist images at all. Ordered most-specific first: url-rels
+  # relation lookup and the artist search endpoint both contain
+  # "musicbrainz" too, so the generic release-search case must come last.
+  *inc=url-rels*) echo '{"relations":[]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[]}' ;;
   *musicbrainz*) echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *deezer*) echo '{"data":[]}' ;;
+  *wikidata*) echo '{"claims":{}}' ;;
   *coverartarchive*) # last arg pattern: -o <file> present in argv
     out=""; prev=""
     for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
@@ -312,6 +323,35 @@ exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
     export RIP_CURL_BIN="$RIP_SANDBOX/curl"
+  }
+
+  # fake_copy_rsync — an rsync stand-in that actually copies the listed
+  # files from src to the local sandbox "remote" (plain `cp`, no network),
+  # so artist-image tests can assert on the bytes that landed server-side
+  # instead of only inferring "shipped" from local absence.
+  fake_copy_rsync() {
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+case "$*" in *-rcn*) exit 0 ;; esac
+lf="" a1="" a2=""
+for a in "$@"; do
+  case "$a" in
+    --files-from=*) lf="${a#--files-from=}"; continue ;;
+    -*) continue ;;
+  esac
+  a1="$a2"; a2="$a"
+done
+src="$a1" dest="$a2"
+[ -n "$lf" ] || exit 0
+while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
+  mkdir -p "$dest$(dirname "$rel")"
+  cp "$src$rel" "$dest$rel" 2>/dev/null
+done < "$lf"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
   }
 
   It 'enrichment embeds picture + lyrics and ships cover.jpg'
@@ -436,5 +476,250 @@ EOF
     The path "$RIP_STAGING_ROOT/music/C/Untouched/evil.flac" should be exist
     # the private listfile itself is gone — nothing stray left in .work/
     The result of function stray_listfiles should equal "0"
+  End
+
+  # --- enrichment: per-artist artist.jpg -----------------------------------
+  # Dedupe artists across the albums touched THIS run, derived from the SAME
+  # listfile-based album map _enrich_music already builds (not a directory
+  # glob — same discipline as the cover/lyrics step, see the regression
+  # guard above). Idempotent both locally and on the server; keyless fetch
+  # chain Deezer → MusicBrainz/Wikidata/Commons; best-effort, never blocks
+  # the push.
+
+  deezer_search_count() { grep -c "search/artist" "$RIP_SANDBOX/curl.log" 2>/dev/null; }
+
+  It 'artist image: server already has it — no fetch attempted, no local file created'
+    enrich_setup
+    mkdir -p "$RIP_SANDBOX/server/music/Art"
+    printf 'REMOTE-ALREADY-THERE' > "$RIP_SANDBOX/server/music/Art/artist.jpg"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "deezer"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "wikidata"
+    The path "$RIP_STAGING_ROOT/music/Art/artist.jpg" should not be exist
+  End
+
+  It 'artist image: fetched from Deezer, appended to the list, and shipped'
+    enrich_setup
+    fake_copy_rsync
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *inc=url-rels*) echo '{"relations":[]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[]}' ;;
+  *musicbrainz*) echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *deezer*search/artist*) echo '{"data":[{"picture_xl":"https://fake-deezer-cdn.test/pic_xl.jpg"}]}' ;;
+  *fake-deezer-cdn.test*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'DEEZERJPEG' > "$out" ;;
+  *wikidata*) echo '{"claims":{}}' ;;
+  *coverartarchive*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'JPEGDATA' > "$out" ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_SANDBOX/curl.log" should include "search/artist"
+    # gone locally after verify-clean, present in the local remote
+    The path "$RIP_STAGING_ROOT/music/Art/artist.jpg" should not be exist
+    The path "$RIP_STAGING_ROOT/music/Art" should not be exist
+    The path "$RIP_SANDBOX/server/music/Art/artist.jpg" should be exist
+    The contents of file "$RIP_SANDBOX/server/music/Art/artist.jpg" should equal "DEEZERJPEG"
+  End
+
+  It "artist image: rejects Deezer's placeholder picture and falls back to Wikimedia via MusicBrainz/Wikidata"
+    enrich_setup
+    fake_copy_rsync
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *inc=url-rels*) echo '{"relations":[{"url":{"resource":"https://www.wikidata.org/wiki/Q42"}}]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[{"id":"mbid-artist-1"}]}' ;;
+  *musicbrainz*) echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *deezer*search/artist*) echo '{"data":[{"picture_xl":"https://fake-deezer-cdn.test/d41d8cd98f00b204e9800998ecf8427e.jpg"}]}' ;;
+  *fake-deezer-cdn.test*) printf 'this branch must never be downloaded' ;;
+  *wikidata*api.php*) echo '{"claims":{"P18":[{"mainsnak":{"datavalue":{"value":"Some Artist.jpg"}}}]}}' ;;
+  *commons*Special:FilePath*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'COMMONSJPEG' > "$out" ;;
+  *coverartarchive*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'JPEGDATA' > "$out" ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # the placeholder-carrying deezer URL was never downloaded…
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "d41d8cd98f00b204e9800998ecf8427e.jpg"
+    # …the fallback landed instead
+    The path "$RIP_SANDBOX/server/music/Art/artist.jpg" should be exist
+    The contents of file "$RIP_SANDBOX/server/music/Art/artist.jpg" should equal "COMMONSJPEG"
+  End
+
+  It 'artist image: total miss across every source — logs and never blocks the push'
+    enrich_setup
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The output should include "no artist image found"
+    The path "$RIP_STAGING_ROOT/music/Art/artist.jpg" should not be exist
+    The path "$RIP_SANDBOX/server/music/Art/artist.jpg" should not be exist
+  End
+
+  It 'artist image: dedupes the fetch across multiple albums by the same artist in one run'
+    mkdir -p "$RIP_STAGING_ROOT/music/Art/Alb1" "$RIP_STAGING_ROOT/music/Art/Alb2"
+    touch "$RIP_STAGING_ROOT/music/Art/Alb1/01 Song.flac" "$RIP_STAGING_ROOT/music/Art/Alb2/01 Other.flac"
+    printf '#!/bin/sh\nexit 0\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    export RIP_FAKE_MF_LOG="$RIP_SANDBOX/metaflac.log"
+    cat > "$RIP_SANDBOX/metaflac" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_MF_LOG"
+case "$*" in
+  *--list*PICTURE*) exit 0 ;;
+  *--show-tag=LYRICS*) exit 0 ;;
+  *--show-tag=ARTIST*) echo "ARTIST=Art" ;;
+  *--show-tag=ALBUM*) echo "ALBUM=Alb" ;;
+  *--show-tag=TITLE*) echo "TITLE=Song" ;;
+  *--show-total-samples*) echo 8820000 ;;
+  *--show-sample-rate*) echo 44100 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/metaflac"
+    export RIP_METAFLAC_BIN="$RIP_SANDBOX/metaflac"
+    export RIP_FAKE_CURL_LOG="$RIP_SANDBOX/curl.log"
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *inc=url-rels*) echo '{"relations":[]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[]}' ;;
+  *musicbrainz*) echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *deezer*search/artist*) echo '{"data":[{"picture_xl":"https://fake-deezer-cdn.test/pic_xl.jpg"}]}' ;;
+  *fake-deezer-cdn.test*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'DEEZERJPEG' > "$out" ;;
+  *wikidata*) echo '{"claims":{}}' ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    export RIP_CURL_BIN="$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The result of function deezer_search_count should equal "1"
+  End
+
+  It 'artist image: pre-existing local file is idempotent (no fetch) and still ships'
+    enrich_setup
+    mkdir -p "$RIP_STAGING_ROOT/music/Art"
+    printf 'LOCAL-ALREADY-HERE' > "$RIP_STAGING_ROOT/music/Art/artist.jpg"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "search/artist"
+    The path "$RIP_STAGING_ROOT/music/Art/artist.jpg" should not be exist
+  End
+
+  It 'artist image: ssh remote check reports it already exists — skip fetch (host:path remote base)'
+    enrich_setup
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    export RIP_FAKE_SSH_LOG="$RIP_SANDBOX/ssh.log"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_SSH_LOG"
+case "$*" in
+  *"/srv/media/music/Art/artist.jpg"*) exit 0 ;;
+esac
+exit 1
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_SANDBOX/ssh.log" should include "fakehost"
+    The contents of file "$RIP_SANDBOX/ssh.log" should include "artist.jpg"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "search/artist"
+    The path "$RIP_STAGING_ROOT/music/Art/artist.jpg" should not be exist
+  End
+
+  It 'artist image: ssh remote check confirms absent — fetch proceeds normally (host:path remote base)'
+    enrich_setup
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    printf '#!/bin/sh\nexit 1\n' > "$RIP_SANDBOX/ssh"; chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *inc=url-rels*) echo '{"relations":[]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[]}' ;;
+  *musicbrainz*) echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *deezer*search/artist*) echo '{"data":[{"picture_xl":"https://fake-deezer-cdn.test/pic_xl.jpg"}]}' ;;
+  *fake-deezer-cdn.test*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'DEEZERJPEG' > "$out" ;;
+  *wikidata*) echo '{"claims":{}}' ;;
+  *coverartarchive*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'JPEGDATA' > "$out" ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_SANDBOX/curl.log" should include "search/artist"
+    The path "$RIP_STAGING_ROOT/music/Art/artist.jpg" should not be exist
+  End
+
+  It 'artist image: ssh remote check failure counts as unknown — skip fetch this run, never block'
+    enrich_setup
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"; chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The output should include "rip: artist image"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "search/artist"
+    The path "$RIP_STAGING_ROOT/music/Art/artist.jpg" should not be exist
   End
 End
