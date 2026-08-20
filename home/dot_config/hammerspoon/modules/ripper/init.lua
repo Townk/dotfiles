@@ -216,8 +216,15 @@ local function tmdbChoices(query, cb)
 		searchTask:terminate()
 		searchTask = nil
 	end
-	searchTask = hs.task.new(RIP_TMDB, function(rc, stdout)
-		searchTask = nil
+	-- terminate() only sends SIGTERM; the terminated task's own callback
+	-- still fires later, asynchronously. Identity-check against `thisTask`
+	-- (not a bare `searchTask = nil`) so that late callback can't clobber
+	-- a newer search's anchor — same precedent as enqueue()'s tasks[id].
+	local thisTask
+	thisTask = hs.task.new(RIP_TMDB, function(rc, stdout)
+		if searchTask == thisTask then
+			searchTask = nil
+		end
 		if rc == 3 then
 			cb(nil) -- no key: caller degrades to the plain prompt
 			return
@@ -234,7 +241,9 @@ local function tmdbChoices(query, cb)
 			end
 		end
 		cb(choices)
-	end, { query }):start()
+	end, { query })
+	searchTask = thisTask
+	thisTask:start()
 end
 
 local function plainTitlePrompt(seed)
@@ -270,12 +279,15 @@ local function tmdbNameAndRip(seed)
 		chooserDebounce = hs.timer.doAfter(0.3, function()
 			tmdbChoices(q, function(choices)
 				if choices == nil then
-					-- key missing: fall back once, close the chooser
+					-- key missing: fall back once, but only if the chooser
+					-- session is still alive. A dismissed chooser doesn't
+					-- stop an in-flight search, so this callback can still
+					-- land after Escape — it must resurrect nothing.
 					if chooser then
 						chooser:hide()
 						chooser = nil
+						plainTitlePrompt(q)
 					end
-					plainTitlePrompt(q)
 					return
 				end
 				if chooser then
