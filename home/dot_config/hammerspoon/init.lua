@@ -31,6 +31,7 @@ lifecycle.registerCleanup(dock.cleanup)
 lifecycle.registerCleanup(clipHistory.cleanup)
 lifecycle.registerCleanup(clipPicker.cleanup)
 lifecycle.registerCleanup(jobsHud.cleanup)
+lifecycle.registerCleanup(ripper.cleanup)
 vncCompanion.setup()
 lifecycle.registerCleanup(vncCompanion.cleanup)
 

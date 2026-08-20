@@ -514,10 +514,8 @@ function M.preview(name)
 	session.show(previewData(name), previewCallbacks)
 end
 
--- Teardown for the session panel's webview. Not registered anywhere yet —
--- ripper has no lifecycle cleanup of its own, and the root init.lua is out
--- of this task's scope; add `lifecycle.registerCleanup(ripper.cleanup)` there
--- when the dialog is wired into the real flow.
+-- Teardown for the session panel's webview (registered in the root
+-- init.lua via lifecycle.registerCleanup, alongside the other panels).
 function M.cleanup()
 	if previewTimer then
 		previewTimer:stop()
