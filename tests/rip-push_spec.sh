@@ -461,6 +461,92 @@ EOF
     The contents of file "$RIP_SANDBOX/curl.log" should not include "/release/"
   End
 
+  # Live defect, round 3 (root-caused by the controller, 2026-08-20):
+  # closing the remaining wrong-release class. Round 2's embedded-first fix
+  # can't help when NOTHING is embedded — an art-less rip of "MTV ao Vivo"
+  # matched the wrong edition because the MB release search matched by
+  # title+artist alone. The rip's own DATE tag is a disambiguator already
+  # in hand (rip::_track_meta): when present, the MB query adds
+  # `AND date:<year>` first, retrying once without it only if that yields
+  # nothing (a right-titled wrong-edition cover beats none).
+
+  It 'cover: the MusicBrainz query includes date:<year> when the rip carries a DATE tag'
+    enrich_setup
+    cat > "$RIP_SANDBOX/metaflac" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_MF_LOG"
+case "$*" in
+  *--list*PICTURE*) exit 0 ;;
+  *--show-tag=LYRICS*) exit 0 ;;
+  *--show-tag=ARTIST*) echo "ARTIST=Art" ;;
+  *--show-tag=ALBUM*) echo "ALBUM=Alb" ;;
+  *--show-tag=TITLE*) echo "TITLE=Song" ;;
+  *--show-tag=DATE*) echo "DATE=2004-03-15" ;;
+  *--show-total-samples*) echo 8820000 ;;
+  *--show-sample-rate*) echo 44100 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/metaflac"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_SANDBOX/curl.log" should include "date:2004"
+    The contents of file "$RIP_FAKE_MF_LOG" should include "--import-picture-from"
+  End
+
+  It 'cover: a date-filtered MusicBrainz miss falls back to the unfiltered query and still lands a cover'
+    enrich_setup
+    cat > "$RIP_SANDBOX/metaflac" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_MF_LOG"
+case "$*" in
+  *--list*PICTURE*) exit 0 ;;
+  *--show-tag=LYRICS*) exit 0 ;;
+  *--show-tag=ARTIST*) echo "ARTIST=Art" ;;
+  *--show-tag=ALBUM*) echo "ALBUM=Alb" ;;
+  *--show-tag=TITLE*) echo "TITLE=Song" ;;
+  *--show-tag=DATE*) echo "DATE=2004-03-15" ;;
+  *--show-total-samples*) echo 8820000 ;;
+  *--show-sample-rate*) echo 44100 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/metaflac"
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *musicbrainz*/release/)
+    case "$*" in
+      *"AND date:"*) echo '{"releases":[]}' ;;   # date-filtered: no match
+      *) echo '{"releases":[{"id":"mbid-1"}]}' ;; # unfiltered fallback: hit
+    esac ;;
+  *coverartarchive*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'JPEGDATA' > "$out" ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+  *deezer*) echo '{"data":[]}' ;;
+  *inc=url-rels*) echo '{"relations":[]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[]}' ;;
+  *wikidata*) echo '{"claims":{}}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # the date-filtered query was tried and missed…
+    The contents of file "$RIP_SANDBOX/curl.log" should include "date:2004"
+    # …the fallback landed the cover anyway
+    The contents of file "$RIP_FAKE_MF_LOG" should include "--import-picture-from"
+  End
+
   # Regression guard (final-review finding 1): rip::_enrich_music used to
   # glob the WHOLE album directory instead of grouping the age-gated LIST
   # itself. A sibling track mid-write (e.g. XLD still writing a neighboring

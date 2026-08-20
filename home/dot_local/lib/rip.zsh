@@ -241,7 +241,10 @@ rip::_verify_and_clean() {
 # stamped, so enriched mtimes are older than the marker and the clean pass
 # still removes them.
 
-# rip::_track_meta <flac> — prints "artist<TAB>album<TAB>title<TAB>duration_s".
+# rip::_track_meta <flac> — prints
+# "artist<TAB>album<TAB>title<TAB>duration_s<TAB>year". year is the DATE
+# tag's first 4 characters (empty if DATE is absent/short) — the cover
+# search's disambiguator for an ambiguous title (see rip::_fetch_cover).
 # Built with printf (not `print -r`): print -r takes its arguments RAW, so a
 # literal \t embedded in a double-quoted string would ride through as the two
 # characters backslash-t instead of becoming a real tab, breaking every
@@ -252,14 +255,16 @@ rip::_verify_and_clean() {
 # through unmolested.
 rip::_track_meta() {
   local mf="${RIP_METAFLAC_BIN:-metaflac}" f="$1"
-  local artist album title samples rate dur=0
+  local artist album title date year samples rate dur=0
   artist="$("$mf" --show-tag=ARTIST "$f" 2>/dev/null | head -1)"; artist="${artist#*=}"
   album="$("$mf" --show-tag=ALBUM "$f" 2>/dev/null | head -1)";  album="${album#*=}"
   title="$("$mf" --show-tag=TITLE "$f" 2>/dev/null | head -1)";  title="${title#*=}"
+  date="$("$mf" --show-tag=DATE "$f" 2>/dev/null | head -1)";   date="${date#*=}"
+  year="${date[1,4]}"
   samples="$("$mf" --show-total-samples "$f" 2>/dev/null)"
   rate="$("$mf" --show-sample-rate "$f" 2>/dev/null)"
   [[ "$samples" == <-> && "$rate" == <1-> ]] && dur=$(( samples / rate ))
-  printf '%s\t%s\t%s\t%s\n' "$artist" "$album" "$title" "$dur"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$artist" "$album" "$title" "$dur" "$year"
 }
 
 # rip::_mb_call <curl_bin> <jq_filter> <curl args…> — MusicBrainz rate-
@@ -287,27 +292,58 @@ rip::_mb_call() {
   print -r -- "$result"
 }
 
+# rip::_fetch_cover <artist> <album> <out> [year] — MB release search by
+# title+artist alone can match the wrong edition on an ambiguous title
+# (live-bitten 2026-08-20: an art-less rip of "MTV ao Vivo" matched the
+# wrong release — embedded-first, the round-2 fix, can't help when
+# nothing is embedded to begin with). <year> — the rip's own DATE tag,
+# already in hand via rip::_track_meta — disambiguates: when given, the MB
+# query adds `AND date:<year>` first; only if THAT yields nothing does it
+# retry once with the plain title+artist query (a right-titled
+# wrong-edition cover beats none). Same idea for the iTunes fallback: with
+# a year in hand, prefer the result whose releaseDate year matches,
+# falling back to the first result otherwise.
 rip::_fetch_cover() {
-  local artist="$1" album="$2" out="$3"
+  local artist="$1" album="$2" out="$3" year="${4:-}"
   local curl_bin="${RIP_CURL_BIN:-curl}"
   local mb="${RIP_MB_URL:-https://musicbrainz.org/ws/2}"
   local caa="${RIP_CAA_URL:-https://coverartarchive.org}"
   local itunes="${RIP_ITUNES_URL:-https://itunes.apple.com}"
-  local mbid
-  mbid="$(rip::_mb_call "$curl_bin" '(.releases // [])[0].id // empty' \
-      -sf -A 'fleet-rip/2.0' -G "$mb/release/" \
-      --data-urlencode "query=release:\"$album\" AND artist:\"$artist\"" \
-      --data-urlencode fmt=json --data-urlencode limit=1)"
+  local mbid=""
+  if [[ -n "$year" ]]; then
+    mbid="$(rip::_mb_call "$curl_bin" '(.releases // [])[0].id // empty' \
+        -sf -A 'fleet-rip/2.0' -G "$mb/release/" \
+        --data-urlencode "query=release:\"$album\" AND artist:\"$artist\" AND date:$year" \
+        --data-urlencode fmt=json --data-urlencode limit=1)"
+  fi
+  if [[ -z "$mbid" ]]; then
+    [[ -n "$year" ]] && print -r -- "rip: cover — date:$year yielded nothing, retrying without it — $artist / $album"
+    mbid="$(rip::_mb_call "$curl_bin" '(.releases // [])[0].id // empty' \
+        -sf -A 'fleet-rip/2.0' -G "$mb/release/" \
+        --data-urlencode "query=release:\"$album\" AND artist:\"$artist\"" \
+        --data-urlencode fmt=json --data-urlencode limit=1)"
+  fi
   if [[ -n "$mbid" ]]; then
     "$curl_bin" -sfL -o "$out" "$caa/release/$mbid/front-500" 2>/dev/null \
       && [[ -s "$out" ]] && return 0
   fi
   local art_url
-  art_url="$("$curl_bin" -sf -G "$itunes/search" \
-      --data-urlencode "term=$artist $album" --data-urlencode entity=album \
-      --data-urlencode limit=1 2>/dev/null \
-    | jq -r '(.results // [])[0].artworkUrl100 // empty' \
-    | sed 's/100x100bb/600x600bb/')"
+  if [[ -n "$year" ]]; then
+    art_url="$("$curl_bin" -sf -G "$itunes/search" \
+        --data-urlencode "term=$artist $album" --data-urlencode entity=album \
+        --data-urlencode limit=5 2>/dev/null \
+      | jq -r --arg y "$year" \
+          '(.results // []) as $r
+           | (first($r[] | select((.releaseDate // "")[0:4] == $y)) // $r[0])
+           | .artworkUrl100 // empty' \
+      | sed 's/100x100bb/600x600bb/')"
+  else
+    art_url="$("$curl_bin" -sf -G "$itunes/search" \
+        --data-urlencode "term=$artist $album" --data-urlencode entity=album \
+        --data-urlencode limit=1 2>/dev/null \
+      | jq -r '(.results // [])[0].artworkUrl100 // empty' \
+      | sed 's/100x100bb/600x600bb/')"
+  fi
   [[ -n "$art_url" ]] || { rm -f -- "$out"; return 1 }
   "$curl_bin" -sfL -o "$out" "$art_url" 2>/dev/null && [[ -s "$out" ]] && return 0
   rm -f -- "$out"; return 1
@@ -493,10 +529,11 @@ rip::_enrich_music() {
       [[ -n "$rel2" ]] && flacs+=("$src/$rel2")
     done <<< "${album_files[$adir]}"
     (( ${#flacs} )) || continue
-    local meta artist album
+    local meta artist album year
     meta="$(rip::_track_meta "${flacs[1]}")"
     artist="${meta%%$'\t'*}"
     album="$(print -r -- "$meta" | cut -f2)"
+    year="$(print -r -- "$meta" | cut -f5)"
     # cover: fetch once per album, embed where absent, ship cover.jpg.
     # Source priority when cover.jpg doesn't exist yet: an embedded
     # PICTURE block on the album's first listed track wins over any
@@ -517,7 +554,7 @@ rip::_enrich_music() {
         && [[ -s "$cover" ]] && have_cover=1
     fi
     if (( ! have_cover )) && [[ -n "$artist" && -n "$album" ]]; then
-      rip::_fetch_cover "$artist" "$album" "$cover" && have_cover=1 || failed=1
+      rip::_fetch_cover "$artist" "$album" "$cover" "$year" && have_cover=1 || failed=1
     fi
     if (( have_cover )); then
       grep -qxF "$adir/cover.jpg" "$listfile" || print -r -- "$adir/cover.jpg" >> "$listfile"
