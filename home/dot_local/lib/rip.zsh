@@ -364,26 +364,35 @@ rip::_fetch_cover() {
 # 2026-08-20): any picture_xl containing this must be rejected outright.
 RIP_ARTIST_IMAGE_PLACEHOLDER_MD5='d41d8cd98f00b204e9800998ecf8427e'
 
-# rip::_remote_has_file <music_relpath> — existence check on the server for
-# music/<music_relpath>, ahead of any fetch (idempotency, per operator
-# requirement). Shared by the artist.jpg and cover.jpg pre-fetch checks
-# (round 4: cover.jpg used to lack this entirely — a future re-rip of an
-# art-less album would refetch and rsync-overwrite a curated server cover,
-# live case: the hand-corrected "MTV ao Vivo"). If rip::remote_base
-# contains a ':' it's `user@host:path`: shell out to `ssh <host> test -f
-# …`. No ':' (the hermetic tests use a plain local dir): a direct
-# filesystem test. Returns 0 exists / 1 confirmed absent / 2 unknown (the
-# ssh call itself failed to run — e.g. the host is unreachable — rc 255 on
-# a real ssh; distinct from the remote `test -f` legitimately reporting rc
-# 1). Every caller treats 2 exactly like "unknown": never block, never
-# refetch/reprocess blindly, just skip this run and log one line.
+# rip::_remote_has_file <media_relpath> — existence check on the server for
+# <media_relpath>, relative to the remote base itself (e.g.
+# "music/<Artist>/artist.jpg", "music/<Artist>/<Album>/cover.jpg", or
+# "movies/<Movie>/extras/<Name>.mkv") — ahead of any fetch/encode
+# (idempotency, per operator requirement). Shared by the music
+# enrichment's artist.jpg and cover.jpg pre-fetch checks (round 4:
+# cover.jpg used to lack this entirely — a future re-rip of an art-less
+# album would refetch and rsync-overwrite a curated server cover, live
+# case: the hand-corrected "MTV ao Vivo") and by rip-extra's server
+# idempotency check. GENERALIZED from a music-only helper (it used to
+# hardcode a "music/" prefix internally, taking only the path under it) —
+# every caller now supplies its own full type-prefixed path; no caller's
+# observable behavior changed, only the string each one passes in. If
+# rip::remote_base contains a ':' it's `user@host:path`: shell out to `ssh
+# <host> test -f …`. No ':' (the hermetic tests use a plain local dir): a
+# direct filesystem test. Returns 0 exists / 1 confirmed absent / 2 unknown
+# (the ssh call itself failed to run — e.g. the host is unreachable — rc
+# 255 on a real ssh; distinct from the remote `test -f` legitimately
+# reporting rc 1). Every caller treats 2 exactly like "unknown": never
+# block, never refetch/reprocess blindly, just skip this run and log one
+# line.
 rip::_remote_has_file() {
   local relpath="$1"
   local base; base="$(rip::remote_base)"
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
     local host="${base%%:*}" rpath="${base#*:}"
-    # Artist/album names are untrusted CDDB/MusicBrainz tag data — an
+    # Artist/album names (and, for rip-extra, movie/extra names) are
+    # untrusted CDDB/MusicBrainz tag data or hand-typed titles — an
     # apostrophe ("Guns N' Roses") breaks hand-rolled single-quoting, and
     # a crafted name can break OUT of it entirely and execute arbitrary
     # commands on cantina over the media@ ssh credentials. ${(q)...} is
@@ -392,7 +401,7 @@ rip::_remote_has_file() {
     # BatchMode+ConnectTimeout: a network black-hole or host-key prompt
     # must never hang the push worker — "never block" applies to the
     # check itself, not just its result.
-    local rfile="$rpath/music/$relpath"
+    local rfile="$rpath/$relpath"
     "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 \
       "$host" "test -f ${(q)rfile}" 2>/dev/null
     local rc=$?
@@ -400,14 +409,14 @@ rip::_remote_has_file() {
     (( rc == 1 )) && return 1
     return 2
   fi
-  [[ -f "$base/music/$relpath" ]] && return 0
+  [[ -f "$base/$relpath" ]] && return 0
   return 1
 }
 
 # rip::_remote_has_artist_image <artist_reldir> — thin rip::_remote_has_file
 # wrapper for the artist.jpg path shape.
 rip::_remote_has_artist_image() {
-  rip::_remote_has_file "$1/artist.jpg"
+  rip::_remote_has_file "music/$1/artist.jpg"
 }
 
 # rip::_fetch_artist_image <artist> <out> — keyless fetch chain: Deezer
@@ -600,7 +609,7 @@ rip::_enrich_music() {
     local cover="$abs/cover.jpg" have_cover=0
     [[ -s "$cover" ]] && have_cover=1
     if (( ! have_cover )); then
-      rip::_remote_has_file "$adir/cover.jpg"
+      rip::_remote_has_file "music/$adir/cover.jpg"
       cover_remote_rc=$?
       case $cover_remote_rc in
         0) print -r -- "rip: cover — server already has $adir/cover.jpg, skipping this run: $artist / $album" ;;
@@ -893,4 +902,205 @@ rip::disc_enqueue() {
   rip::_load_jobs || { log_error "rip: job runner unavailable"; return 1 }
   job::start --group heavy --title "rip: $title" --icon "$RIP_JOB_ICON" \
     -- "$RIP_BIN_DIR/rip-disc" --worker "$title"
+}
+
+# --- extra: one DVD extra, encoded DIRECT from the disc ---------------------
+
+# rip::_dvd_volume — the mounted DVD's mount point: the first /Volumes/*
+# entry holding a VIDEO_TS dir (the ripper module's own disc-detection
+# test, mirrored here so rip-extra recognizes the same discs it does).
+# RIP_DVD_VOLUME is the seam: set, it's used directly (still required to
+# hold a VIDEO_TS dir — the hermetic tests build a real one under a sandbox
+# dir, so this stays a faithful stand-in rather than a rubber stamp),
+# bypassing the /Volumes scan entirely. Prints the volume path; empty + rc
+# 1 when nothing matches.
+rip::_dvd_volume() {
+  if [[ -n "${RIP_DVD_VOLUME:-}" ]]; then
+    [[ -d "$RIP_DVD_VOLUME/VIDEO_TS" ]] || return 1
+    print -r -- "$RIP_DVD_VOLUME"
+    return 0
+  fi
+  local vol
+  for vol in /Volumes/*(N); do
+    [[ -d "$vol/VIDEO_TS" ]] && { print -r -- "$vol"; return 0 }
+  done
+  return 1
+}
+
+# rip::_hb_dvd <hb_bin> <args…> — run HandBrakeCLI directly against the
+# optical drive (a --scan, or a -t <n> encode) with
+# DYLD_FALLBACK_LIBRARY_PATH exported ahead of exec, inside a bare `sh -c`
+# — the proven pattern (see the disc worker) for HandBrakeCLI invoked
+# outside a full shell login environment: pueue snapshots the ENQUEUING
+# process's environment (not a login shell's), and a hand-run `rip-extra
+# --list` straight from Hammerspoon has the same gap, so its own dylibs go
+# unfound on the default search path without this. RIP_DYLD_FALLBACK_PATH
+# is the seam (defaults to Homebrew's own lib dir); the fake HandBrakeCLI in
+# tests ignores the environment entirely, so no test needs to touch it.
+# Args ride through sh -c's own positional "$@" mechanism rather than being
+# string-interpolated into the script text, so a volume path or extra name
+# containing spaces or shell metacharacters is safe.
+rip::_hb_dvd() {
+  local hb_bin="$1"; shift
+  local dyld="${RIP_DYLD_FALLBACK_PATH:-/opt/homebrew/lib}"
+  sh -c 'export DYLD_FALLBACK_LIBRARY_PATH="$1"; shift; exec "$@"' \
+    _ "$dyld" "$hb_bin" "$@"
+}
+
+# rip::_dvd_scan <volume> — HandBrakeCLI's own title scan (`-t 0` scans
+# every title without encoding anything), reduced to one `title N:
+# duration` line per title. Real scan output nests each title's attributes
+# under a "+ title N:" header, one of which is "+ duration: H:MM:SS"; the
+# awk below pairs each duration with the title header most recently seen
+# (single-pass, no intermediate array — same discipline as the disc
+# worker's TINFO parse).
+rip::_dvd_scan() {
+  local vol="$1"
+  local hb_bin="${RIP_HANDBRAKE_BIN:-HandBrakeCLI}"
+  rip::_hb_dvd "$hb_bin" -i "$vol" --scan -t 0 2>&1 | awk '
+    /\+ title [0-9]+:/ {
+      match($0, /[0-9]+/); n = substr($0, RSTART, RLENGTH); next
+    }
+    /\+ duration:/ {
+      if (n != "") {
+        d = $0
+        sub(/^.*duration: */, "", d)
+        print "title " n ": " d
+        n = ""
+      }
+    }
+  '
+}
+
+# rip::extra_list — the `rip-extra --list` body: locate the mounted DVD and
+# print its scan. No volume mounted is an error (rc 1), not a silent
+# no-op — there is nothing useful to list.
+rip::extra_list() {
+  local vol
+  vol="$(rip::_dvd_volume)" || { log_error "rip: no DVD volume mounted"; return 1 }
+  rip::_dvd_scan "$vol"
+}
+
+# rip::_check_title_no <n> — title numbers come straight off `rip-extra
+# --list`'s own output, but are still hand-typed by the operator afterward;
+# reject anything that isn't a plain non-negative integer.
+rip::_check_title_no() {
+  [[ "$1" == <-> ]] && return 0
+  log_error "rip: title number must be numeric: $1"
+  return 2
+}
+
+# rip::_check_extra_name <name> — same shape of rule as rip::_check_title
+# (non-empty, no slash — it becomes a filename component), kept as its own
+# function since the error message names "extra name" rather than "title".
+rip::_check_extra_name() {
+  case "$1" in
+    "") log_error "rip: empty extra name"; return 2 ;;
+    */*) log_error "rip: extra name may not contain a slash: $1"; return 2 ;;
+  esac
+  return 0
+}
+
+# rip::extra_worker <title-no> <movie> <name> — the enqueued body: encode
+# title <title-no> DIRECT from the mounted disc (no MakeMKV intermediate —
+# an extra is short enough that a lossless rip-then-encode round trip buys
+# nothing), publish it into Jellyfin's extras/ convention
+# (movies/<movie>/extras/<name>.mkv), and push it. Progress composition
+# mirrors rip::pipeline_worker: encode owns 0-85 of the capsule, push owns
+# 85-100 (both bands are fixed here, unlike the pipeline's outer-band
+# rescale — rip-extra is never itself composed inside another worker's
+# band). Cleanup rules mirror the pipeline's: encode failure removes the
+# temp and keeps nothing; a push/verify failure leaves the ALREADY-
+# PUBLISHED extra on disk for a plain `rip-push movies` retry.
+rip::extra_worker() {
+  # See rip::pipeline_worker's identical comment: the real rip-extra bin
+  # sources this under `set -eu -o pipefail`, and this function's own
+  # HandBrakeCLI pipeline needs to own its error handling (rc capture +
+  # cleanup) regardless of the caller's options.
+  setopt localoptions noerrexit nopipefail
+  local title_no="$1" movie="$2" name="$3"
+  rip::_check_title_no "$title_no" || return 2
+  rip::_check_title "$movie" || return 2
+  rip::_check_extra_name "$name" || return 2
+
+  local vol
+  vol="$(rip::_dvd_volume)" || { log_error "rip: no DVD volume mounted"; return 1 }
+
+  # SERVER IDEMPOTENCY FIRST (operator's rule): a re-run against an extra
+  # the server already has must touch nothing — no disc access, no encode.
+  local relpath="movies/$movie/extras/$name.mkv"
+  local remote_rc
+  rip::_remote_has_file "$relpath"
+  remote_rc=$?
+  if (( remote_rc == 0 )); then
+    print -r -- "rip: server already has $relpath — nothing to do"
+    return 0
+  fi
+
+  local hb_bin="${RIP_HANDBRAKE_BIN:-HandBrakeCLI}"
+  # Same kill-proof-by-construction shape as rip::pipeline_worker: the
+  # encoder writes into .work/ and is only renamed into movies/ once it has
+  # exited 0, so a killed worker (plain `pueue kill` sends SIGKILL on pueue
+  # 4.x — untrappable) leaves debris only where nothing ships from.
+  local work_dir out_tmp
+  work_dir="$(rip::staging_root)/.work"
+  out_tmp="$work_dir/.extra-encode.mkv"
+  mkdir -p "$work_dir"
+  rm -f -- "$out_tmp"
+
+  rip::_progress 0 "encoding extra — $name"
+  trap 'rm -f -- "$out_tmp"
+        log_error "rip: cancelled during extra encode — partial removed: $movie — $name"
+        exit 130' TERM INT
+  local line pct
+  rip::_hb_dvd "$hb_bin" -t "$title_no" -i "$vol" "${RIP_HB_ARGS[@]}" -o "$out_tmp" 2>&1 \
+    | tr '\r' '\n' \
+    | while IFS= read -r line; do
+        case "$line" in
+          *Encoding:*%*)
+            pct="${line%\%*}"; pct="${pct##*, }"; pct="${pct%%.*}"; pct="${pct// /}"
+            [[ "$pct" == <-> ]] \
+              && RIP_PROGRESS_BASE=0 RIP_PROGRESS_SPAN=85 \
+                 rip::_progress "$pct" "encoding extra — $name"
+            ;;
+        esac
+      done
+  local rc=$pipestatus[1]
+  if (( rc != 0 )); then
+    rm -f -- "$out_tmp"
+    log_error "rip: extra encode failed (rc=$rc) — nothing kept: $movie — $name"
+    trap - TERM INT   # $out_tmp goes out of scope with this return
+    return $rc
+  fi
+  # The encode is complete: from here a cancel must LEAVE it alone.
+  trap - TERM INT
+
+  local out_dir out
+  out_dir="$(rip::staging_root)/movies/$movie/extras"
+  out="$out_dir/$name.mkv"
+  if ! { mkdir -p "$out_dir" && mv -f -- "$out_tmp" "$out" }; then
+    rm -f -- "$out_tmp"
+    rmdir -- "$out_dir" 2>/dev/null || :
+    log_error "rip: could not publish the extra to $out"
+    return 1
+  fi
+
+  RIP_PUSH_MIN_AGE_S=0 RIP_PROGRESS_BASE=85 RIP_PROGRESS_SPAN=15 \
+    rip::push_worker movies
+  # Push/verify failure: the published extra stays exactly where it is —
+  # the standard cleanup rule (see the pipeline's identical contract) — for
+  # a plain `rip-push movies` retry with no re-encode.
+}
+
+# rip::extra_enqueue <title-no> <movie> <name> — one heavy-group job (same
+# group as the pipeline/disc jobs: two concurrent x265 encodes would thrash
+# the laptop, and only one disc can be in the drive at a time regardless).
+rip::extra_enqueue() {
+  local title_no="$1" movie="$2" name="$3"
+  rip::_check_title_no "$title_no" || return 2
+  rip::_check_title "$movie" || return 2
+  rip::_check_extra_name "$name" || return 2
+  rip::_load_jobs || { log_error "rip: job runner unavailable"; return 1 }
+  job::start --group heavy --title "extra: $movie — $name" --icon "$RIP_JOB_ICON" \
+    -- "$RIP_BIN_DIR/rip-extra" --worker "$title_no" "$movie" "$name"
 }

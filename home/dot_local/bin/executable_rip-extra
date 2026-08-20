@@ -1,0 +1,31 @@
+#!/usr/bin/env zsh
+# rip-extra — encode one DVD extra DIRECT from the disc into Jellyfin's
+# extras/ convention (movies/<Movie>/extras/<Name>.mkv), pushed and
+# verified like any other rip. Thin by design: behavior lives in rip.zsh.
+#
+#   rip-extra --list                                    scan the mounted DVD
+#   rip-extra <title-no> "<Movie (Year)>" "<Extra Name>" enqueue
+#   rip-extra --worker <title-no> <movie> <name>         internal: the job body
+
+set -eu -o pipefail
+
+RIP_LIB_DIR="${RIP_LIB_DIR:-$HOME/.local/lib}"
+source "$RIP_LIB_DIR/rip.zsh" || {
+  print -ru2 -- "rip-extra: cannot source rip.zsh from $RIP_LIB_DIR"
+  exit 1
+}
+
+case "${1:-}" in
+  --list) rip::extra_list ;;
+  --worker)
+    shift
+    rip::extra_worker "${1:?title number required}" "${2:?movie title required}" "${3:?extra name required}"
+    ;;
+  "" | --help)
+    print -ru2 -- 'usage: rip-extra --list | rip-extra <title-no> "<Movie (Year)>" "<Extra Name>"'
+    exit 2
+    ;;
+  *)
+    rip::extra_enqueue "$1" "${2:?movie title required}" "${3:?extra name required}"
+    ;;
+esac
