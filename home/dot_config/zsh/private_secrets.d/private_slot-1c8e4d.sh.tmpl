@@ -1,12 +1,12 @@
 {{- /* human slot slot-1c8e4d: cached after first materialization; set CHEZMOI_REFRESH_SECRETS=1 to force 1Password resolution. */ -}}
 {{- $target := joinPath .chezmoi.homeDir ".config" "zsh" "secrets.d" "slot-1c8e4d.sh" -}}
-{{- $cacheHeader := "# chezmoi: op-cache-v1 5b7b6c809e25b116817e224229b5afd83dfeb6d1323e1f380510408076bca99b" -}}
+{{- $cacheHeader := "# chezmoi: op-cache-v1 411ad4ebb31ef13e69d2504dc80ed50bc049c8f60cb0cb524c2a8b528d585655" -}}
 {{- $cachedHeader := "" -}}
 {{- if stat $target -}}{{ $cachedHeader = output "sh" "-c" (printf "sed -n '1p' %q" $target) | trim }}{{- end -}}
 {{- if and (ne (env "CHEZMOI_REFRESH_SECRETS") "1") (eq $cachedHeader $cacheHeader) -}}
 {{ output "cat" $target -}}
 {{- else -}}
-# chezmoi: op-cache-v1 5b7b6c809e25b116817e224229b5afd83dfeb6d1323e1f380510408076bca99b
+# chezmoi: op-cache-v1 411ad4ebb31ef13e69d2504dc80ed50bc049c8f60cb0cb524c2a8b528d585655
 export MISE_GITHUB_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/MISE_GITHUB_TOKEN/1c8e4d" | replace "'" "'\"'\"'" }}'
 export HOMEBREW_GITHUB_API_TOKEN='{{ output "op" "read" "--no-newline" "op://Tokens/HOMEBREW_GITHUB_API_TOKEN/1c8e4d" | replace "'" "'\"'\"'" }}'
 export OPENCODE_GO_API_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/OPENCODE_GO_API_KEY/1c8e4d" | replace "'" "'\"'\"'" }}'
@@ -27,4 +27,5 @@ export HOMELAB_ATUIN_USERNAME='{{ output "op" "read" "--no-newline" "op://Tokens
 export HOMELAB_ATUIN_PASSWORD='{{ output "op" "read" "--no-newline" "op://Tokens/HOMELAB_ATUIN_PASSWORD/1c8e4d" | replace "'" "'\"'\"'" }}'
 export HOMELAB_ATUIN_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/HOMELAB_ATUIN_KEY/1c8e4d" | replace "'" "'\"'\"'" }}'
 export TMDB_API_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/TMDB_API_KEY/1c8e4d" | replace "'" "'\"'\"'" }}'
+export LASTFM_API_KEY='{{ output "op" "read" "--no-newline" "op://Tokens/LASTFM_API_KEY/1c8e4d" | replace "'" "'\"'\"'" }}'
 {{ end -}}
