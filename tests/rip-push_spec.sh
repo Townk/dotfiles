@@ -260,4 +260,93 @@ EOF
     The output should include "verified"
     The path "$RIP_STAGING_ROOT/movies/A (2001)/A (2001).mkv" should not be exist
   End
+
+  # --- enrichment: embedded cover art + lyrics ------------------------------
+
+  enrich_setup() {
+    mkdir -p "$RIP_STAGING_ROOT/music/Art/Alb"
+    touch "$RIP_STAGING_ROOT/music/Art/Alb/01 Song.flac"
+    touch -t 202601010000 "$RIP_STAGING_ROOT/music/Art/Alb/01 Song.flac"
+    printf '#!/bin/sh\nexit 0\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    export RIP_FAKE_MF_LOG="$RIP_SANDBOX/metaflac.log"
+    cat > "$RIP_SANDBOX/metaflac" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_MF_LOG"
+case "$*" in
+  *--list*PICTURE*) exit 0 ;;                       # no picture yet (empty out)
+  *--show-tag=LYRICS*) exit 0 ;;                    # no lyrics yet
+  *--show-tag=ARTIST*) echo "ARTIST=Art" ;;
+  *--show-tag=ALBUM*) echo "ALBUM=Alb" ;;
+  *--show-tag=TITLE*) echo "TITLE=Song" ;;
+  *--show-total-samples*) echo 8820000 ;;
+  *--show-sample-rate*) echo 44100 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/metaflac"
+    export RIP_METAFLAC_BIN="$RIP_SANDBOX/metaflac"
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *musicbrainz*) echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *coverartarchive*) # last arg pattern: -o <file> present in argv
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'JPEGDATA' > "$out" ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    export RIP_CURL_BIN="$RIP_SANDBOX/curl"
+  }
+
+  It 'enrichment embeds picture + lyrics and ships cover.jpg'
+    enrich_setup
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_FAKE_MF_LOG" should include "--import-picture-from"
+    The contents of file "$RIP_FAKE_MF_LOG" should include "--set-tag-from-file=LYRICS"
+    # cover.jpg was created post-list, appended, shipped, and cleaned
+    The path "$RIP_STAGING_ROOT/music/Art/Alb/cover.jpg" should not be exist
+    The path "$RIP_STAGING_ROOT/music/Art" should not be exist
+  End
+
+  It 'enrichment failures never fail the push'
+    enrich_setup
+    printf '#!/bin/sh\nexit 7\n' > "$RIP_SANDBOX/curl"; chmod +x "$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # cover fetch failed (curl rc 7) so lyrics fetch is tried and also fails
+    # via the same broken curl, printing the "not found" line to stdout
+    The output should include "no lyrics found"
+    The stderr should include "enrich"
+  End
+
+  It 'enrichment is idempotent — existing picture and lyrics are skipped'
+    enrich_setup
+    cat > "$RIP_SANDBOX/metaflac" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_MF_LOG"
+case "$*" in
+  *--list*PICTURE*) echo "METADATA block #2"; echo "  type: 6 (PICTURE)" ;;
+  *--show-tag=LYRICS*) echo "LYRICS=already here" ;;
+  *--show-tag=ARTIST*) echo "ARTIST=Art" ;;
+  *--show-tag=ALBUM*) echo "ALBUM=Alb" ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/metaflac"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_FAKE_MF_LOG" should not include "--import-picture-from"
+    The contents of file "$RIP_FAKE_MF_LOG" should not include "--set-tag-from-file"
+  End
 End

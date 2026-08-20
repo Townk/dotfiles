@@ -111,7 +111,9 @@ rip::push_worker() {
     return 0
   fi
 
-  # (Task 2 inserts the enrichment stage HERE, before the marker.)
+  if [[ "$type" == music ]]; then
+    rip::_enrich_music "$src" "$listfile" || log_warn "rip: enrich pass had failures — pushing anyway"
+  fi
 
   local marker; marker="$(rip::staging_root)/.work/push-$type.stamp"
   touch -- "$marker" || {
@@ -193,6 +195,131 @@ rip::_verify_and_clean() {
     done
   done
   rm -f -- "$listfile"
+  return 0
+}
+
+# --- enrichment: embedded cover art + lyrics, pre-push -----------------------
+# Best-effort by doctrine: any failure logs and continues — a lyrics outage
+# must never strand an album locally. Idempotent: tracks already carrying a
+# PICTURE block / LYRICS tag are skipped. Runs BEFORE the push marker is
+# stamped, so enriched mtimes are older than the marker and the clean pass
+# still removes them.
+
+# rip::_track_meta <flac> — prints "artist<TAB>album<TAB>title<TAB>duration_s".
+# Built with printf (not `print -r`): print -r takes its arguments RAW, so a
+# literal \t embedded in a double-quoted string would ride through as the two
+# characters backslash-t instead of becoming a real tab, breaking every
+# consumer below that splits on $'\t' / cut. printf's format string is where
+# \t is interpreted, and — unlike `print` without -r — it never reprocesses
+# escape-like content inside the %s argument values themselves, so an artist
+# or album tag that happens to contain a literal backslash sequence rides
+# through unmolested.
+rip::_track_meta() {
+  local mf="${RIP_METAFLAC_BIN:-metaflac}" f="$1"
+  local artist album title samples rate dur=0
+  artist="$("$mf" --show-tag=ARTIST "$f" 2>/dev/null | head -1)"; artist="${artist#*=}"
+  album="$("$mf" --show-tag=ALBUM "$f" 2>/dev/null | head -1)";  album="${album#*=}"
+  title="$("$mf" --show-tag=TITLE "$f" 2>/dev/null | head -1)";  title="${title#*=}"
+  samples="$("$mf" --show-total-samples "$f" 2>/dev/null)"
+  rate="$("$mf" --show-sample-rate "$f" 2>/dev/null)"
+  [[ "$samples" == <-> && "$rate" == <1-> ]] && dur=$(( samples / rate ))
+  printf '%s\t%s\t%s\t%s\n' "$artist" "$album" "$title" "$dur"
+}
+
+rip::_fetch_cover() {
+  local artist="$1" album="$2" out="$3"
+  local curl_bin="${RIP_CURL_BIN:-curl}"
+  local mb="${RIP_MB_URL:-https://musicbrainz.org/ws/2}"
+  local caa="${RIP_CAA_URL:-https://coverartarchive.org}"
+  local itunes="${RIP_ITUNES_URL:-https://itunes.apple.com}"
+  local mbid
+  mbid="$("$curl_bin" -sf -A 'fleet-rip/2.0' -G "$mb/release/" \
+      --data-urlencode "query=release:\"$album\" AND artist:\"$artist\"" \
+      --data-urlencode fmt=json --data-urlencode limit=1 2>/dev/null \
+    | jq -r '(.releases // [])[0].id // empty')"
+  if [[ -n "$mbid" ]]; then
+    "$curl_bin" -sfL -o "$out" "$caa/release/$mbid/front-500" 2>/dev/null \
+      && [[ -s "$out" ]] && return 0
+  fi
+  local art_url
+  art_url="$("$curl_bin" -sf -G "$itunes/search" \
+      --data-urlencode "term=$artist $album" --data-urlencode entity=album \
+      --data-urlencode limit=1 2>/dev/null \
+    | jq -r '(.results // [])[0].artworkUrl100 // empty' \
+    | sed 's/100x100bb/600x600bb/')"
+  [[ -n "$art_url" ]] || { rm -f -- "$out"; return 1 }
+  "$curl_bin" -sfL -o "$out" "$art_url" 2>/dev/null && [[ -s "$out" ]] && return 0
+  rm -f -- "$out"; return 1
+}
+
+rip::_fetch_lyrics() {
+  local artist="$1" album="$2" title="$3" dur="$4"
+  local curl_bin="${RIP_CURL_BIN:-curl}"
+  local lrclib="${RIP_LRCLIB_URL:-https://lrclib.net}"
+  local json
+  json="$("$curl_bin" -sf -A 'fleet-rip/2.0' -G "$lrclib/api/get" \
+      --data-urlencode "artist_name=$artist" \
+      --data-urlencode "track_name=$title" \
+      --data-urlencode "album_name=$album" \
+      --data-urlencode "duration=$dur" 2>/dev/null)" || return 1
+  local lyr
+  lyr="$(jq -r '.syncedLyrics // .plainLyrics // empty' <<<"$json")"
+  [[ -n "$lyr" && "$lyr" != null ]] || return 1
+  print -r -- "$lyr"
+}
+
+# rip::_enrich_music <src> <listfile> — per album dir holding listed .flac
+# files: embed cover art into each track (+ cover.jpg beside them, appended
+# to the list so it ships THIS run) and embed LYRICS per track. rc 1 if any
+# sub-step failed (caller logs and pushes anyway).
+rip::_enrich_music() {
+  setopt localoptions noerrexit nopipefail
+  local src="$1" listfile="$2"
+  local mf="${RIP_METAFLAC_BIN:-metaflac}"
+  local rel failed=0
+  local -A album_dirs=()
+  while IFS= read -r rel; do
+    [[ "$rel" == *.flac ]] && album_dirs[${rel:h}]=1
+  done < "$listfile"
+  local adir
+  for adir in ${(k)album_dirs}; do
+    local abs="$src/$adir"
+    local -a flacs=("$abs"/*.flac(N))
+    (( ${#flacs} )) || continue
+    local meta artist album
+    meta="$(rip::_track_meta "${flacs[1]}")"
+    artist="${meta%%$'\t'*}"
+    album="$(print -r -- "$meta" | cut -f2)"
+    # cover: fetch once per album, embed where absent, ship cover.jpg
+    local cover="$abs/cover.jpg" have_cover=0
+    [[ -s "$cover" ]] && have_cover=1
+    if (( ! have_cover )) && [[ -n "$artist" && -n "$album" ]]; then
+      rip::_fetch_cover "$artist" "$album" "$cover" && have_cover=1 || failed=1
+    fi
+    if (( have_cover )); then
+      grep -qxF "$adir/cover.jpg" "$listfile" || print -r -- "$adir/cover.jpg" >> "$listfile"
+      local f
+      for f in "${flacs[@]}"; do
+        [[ -n "$("$mf" --list --block-type=PICTURE "$f" 2>/dev/null)" ]] && continue
+        "$mf" --import-picture-from="$cover" "$f" 2>/dev/null || failed=1
+      done
+    fi
+    # lyrics: per track
+    local f tmeta title dur lyr
+    for f in "${flacs[@]}"; do
+      [[ -n "$("$mf" --show-tag=LYRICS "$f" 2>/dev/null)" ]] && continue
+      tmeta="$(rip::_track_meta "$f")"
+      title="$(print -r -- "$tmeta" | cut -f3)"
+      dur="$(print -r -- "$tmeta" | cut -f4)"
+      [[ -n "$title" ]] || continue
+      if lyr="$(rip::_fetch_lyrics "$artist" "$album" "$title" "$dur")"; then
+        print -r -- "$lyr" | "$mf" --set-tag-from-file=LYRICS=/dev/stdin "$f" 2>/dev/null || failed=1
+      else
+        print -r -- "rip: no lyrics found — $artist / $title"
+      fi
+    done
+  done
+  (( failed )) && { log_error "rip: enrich pass had failures (see above)"; return 1 }
   return 0
 }
 
