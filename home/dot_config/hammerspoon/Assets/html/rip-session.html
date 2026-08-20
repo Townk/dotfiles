@@ -272,10 +272,17 @@
       if (SESSION.scanning) { ok = false; reason = 'reading the disc…'; }
       else if (!feat && extras.length === 0) { ok = false; reason = 'nothing selected — pick a feature or an extra'; }
       else if (feat && !feat.movie) { ok = false; reason = 'pick the feature to enable Start'; }
+      // Movie titles become path components downstream exactly like extra
+      // names (rip::_check_title rejects slashes), and TMDB can serve one —
+      // "Face/Off (1997)" is real. Gate it here so Start never enables a
+      // plan the pipeline would bounce after the operator committed.
+      else if (feat && !nameValid(feat.movie.title)) { ok = false; reason = 'that title has a slash — pick another'; }
       else {
         for (var j = 0; j < extras.length; j++) {
           if (!nameValid(extras[j].name)) { ok = false; reason = 'name every extra to enable Start'; break; }
-          if (!attachFor(extras[j])) { ok = false; reason = 'choose the movie each extra attaches to'; break; }
+          var at = attachFor(extras[j]);
+          if (!at) { ok = false; reason = 'choose the movie each extra attaches to'; break; }
+          if (!nameValid(at)) { ok = false; reason = 'attached movie title has a slash — pick another'; break; }
         }
       }
       return { feature: feat, extras: extras, skipped: skipped, libSkips: libSkips, ok: ok, reason: reason };
@@ -349,6 +356,14 @@
     function setRole(i, role) {
       var r = rows[i];
       if (!r || r.role === role) { focusIdx = i; render(); return; }
+      // Any role change invalidates an in-flight TMDB search: bump the seq
+      // so a stale reply is dropped (it would otherwise pass the seq guard
+      // and hang its dropdown under whichever row is Feature NOW — a wrong
+      // movie on a wrong row, review finding 2026-08-20), and cancel a
+      // pending debounce so it can't post a query typed against a row that
+      // no longer owns the search field.
+      searchSeq++;
+      if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
       if (role === 'feature') {
         for (var j = 0; j < rows.length; j++) {
           if (j !== i && rows[j].role === 'feature') {
@@ -495,6 +510,7 @@
     function clearMovie(i) {
       var r = rows[i];
       if (!r) return;
+      searchSeq++; // orphan any in-flight reply — same rule as setRole
       r.movie = null;
       r.query = '';
       focusIdx = i;
@@ -514,7 +530,10 @@
       r.query = el.value;
       if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
       var q = el.value.trim();
-      if (q.length < 2) { closeDropdown(); return; }
+      // Bumping the seq here too: deleting back under 2 chars must also
+      // orphan any reply still in flight, or it reopens the dropdown for a
+      // query the field no longer shows.
+      if (q.length < 2) { searchSeq++; closeDropdown(); return; }
       searchTimer = setTimeout(function () {
         searchTimer = null;
         searchSeq++;
@@ -559,6 +578,10 @@
     window.__setSession = function (data) {
       if (!data) return;
       SESSION = data;
+      // A session replacement orphans any in-flight TMDB reply — it was a
+      // question about the previous session's rows (same rule as setRole).
+      searchSeq++;
+      if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
       closeDropdown(true);
       initRows(SESSION);
       render();

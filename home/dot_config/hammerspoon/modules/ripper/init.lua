@@ -501,7 +501,12 @@ function M.preview(name)
 			if previewTimer == thisTimer then
 				previewTimer = nil
 			end
-			session.show(previewData("u2"), previewCallbacks)
+			-- Only populate a panel that is still up: if the operator
+			-- dismissed during the fake scan, firing session.show here would
+			-- reopen it and steal focus back 1.5s after they declined.
+			if session.isShown() then
+				session.show(previewData("u2"), previewCallbacks)
+			end
 		end)
 		previewTimer = thisTimer
 		return
