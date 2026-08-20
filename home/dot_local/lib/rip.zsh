@@ -243,7 +243,9 @@ rip::_verify_and_clean() {
 
 # rip::_track_meta <flac> — prints
 # "artist<TAB>album<TAB>title<TAB>duration_s<TAB>year". year is the DATE
-# tag's first 4 characters (empty if DATE is absent/short) — the cover
+# tag's first 4 characters, kept ONLY when that's exactly 4 characters —
+# empty otherwise (DATE absent, or too short to be a year at all: a bare
+# "04" must not leak through as a junk `date:04` MB query) — the cover
 # search's disambiguator for an ambiguous title (see rip::_fetch_cover).
 # Built with printf (not `print -r`): print -r takes its arguments RAW, so a
 # literal \t embedded in a double-quoted string would ride through as the two
@@ -261,6 +263,7 @@ rip::_track_meta() {
   title="$("$mf" --show-tag=TITLE "$f" 2>/dev/null | head -1)";  title="${title#*=}"
   date="$("$mf" --show-tag=DATE "$f" 2>/dev/null | head -1)";   date="${date#*=}"
   year="${date[1,4]}"
+  [[ ${#year} == 4 ]] || year=""
   samples="$("$mf" --show-total-samples "$f" 2>/dev/null)"
   rate="$("$mf" --show-sample-rate "$f" 2>/dev/null)"
   [[ "$samples" == <-> && "$rate" == <1-> ]] && dur=$(( samples / rate ))
@@ -274,21 +277,29 @@ rip::_track_meta() {
 # silently — the caller would otherwise honestly report a miss on data
 # that's really there (live-caught 2026-08-20: the chain missed on a real
 # push while succeeding standalone). Sleeps RIP_MB_PAUSE_S before the
-# request to space it from whatever MB call came before, then — only if
-# the parse comes back empty — retries ONCE after RIP_MB_RETRY_PAUSE_S.
-# Deezer/Wikidata/Commons don't rate-limit at our volumes, so this wrapper
-# is MB-only. Both pauses are seams (defaults 1s / 3s) so the test suite
-# can zero them out and stay fast.
+# request to space it from whatever MB call came before, then retries
+# ONCE after RIP_MB_RETRY_PAUSE_S — but ONLY on a curl TRANSPORT failure
+# (curl's own exit code, captured separately from jq's — with -f a 503
+# is rc 22). An empty-but-successful parse (curl rc 0, body legitimately
+# has no match) is a real miss, not a rate-limit symptom, and must be
+# accepted as-is: retrying it would double MB traffic and add up to 8s of
+# sleep on every ordinary miss, including the by-design date-filtered miss
+# in rip::_fetch_cover (round 3, live-caught 2026-08-20 in review — the
+# first version of this wrapper retried on ANY empty parse). Deezer/
+# Wikidata/Commons don't rate-limit at our volumes, so this wrapper is
+# MB-only. Both pauses are seams (defaults 1s / 3s) so the test suite can
+# zero them out and stay fast.
 rip::_mb_call() {
   local curl_bin="$1" jq_filter="$2"; shift 2
   local pause="${RIP_MB_PAUSE_S:-1}" retry_pause="${RIP_MB_RETRY_PAUSE_S:-3}"
-  local result
+  local raw rc result
   (( pause > 0 )) && sleep "$pause"
-  result="$("$curl_bin" "$@" 2>/dev/null | jq -r "$jq_filter")"
-  if [[ -z "$result" || "$result" == null ]]; then
+  raw="$("$curl_bin" "$@" 2>/dev/null)"; rc=$?
+  if (( rc != 0 )); then
     (( retry_pause > 0 )) && sleep "$retry_pause"
-    result="$("$curl_bin" "$@" 2>/dev/null | jq -r "$jq_filter")"
+    raw="$("$curl_bin" "$@" 2>/dev/null)"; rc=$?
   fi
+  result="$(jq -r "$jq_filter" <<<"$raw")"
   print -r -- "$result"
 }
 
@@ -353,31 +364,35 @@ rip::_fetch_cover() {
 # 2026-08-20): any picture_xl containing this must be rejected outright.
 RIP_ARTIST_IMAGE_PLACEHOLDER_MD5='d41d8cd98f00b204e9800998ecf8427e'
 
-# rip::_remote_has_artist_image <artist_reldir> — existence check on the
-# server, ahead of any fetch (idempotency, per operator requirement). If
-# rip::remote_base contains a ':' it's `user@host:path`: shell out to `ssh
-# <host> test -f …`. No ':' (the hermetic tests use a plain local dir): a
-# direct filesystem test. Returns 0 exists / 1 confirmed absent / 2 unknown
-# (the ssh call itself failed to run — e.g. the host is unreachable — rc
-# 255 on a real ssh; distinct from the remote `test -f` legitimately
-# reporting rc 1). The caller treats 2 exactly like "unknown": never block,
-# never refetch blindly, just skip the fetch this run and log one line.
-rip::_remote_has_artist_image() {
-  local artist_rel="$1"
+# rip::_remote_has_file <music_relpath> — existence check on the server for
+# music/<music_relpath>, ahead of any fetch (idempotency, per operator
+# requirement). Shared by the artist.jpg and cover.jpg pre-fetch checks
+# (round 4: cover.jpg used to lack this entirely — a future re-rip of an
+# art-less album would refetch and rsync-overwrite a curated server cover,
+# live case: the hand-corrected "MTV ao Vivo"). If rip::remote_base
+# contains a ':' it's `user@host:path`: shell out to `ssh <host> test -f
+# …`. No ':' (the hermetic tests use a plain local dir): a direct
+# filesystem test. Returns 0 exists / 1 confirmed absent / 2 unknown (the
+# ssh call itself failed to run — e.g. the host is unreachable — rc 255 on
+# a real ssh; distinct from the remote `test -f` legitimately reporting rc
+# 1). Every caller treats 2 exactly like "unknown": never block, never
+# refetch/reprocess blindly, just skip this run and log one line.
+rip::_remote_has_file() {
+  local relpath="$1"
   local base; base="$(rip::remote_base)"
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
     local host="${base%%:*}" rpath="${base#*:}"
-    # Artist names are untrusted CDDB/MusicBrainz tag data — an apostrophe
-    # ("Guns N' Roses") breaks hand-rolled single-quoting, and a crafted
-    # tag can break OUT of it entirely and execute arbitrary commands on
-    # cantina over the media@ ssh credentials. ${(q)...} is zsh's own
-    # quoter: it safely shell-quotes the remote-file path for ANY content,
-    # never hand-interpolated into a quoted string ourselves.
+    # Artist/album names are untrusted CDDB/MusicBrainz tag data — an
+    # apostrophe ("Guns N' Roses") breaks hand-rolled single-quoting, and
+    # a crafted name can break OUT of it entirely and execute arbitrary
+    # commands on cantina over the media@ ssh credentials. ${(q)...} is
+    # zsh's own quoter: it safely shell-quotes the remote-file path for
+    # ANY content, never hand-interpolated into a quoted string ourselves.
     # BatchMode+ConnectTimeout: a network black-hole or host-key prompt
     # must never hang the push worker — "never block" applies to the
     # check itself, not just its result.
-    local rfile="$rpath/music/$artist_rel/artist.jpg"
+    local rfile="$rpath/music/$relpath"
     "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 \
       "$host" "test -f ${(q)rfile}" 2>/dev/null
     local rc=$?
@@ -385,8 +400,14 @@ rip::_remote_has_artist_image() {
     (( rc == 1 )) && return 1
     return 2
   fi
-  [[ -f "$base/music/$artist_rel/artist.jpg" ]] && return 0
+  [[ -f "$base/music/$relpath" ]] && return 0
   return 1
+}
+
+# rip::_remote_has_artist_image <artist_reldir> — thin rip::_remote_has_file
+# wrapper for the artist.jpg path shape.
+rip::_remote_has_artist_image() {
+  rip::_remote_has_file "$1/artist.jpg"
 }
 
 # rip::_fetch_artist_image <artist> <out> — keyless fetch chain: Deezer
@@ -463,7 +484,7 @@ rip::_ensure_artist_image() {
       return 0
     fi
   fi
-  grep -qxF "$artist_rel/artist.jpg" "$listfile" || print -r -- "$artist_rel/artist.jpg" >> "$listfile"
+  grep -qxF -- "$artist_rel/artist.jpg" "$listfile" || print -r -- "$artist_rel/artist.jpg" >> "$listfile"
   return 0
 }
 
@@ -496,6 +517,21 @@ rip::_enrich_music() {
   local src="$1" listfile="$2"
   local mf="${RIP_METAFLAC_BIN:-metaflac}"
   local rel adir failed=0
+  # Every bare (no `=value`) `local name` below is declared EXACTLY ONCE
+  # here, outside the per-album loop — never re-declared bare inside it.
+  # zsh prints "name=value" to STDOUT when `local name` (no assignment)
+  # re-declares a variable that's ALREADY local in this scope with a value
+  # set — confirmed across stock zsh 5.9 and this fleet's zsh build alike,
+  # live-caught 2026-08-20 in review. A bare `local` INSIDE a loop that
+  # runs more than once (any multi-album push) re-declares on every
+  # iteration after the first, leaking every one of these variables'
+  # previous-album leftover values as bare "name=value" stdout lines (the
+  # pre-existing `rel2` had this latent bug too, dormant only because no
+  # multi-album test happened to run without a faked metaflac). `local
+  # name=value` (WITH an assignment, e.g. `abs`/`flacs`/`cover` below,
+  # still declared per-iteration) is unaffected — the print only fires for
+  # a bare re-declaration.
+  local rel2 meta artist album year cover_remote_rc artist_rel f tmeta title dur lyr
   # Group the LISTED flac relpaths by album dir — deliberately NOT a glob of
   # the album directory. A sibling flac can be mid-write (XLD writing a
   # neighboring track while this one already settled): metaflac's
@@ -524,48 +560,73 @@ rip::_enrich_music() {
   for adir in ${(k)album_files}; do
     local abs="$src/$adir"
     local -a flacs=()
-    local rel2
     while IFS= read -r rel2; do
       [[ -n "$rel2" ]] && flacs+=("$src/$rel2")
     done <<< "${album_files[$adir]}"
     (( ${#flacs} )) || continue
-    local meta artist album year
     meta="$(rip::_track_meta "${flacs[1]}")"
     artist="${meta%%$'\t'*}"
     album="$(print -r -- "$meta" | cut -f2)"
     year="$(print -r -- "$meta" | cut -f5)"
     # cover: fetch once per album, embed where absent, ship cover.jpg.
-    # Source priority when cover.jpg doesn't exist yet: an embedded
-    # PICTURE block on the album's first listed track wins over any
-    # external fetch — XLD matched it against the actual disc, so it's
-    # the most trustworthy source there is. An external search can be
-    # fooled by an ambiguous title (live-bitten 2026-08-20: "MTV ao Vivo"
-    # matched the wrong release) and Navidrome's default
-    # CoverArtPriority puts cover.* ABOVE embedded art, so a wrong
-    # external fetch would win the display even though per-track
-    # idempotency correctly left the good embedded art alone. Only fall
-    # through to the external MB/CAA→iTunes chain when no listed track
-    # in the album carries embedded art at all.
+    #
+    # Server check FIRST (round 4, live case: the hand-corrected "MTV ao
+    # Vivo"): without it, a future re-rip of an art-less album would
+    # refetch and rsync-overwrite a curated server cover. Mirrors the
+    # artist.jpg tri-state check exactly (rip::_remote_has_file): 0 server
+    # already has one → skip the ENTIRE cover step this run, INCLUDING the
+    # per-track embed loop below (simplest consistent rule — no export, no
+    # fetch, no embeds; whatever's on the server stands; logged once).
+    # 2/unreachable → same fail-safe: skip entirely rather than guess. Only
+    # rc 1 (confirmed absent) proceeds to the embedded-first / external
+    # chain below. Skipped outright when cover.jpg is already sitting here
+    # locally (multi-run leftover) — no need to ask the server at all.
+    #
+    # Source priority once we DO proceed: an embedded PICTURE block wins
+    # over any external fetch — XLD matched it against the actual disc, so
+    # it's the most trustworthy source there is — checked across EVERY
+    # listed track in the album (not just the first: find/listfile order
+    # is arbitrary, and a partially-embedded or partially-settled album
+    # whose first-enumerated track happens to be art-less must not bury a
+    # later track's correct embedded art under a wrong external fetch;
+    # live-caught 2026-08-20 in review). The first listed track (in
+    # enumeration order) that carries a PICTURE block wins; only when NONE
+    # of them do does the external MB/CAA→iTunes chain run (which can
+    # itself be fooled by an ambiguous title — live-bitten 2026-08-20:
+    # "MTV ao Vivo" matched the wrong release — and Navidrome's default
+    # CoverArtPriority puts cover.* ABOVE embedded art, so a wrong external
+    # fetch would win the display even though per-track idempotency
+    # correctly left any good embedded art alone).
     local cover="$abs/cover.jpg" have_cover=0
     [[ -s "$cover" ]] && have_cover=1
-    if (( ! have_cover )) \
-        && [[ -n "$("$mf" --list --block-type=PICTURE "${flacs[1]}" 2>/dev/null)" ]]; then
-      "$mf" --export-picture-to="$cover" "${flacs[1]}" 2>/dev/null \
-        && [[ -s "$cover" ]] && have_cover=1
-    fi
-    if (( ! have_cover )) && [[ -n "$artist" && -n "$album" ]]; then
-      rip::_fetch_cover "$artist" "$album" "$cover" "$year" && have_cover=1 || failed=1
+    if (( ! have_cover )); then
+      rip::_remote_has_file "$adir/cover.jpg"
+      cover_remote_rc=$?
+      case $cover_remote_rc in
+        0) print -r -- "rip: cover — server already has $adir/cover.jpg, skipping this run: $artist / $album" ;;
+        1) ;;   # confirmed absent — proceed below
+        *) print -r -- "rip: cover remote check unreachable — skipping this run: $artist / $album" ;;
+      esac
+      if (( cover_remote_rc == 1 )); then
+        for f in "${flacs[@]}"; do
+          [[ -n "$("$mf" --list --block-type=PICTURE "$f" 2>/dev/null)" ]] || continue
+          "$mf" --export-picture-to="$cover" "$f" 2>/dev/null \
+            && [[ -s "$cover" ]] && have_cover=1
+          (( have_cover )) && break
+        done
+        if (( ! have_cover )) && [[ -n "$artist" && -n "$album" ]]; then
+          rip::_fetch_cover "$artist" "$album" "$cover" "$year" && have_cover=1 || failed=1
+        fi
+      fi
     fi
     if (( have_cover )); then
-      grep -qxF "$adir/cover.jpg" "$listfile" || print -r -- "$adir/cover.jpg" >> "$listfile"
-      local f
+      grep -qxF -- "$adir/cover.jpg" "$listfile" || print -r -- "$adir/cover.jpg" >> "$listfile"
       for f in "${flacs[@]}"; do
         [[ -n "$("$mf" --list --block-type=PICTURE "$f" 2>/dev/null)" ]] && continue
         "$mf" --import-picture-from="$cover" "$f" 2>/dev/null || failed=1
       done
     fi
     # lyrics: per track
-    local f tmeta title dur lyr
     for f in "${flacs[@]}"; do
       [[ -n "$("$mf" --show-tag=LYRICS "$f" 2>/dev/null)" ]] && continue
       tmeta="$(rip::_track_meta "$f")"
@@ -580,7 +641,7 @@ rip::_enrich_music() {
     done
     # artist image: once per unique artist dir touched this run — the
     # artist staging dir is the album dir's PARENT ($src/<Artist>).
-    local artist_rel="${adir:h}"
+    artist_rel="${adir:h}"
     if [[ -n "$artist" && -z "${artist_seen[$artist_rel]:-}" ]]; then
       artist_seen[$artist_rel]=1
       rip::_ensure_artist_image "$src" "$artist_rel" "$artist" "$listfile"

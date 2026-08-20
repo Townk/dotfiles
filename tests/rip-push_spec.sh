@@ -1025,4 +1025,149 @@ EOF
     The contents of file "$RIP_SANDBOX/server/music/Art/artist.jpg" should equal "COMMONSJPEG"
     The result of function mb_artist_call_count should equal "2"
   End
+
+  # Final consolidated-review fix wave (round 4, 2026-08-20): three
+  # Importants against the round-3 code.
+
+  # Finding 1: embedded-first used to probe ONLY ${flacs[1]} — find/
+  # listfile order is arbitrary, so a partially-embedded album whose
+  # first-enumerated track happens to be art-less still external-fetched,
+  # burying a LATER track's correct embedded art under a wrong cover.jpg.
+  # Fix loops every listed flac and exports from the first one (in listed
+  # order) that carries a PICTURE block. Drives rip::_enrich_music
+  # directly with a hand-built listfile (rather than going through
+  # push_worker's find-based one) specifically so the art-less-first
+  # ordering is deterministic, not filesystem-traversal-order-dependent.
+  It 'cover embedded-first loops ALL listed flacs — an art-less track enumerated first must not bury a later art-bearing track under an external fetch'
+    enrich_setup
+    mkdir -p "$RIP_STAGING_ROOT/music/Art/Alb"
+    touch "$RIP_STAGING_ROOT/music/Art/Alb/01 NoArt.flac" "$RIP_STAGING_ROOT/music/Art/Alb/02 HasArt.flac"
+    cat > "$RIP_SANDBOX/metaflac" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_MF_LOG"
+case "$*" in
+  *"--list --block-type=PICTURE"*"01 NoArt.flac") exit 0 ;;
+  *"--list --block-type=PICTURE"*"02 HasArt.flac") echo "METADATA block #2"; echo "  type: 6 (PICTURE)" ;;
+  *--export-picture-to=*)
+    out=""
+    for a in "$@"; do case "$a" in --export-picture-to=*) out="${a#--export-picture-to=}";; esac; done
+    [ -n "$out" ] && printf 'EMBEDDEDJPEG' > "$out" ;;
+  *--show-tag=LYRICS*) exit 0 ;;
+  *--show-tag=ARTIST*) echo "ARTIST=Art" ;;
+  *--show-tag=ALBUM*) echo "ALBUM=Alb" ;;
+  *--show-tag=TITLE*) echo "TITLE=Song" ;;
+  *--show-total-samples*) echo 8820000 ;;
+  *--show-sample-rate*) echo 44100 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/metaflac"
+    listfile="$RIP_SANDBOX/enrich.list"
+    # art-less track listed FIRST — the exact ordering the old ${flacs[1]}-
+    # only code would have gotten wrong.
+    printf 'Art/Alb/01 NoArt.flac\nArt/Alb/02 HasArt.flac\n' > "$listfile"
+    When run zsh -c "source $RIPLIB && rip::_enrich_music '$RIP_STAGING_ROOT/music' '$listfile'"
+    The status should equal 0
+    The contents of file "$RIP_FAKE_MF_LOG" should include "--export-picture-to"
+    The path "$RIP_STAGING_ROOT/music/Art/Alb/cover.jpg" should be exist
+    The contents of file "$RIP_STAGING_ROOT/music/Art/Alb/cover.jpg" should equal "EMBEDDEDJPEG"
+    # no external cover source was ever consulted
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "coverartarchive"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "itunes"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "/release/"
+    # the artist-image step also runs here (calling rip::_enrich_music
+    # directly still exercises it) and best-effort misses via the shared
+    # enrich_setup curl fake — unrelated to this example's assertion, but
+    # covered so shellspec doesn't flag it as unaccounted-for stdout
+    The output should include "no artist image found"
+  End
+
+  # Finding 2: rip::_mb_call used to retry on ANY empty parse, including a
+  # clean, successful, legitimately-empty response (a real miss — e.g. the
+  # by-design date-filtered miss in rip::_fetch_cover) — doubling MB
+  # traffic and adding up to 8s of sleep on every ordinary miss. Fix
+  # retries ONLY on curl's own transport failure (its rc, captured
+  # separately from jq's parse). The "retries on a genuine transport
+  # failure" half is already covered by the two MB-retry examples above
+  # (their fakes `exit 22` on the first call — a transport failure, not an
+  # empty parse); this example is the other half: a clean 200 with an
+  # empty body must NOT trigger a second call.
+  It 'rip::_mb_call does not retry a clean, successful, empty MusicBrainz response (a real miss, not a rate-limit symptom)'
+    enrich_setup
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *musicbrainz*/release/)
+    n=0
+    [ -f "$RIP_SANDBOX/mb_release_count" ] && n=$(cat "$RIP_SANDBOX/mb_release_count")
+    n=$((n+1))
+    echo "$n" > "$RIP_SANDBOX/mb_release_count"
+    echo '{"releases":[]}' ;;   # clean 200, genuinely no match
+  *coverartarchive*) : ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+  *deezer*) echo '{"data":[]}' ;;
+  *inc=url-rels*) echo '{"relations":[]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[]}' ;;
+  *wikidata*) echo '{"claims":{}}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The stderr should include "enrich"
+    The result of function mb_release_call_count should equal "1"
+  End
+
+  # Finding 3: cover.jpg lacked the server-side already-exists check that
+  # artist.jpg has — a future re-rip of an art-less album would refetch
+  # and rsync-overwrite a curated server cover (live case: the
+  # hand-corrected "MTV ao Vivo"). Fix mirrors the artist.jpg tri-state
+  # check (rip::_remote_has_file, shared helper) ahead of any export or
+  # fetch; when the server already has cover.jpg, the ENTIRE cover step is
+  # skipped this run — no export, no fetch, no per-track embeds — logged
+  # once.
+  It 'cover: server already has cover.jpg — entire cover step skipped this run (no export, no fetch, no embeds), logged once'
+    enrich_setup
+    mkdir -p "$RIP_SANDBOX/server/music/Art/Alb"
+    printf 'CURATED-SERVER-COVER' > "$RIP_SANDBOX/server/music/Art/Alb/cover.jpg"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The output should include "rip: cover — server already has Art/Alb/cover.jpg, skipping this run"
+    The path "$RIP_STAGING_ROOT/music/Art/Alb/cover.jpg" should not be exist
+    The contents of file "$RIP_FAKE_MF_LOG" should not include "--export-picture-to"
+    The contents of file "$RIP_FAKE_MF_LOG" should not include "--import-picture-from"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "coverartarchive"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "itunes"
+    The contents of file "$RIP_SANDBOX/curl.log" should not include "/release/"
+  End
+
+  # Regression guard (round 4 leak, live-caught in review while adding the
+  # findings above): a genuine zsh behavior — confirmed identically on
+  # stock zsh 5.9 and this fleet's zsh build — prints "name=value" to
+  # STDOUT whenever `local name` (bare, no `=value`) re-declares a
+  # variable that's ALREADY local in the current scope with a value set.
+  # rip::_enrich_music's per-album loop used to re-declare several bare
+  # `local`s (including the pre-existing `rel2`) INSIDE the loop body,
+  # which is silent for a single-album run but leaks every one of those
+  # variables' previous-album values as bare "name=value" stdout lines on
+  # the SECOND and later albums of any multi-album push. Fixed by hoisting
+  # every bare `local` to the top of the function, declared exactly once.
+  It 'enrichment never leaks bare "name=value" lines on a multi-album run'
+    mkdir -p "$RIP_STAGING_ROOT/music/Art/Alb1" "$RIP_STAGING_ROOT/music/Art/Alb2"
+    touch "$RIP_STAGING_ROOT/music/Art/Alb1/01 Song.flac" "$RIP_STAGING_ROOT/music/Art/Alb2/01 Other.flac"
+    printf '#!/bin/sh\nexit 0\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The output should not include "='"
+    The output should not include "rel2="
+    The output should not include "artist_rel="
+  End
 End
