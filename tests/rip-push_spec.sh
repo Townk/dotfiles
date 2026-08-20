@@ -722,4 +722,70 @@ EOF
     The contents of file "$RIP_SANDBOX/curl.log" should not include "search/artist"
     The path "$RIP_STAGING_ROOT/music/Art/artist.jpg" should not be exist
   End
+
+  # Security regression guard (review finding 1): the remote command used to
+  # be hand-built with a raw single-quoted interpolation —
+  # "test -f '$rpath/music/$artist_rel/artist.jpg'" — so an apostrophe in
+  # the artist DIRECTORY name (itself derived from untrusted CDDB/
+  # MusicBrainz tag data upstream in the pipeline) breaks the quoting, and a
+  # crafted name can break OUT of it and run arbitrary commands on cantina
+  # over the media@ ssh credentials. Fix: ${(q)...}, zsh's own quoter, which
+  # safely shell-quotes ANY content. This fake ssh round-trips the generated
+  # remote command through a REAL `sh -c` (simulating the remote shell) and
+  # logs the resulting rc — proving the command is syntactically valid
+  # (rc 1: file legitimately absent) rather than broken (a syntax error
+  # would not yield a clean rc 1, and get miscategorized as "unknown").
+  fake_roundtrip_ssh() {
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/ssh.log"
+shift 4   # -o BatchMode=yes -o ConnectTimeout=5
+shift     # <host>
+cmd="\$1"
+sh -c "\$cmd"
+rc=\$?
+printf 'RC=%s\n' "\$rc" >> "$RIP_SANDBOX/ssh.log"
+exit "\$rc"
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+  }
+
+  It 'artist image: ssh remote check safely quotes an artist directory name containing an apostrophe'
+    enrich_setup
+    mkdir -p "$RIP_STAGING_ROOT/music/N' Roses/Alb"
+    touch "$RIP_STAGING_ROOT/music/N' Roses/Alb/01 Song.flac"
+    export RIP_REMOTE_BASE="fakehost:$RIP_SANDBOX/server"
+    fake_roundtrip_ssh
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # rc 1 — the remote `test -f` ran cleanly and legitimately found the
+    # file absent; a broken quote would either error out or, at best, not
+    # reliably report 1 here
+    The contents of file "$RIP_SANDBOX/ssh.log" should include "RC=1"
+    The contents of file "$RIP_SANDBOX/ssh.log" should include "BatchMode=yes"
+    The contents of file "$RIP_SANDBOX/ssh.log" should include "ConnectTimeout=5"
+    # confirmed absent → the fetch chain proceeded (never misread as
+    # "unknown" from a syntax error, which would have skipped it)
+    The contents of file "$RIP_SANDBOX/curl.log" should include "search/artist"
+  End
+
+  It 'artist image: ssh remote check is immune to shell metacharacter injection via a crafted artist directory name'
+    enrich_setup
+    evil="x'; touch '$RIP_SANDBOX/PWNED' #"
+    mkdir -p "$RIP_STAGING_ROOT/music/$evil/Alb"
+    touch "$RIP_STAGING_ROOT/music/$evil/Alb/01 Song.flac"
+    export RIP_REMOTE_BASE="fakehost:$RIP_SANDBOX/server"
+    fake_roundtrip_ssh
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # the payload never executed…
+    The path "$RIP_SANDBOX/PWNED" should not be exist
+    # …the quoted command still parsed and ran cleanly (rc 1: absent, not a
+    # syntax error), so the fetch chain proceeded normally
+    The contents of file "$RIP_SANDBOX/ssh.log" should include "RC=1"
+    The contents of file "$RIP_SANDBOX/curl.log" should include "search/artist"
+  End
 End

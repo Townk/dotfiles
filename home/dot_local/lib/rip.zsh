@@ -307,7 +307,18 @@ rip::_remote_has_artist_image() {
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
     local host="${base%%:*}" rpath="${base#*:}"
-    "$ssh_bin" "$host" "test -f '$rpath/music/$artist_rel/artist.jpg'" 2>/dev/null
+    # Artist names are untrusted CDDB/MusicBrainz tag data — an apostrophe
+    # ("Guns N' Roses") breaks hand-rolled single-quoting, and a crafted
+    # tag can break OUT of it entirely and execute arbitrary commands on
+    # cantina over the media@ ssh credentials. ${(q)...} is zsh's own
+    # quoter: it safely shell-quotes the remote-file path for ANY content,
+    # never hand-interpolated into a quoted string ourselves.
+    # BatchMode+ConnectTimeout: a network black-hole or host-key prompt
+    # must never hang the push worker — "never block" applies to the
+    # check itself, not just its result.
+    local rfile="$rpath/music/$artist_rel/artist.jpg"
+    "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 \
+      "$host" "test -f ${(q)rfile}" 2>/dev/null
     local rc=$?
     (( rc == 0 )) && return 0
     (( rc == 1 )) && return 1
