@@ -159,6 +159,9 @@ defaults write com.apple.digihub com.apple.digihub.cd.music.appeared -dict actio
 defaults write jp.tmkk.XLD AutoMountDisc -int 1
 defaults write jp.tmkk.XLD AutoQueryCDDB -int 1
 
+echo "📀  Video DVD insert opens MakeMKV (rip flow: human selects titles incl. extras, pipeline encodes+pushes)"
+defaults write com.apple.digihub com.apple.digihub.dvd.video.appeared -dict action 100 custom "/Applications/MakeMKV.app"
+
 {{- end }}
 
 # vim:ft=sh
