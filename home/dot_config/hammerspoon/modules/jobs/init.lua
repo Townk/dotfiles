@@ -13,6 +13,21 @@
 --   * stall rendering must never do cold glyph I/O (resolver cache is
 --     shared with osd, which pre-warms the hourglass).
 --   * the cancel affordance never dims.
+-- KNOWN ISSUE (observed live 2026-08-19): a brand-new `progress: "expected"`
+-- job that never calls job::progress (a raw one-off, no sidecar writes at
+-- all) can enqueue with NO capsule ever appearing, recoverable only via
+-- `job::hud show`/toggle. armTimer()'s synchronous tick() -- run the instant
+-- the pathwatcher re-arms a stopped timer -- can land in job::start's
+-- mkdir-before-meta.json-write window; scanJobs() then reads 0 jobs and
+-- tick() calls stopAll(), killing the timer it just started. A job that
+-- calls job::progress gets more watcher events (its own tmp+mv sidecar
+-- writes) to retry on; a silent one gets none until `result` lands, and by
+-- then scanJobs already excludes it. Not a one-line fix: the honest options
+-- are either a real grace window before trusting an empty first scan (this
+-- module's GHOST_GRACE pattern, extended to cover "job dir exists but
+-- meta.json isn't readable yet") or dropping armTimer()'s synchronous
+-- initial tick() in favor of the timer's own first fire -- both are
+-- behavior changes, not a condition fix.
 -- Interaction: ✕ cancels that job (via libexec/job -> pueue kill; the
 -- task's own TERM trap decides what cancel means). Mouse-down anywhere
 -- else on a capsule dismisses the whole stack without touching the tasks;
