@@ -152,6 +152,9 @@ done
 echo "🔨  Making Hammerspoon use XDG config directories"
 defaults write org.hammerspoon.Hammerspoon MJConfigFile "~/.config/hammerspoon/init.lua"
 
+echo "💿  Music CD insert opens XLD (rip flow: XLD receives the disc, human rips, pipeline pushes)"
+defaults write com.apple.digihub com.apple.digihub.cd.music.appeared -dict action 100 custom "/Applications/XLD.app"
+
 {{- end }}
 
 # vim:ft=sh
