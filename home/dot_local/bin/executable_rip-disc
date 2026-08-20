@@ -1,0 +1,22 @@
+#!/usr/bin/env zsh
+# rip-disc — auto-rip the disc in the drive as ONE observable job::
+# job: makemkvcon rips the longest title into .work/autorip, then the
+# pipeline encodes, pushes, verifies, and cleans. Invoked by the ripper
+# module after the consent dialog + TMDB chooser; usable by hand.
+#
+#   rip-disc "<Title (Year)>"       enqueue
+#   rip-disc --worker "<title>"     internal: the job body
+
+set -eu -o pipefail
+
+RIP_LIB_DIR="${RIP_LIB_DIR:-$HOME/.local/lib}"
+source "$RIP_LIB_DIR/rip.zsh" || {
+  print -ru2 -- "rip-disc: cannot source rip.zsh from $RIP_LIB_DIR"
+  exit 1
+}
+
+case "${1:-}" in
+  --worker) shift; rip::disc_worker "${1:?title required}" ;;
+  "" | --help) print -ru2 -- 'usage: rip-disc "<Title (Year)>"'; exit 2 ;;
+  *) rip::disc_enqueue "$1" ;;
+esac

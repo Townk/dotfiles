@@ -390,7 +390,15 @@ rip::pipeline_worker() {
   mkdir -p "$work_dir"
   rm -f -- "$out_tmp"
 
-  rip::_progress 0 "encoding — $title"
+  # Progress composition: this worker may itself run inside an outer band
+  # (rip-disc gives it 40–100). Encode takes the first 85% OF THE BAND,
+  # push the rest — identical to the old hardcoded 0–85/85–100 when no
+  # outer band is set.
+  local band_base="${RIP_PROGRESS_BASE:-0}" band_span="${RIP_PROGRESS_SPAN:-100}"
+  local enc_span=$(( band_span * 85 / 100 ))
+
+  RIP_PROGRESS_BASE=$band_base RIP_PROGRESS_SPAN=$band_span \
+    rip::_progress 0 "encoding — $title"
   # Correctness no longer depends on this trap — .work already guarantees
   # nothing pushable survives a death of any kind. It buys the two things a
   # SIGKILL cannot: the temp goes away immediately rather than waiting for
@@ -416,7 +424,7 @@ rip::pipeline_worker() {
           *Encoding:*%*)
             pct="${line%\%*}"; pct="${pct##*, }"; pct="${pct%%.*}"; pct="${pct// /}"
             [[ "$pct" == <-> ]] \
-              && RIP_PROGRESS_BASE=0 RIP_PROGRESS_SPAN=85 \
+              && RIP_PROGRESS_BASE=$band_base RIP_PROGRESS_SPAN=$enc_span \
                  rip::_progress "$pct" "encoding — $title"
             ;;
         esac
@@ -441,10 +449,14 @@ rip::pipeline_worker() {
     return 1
   fi
 
-  RIP_PUSH_MIN_AGE_S=0 RIP_PROGRESS_BASE=85 RIP_PROGRESS_SPAN=15 rip::push_worker movies || return $?
+  RIP_PUSH_MIN_AGE_S=0 \
+  RIP_PROGRESS_BASE=$(( band_base + enc_span )) \
+  RIP_PROGRESS_SPAN=$(( band_span - enc_span )) \
+  rip::push_worker movies || return $?
 
   rm -f -- "$input"
-  rip::_progress 100 "done — $title"
+  RIP_PROGRESS_BASE=$band_base RIP_PROGRESS_SPAN=$band_span \
+    rip::_progress 100 "done — $title"
   return 0
 }
 
@@ -457,4 +469,77 @@ rip::pipeline_enqueue() {
   rip::_load_jobs || { log_error "rip: job runner unavailable"; return 1 }
   job::start --group heavy --title "rip: $title" --icon "$RIP_JOB_ICON" \
     -- "$RIP_BIN_DIR/rip-pipeline" --worker "$input" "$title"
+}
+
+# --- disc: makemkvcon rip → pipeline, one capsule ---------------------------
+
+# rip::disc_worker <title> — the auto-rip body (UX v2). Scans disc:0,
+# picks the LONGEST title (the movie heuristic; MakeMKV GUI → intermediate/
+# is the fallback for discs where that guess is wrong), rips it losslessly
+# into .work/autorip/ (unwatched, unpushed — same invariant as the encode
+# temp), then chains the pipeline stages under the 40–100 band. The drive
+# is free the moment the rip stage ends.
+rip::disc_worker() {
+  setopt localoptions noerrexit nopipefail
+  local title="$1"
+  rip::_check_title "$title" || return 2
+  local mkc="${RIP_MAKEMKVCON_BIN:-/Applications/MakeMKV.app/Contents/MacOS/makemkvcon}"
+  local rip_dir; rip_dir="$(rip::staging_root)/.work/autorip"
+  rm -rf -- "$rip_dir" && mkdir -p "$rip_dir"
+
+  # Longest title: TINFO:<idx>,9,0,"H:MM:SS" is the duration attribute.
+  # Single-pass awk (not a pipe-into-`read` chain — that shape runs each
+  # stage in its own subshell in zsh, which is a known footgun for getting
+  # a scalar back out): split on `:`, `,`, `"` so the quoted "H:MM:SS"
+  # duration and the leading TINFO:<idx>,9,0, header share one delimiter
+  # set, then track the max in END and print just the winning index.
+  local best_idx
+  best_idx="$("$mkc" -r info disc:0 2>/dev/null | awk -F'[:,"]' '
+    /^TINFO:[0-9]+,9,0,/ {
+      idx = $2
+      secs = ($6 + 0) * 3600 + ($7 + 0) * 60 + ($8 + 0)
+      if (best_idx == "" || secs > best_secs) { best_secs = secs; best_idx = idx }
+    }
+    END { print best_idx }
+  ')"
+  [[ -n "$best_idx" ]] || { log_error "rip: disc scan found no titles"; rm -rf -- "$rip_dir"; return 1 }
+
+  rip::_progress 0 "ripping disc — $title"
+  local cur total
+  "$mkc" -r --progress=-same mkv disc:0 "$best_idx" "$rip_dir" 2>&1 \
+    | while IFS= read -r line; do
+        case "$line" in
+          PRGV:*)
+            cur="${line#PRGV:}"; total="${cur##*,}"; cur="${cur%%,*}"
+            [[ "$cur" == <-> && "$total" == <1-> ]] \
+              && RIP_PROGRESS_BASE=0 RIP_PROGRESS_SPAN=40 \
+                 rip::_progress $(( cur * 100 / total )) "ripping disc — $title"
+            ;;
+        esac
+      done
+  local rc=$pipestatus[1]
+  local -a ripped=("$rip_dir"/*.mkv(N))
+  if (( rc != 0 )) || (( ${#ripped} == 0 )); then
+    rm -rf -- "$rip_dir"
+    log_error "rip: disc rip failed (rc=$rc, files=${#ripped}) — nothing kept"
+    return $(( rc ? rc : 1 ))
+  fi
+
+  RIP_PROGRESS_BASE=40 RIP_PROGRESS_SPAN=60 rip::pipeline_worker "${ripped[1]}" "$title"
+  rc=$?
+  # pipeline success already rm'd the input; sweep the dir either way
+  # (failure keeps the encode-stage rules; the RIP itself is cheap to redo
+  # from the disc, so autorip debris never outlives the job)
+  rm -rf -- "$rip_dir"
+  return $rc
+}
+
+# rip::disc_enqueue <title> — one heavy job per disc (parallelism 1 also
+# serializes drive access, which is physical anyway).
+rip::disc_enqueue() {
+  local title="$1"
+  rip::_check_title "$title" || return 2
+  rip::_load_jobs || { log_error "rip: job runner unavailable"; return 1 }
+  job::start --group heavy --title "rip: $title" --icon "$RIP_JOB_ICON" \
+    -- "$RIP_BIN_DIR/rip-disc" --worker "$title"
 }
