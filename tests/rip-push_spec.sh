@@ -38,6 +38,15 @@ EOF
   # ever sees `--group <G> --label job:<id>` and the sh-quoted command line).
   titles() { cat "$JOB_STATE_ROOT"/*/meta.json 2>/dev/null; }
 
+  # stray_listfiles() — count of push-<type>.<pid>.list scratch files left
+  # under .work/. Used to assert the private per-invocation listfile is
+  # actually removed once a run finishes (success or failure), not just
+  # renamed off the old shared path.
+  stray_listfiles() {
+    local -a f=("$RIP_STAGING_ROOT"/.work/push-*.list(N))
+    print -r -- "${#f}"
+  }
+
   It 'rejects an unknown type'
     When run zsh -c "source $RIPLIB && rip::push_enqueue books"
     The status should equal 2
@@ -348,5 +357,84 @@ EOF
     The output should include "verified"
     The contents of file "$RIP_FAKE_MF_LOG" should not include "--import-picture-from"
     The contents of file "$RIP_FAKE_MF_LOG" should not include "--set-tag-from-file"
+  End
+
+  # Regression guard (final-review finding 1): rip::_enrich_music used to
+  # glob the WHOLE album directory instead of grouping the age-gated LIST
+  # itself. A sibling track mid-write (e.g. XLD still writing a neighboring
+  # track in the same album dir while this one already settled) would get
+  # probed and metaflac'd right along with the settled one — metaflac's
+  # rewrite-and-rename on a file XLD is still appending to sends XLD's
+  # remaining writes into an unlinked inode; the truncated file then settles
+  # on its own next run, ships, self-verifies clean, and is deleted locally.
+  # Only files the age gate actually admitted into <listfile> may be probed
+  # or embedded.
+  It 'enrichment touches only the listed flac, never an unlisted fresh sibling in the same album dir'
+    export RIP_PUSH_MIN_AGE_S=90   # re-export the real default; need age gating active
+    enrich_setup
+    # unlisted: written just now, well inside the 90s gate — simulates a
+    # sibling track XLD is still mid-write on
+    touch "$RIP_STAGING_ROOT/music/Art/Alb/02 Other.flac"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_FAKE_MF_LOG" should include "01 Song.flac"
+    The contents of file "$RIP_FAKE_MF_LOG" should not include "02 Other.flac"
+    # the settled/listed track shipped and was cleaned…
+    The path "$RIP_STAGING_ROOT/music/Art/Alb/01 Song.flac" should not be exist
+    # …the fresh unlisted sibling was never touched, in any way
+    The path "$RIP_STAGING_ROOT/music/Art/Alb/02 Other.flac" should be exist
+  End
+
+  # Regression guard (final-review finding 2): the listfile used to be a
+  # FIXED path shared by every invocation of the same type, so the pipeline's
+  # heavy-group inner push and a transfer-group/hand-run `rip-push <type>`
+  # (which DO run concurrently) could rebuild each other's list mid-flight.
+  # Fix: the listfile is private per invocation ($$ in its name — asserted
+  # below via the rsync log), and verify_and_clean snapshots it into memory
+  # ONCE and drives both the verify's --files-from and the delete loop off
+  # that snapshot rather than a second read of the file. The fake rsync
+  # here simulates the worst case directly: it OVERWRITES the private
+  # listfile with a different (unrelated, never-pushed) filename during the
+  # verify call itself — if the delete loop re-read the file instead of
+  # using its snapshot, it would delete the wrong file entirely.
+  It 'verify+delete are driven by an in-memory snapshot, immune to the listfile changing between them; listfile is private per-$$ and removed on success'
+    export RIP_PUSH_MIN_AGE_S=90   # re-export the real default; need age gating active
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb" "$RIP_STAGING_ROOT/music/C/Untouched"
+    touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    touch -t 202601010000 "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"   # settled: admitted to the list
+    touch "$RIP_STAGING_ROOT/music/C/Untouched/evil.flac"   # fresh: NEVER in the real list
+    export RIP_FAKE_RSYNC_LOG="$RIP_SANDBOX/rsync.log"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_RSYNC_LOG"
+lf=""
+for a in "$@"; do case "$a" in --files-from=*) lf="${a#--files-from=}";; esac; done
+case "$*" in
+  *-rcn*)
+    printf '%s\n' "C/Untouched/evil.flac" > "$lf"
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # the listfile is private per invocation: --files-from carries a $$
+    # segment, never the old fixed shared name
+    The contents of file "$RIP_FAKE_RSYNC_LOG" should include ".work/push-music."
+    The contents of file "$RIP_FAKE_RSYNC_LOG" should include ".list"
+    The contents of file "$RIP_FAKE_RSYNC_LOG" should not include "push-music.list"
+    # delete followed the SNAPSHOT taken before verify — the real pushed
+    # file is gone, its now-empty album dir pruned…
+    The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should not be exist
+    The path "$RIP_STAGING_ROOT/music/B" should not be exist
+    # …and the name the tampered listfile pointed at instead was never
+    # touched, since the delete loop never re-read it
+    The path "$RIP_STAGING_ROOT/music/C/Untouched/evil.flac" should be exist
+    # the private listfile itself is gone — nothing stray left in .work/
+    The result of function stray_listfiles should equal "0"
   End
 End

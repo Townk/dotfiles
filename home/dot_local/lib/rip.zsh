@@ -98,7 +98,16 @@ rip::push_worker() {
   # deleted as one fixed set. 0 disables the gate: the pipeline's inner
   # push runs on a file that is complete by construction (atomic rename).
   local age="${RIP_PUSH_MIN_AGE_S:-90}"
-  local listfile; listfile="$(rip::staging_root)/.work/push-$type.list"
+  # Private to THIS invocation ($$ in the name): the heavy group's inner
+  # push (from rip::pipeline_worker) and a transfer-group/hand-run
+  # `rip-push <type>` DO run concurrently on the same type, and a fixed
+  # path here let one invocation's list-rebuild land mid-flight of
+  # another's verify/delete — belt+braces even so, verify and delete are
+  # driven off one in-memory snapshot rather than a second read of this
+  # file (see rip::_verify_and_clean). Removed on every exit path below;
+  # a killed process's leftover is swept at Hammerspoon startup along with
+  # the rest of .work/.
+  local listfile; listfile="$(rip::staging_root)/.work/push-$type.$$.list"
   mkdir -p "${listfile:h}"
   if (( age > 0 )); then
     find "$src" -type f ! -name .DS_Store -mtime +"${age}s" 2>/dev/null
@@ -117,7 +126,9 @@ rip::push_worker() {
 
   local marker; marker="$(rip::staging_root)/.work/push-$type.stamp"
   touch -- "$marker" || {
-    log_error "rip: cannot stamp the push marker at $marker"; return 1
+    log_error "rip: cannot stamp the push marker at $marker"
+    rm -f -- "$listfile"
+    return 1
   }
 
   rip::_progress 0 "pushing $type"
@@ -137,6 +148,7 @@ rip::push_worker() {
   local rc=$pipestatus[1]
   if (( rc != 0 )); then
     log_error "rip: rsync failed (rc=$rc) for $type — keeping local files"
+    rm -f -- "$listfile"
     return $rc
   fi
   rip::_verify_and_clean "$type" "$src" "$dest" "$marker" "$listfile"
@@ -151,9 +163,29 @@ rip::push_worker() {
 # start-of-transfer stamp; <listfile> is the exact set of relative paths
 # the age gate admitted — only those are verified and deleted, belt+braces
 # with the not-newer-than-marker check below.
+#
+# <listfile> is snapshotted into an in-memory array ONCE, right here, before
+# anything else runs. The verify's --files-from and the delete loop both
+# drive off that one snapshot rather than each doing its own read of
+# <listfile> — the file is already private to this invocation ($$ in its
+# name, see push_worker), but pinning the verify's rsync to read back
+# exactly the snapshot (never whatever might be on disk by the time the
+# delete loop gets there) costs nothing and removes any dependency on
+# <listfile> staying byte-identical across the whole function. <listfile>
+# itself is removed on every exit path below — it is pure scratch once
+# snapshotted, and a leftover from a killed process is swept at Hammerspoon
+# startup along with the rest of .work/.
 rip::_verify_and_clean() {
   local type="$1" src="$2" dest="$3" marker="$4" listfile="$5"
   local rsync_bin="${RIP_RSYNC_BIN:-rsync}"
+  local -a listed=()
+  local rel
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] && listed+=("$rel")
+  done < "$listfile"
+  # Re-pin the private file to EXACTLY the snapshot before rsync reads it.
+  printf '%s\n' "${listed[@]}" > "$listfile"
+
   local diffs
   # The verify must see exactly the tree the push shipped, so the two rsync
   # calls have to agree on --exclude and the file list; otherwise excluded
@@ -161,10 +193,12 @@ rip::_verify_and_clean() {
   if ! diffs="$("$rsync_bin" -rcn --exclude=.DS_Store --files-from="$listfile" \
       --out-format='%n' "$src/" "$dest" 2>&1)"; then
     log_error "rip: verify pass failed to run for $type — keeping local files"
+    rm -f -- "$listfile"
     return 1
   fi
   if [ -n "$diffs" ]; then
     log_error "rip: verify found differences for $type — files still settling or changed; keeping local, will retry"
+    rm -f -- "$listfile"
     return 1
   fi
   print -r -- "rip: $type verified on cantina — cleaning staging"
@@ -175,18 +209,20 @@ rip::_verify_and_clean() {
   # doctrine's answer to "not sure" is always "keep it".
   if [[ ! -f "$marker" ]]; then
     log_error "rip: push marker missing for $type — keeping local files"
+    rm -f -- "$listfile"
     return 1
   fi
-  # Delete EXACTLY the pushed list (∩ not-newer-than-marker, belt+braces),
-  # then prune only directories that held listed files and are now empty.
-  local rel f
+  # Delete EXACTLY the snapshotted list (∩ not-newer-than-marker,
+  # belt+braces), then prune only directories that held listed files and
+  # are now empty.
+  local f
   local -a touched_dirs=()
-  while IFS= read -r rel; do
+  for rel in "${listed[@]}"; do
     f="$src/$rel"
     [[ -f "$f" && ! "$f" -nt "$marker" ]] || continue
     rm -f -- "$f"
     touched_dirs+=("${f:h}")
-  done < "$listfile"
+  done
   local d
   for d in ${(Oau)touched_dirs}; do
     while [[ "$d" != "$src" && -d "$d" ]]; do
@@ -276,15 +312,32 @@ rip::_enrich_music() {
   setopt localoptions noerrexit nopipefail
   local src="$1" listfile="$2"
   local mf="${RIP_METAFLAC_BIN:-metaflac}"
-  local rel failed=0
-  local -A album_dirs=()
+  local rel adir failed=0
+  # Group the LISTED flac relpaths by album dir — deliberately NOT a glob of
+  # the album directory. A sibling flac can be mid-write (XLD writing a
+  # neighboring track while this one already settled): metaflac's
+  # rewrite-and-rename on that sibling would still be live, and probing or
+  # embedding into it here could send its remaining writes into an unlinked
+  # inode — the truncated file then settles, ships, self-verifies clean, and
+  # is deleted locally, destroying the only digital copy. Only files the age
+  # gate already admitted into <listfile> may be touched. Values are
+  # newline-joined relpaths (not space-joined: filenames carry spaces).
+  local -A album_files=()
   while IFS= read -r rel; do
-    [[ "$rel" == *.flac ]] && album_dirs[${rel:h}]=1
+    [[ "$rel" == *.flac ]] || continue
+    adir="${rel:h}"
+    # ${...:-} guards the unset-key read: the real bins source this under
+    # `set -u`, and a plain ${album_files[$adir]} on a key not yet seen is
+    # a hard "parameter not set" error there (not merely empty).
+    album_files[$adir]="${album_files[$adir]:-}$rel"$'\n'
   done < "$listfile"
-  local adir
-  for adir in ${(k)album_dirs}; do
+  for adir in ${(k)album_files}; do
     local abs="$src/$adir"
-    local -a flacs=("$abs"/*.flac(N))
+    local -a flacs=()
+    local rel2
+    while IFS= read -r rel2; do
+      [[ -n "$rel2" ]] && flacs+=("$src/$rel2")
+    done <<< "${album_files[$adir]}"
     (( ${#flacs} )) || continue
     local meta artist album
     meta="$(rip::_track_meta "${flacs[1]}")"
