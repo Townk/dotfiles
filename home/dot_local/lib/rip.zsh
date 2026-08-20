@@ -182,6 +182,10 @@ rip::_verify_and_clean() {
 # along as soft subs.
 typeset -ga RIP_HB_ARGS=(
   -f av_mkv -e x265_10bit -q 20
+  # DVDs are routinely interlaced (480i); without this, combing bakes into
+  # the encode (seen live 2026-08-19 on a concert disc). comb-detect makes
+  # decomb a no-op on progressive content, so this is safe everywhere.
+  --comb-detect --decomb
   --all-audio -E copy
   --audio-copy-mask aac,ac3,eac3,dts,dtshd,truehd,mp3,flac
   --audio-fallback ca_aac
