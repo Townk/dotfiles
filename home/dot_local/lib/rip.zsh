@@ -91,22 +91,37 @@ rip::push_worker() {
   dest="$(rip::remote_base)/$type/"
   [ -d "$src" ] || { log_error "rip: no staging dir $src"; return 1 }
 
-  # Stamp the moment the transfer begins. The verify pass blesses the tree
-  # as the push found it, but the delete runs moments later — a track XLD
-  # finishes in that window, or an encode the pipeline publishes while a
-  # hand-run `rip-push movies` is in flight (heavy and transfer are separate
-  # groups and DO run concurrently), was never pushed and must not be
-  # deleted. _verify_and_clean removes only what is no newer than this.
-  # The marker lives in .work, a sibling of every pushed tree, so it is
-  # itself never shipped and never shows up in the verify diff.
+  # AGE GATE (spec UX-v2, live-bitten 2026-08-19): a half-written track that
+  # holds still for the ~2s push+verify window can ship truncated and be
+  # verify-deleted from under its writer. Only files that have been quiet
+  # for RIP_PUSH_MIN_AGE_S are visible to this run — pushed, verified, and
+  # deleted as one fixed set. 0 disables the gate: the pipeline's inner
+  # push runs on a file that is complete by construction (atomic rename).
+  local age="${RIP_PUSH_MIN_AGE_S:-90}"
+  local listfile; listfile="$(rip::staging_root)/.work/push-$type.list"
+  mkdir -p "${listfile:h}"
+  if (( age > 0 )); then
+    find "$src" -type f ! -name .DS_Store -mtime +"${age}s" 2>/dev/null
+  else
+    find "$src" -type f ! -name .DS_Store 2>/dev/null
+  fi | sed "s|^$src/||" > "$listfile"
+  if [[ ! -s "$listfile" ]]; then
+    print -r -- "rip: nothing settled to push for $type (age gate ${age}s)"
+    rm -f -- "$listfile"
+    return 0
+  fi
+
+  # (Task 2 inserts the enrichment stage HERE, before the marker.)
+
   local marker; marker="$(rip::staging_root)/.work/push-$type.stamp"
-  mkdir -p "${marker:h}" && touch -- "$marker" || {
+  touch -- "$marker" || {
     log_error "rip: cannot stamp the push marker at $marker"; return 1
   }
 
   rip::_progress 0 "pushing $type"
   local line pct file
-  "$rsync_bin" -a --partial --exclude=.DS_Store --info=progress2,name1 "$src/" "$dest" \
+  "$rsync_bin" -a --partial --exclude=.DS_Store --files-from="$listfile" \
+      --info=progress2,name1 "$src/" "$dest" \
     | tr '\r' '\n' \
     | while IFS= read -r line; do
         case "$line" in
@@ -122,29 +137,32 @@ rip::push_worker() {
     log_error "rip: rsync failed (rc=$rc) for $type — keeping local files"
     return $rc
   fi
-  rip::_verify_and_clean "$type" "$src" "$dest" "$marker"
+  rip::_verify_and_clean "$type" "$src" "$dest" "$marker" "$listfile"
 }
 
-# rip::_verify_and_clean <type> <src> <dest> <marker> — deleting the only
-# digital copy demands more than "rsync exited 0": a checksum dry-run must
-# report ZERO differences before anything local is removed. A difference
-# (e.g. a rip that landed mid-push) keeps EVERYTHING and fails the job —
-# the next run pushes it. Never uses --delete: the server never loses files
-# because staging emptied. <marker> is push_worker's start-of-transfer
-# stamp; nothing newer than it is ever deleted.
+# rip::_verify_and_clean <type> <src> <dest> <marker> <listfile> — deleting
+# the only digital copy demands more than "rsync exited 0": a checksum
+# dry-run must report ZERO differences before anything local is removed. A
+# difference (e.g. a rip that landed mid-push) keeps EVERYTHING and fails
+# the job — the next run pushes it. Never uses --delete: the server never
+# loses files because staging emptied. <marker> is push_worker's
+# start-of-transfer stamp; <listfile> is the exact set of relative paths
+# the age gate admitted — only those are verified and deleted, belt+braces
+# with the not-newer-than-marker check below.
 rip::_verify_and_clean() {
-  local type="$1" src="$2" dest="$3" marker="$4"
+  local type="$1" src="$2" dest="$3" marker="$4" listfile="$5"
   local rsync_bin="${RIP_RSYNC_BIN:-rsync}"
   local diffs
   # The verify must see exactly the tree the push shipped, so the two rsync
-  # calls have to agree on --exclude; otherwise the excluded files show up
-  # as differences and the clean never runs.
-  if ! diffs="$("$rsync_bin" -rcn --exclude=.DS_Store --out-format='%n' "$src/" "$dest" 2>&1)"; then
+  # calls have to agree on --exclude and the file list; otherwise excluded
+  # or unlisted files show up as differences and the clean never runs.
+  if ! diffs="$("$rsync_bin" -rcn --exclude=.DS_Store --files-from="$listfile" \
+      --out-format='%n' "$src/" "$dest" 2>&1)"; then
     log_error "rip: verify pass failed to run for $type — keeping local files"
     return 1
   fi
   if [ -n "$diffs" ]; then
-    log_error "rip: verify found differences for $type — keeping local files"
+    log_error "rip: verify found differences for $type — files still settling or changed; keeping local, will retry"
     return 1
   fi
   print -r -- "rip: $type verified on cantina — cleaning staging"
@@ -157,19 +175,24 @@ rip::_verify_and_clean() {
     log_error "rip: push marker missing for $type — keeping local files"
     return 1
   fi
-  # Snapshot the directories the push covered BEFORE removing any file:
-  # deleting a file bumps its parent's mtime, so after the delete every
-  # emptied directory would look newer than the marker and nothing would
-  # ever be pruned. Directories created since the push started (a brand
-  # new album dir XLD is still filling) are absent from this list and so
-  # survive even while momentarily empty.
-  local -a pushed_dirs
-  pushed_dirs=(${(f)"$(find "$src" -mindepth 1 -type d ! -newer "$marker" 2>/dev/null)"})
-  find "$src" -type f ! -newer "$marker" -delete
+  # Delete EXACTLY the pushed list (∩ not-newer-than-marker, belt+braces),
+  # then prune only directories that held listed files and are now empty.
+  local rel f
+  local -a touched_dirs=()
+  while IFS= read -r rel; do
+    f="$src/$rel"
+    [[ -f "$f" && ! "$f" -nt "$marker" ]] || continue
+    rm -f -- "$f"
+    touched_dirs+=("${f:h}")
+  done < "$listfile"
   local d
-  for d in ${(Oa)pushed_dirs}; do          # deepest first
-    [[ -n "$d" ]] && rmdir -- "$d" 2>/dev/null
+  for d in ${(Oau)touched_dirs}; do
+    while [[ "$d" != "$src" && -d "$d" ]]; do
+      rmdir -- "$d" 2>/dev/null || break
+      d="${d:h}"
+    done
   done
+  rm -f -- "$listfile"
   return 0
 }
 
@@ -291,7 +314,7 @@ rip::pipeline_worker() {
     return 1
   fi
 
-  RIP_PROGRESS_BASE=85 RIP_PROGRESS_SPAN=15 rip::push_worker movies || return $?
+  RIP_PUSH_MIN_AGE_S=0 RIP_PROGRESS_BASE=85 RIP_PROGRESS_SPAN=15 rip::push_worker movies || return $?
 
   rm -f -- "$input"
   rip::_progress 100 "done — $title"

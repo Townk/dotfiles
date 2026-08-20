@@ -23,6 +23,11 @@ EOF
     export JOB_PUEUE_BIN="$RIP_SANDBOX/pueue"
     # the bins under test must source the SOURCE-TREE lib, not ~/.local/lib
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+    # Every pre-existing example here stages files moments before running
+    # the worker, so they'd all sit inside the default 90s age gate. Disable
+    # it suite-wide; the three age-gate examples below re-export the real
+    # default themselves since gating behavior is exactly what they test.
+    export RIP_PUSH_MIN_AGE_S=0
   }
   cleanup() { rm -rf "$RIP_SANDBOX"; }
   BeforeEach 'setup'
@@ -202,5 +207,57 @@ EOF
     The status should equal 1
     The stderr should include "verify"
     The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist
+  End
+
+  It 'age gate: a settling file is not pushed and survives the clean'
+    export RIP_PUSH_MIN_AGE_S=90   # re-export the real default over setup()'s 0
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb" "$RIP_STAGING_ROOT/music/C/New"
+    touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    # make the settled file old enough for the 90s default gate
+    touch -t 202601010000 "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    touch "$RIP_STAGING_ROOT/music/C/New/01 Fresh.flac"   # just written
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${RIP_FAKE_RSYNC_LOG:?}"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    export RIP_FAKE_RSYNC_LOG="$RIP_SANDBOX/rsync.log"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # the settled file was pushed (files-from list) and deleted
+    The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should not be exist
+    # the fresh file was NEVER in the list and survives, dir intact
+    The path "$RIP_STAGING_ROOT/music/C/New/01 Fresh.flac" should be exist
+    The contents of file "$RIP_FAKE_RSYNC_LOG" should include "--files-from"
+  End
+
+  It 'age gate: nothing settled → quiet success, no rsync at all'
+    export RIP_PUSH_MIN_AGE_S=90   # re-export the real default over setup()'s 0
+    mkdir -p "$RIP_STAGING_ROOT/music/C/New"
+    touch "$RIP_STAGING_ROOT/music/C/New/01 Fresh.flac"
+    printf '#!/bin/sh\nexit 99\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "nothing settled"
+    The path "$RIP_STAGING_ROOT/music/C/New/01 Fresh.flac" should be exist
+  End
+
+  It 'age gate disabled (RIP_PUSH_MIN_AGE_S=0) pushes fresh files — the pipeline composition'
+    mkdir -p "$RIP_STAGING_ROOT/movies/A (2001)"
+    touch "$RIP_STAGING_ROOT/movies/A (2001)/A (2001).mkv"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && RIP_PUSH_MIN_AGE_S=0 rip::push_worker movies"
+    The status should equal 0
+    The output should include "verified"
+    The path "$RIP_STAGING_ROOT/movies/A (2001)/A (2001).mkv" should not be exist
   End
 End
