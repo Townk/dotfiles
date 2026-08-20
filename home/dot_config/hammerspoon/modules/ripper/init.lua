@@ -51,7 +51,15 @@ local RIP_PUSH = HOME .. "/.local/bin/rip-push"
 local RIP_DISC = HOME .. "/.local/bin/rip-disc"
 local RIP_TMDB = HOME .. "/.local/bin/rip-tmdb-search"
 local STABLE_SECS = 30
-local MUSIC_QUIET_SECS = 60
+-- INVARIANT: this must exceed rip.zsh's RIP_PUSH_MIN_AGE_S (default 90s).
+-- If it didn't, a fully-quiet album (a single track, or just a fast rip)
+-- could fire this timer, run `rip-push music`, and hit the age gate before
+-- any file is old enough — "nothing settled", exit 0 — with NOTHING left
+-- to re-arm the timer. That's silent, unbounded stranding: the album sits
+-- in staging forever until some unrelated later write in music/ happens to
+-- restart the timer. Keeping this above the age gate guarantees the timer
+-- can never fire before the gate would already admit the content.
+local MUSIC_QUIET_SECS = 120
 
 local log = hs.logger.new("ripper", "info")
 local declined = {} -- path -> size at decline time
