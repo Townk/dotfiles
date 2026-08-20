@@ -833,12 +833,35 @@ rip::disc_worker() {
   [[ -n "$best_idx" ]] || { log_error "rip: disc scan found no titles"; rm -rf -- "$rip_dir"; return 1 }
 
   rip::_progress 0 "ripping disc — $title"
-  local cur total
-  "$mkc" -r --progress=-same mkv disc:0 "$best_idx" "$rip_dir" 2>&1 \
+  local cur total rest
+  # PTY WRAP (live-bitten 2026-08-20): real makemkvcon block-buffers stdout
+  # once it's piped instead of writing to a terminal, so the loop below saw
+  # ZERO PRGV lines for the whole rip on a real DVD (the test fake is
+  # line-buffered by default and never caught this). `script -q /dev/null`
+  # gives it a pty, which forces line buffering back on — verified on this
+  # box that `script -q /dev/null` both allocates its own pty even fully
+  # detached from any controlling terminal (setsid-equivalent) AND
+  # propagates the wrapped command's exit status unchanged (`script -q
+  # /dev/null sh -c 'exit 7'` → rc 7). RIP_PTY_WRAP is the seam: default
+  # the real wrapper, empty in tests — the fake harness doesn't need a pty
+  # (it isn't buffered), and shellspec's own sandboxing has no reason to
+  # fight a real `script` invocation on every run.
+  #
+  # A pty round-trip has two side effects the parse below has to tolerate:
+  # ONLCR turns every line's trailing \n into \r\n (stripped wholesale with
+  # `tr -d '\r'` rather than trimmed per-line, since a source line could in
+  # principle carry an embedded \r of its own), and the pty's own line
+  # discipline prepends a few literal echo/erase bytes (observed: literal
+  # "^D" + two backspaces) to the very first line of output — matched with
+  # `*PRGV:*` instead of an anchored `PRGV:*` so that garbage prefix can
+  # never suppress the first real progress update.
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  "${pty_wrap[@]}" "$mkc" -r --progress=-same mkv disc:0 "$best_idx" "$rip_dir" 2>&1 \
+    | tr -d '\r' \
     | while IFS= read -r line; do
         case "$line" in
-          PRGV:*)
-            cur="${line#PRGV:}"; total="${cur##*,}"; cur="${cur%%,*}"
+          *PRGV:*)
+            rest="${line#*PRGV:}"; total="${rest##*,}"; cur="${rest%%,*}"
             [[ "$cur" == <-> && "$total" == <1-> ]] \
               && RIP_PROGRESS_BASE=0 RIP_PROGRESS_SPAN=40 \
                  rip::_progress $(( cur * 100 / total )) "ripping disc — $title"

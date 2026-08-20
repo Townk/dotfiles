@@ -11,6 +11,10 @@ Describe 'rip.zsh disc'
     export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
     export RIP_PUSH_MIN_AGE_S=0
+    # No real pty in the fake harness — it isn't buffered, so it needs no
+    # help staying line-buffered, and shellspec's own sandboxing has no
+    # reason to fight a real `script` invocation on every run.
+    export RIP_PTY_WRAP=""
     mkdir -p "$RIP_STAGING_ROOT/movies" "$RIP_SANDBOX/server/movies"
     cat > "$RIP_SANDBOX/pueue" <<'EOF'
 #!/bin/sh
@@ -31,9 +35,15 @@ case "$*" in
   *mkv*)
     dir=""
     for a in "$@"; do dir="$a"; done
+    # CR-terminated, mimicking a real pty's ONLCR translation (\n -> \r\n)
+    # — the fix under test has to tolerate that, not just a bare \n. Always
+    # emitted first (even ahead of a forced failure below) so the
+    # CR-tolerance example can see a genuine mid-rip percentage rather than
+    # nothing at all.
+    printf 'PRGV:16384,0,65536\r\n'
     [ -n "${RIP_FAKE_MKV_RC:-}" ] && exit "$RIP_FAKE_MKV_RC"
-    echo 'PRGV:32768,0,65536'
-    echo 'PRGV:65536,0,65536'
+    printf 'PRGV:32768,0,65536\r\n'
+    printf 'PRGV:65536,0,65536\r\n'
     printf 'ripped' > "$dir/title_t01.mkv"
     ;;
 esac
@@ -86,6 +96,19 @@ EOF
     The stderr should include "encode failed"
     # last rip-stage write was PRGV 65536/65536 → 100% of a 0-40 band → 40
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include " 40 "
+  End
+
+  It 'progress: CR-terminated PRGV lines (pty ONLCR) still parse mid-rip'
+    export JOB_ID="job-disc-3"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_MKV_RC=9
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
+    The status should equal 9
+    The stderr should include "disc rip failed"
+    # PRGV:16384,0,65536 -> 25% of the 0-40 band -> 10. If the trailing \r
+    # (real pty ONLCR: \n -> \r\n) broke the numeric-glob check, no write
+    # would follow the worker's initial "0", and this would read " 0 "
+    # instead.
+    The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include " 10 "
   End
 
   It 'enqueue: heavy group, rip: title, absolute worker path'
