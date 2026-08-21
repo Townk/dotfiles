@@ -321,7 +321,8 @@
         html = hint('&uarr;&darr;', 'Movie') + hint('&crarr;', 'Attach') + hint('esc', 'Close');
       } else {
         html = hint('&crarr;', 'Start rip') + hint('esc', 'Not now')
-          + hint('&larr;&rarr;', 'Role') + hint('&uarr;&darr;', 'Row');
+          + hint('&uarr;&darr;', 'Row')
+          + hint('&#8963;F/E/S', 'Role');
       }
       el.innerHTML = html;
       function hint(k, label) { return '<span><b>' + k + '</b>' + label + '</span>'; }
@@ -381,7 +382,7 @@
       focusIdx = i;
       closeDropdown(true);
       render();
-      if (role === 'feature') focusFeatureSearch();
+      focusRowField(); // land in the row's field for its NEW role (search or name)
     }
 
     var ROLES = ['feature', 'extra', 'skip'];
@@ -397,6 +398,39 @@
       if (rows.length === 0) return;
       focusIdx = Math.max(0, Math.min(rows.length - 1, focusIdx + delta));
       render();
+      focusRowField();
+    }
+
+    // Focus follows the row (operator's Mode B ruling, 2026-08-20): moving
+    // to a row lands the caret in its text field — the feature's search
+    // (unless a movie is already picked) or the extra's name input. Skip
+    // rows and picked features have nothing to type in; the row highlight
+    // alone marks them.
+    function focusRowField() {
+      var r = rows[focusIdx];
+      if (!r || !document.querySelector) return;
+      var el = null;
+      if (r.role === 'feature' && !r.movie) el = document.getElementById('featureSearch');
+      else if (r.role === 'extra') el = document.querySelector('input[data-name="' + focusIdx + '"]');
+      if (el && el.focus) {
+        el.focus();
+        if (el.setSelectionRange) el.setSelectionRange(el.value.length, el.value.length);
+      }
+    }
+
+    // The row a key gesture applies to: the row owning the focused text
+    // field when there is one (a click can put the caret in a row the
+    // arrow-tracked focusIdx never visited), else focusIdx.
+    function rowIndexOfTarget(t) {
+      if (t && t.getAttribute) {
+        var na = t.getAttribute('data-name');
+        if (na != null) return parseInt(na, 10);
+        if (t.id === 'featureSearch') {
+          var f = featureRow();
+          for (var i = 0; i < rows.length; i++) if (rows[i] === f) return i;
+        }
+      }
+      return focusIdx;
     }
 
     //----------------------------------------------------------------------
@@ -701,6 +735,18 @@
         // anything else falls through to normal typing
       }
 
+      // Role shortcuts are Ctrl-chords and work everywhere, text fields
+      // included — focus lives in a field most of the time now that it
+      // follows the row (operator's Mode B ruling, 2026-08-20), so bare
+      // letters can't be shortcuts. This deliberately overrides WebKit's
+      // emacs-style caret editing on ⌃E/⌃F inside inputs.
+      if (e.ctrlKey && !e.metaKey && !e.altKey) {
+        var ri = rowIndexOfTarget(t);
+        if (e.key === 'f') { e.preventDefault(); setRole(ri, 'feature'); return; }
+        if (e.key === 'e') { e.preventDefault(); setRole(ri, 'extra'); return; }
+        if (e.key === 's') { e.preventDefault(); setRole(ri, 'skip'); return; }
+      }
+
       if (e.key === 'Escape') { e.preventDefault(); dismiss(); return; }
 
       if (e.key === 'Enter') {
@@ -713,14 +759,12 @@
       if (e.key === 'ArrowDown') { e.preventDefault(); if (inText) t.blur(); moveFocus(1); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); if (inText) t.blur(); moveFocus(-1); return; }
 
-      // Role keys never fire while typing: left/right must move the caret,
-      // and f/e/s are ordinary letters in a name.
+      // Left/right never fire while typing: they must move the caret.
+      // (Bare f/e/s are gone entirely — the Ctrl-chords above replaced
+      // them, since focus now lives in text fields most of the time.)
       if (inText) return;
       if (e.key === 'ArrowLeft') { e.preventDefault(); cycleRole(-1); return; }
       if (e.key === 'ArrowRight') { e.preventDefault(); cycleRole(1); return; }
-      if (e.key === 'f') { e.preventDefault(); setRole(focusIdx, 'feature'); return; }
-      if (e.key === 'e') { e.preventDefault(); setRole(focusIdx, 'extra'); return; }
-      if (e.key === 's') { e.preventDefault(); setRole(focusIdx, 'skip'); return; }
     }
 
     //----------------------------------------------------------------------
