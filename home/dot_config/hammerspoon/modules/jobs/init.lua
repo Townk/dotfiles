@@ -47,7 +47,9 @@ local TICK_SECS = 0.25
 local PUEUE_EVERY = 8 -- ticks between pueue polls (~2 s)
 local PUEUE_DEAD_AFTER = 3 -- consecutive failed polls -> treat system dead
 local PUEUE_POLL_TIMEOUT = 10 -- seconds an outstanding poll may run before we count it as failed and retire it
-local STALL_SECS = 3
+local STALL_SECS = 6 -- x265 legitimately gaps a few seconds between progress
+-- updates on hard scenes; 3s flickered the hourglass on healthy encodes
+-- (live 2026-08-21). 6s still surfaces a genuinely wedged job fast.
 local GHOST_GRACE = 30 -- pre-first-poll: seconds of silence before a job dir is presumed a leaked ghost
 -- pueue's `status --json` embeds every task's full captured environment;
 -- past a handful of finished tasks that tops the 64KB pipe buffer, and

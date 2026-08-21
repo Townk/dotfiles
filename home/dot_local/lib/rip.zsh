@@ -778,7 +778,11 @@ rip::pipeline_worker() {
   local line pct
   # pty wrap: see rip::_hb_dvd — piped HandBrake block-buffers progress
   # into minute-apart bursts; a pty keeps the sidecar ticking steadily.
-  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  # -F is load-bearing: without it macOS script(1) batches its own
+  # passthrough (observed live 2026-08-21: sidecar epochs 30-45s apart
+  # mid-encode, capsule stall-flickering — the pty fixed HandBrake's
+  # buffering only for script to reintroduce its own).
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q -F /dev/null})
   "${pty_wrap[@]}" "$hb_bin" "${RIP_HB_ARGS[@]}" -i "$input" -o "$out_tmp" 2>&1 \
     | LC_ALL=C tr '\r' '\n' \
     | while IFS= read -r line; do
@@ -890,7 +894,7 @@ rip::disc_worker() {
   # "^D" + two backspaces) to the very first line of output — matched with
   # `*PRGV:*` instead of an anchored `PRGV:*` so that garbage prefix can
   # never suppress the first real progress update.
-  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q -F /dev/null})
   "${pty_wrap[@]}" "$mkc" -r --progress=-same mkv disc:0 "$best_idx" "$rip_dir" 2>&1 \
     | LC_ALL=C tr -d '\r' \
     | while IFS= read -r line; do
@@ -986,7 +990,7 @@ rip::_hb_dvd() {
   # them (live 2026-08-20: capsule grey at 10% with a 46s-stale sidecar).
   # Under a pty HB line-buffers and the sidecar ticks steadily. The scan
   # path rides through harmlessly (its output is parsed after exit).
-  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q -F /dev/null})
   "${pty_wrap[@]}" \
     sh -c 'export DYLD_FALLBACK_LIBRARY_PATH="$1"; shift; exec "$@"' \
     _ "$dyld" "$hb_bin" "$@"
@@ -1216,7 +1220,7 @@ rip::extra_enqueue() {
 rip::session_scan() {
   setopt localoptions noerrexit nopipefail
   local mkc="${RIP_MAKEMKVCON_BIN:-/Applications/MakeMKV.app/Contents/MacOS/makemkvcon}"
-  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q -F /dev/null})
   local rows
   rows="$("${pty_wrap[@]}" "$mkc" -r info disc:0 2>/dev/null \
     | LC_ALL=C tr -d '\r' \
@@ -1522,7 +1526,7 @@ rip::session_worker() {
   rm -rf -- "$sess_dir"
   mkdir -p "$sess_dir" || { log_error "rip: cannot create $sess_dir"; return 1 }
 
-  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q -F /dev/null})
   # Every bare `local` below is declared ONCE, here, outside the loops: zsh
   # PRINTS "name=value" to stdout when a bare `local name` re-declares a
   # variable that already holds a value in the same scope, so a bare local
