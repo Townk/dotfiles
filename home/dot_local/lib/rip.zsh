@@ -262,12 +262,30 @@ rip::_verify_and_clean() {
 # escape-like content inside the %s argument values themselves, so an artist
 # or album tag that happens to contain a literal backslash sequence rides
 # through unmolested.
+# rip::_nfc <text> — normalize to composed Unicode (NFC). macOS/XLD write
+# accented tag text DECOMPOSED (NFD: "í" = i + combining acute); external
+# lookups match bytes, and LRCLIB missed lyrics for NFD queries that NFC
+# finds (live 2026-08-21, XLD-converted Jota Quest album). iconv's
+# utf-8-mac codec is exactly the NFD→NFC leg; already-composed text passes
+# through unchanged. Best-effort: on any iconv failure the original text
+# stands. SAFE ONLY FOR QUERY/DISPLAY TEXT — filesystem and server paths
+# come from on-disk names, which stay NFD; never normalize those.
+rip::_nfc() {
+  local out
+  if out="$(print -rn -- "$1" | iconv -f utf-8-mac -t utf-8 2>/dev/null)" \
+     && { [[ -n "$out" ]] || [[ -z "$1" ]] }; then
+    print -rn -- "$out"
+  else
+    print -rn -- "$1"
+  fi
+}
+
 rip::_track_meta() {
   local mf="${RIP_METAFLAC_BIN:-metaflac}" f="$1"
   local artist album title date year samples rate dur=0
-  artist="$("$mf" --show-tag=ARTIST "$f" 2>/dev/null | head -1)"; artist="${artist#*=}"
-  album="$("$mf" --show-tag=ALBUM "$f" 2>/dev/null | head -1)";  album="${album#*=}"
-  title="$("$mf" --show-tag=TITLE "$f" 2>/dev/null | head -1)";  title="${title#*=}"
+  artist="$("$mf" --show-tag=ARTIST "$f" 2>/dev/null | head -1)"; artist="$(rip::_nfc "${artist#*=}")"
+  album="$("$mf" --show-tag=ALBUM "$f" 2>/dev/null | head -1)";  album="$(rip::_nfc "${album#*=}")"
+  title="$("$mf" --show-tag=TITLE "$f" 2>/dev/null | head -1)";  title="$(rip::_nfc "${title#*=}")"
   date="$("$mf" --show-tag=DATE "$f" 2>/dev/null | head -1)";   date="${date#*=}"
   year="${date[1,4]}"
   [[ ${#year} == 4 ]] || year=""

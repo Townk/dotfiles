@@ -775,6 +775,35 @@ EOF
     The contents of file "$RIP_SANDBOX/server/music/Art/artist.jpg" should equal "COMMONSJPEG"
   End
 
+  # Live 2026-08-21 ("Discotecagem pop variada", XLD-converted from old
+  # files): macOS/XLD write accented tags DECOMPOSED (NFD — "í" as i +
+  # combining acute), while CD rips carried composed (NFC) text. External
+  # lookups (LRCLIB especially) match bytes, so NFD queries missed lyrics
+  # that NFC finds. _track_meta must hand out NFC; paths never come from
+  # tags (fs-derived reldirs), so normalizing here is query-only.
+  It 'track meta: decomposed (NFD) tags are normalized to NFC'
+    enrich_setup
+    cat > "$RIP_SANDBOX/metaflac" <<EOF
+#!/bin/sh
+case "\$*" in
+  *--show-tag=ARTIST*) printf 'ARTIST=Jota Quest\n' ;;
+  *--show-tag=ALBUM*)  printf 'ALBUM=Discotecagem\n' ;;
+  *--show-tag=TITLE*)  printf 'TITLE=A$(printf 'i\xcc\x81') c$(printf 'e\xcc\x82') falou\n' ;;
+  *--show-tag=DATE*)   printf 'DATE=2003\n' ;;
+  *--show-total-samples*) printf '441000\n' ;;
+  *--show-sample-rate*) printf '44100\n' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/metaflac"
+    When run zsh -c "source $RIPLIB && rip::_track_meta whatever.flac"
+    The status should equal 0
+    # composed forms present (í = C3 AD, ê = C3 AA)…
+    The output should include "$(printf 'A\xc3\xad c\xc3\xaa falou')"
+    # …decomposed combining sequences gone
+    The output should not include "$(printf 'i\xcc\x81')"
+  End
+
   It 'artist image: total miss across every source — logs and never blocks the push'
     enrich_setup
     When run zsh -c "source $RIPLIB && rip::push_worker music"
