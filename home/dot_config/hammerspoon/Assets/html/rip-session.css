@@ -348,7 +348,15 @@ body { background: transparent; overflow: hidden; }
   cursor: default;
   user-select: none;
 }
-.btn-primary.disabled { opacity: var(--dim); }
+/* Disabled must read GREY, not "mauve but shy": at opacity 0.45 the mauve
+ * still looked like the most clickable thing on the panel — live confusion
+ * on the first real disc (operator, 2026-08-21: "enabled while reading
+ * titles"). It was logically inert the whole time; this makes it LOOK so. */
+.btn-primary.disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgb(150, 150, 150);
+  pointer-events: none;
+}
 .btn-ghost {
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 8px;
