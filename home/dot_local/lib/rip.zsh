@@ -451,7 +451,21 @@ rip::_fetch_artist_image() {
       --data-urlencode "q=$artist" 2>/dev/null \
     | jq -r '(.data // [])[0].picture_xl // empty')"
   if [[ -n "$pic_url" && "$pic_url" != *"$RIP_ARTIST_IMAGE_PLACEHOLDER_MD5"* ]]; then
-    "$curl_bin" -sfL -o "$out" "$pic_url" 2>/dev/null && [[ -s "$out" ]] && return 0
+    if "$curl_bin" -sfL -o "$out" "$pic_url" 2>/dev/null && [[ -s "$out" ]]; then
+      # The URL check is NOT enough: Deezer also serves placeholder ART
+      # (grey silhouette) under normal per-artist URL hashes — one shipped
+      # as a real artist.jpg live 2026-08-21 (The Black Piper). Digest the
+      # downloaded BYTES against the known-placeholder denylist; a match
+      # falls through to the Wikidata chain like the URL reject does.
+      # Denylist entries collected live; extend when a new variant ships:
+      #   3a0adf20… grey silhouette (1000x1000)   cf0b6a52… empty-MD5 URL's bytes
+      local got_md5
+      got_md5="$(md5 -q "$out" 2>/dev/null)"
+      if [[ -z "$got_md5" || " ${RIP_DEEZER_PLACEHOLDER_FILE_MD5S:-3a0adf20e5abdafa2c1f954ca4537f36 cf0b6a5247e606f67470140451774cb5} " != *" $got_md5 "* ]]; then
+        return 0
+      fi
+      print -r -- "rip: Deezer served placeholder art for $artist — trying the fallback chain"
+    fi
     rm -f -- "$out"
   fi
   # Fallback: MusicBrainz artist search → url-rels → Wikidata P18 → Commons.

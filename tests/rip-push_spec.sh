@@ -726,6 +726,55 @@ EOF
     The contents of file "$RIP_SANDBOX/server/music/Art/artist.jpg" should equal "COMMONSJPEG"
   End
 
+  # Live 2026-08-21 (The Black Piper): Deezer also serves placeholder ART
+  # (grey silhouette) under a normal per-artist URL hash — the URL check
+  # above never fires, and a 16KB placeholder shipped as artist.jpg. The
+  # downloaded BYTES must be digest-checked against the known-placeholder
+  # denylist (RIP_DEEZER_PLACEHOLDER_FILE_MD5S seam) and rejected the same
+  # way: fall through to the Wikidata chain.
+  It "artist image: rejects Deezer placeholder BYTES under a clean URL (digest denylist)"
+    enrich_setup
+    fake_copy_rsync
+    cat > "$RIP_SANDBOX/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_CURL_LOG"
+url=""
+for a in "$@"; do case "$a" in http*|https*) url="$a";; esac; done
+case "$url" in
+  *inc=url-rels*) echo '{"relations":[{"url":{"resource":"https://www.wikidata.org/wiki/Q42"}}]}' ;;
+  *musicbrainz*artist/) echo '{"artists":[{"id":"mbid-artist-1"}]}' ;;
+  *musicbrainz*) echo '{"releases":[{"id":"mbid-1"}]}' ;;
+  *deezer*search/artist*) echo '{"data":[{"picture_xl":"https://fake-deezer-cdn.test/e4f18b52ef370cf500bac7597eaf7b89.jpg"}]}' ;;
+  *fake-deezer-cdn.test*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'DZPLACEHOLDER' > "$out" ;;
+  *wikidata*api.php*) echo '{"claims":{"P18":[{"mainsnak":{"datavalue":{"value":"Some Artist.jpg"}}}]}}' ;;
+  *commons*Special:FilePath*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'COMMONSJPEG' > "$out" ;;
+  *coverartarchive*)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    [ -n "$out" ] && printf 'JPEGDATA' > "$out" ;;
+  *lrclib*) echo '{"syncedLyrics":"[00:01.00] la la","plainLyrics":"la la"}' ;;
+  *itunes*) echo '{"results":[]}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/curl"
+    export RIP_DEEZER_PLACEHOLDER_FILE_MD5S="$(printf 'DZPLACEHOLDER' | md5 | awk '{print $NF}')"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    # the clean-URL image WAS downloaded (unlike the URL-reject case)…
+    The contents of file "$RIP_SANDBOX/curl.log" should include "e4f18b52ef370cf500bac7597eaf7b89.jpg"
+    # …but its bytes matched the placeholder denylist, so the fallback won
+    The path "$RIP_SANDBOX/server/music/Art/artist.jpg" should be exist
+    The contents of file "$RIP_SANDBOX/server/music/Art/artist.jpg" should equal "COMMONSJPEG"
+  End
+
   It 'artist image: total miss across every source — logs and never blocks the push'
     enrich_setup
     When run zsh -c "source $RIPLIB && rip::push_worker music"
