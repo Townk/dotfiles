@@ -302,7 +302,7 @@ local function close_panel(fireDismiss)
 		webview:hide()
 	end
 	isShown = false
-	dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)
+	-- (No disarm: this panel never arms dismiss-on-blur — see M.show.)
 
 	if savedWindow and weStillHadFocus and not dismissOnBlur.dismissingViaSwitcher then
 		savedWindow:focus()
@@ -438,10 +438,16 @@ function M.show(data, cbs)
 	isShown = true
 	closed = false
 
-	dismissOnBlur.arm(DISMISS_ON_BLUR_ID, function(win)
-		local ourWin = webview and webview:hswindow()
-		return win ~= nil and ourWin ~= nil and win:id() == ourWin:id()
-	end, M.hide)
+	-- DELIBERATE divergence from the clipboard picker: this panel does NOT
+	-- arm dismiss-on-blur. The picker is a transient palette where losing
+	-- focus means "never mind"; this is a review surface the operator may
+	-- sit in for minutes while macOS itself steals focus — live 2026-08-21,
+	-- an OS authorization dialog appeared over the first real session, and
+	-- approving it blur-dismissed the panel AND recorded a decline for the
+	-- disc (operator's ruling: never dismiss on focus loss). It closes only
+	-- on Esc / Not now / Start / disc unmount. dismissOthers above still
+	-- runs so OPENING this panel closes the transient panels; they cannot
+	-- close it back (dismissOthers only reaches armed ids).
 end
 
 --- Tell the panel the server already holds a movie, so the feature row that
@@ -496,7 +502,7 @@ function M.cleanup()
 		webview = nil
 	end
 	ucc = nil
-	dismissOnBlur.disarm(DISMISS_ON_BLUR_ID)
+	-- (No disarm: this panel never arms dismiss-on-blur — see M.show.)
 	isShown = false
 	closed = true
 	callbacks = {}
