@@ -84,6 +84,13 @@ rip::push_worker() {
   # the job.zsh precedent (job::watch's `setopt localoptions noerrexit`
   # for the same class of problem).
   setopt localoptions noerrexit nopipefail
+  # Workers must load the job lib THEMSELVES: the thin bins source only
+  # rip.zsh, and rip::_progress silently no-ops when job::progress is
+  # undefined — which left every live run's capsule with no sidecar and no
+  # progress at all (live 2026-08-20; the suites masked it by pre-sourcing
+  # job.zsh in worker examples). Best-effort on purpose: progress is
+  # cosmetic, the rip itself must not care.
+  rip::_load_jobs || true
   local type="$1"
   rip::_check_type "$type" || return 2
   local src dest rsync_bin="${RIP_RSYNC_BIN:-rsync}"
@@ -707,6 +714,7 @@ rip::pipeline_worker() {
   # HandBrakeCLI pipeline needs to own its error handling (rc capture +
   # cleanup) regardless of the caller's options.
   setopt localoptions noerrexit nopipefail
+  rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
   local input="$1" title="$2"
   rip::_check_title "$title" || return 2
   [ -f "$input" ] || { log_error "rip: no such input: $input"; return 1 }
@@ -824,6 +832,7 @@ rip::pipeline_enqueue() {
 # is free the moment the rip stage ends.
 rip::disc_worker() {
   setopt localoptions noerrexit nopipefail
+  rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
   local title="$1"
   rip::_check_title "$title" || return 2
   local mkc="${RIP_MAKEMKVCON_BIN:-/Applications/MakeMKV.app/Contents/MacOS/makemkvcon}"
@@ -1042,6 +1051,7 @@ rip::extra_worker() {
   # HandBrakeCLI pipeline needs to own its error handling (rc capture +
   # cleanup) regardless of the caller's options.
   setopt localoptions noerrexit nopipefail
+  rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
   local title_no="$1" movie="$2" name="$3"
   rip::_check_title_no "$title_no" || return 2
   rip::_check_title "$movie" || return 2

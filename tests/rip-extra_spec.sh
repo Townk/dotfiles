@@ -159,6 +159,21 @@ EOF
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "100"
   End
 
+  # Live failure 2026-08-20 (U2 360°, "no progress in the capsule"): every
+  # worker example here pre-sources job.zsh — but the real bins source ONLY
+  # rip.zsh, and no worker loaded the job lib itself, so job::progress was
+  # undefined and rip::_progress silently no-op'd in every production run.
+  # The sidecar never existed live. This example runs the worker under the
+  # PRODUCTION composition (rip.zsh alone) and demands the sidecar.
+  It 'worker writes the progress sidecar without the caller pre-loading job.zsh'
+    export JOB_ID="job-extra-prodcomp"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    When run zsh -c "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    The status should equal 0
+    The output should include "verified"
+    The path "$JOB_STATE_ROOT/$JOB_ID/progress" should be exist
+    The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "100"
+  End
+
   # Live failure 2026-08-20 (Elvis TTWII title 5, exit 141): HandBrake's
   # stream carried a byte that is invalid UTF-8; under a UTF-8 locale macOS
   # `tr` aborts on it ("tr: Illegal byte sequence"), the pipe collapses, and
