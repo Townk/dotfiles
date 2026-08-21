@@ -480,8 +480,11 @@ local sessionCallbacks = {
 -- the server's movie list — which are asked in parallel and land in either
 -- order. Both write into `sessionState` and then re-render, so whichever
 -- lands last paints a panel carrying both. session.show() on an open panel
--- injects __setSession rather than rebuilding the webview, which is what
--- makes a re-render free (no flicker, no lost key window, no lost typing).
+-- injects __setSession rather than rebuilding the webview — but __setSession
+-- is a FULL RESET of the row state, so it may only ever deliver the scan's
+-- titles; the library list arrives additively via session.setLibrary
+-- (re-review finding 2026-08-21: a late library reply re-rendering here
+-- silently wiped roles/names the operator had already entered).
 --
 -- The isShown() gate is the consent guard: the panel IS the consent dialog,
 -- so a reply arriving after the operator hit Esc must never reopen it and
@@ -576,7 +579,15 @@ local function runLibraryFetch(state)
 			log.f("library list unavailable (rc=%s) — the attach chip will say so", tostring(rc))
 		end
 		state.library = movies
-		renderSession()
+		-- Additive delivery once real rows exist: renderSession is a
+		-- __setSession FULL RESET that would wipe roles/names entered while
+		-- this fetch was in flight (re-review finding 2026-08-21). While the
+		-- scan is still pending there is nothing to lose and ITS render
+		-- carries the list from sessionState — nothing more to do here.
+		if state.scanning then
+			return
+		end
+		session.setLibrary(movies)
 	end, { "--library" })
 	libraryTask = thisTask
 	thisTask:start()

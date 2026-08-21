@@ -464,6 +464,22 @@ function M.setHave(payload)
 	webview:evaluateJavaScript("window.__setHave && window.__setHave(" .. json_for_script(msg) .. ")")
 end
 
+--- Deliver the server library list ADDITIVELY. Never route this through a
+--- session re-render: __setSession is a full reset that rebuilds every row
+--- and would discard roles/names the operator entered while the library
+--- fetch was still in flight (re-review finding 2026-08-21 — a slow or
+--- unreachable cantina plus a fast scan is exactly the rc-2 case).
+--- @param list table[] { { title = "...", year = "1970"? }, ... }
+function M.setLibrary(list)
+	if not webview or not isShown then
+		return
+	end
+	if type(list) ~= "table" then
+		return
+	end
+	webview:evaluateJavaScript("window.__setLibrary && window.__setLibrary(" .. json_for_script(list) .. ")")
+end
+
 --- Dismiss the panel. Fires callbacks.onDismiss exactly once per open.
 function M.hide()
 	close_panel(true)

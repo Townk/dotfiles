@@ -696,6 +696,19 @@
       render();
     };
 
+    // Lua -> JS: the server library list, delivered ADDITIVELY — never via
+    // __setSession, whose full reset would discard roles and names entered
+    // while the fetch was in flight (re-review finding 2026-08-21). If the
+    // caret is in a text field, only the footer refreshes now: a full
+    // render rebuilds the inputs and would eat the caret mid-word; the
+    // attach chips pick up the list on the next natural render.
+    window.__setLibrary = function (list) {
+      library = arr(list);
+      var ae = document.activeElement;
+      if (ae && ae.tagName === 'INPUT') { renderFooter(); return; }
+      render();
+    };
+
     //----------------------------------------------------------------------
     // Start / dismiss
     //----------------------------------------------------------------------
