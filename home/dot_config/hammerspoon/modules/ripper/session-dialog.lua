@@ -17,23 +17,33 @@
 --- API:
 ---   local session = require("ripper.session-dialog")
 ---   session.show(data, callbacks)  -- open, or re-render in place if already open
+---   session.setHave(payload)       -- "the server already has that movie"
 ---   session.hide()                 -- dismiss (fires callbacks.onDismiss once)
 ---   session.cleanup()              -- delete the webview (register with lifecycle)
 ---
 --- `data`:
 ---   { volume = "U2_360_ROSE_BOWL", kind = "DVD", scanning = false,
+---     scanFailed = false,
 ---     titles = { { no = 0, duration = "1:58:12", seconds = 7092,
 ---                  size = "6.9 GB", inLibrary = nil|"Movie (Year)" }, ... },
 ---     library = { { title = "Movie", year = 1970 }, ... } }
 ---
---- `callbacks`: { onStart = fun(plan), onDismiss = fun() }; `plan`:
+--- `callbacks`: { onStart = fun(plan), onPick = fun(movie), onDismiss = fun() };
+--- `plan`:
 ---   { feature = { no = 0, movie = "Movie (Year)" } | nil,
 ---     extras = { { no = 1, name = "…", attachTo = "Movie (Year)" }, ... },
 ---     skipped = { 3 } }
 ---
---- NOTE (Mode B): this module only produces a plan. Nothing here touches the
---- disc, pueue, makemkvcon or rip.zsh — wiring the plan into the pipeline is
---- a separate task.
+--- onPick fires the moment the operator commits a TMDB result, carrying the
+--- composed "Name (Year)" title. Its purpose is the auto-extras flow: the
+--- caller asks the server whether that movie is already in the library and,
+--- on a confirmed yes, calls setHave{movie=…, have=true} — which flips the
+--- feature row to Skip and leaves the extras attached to it. "Absent" and
+--- "could not check" are both silence: never call setHave for them.
+---
+--- This module still only PRODUCES a plan. Nothing here touches the disc,
+--- pueue, makemkvcon or rip.zsh — the caller (ripper/init.lua) owns the
+--- rip-disc hs.tasks behind onPick and onStart.
 
 local M = {}
 
@@ -144,6 +154,11 @@ local function session_payload(data)
 		volume = data.volume or "",
 		kind = data.kind or "",
 		scanning = data.scanning and true or false,
+		-- The scan ran and came back with nothing readable. Distinct from
+		-- `scanning` (still running) and from an empty titles list (a disc we
+		-- read fine that genuinely has no titles) — the client renders a
+		-- different line for each.
+		scanFailed = data.scanFailed and true or false,
 		titles = data.titles or {},
 		library = data.library or {},
 	}
@@ -312,6 +327,15 @@ local function handle_message(body)
 		if type(q) == "string" and q ~= "" then
 			run_search(q, body.seq)
 		end
+	elseif action == "picked" then
+		-- The operator committed a TMDB result. The panel stays open and
+		-- fully usable; this is a side question to the caller (is that movie
+		-- already on the server?) whose answer arrives back through
+		-- M.setHave, or never.
+		local movie = body.movie
+		if type(movie) == "string" and movie ~= "" and callbacks.onPick then
+			callbacks.onPick(movie)
+		end
 	elseif action == "start" then
 		local plan = normalize_plan(body.plan)
 		close_panel(false)
@@ -418,6 +442,26 @@ function M.show(data, cbs)
 		local ourWin = webview and webview:hswindow()
 		return win ~= nil and ourWin ~= nil and win:id() == ourWin:id()
 	end, M.hide)
+end
+
+--- Tell the panel the server already holds a movie, so the feature row that
+--- picked it becomes a Skip and the session turns extras-only.
+---
+--- Call this ONLY for a confirmed have. The client re-checks that the feature
+--- row still holds exactly `payload.movie` before acting (the answer arrives
+--- asynchronously, and the operator may have changed the pick meanwhile), but
+--- "absent" and "could not check" must not be sent at all — never let an
+--- unreachable server mark a disc as already-owned.
+--- @param payload table { movie = "Movie (Year)", have = true }
+function M.setHave(payload)
+	if not webview or not isShown then
+		return
+	end
+	if type(payload) ~= "table" or type(payload.movie) ~= "string" or payload.movie == "" then
+		return
+	end
+	local msg = { movie = payload.movie, have = payload.have and true or false }
+	webview:evaluateJavaScript("window.__setHave && window.__setHave(" .. json_for_script(msg) .. ")")
 end
 
 --- Dismiss the panel. Fires callbacks.onDismiss exactly once per open.

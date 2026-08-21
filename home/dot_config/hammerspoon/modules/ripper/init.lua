@@ -22,27 +22,29 @@
 --   * Disc insert: an hs.fs.volume watcher classifies the new volume —
 --     a VIDEO_TS/ dir means a DVD, an .aiff track means an audio CD
 --     (opened in XLD, which owns the rest of that flow; nothing else here
---     touches audio discs). A DVD gets a blocking "Rip this disc?" alert;
---     "Not now" is remembered per volume path until it unmounts, so the
---     dialog never loops on a disc left sitting in the drive.
---   * Naming happens BEFORE the rip, not after: accepting the alert opens
---     an hs.chooser wired to `rip-tmdb-search` (300ms debounced per
---     keystroke, one in-flight hs.task at a time) so the operator picks
---     the exact TMDB title+year while the disc spins up. No TMDB key
---     configured degrades to the same plain hs.dialog.textPrompt the
---     manual MakeMKV-GUI path uses. Either way the result is one
---     `rip-disc "<Title (Year)>"` enqueue — the disc itself is never
---     touched by Lua; makemkvcon and the rest of the chain live in
---     rip.zsh.
---   * M.preview(<fixture>) opens the Rip Session Review panel
---     (ripper/session-dialog.lua) — the webview that will eventually
---     REPLACE the chooser above — on a canned session, with stub callbacks
---     that only print and toast. It is a UI harness: no disc is read and
---     nothing is ever enqueued. See the Mode B section near the bottom.
+--     touches audio discs).
+--   * A DVD opens the Rip Session Review panel (ripper/session-dialog.lua)
+--     already scanning, so the panel IS the consent surface: every title
+--     on the disc becomes a row the operator marks Feature / Extra / Skip
+--     and names, Esc means "Not now" (remembered per volume path until it
+--     unmounts, so nothing loops on a disc left in the drive), and Start
+--     produces ONE plan that becomes one `rip-disc --session` job. The
+--     disc itself is never touched by Lua: `rip-disc --scan` reads the
+--     titles, `rip-disc --have` answers the auto-extras question, and
+--     makemkvcon plus the rest of the chain live in rip.zsh.
+--     Spec: docs/superpowers/specs/2026-08-20-rip-session-review-design.md.
+--   * The old consent alert + TMDB hs.chooser (tmdbNameAndRip,
+--     plainTitlePrompt, tmdbChoices, labelToQuery) are still here but no
+--     longer reachable from the DVD path; they come out once the session
+--     flow has been verified against real discs (spec).
+--   * M.preview(<fixture>) opens the same panel on a canned session with
+--     stub callbacks that only print and toast — a UI harness: no disc is
+--     read and nothing is ever enqueued. See the Mode B section near the
+--     bottom.
 --   * The volume watcher only sees mounts that happen after M.start()
 --     runs, so a disc already sitting in the drive at launch/reload needs
 --     a manual nudge: M.ripDisc() rescans /Volumes for a VIDEO_TS/ dir,
---     clears its declined flag, and re-runs the same consent flow.
+--     clears its declined flag, and reopens the panel on a fresh scan.
 
 local M = {}
 
@@ -80,6 +82,10 @@ local chooserDebounce = nil -- debounce timer for the chooser's queryChangedCall
 local tasks = {} -- id -> hs.task object while running (anchors it against GC)
 local nextTaskId = 0
 local previewTimer = nil -- M.preview("scanning")'s populate timer (anchors it against GC)
+local scanTask = nil -- in-flight `rip-disc --scan` (anchors it against GC)
+local haveTask = nil -- in-flight `rip-disc --have` (anchors it against GC)
+local sessionVolume = nil -- the volume the open session panel is reviewing
+local planSeq = 0 -- monotonic suffix for plan temp files
 
 local function fileSize(p)
 	local a = hs.fs.attributes(p)
@@ -317,18 +323,210 @@ local function tmdbNameAndRip(seed)
 	chooser:show()
 end
 
+--------------------------------------------------------------------------------
+-- Rip Session Review — the DVD flow
+--------------------------------------------------------------------------------
+-- One panel replaces BOTH the old consent alert and the TMDB chooser above.
+-- It opens on insert already scanning, so it IS the consent surface: Esc means
+-- "Not now" (remembered until the disc unmounts, exactly as the alert's did),
+-- and M.ripDisc() re-offers it. Everything the panel decides comes back as one
+-- plan, which becomes one `rip-disc --session` job.
+--
+-- Spec: docs/superpowers/specs/2026-08-20-rip-session-review-design.md.
+-- The consent alert, tmdbNameAndRip and plainTitlePrompt above are left in
+-- place but are no longer reachable from the DVD path; they come out once the
+-- session flow has been verified against real discs (spec).
+
+-- The volume label as the panel shows it: the raw mount-point basename, which
+-- is what is physically printed on the disc (U2_360_ROSE_BOWL). Deliberately
+-- NOT labelToQuery's prettified form — that exists to seed a TMDB search, and
+-- the panel's header is an identification aid, not a query.
+local function volLabel(vol)
+	return vol:match("([^/]+)$") or vol
+end
+
+local function lastLine(s)
+	local last = nil
+	for line in (s or ""):gmatch("[^\n]+") do
+		last = line
+	end
+	return last
+end
+
+-- "1 movie + 2 extras", the footer's own phrasing, for the console line and
+-- the toast. Shared with the preview harness below.
+local function planSummary(plan)
+	local parts = {}
+	if plan.feature then
+		table.insert(parts, "1 movie")
+	end
+	local n = #plan.extras
+	if n > 0 then
+		table.insert(parts, string.format("%d extra%s", n, n == 1 and "" or "s"))
+	end
+	if #parts == 0 then
+		return "nothing"
+	end
+	return table.concat(parts, " + ")
+end
+
+-- The plan lands in .work/ rather than /tmp: it is rip.zsh's own scratch area,
+-- swept at every Hammerspoon start, and `rip-disc --session` immediately
+-- copies the plan into a name of the job's own anyway (the queued job may not
+-- run for minutes, and this file is not guaranteed to outlive the enqueue).
+local function planTempPath()
+	planSeq = planSeq + 1
+	return string.format("%s/session-plan-%d-%d.json", WORK, os.time(), planSeq)
+end
+
+local sessionCallbacks = {
+	-- The operator committed a TMDB pick. Ask the server whether that movie
+	-- is already in the library; a confirmed yes turns the session
+	-- extras-only (the feature row flips to Skip, the extras keep attaching
+	-- to it). rc 1 (confirmed absent) and rc 2 (the check could not run) are
+	-- BOTH silence — an unreachable cantina must never mark a disc as
+	-- already-owned (spec: "check FAILURE = unknown = do nothing").
+	onPick = function(movie)
+		if type(movie) ~= "string" or movie == "" then
+			return
+		end
+		if haveTask then
+			haveTask:terminate()
+			haveTask = nil
+		end
+		-- terminate() only sends SIGTERM and the terminated task's callback
+		-- still fires later: clear the anchor through an identity check so a
+		-- late reply cannot clobber a newer question's (tmdbChoices' rule).
+		local thisTask
+		thisTask = hs.task.new(RIP_DISC, function(rc)
+			if haveTask == thisTask then
+				haveTask = nil
+			end
+			if rc ~= 0 then
+				return
+			end
+			if not session.isShown() then
+				return
+			end
+			session.setHave({ movie = movie, have = true })
+		end, { "--have", movie })
+		haveTask = thisTask
+		thisTask:start()
+	end,
+
+	onStart = function(plan)
+		local path = planTempPath()
+		local fh = io.open(path, "w")
+		if not fh then
+			log.ef("cannot write the session plan to %s", path)
+			osd.notify("glyph:nf-md-alert", "Rip failed — cannot write the session plan", "Basso")
+			hs.notify
+				.new(nil, {
+					title = "Rip session failed",
+					informativeText = "cannot write the session plan to " .. path,
+					withdrawAfter = 0,
+				})
+				:send()
+			return
+		end
+		fh:write(hs.json.encode(plan))
+		fh:close()
+
+		local summary = planSummary(plan)
+		nextTaskId = nextTaskId + 1
+		local id = nextTaskId
+		local t = hs.task.new(RIP_DISC, function(rc, stdout, stderr)
+			tasks[id] = nil
+			if rc == 0 then
+				-- ONE short line on success (the job id), the full dump only
+				-- on failure — the clipboard picker's headless_restore rule,
+				-- for the same reason: console prints are not free.
+				print(string.format("ripper: rip session enqueued (%s) job=%s", summary, (stdout or ""):match("[^\n]*") or ""))
+				return
+			end
+			print(
+				string.format(
+					"ripper: rip session enqueue failed exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
+					tostring(rc),
+					stdout or "",
+					stderr or ""
+				)
+			)
+			-- The can't-miss immediate signal + the durable NC item (Focus
+			-- can swallow either alone) — the picker's failure pairing.
+			local reason = lastLine(stderr) or "could not enqueue the rip session"
+			osd.notify("glyph:nf-md-alert", "Rip session failed — " .. reason, "Basso")
+			hs.notify.new(nil, { title = "Rip session failed", informativeText = reason, withdrawAfter = 0 }):send()
+		end, { "--session", path })
+		tasks[id] = t
+		t:start()
+		osd.notify("glyph:nf-md-movie_open", "Ripping " .. summary, "Frog")
+	end,
+
+	-- Esc / click-away. Decline semantics are unchanged from UX v2: quiet
+	-- until the disc unmounts, re-offered by M.ripDisc().
+	onDismiss = function()
+		if sessionVolume then
+			declinedVolumes[sessionVolume] = true
+			log.f("disc declined until eject: %s", sessionVolume)
+		end
+	end,
+}
+
+-- `rip-disc --scan` — makemkvcon's own title list, one JSON line per title.
+-- Absolute path and identity-anchored, exactly like the TMDB search task.
+local function runSessionScan(vol)
+	local label = volLabel(vol)
+	if scanTask then
+		scanTask:terminate()
+		scanTask = nil
+	end
+	local thisTask
+	thisTask = hs.task.new(RIP_DISC, function(rc, stdout)
+		if scanTask == thisTask then
+			scanTask = nil
+		end
+		-- The scan takes a few seconds and the panel IS the consent dialog:
+		-- if the operator hit Esc meanwhile, session.show() here would
+		-- reopen a panel they already declined and steal focus back (the
+		-- preview timer's guard, same reasoning).
+		if not session.isShown() then
+			return
+		end
+		if rc ~= 0 then
+			log.ef("disc scan failed rc=%d: %s", rc, label)
+			session.show({ volume = label, kind = "DVD", scanFailed = true }, sessionCallbacks)
+			return
+		end
+		local titles = {}
+		for line in (stdout or ""):gmatch("[^\n]+") do
+			local ok, obj = pcall(hs.json.decode, line)
+			if ok and type(obj) == "table" and obj.no ~= nil then
+				titles[#titles + 1] = obj
+			end
+		end
+		log.f("disc scan: %d title(s) on %s", #titles, label)
+		session.show({ volume = label, kind = "DVD", titles = titles }, sessionCallbacks)
+	end, { "--scan" })
+	scanTask = thisTask
+	thisTask:start()
+end
+
+-- Open the panel in its scanning state and start reading the disc. The panel
+-- re-renders in place when the scan lands (session.show on an open panel
+-- injects __setSession rather than rebuilding the webview).
+local function startSession(vol)
+	sessionVolume = vol
+	session.show({ volume = volLabel(vol), kind = "DVD", scanning = true }, sessionCallbacks)
+	runSessionScan(vol)
+end
+
 local function considerVolume(vol)
 	if declinedVolumes[vol] then
 		return
 	end
 	if hs.fs.attributes(vol .. "/VIDEO_TS", "mode") == "directory" then
-		local btn = hs.dialog.blockAlert("Rip this disc?", vol, "Yes", "Not now")
-		if btn == "Yes" then
-			tmdbNameAndRip(labelToQuery(vol))
-		else
-			declinedVolumes[vol] = true
-			log.f("disc declined until eject: %s", vol)
-		end
+		startSession(vol)
 		return
 	end
 	-- audio CD: macOS mounts them as cddafs with .aiff track files
@@ -346,9 +544,9 @@ end
 
 -- Manual re-trigger for a disc that was already in the drive before
 -- M.start() armed the volume watcher (hs.fs.volume only sees mounts that
--- happen after it starts). Scans /Volumes for a VIDEO_TS dir, clears its
--- declined flag so a "Not now" from a previous session doesn't stick, and
--- re-runs the same consent flow an insert would have triggered.
+-- happen after it starts) — and the re-offer for a disc the operator said
+-- "Not now" to. Scans /Volumes for a VIDEO_TS dir, clears its declined flag,
+-- and reopens the session panel on a fresh scan.
 function M.ripDisc()
 	local iter, dir = hs.fs.dir("/Volumes")
 	if not iter then
@@ -370,15 +568,14 @@ end
 --------------------------------------------------------------------------------
 -- Rip Session Review — Mode B preview harness
 --------------------------------------------------------------------------------
--- The session dialog (ripper/session-dialog.lua) is the replacement for the
--- hs.chooser naming step above, but it is NOT wired into the consent/rip
--- flow yet: this harness exists so the panel can be judged on feel — layout,
--- keyboard, the live TMDB typeahead — without a disc in the drive and
--- without enqueueing anything. `M.preview()` opens it on a fixture with stub
--- callbacks that only print and toast.
+-- The session dialog now drives the real DVD flow above; this harness stays
+-- because it is the only way to judge the panel on feel — layout, keyboard,
+-- the live TMDB typeahead, the auto-extras flip — without a disc in the drive
+-- and without enqueueing anything. `M.preview()` opens it on a fixture with
+-- stub callbacks that only print and toast.
 --
--- The consent/chooser/watcher flow above is deliberately untouched; when the
--- integration lands it replaces tmdbNameAndRip's chooser, not this harness.
+-- Nothing here shares state with the live flow: the stub callbacks never
+-- touch declinedVolumes, never spawn rip-disc, and never enqueue.
 
 -- Fixture sessions, one per mockup shape. Built fresh on each call so a
 -- previous preview can never leak state into the next one.
@@ -434,20 +631,9 @@ local function previewData(name)
 	}
 end
 
-local function previewSummary(plan)
-	local parts = {}
-	if plan.feature then
-		table.insert(parts, "1 movie")
-	end
-	local n = #plan.extras
-	if n > 0 then
-		table.insert(parts, string.format("%d extra%s", n, n == 1 and "" or "s"))
-	end
-	if #parts == 0 then
-		return "nothing"
-	end
-	return table.concat(parts, " + ")
-end
+-- The fixture movie the stub onPick answers "already in your library" for —
+-- it demos the auto-extras flip with no server anywhere in the loop.
+local PREVIEW_HAVE = "Elvis: That's the Way It Is"
 
 -- Stub callbacks: they print and toast, and that is ALL they do. Nothing
 -- here enqueues a job, spawns rip-disc, or touches the disc.
@@ -468,7 +654,17 @@ local previewCallbacks = {
 		for _, no in ipairs(plan.skipped) do
 			hs.printf("ripper.preview:   skip     title=%s", tostring(no))
 		end
-		osd.notify("glyph:nf-md-movie_open", "preview: would rip " .. previewSummary(plan), "Frog")
+		osd.notify("glyph:nf-md-movie_open", "preview: would rip " .. planSummary(plan), "Frog")
+	end,
+	-- The real onPick shells out to `rip-disc --have`. The stub answers from
+	-- a hardcoded name instead, so the auto-extras flip (feature row → Skip,
+	-- green have-line, extras still attached) can be judged with no server,
+	-- no network and no disc.
+	onPick = function(movie)
+		hs.printf("ripper.preview: picked %s (nothing asked of the server)", tostring(movie))
+		if type(movie) == "string" and movie:sub(1, #PREVIEW_HAVE) == PREVIEW_HAVE then
+			session.setHave({ movie = movie, have = true })
+		end
 	end,
 	onDismiss = function()
 		hs.printf("ripper.preview: dismissed — nothing enqueued")
@@ -526,6 +722,15 @@ function M.cleanup()
 		previewTimer:stop()
 		previewTimer = nil
 	end
+	if scanTask then
+		scanTask:terminate()
+		scanTask = nil
+	end
+	if haveTask then
+		haveTask:terminate()
+		haveTask = nil
+	end
+	sessionVolume = nil
 	session.cleanup()
 end
 

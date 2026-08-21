@@ -227,6 +227,13 @@
         el.innerHTML = '<div class="scanning">reading titles…</div>';
         return;
       }
+      // The scan itself failed (no disc, an unreadable one, makemkvcon gone).
+      // Say so in the same dim voice as "reading titles…" and leave the panel
+      // up — Esc is still the way out, and there is nothing to decide.
+      if (SESSION.scanFailed) {
+        el.innerHTML = '<div class="scanning">could not read the disc</div>';
+        return;
+      }
       if (rows.length === 0) {
         el.innerHTML = '<div class="scanning">no titles on this disc</div>';
         return;
@@ -255,7 +262,9 @@
       var n = rows.length;
       var bits = [];
       if (SESSION.kind) bits.push(SESSION.kind);
-      bits.push(SESSION.scanning ? 'reading…' : (n + ' title' + (n === 1 ? '' : 's')));
+      bits.push(SESSION.scanning ? 'reading…'
+        : SESSION.scanFailed ? 'unreadable'
+        : (n + ' title' + (n === 1 ? '' : 's')));
       document.getElementById('hdrMeta').innerHTML = esc(bits.join(' · '));
     }
 
@@ -270,6 +279,7 @@
       }
       var ok = true, reason = null;
       if (SESSION.scanning) { ok = false; reason = 'reading the disc…'; }
+      else if (SESSION.scanFailed) { ok = false; reason = 'could not read the disc'; }
       else if (!feat && extras.length === 0) { ok = false; reason = 'nothing selected — pick a feature or an extra'; }
       else if (feat && !feat.movie) { ok = false; reason = 'pick the feature to enable Start'; }
       // Movie titles become path components downstream exactly like extra
@@ -539,6 +549,11 @@
       if (f) { f.movie = it; f.query = ''; focusIdx = dd.row; }
       closeDropdown(true);
       render();
+      // The disc itself cannot say which film it is — the TMDB pick can.
+      // Tell Lua, which asks the server whether this movie is already in
+      // the library and answers through __setHave below (the auto-extras
+      // path). Fire-and-forget: an unreachable server changes nothing.
+      if (f && f.movie && f.movie.title) post('picked', { movie: f.movie.title });
     }
 
     function clearMovie(i) {
@@ -621,6 +636,33 @@
       render();
       var f = featureRow();
       if (f && !f.movie) focusFeatureSearch();
+    };
+
+    // Lua -> JS (session-dialog.lua's M.setHave, driven by `rip-disc
+    // --have`): the server ALREADY has the movie the operator just picked,
+    // so this disc is an extras-only re-insert. Flip the feature row to
+    // Skip with the same green have-line a pre-marked title gets, and keep
+    // the extras pointed at that movie.
+    //
+    // Only a confirmed have arrives here as have:true — "absent" and
+    // "unknown" are both silence by design, so an unreachable server can
+    // never mark a disc as already-owned.
+    window.__setHave = function (p) {
+      if (!p || !p.have) return;
+      var f = featureRow();
+      // Stale guard: the check ran asynchronously, and by now the operator
+      // may have cleared the pick, picked a different movie, or moved the
+      // Feature role to another row entirely. Only act when the feature row
+      // still holds EXACTLY the movie that was asked about.
+      if (!f || !f.movie || f.movie.title !== p.movie) return;
+      f.role = 'skip';
+      f.inLibrary = p.movie;
+      f.query = '';
+      // With no Feature row left, attachFor() falls through to
+      // defaultAttach — so every extra keeps attaching to the movie the
+      // server already has, which is the whole point of the flip.
+      defaultAttach = p.movie;
+      render();
     };
 
     //----------------------------------------------------------------------

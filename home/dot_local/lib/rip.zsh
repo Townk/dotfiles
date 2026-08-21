@@ -393,6 +393,14 @@ RIP_ARTIST_IMAGE_PLACEHOLDER_MD5='d41d8cd98f00b204e9800998ecf8427e'
 # block, never refetch/reprocess blindly, just skip this run and log one
 # line.
 rip::_remote_has_file() {
+  # The tri-state IS this function's contract, so it has to own its own
+  # error handling: under the `set -e` the real bins source this file with,
+  # an ssh that exits 255 (unreachable host) would kill the whole process
+  # before the `local rc=$?` below ever runs, and "unknown" could never be
+  # reported at all. Every worker already sets this for its own reasons;
+  # rip::session_have (the `rip-disc --have` body) is a bare helper call
+  # straight from the bin, which is where the gap showed up.
+  setopt localoptions noerrexit nopipefail
   local relpath="$1"
   local base; base="$(rip::remote_base)"
   if [[ "$base" == *:* ]]; then
@@ -1153,4 +1161,419 @@ rip::extra_enqueue() {
   rip::_load_jobs || { log_error "rip: job runner unavailable"; return 1 }
   job::start --group heavy --title "extra: $movie — $name" --icon "$RIP_JOB_ICON" \
     -- "$RIP_BIN_DIR/rip-extra" --worker "$title_no" "$movie" "$name"
+}
+
+# --- session: one disc, one operator-authored plan, one job -----------------
+#
+# The Rip Session Review panel (hammerspoon modules/ripper/session-dialog.lua)
+# is the consent + naming surface for a DVD insert: every title on the disc is
+# a row the operator marks Feature / Extra / Skip, the feature carries a TMDB
+# pick, each extra a name and an attach target. What comes back is a PLAN, and
+# these four functions are its whole server side:
+#
+#   rip::session_scan            rip-disc --scan            → the panel's rows
+#   rip::session_have <movie>    rip-disc --have <movie>    → auto-extras flip
+#   rip::session_enqueue <plan>  rip-disc --session <plan>  → one heavy job
+#   rip::session_worker <plan>   rip-disc --session-worker  → the job body
+#
+# ONE SCANNER, ONE NUMBERING (spec, and a standing reviewer warning):
+# HandBrake and makemkvcon number a disc's titles DIFFERENTLY, and no mapping
+# between them may ever be assumed. The session flow is makemkvcon end to end —
+# the scan that fills the panel and the rip that follows read the same
+# numbering. `rip-extra` (HandBrake direct-from-disc, HB numbering) stays the
+# standalone manual tool and is never mixed into this flow.
+
+# rip::session_scan — `makemkvcon -r info disc:0`, reduced to one JSON line
+# per title for the panel:
+#   {"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088}
+#
+# TINFO attributes (MakeMKV's ap_ItemAttributeId enum, the same table the disc
+# worker's own `attr 9 = duration` parse rests on): 9 = duration "H:MM:SS",
+# 10 = human size string ("6.9 GB"), 11 = size in bytes. Only those three are
+# read; every other attribute on the line (2 = name, 27 = source filename, …)
+# is ignored, and a title with no duration at all is not a row the panel can
+# show, so it is dropped.
+#
+# The parse is a single-pass awk over `TINFO:<idx>,<attr>,<code>,"<value>"`,
+# splitting on POSITION (three commas, then the quoted tail) rather than on a
+# comma delimiter — attribute VALUES routinely contain commas ("Trailer,
+# Theatrical") and a field-split parse silently mangles them. Same discipline
+# as the disc worker's own TINFO awk.
+#
+# Everything that reaches the JSON is numeric or structural AND is scrubbed to
+# a safe character class right here in awk (duration → digits and colons, size
+# → alphanumerics, dot and space, bytes → digits or 0), so the printf below
+# cannot be handed a quote or a backslash to escape. That is the whole reason
+# this emits JSON with printf instead of shelling out to jq.
+#
+# Runs under the same RIP_PTY_WRAP seam as every other makemkvcon/HandBrake
+# invocation here, and pipes through `LC_ALL=C tr -d '\r'` for the pty's own
+# ONLCR translation (see the disc worker's long note on both).
+#
+# rc 1 when nothing parsed — no disc, an unreadable disc, or a drive that
+# answered with no titles are all the same thing to the panel: "could not read
+# the disc".
+rip::session_scan() {
+  setopt localoptions noerrexit nopipefail
+  local mkc="${RIP_MAKEMKVCON_BIN:-/Applications/MakeMKV.app/Contents/MacOS/makemkvcon}"
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  local rows
+  rows="$("${pty_wrap[@]}" "$mkc" -r info disc:0 2>/dev/null \
+    | LC_ALL=C tr -d '\r' \
+    | awk '
+      {
+        p = index($0, "TINFO:")
+        if (p == 0) next
+        rest = substr($0, p + 6)
+        c = index(rest, ","); if (c == 0) next
+        idx = substr(rest, 1, c - 1); rest = substr(rest, c + 1)
+        c = index(rest, ","); if (c == 0) next
+        attr = substr(rest, 1, c - 1); rest = substr(rest, c + 1)
+        c = index(rest, ","); if (c == 0) next
+        val = substr(rest, c + 1)
+        if (substr(val, 1, 1) == "\"") {
+          val = substr(val, 2)
+          q = index(val, "\"")
+          if (q > 0) val = substr(val, 1, q - 1)
+        }
+        if (idx !~ /^[0-9]+$/) next
+        if (attr == "9") {
+          dur[idx] = val
+          if (!(idx in seen)) { order[n++] = idx; seen[idx] = 1 }
+        } else if (attr == "10") size[idx] = val
+        else if (attr == "11") bytes[idx] = val
+      }
+      END {
+        for (i = 0; i < n; i++) {
+          k = order[i]
+          d = dur[k]; gsub(/[^0-9:]/, "", d)
+          if (d == "") continue
+          s = (k in size) ? size[k] : ""; gsub(/[^0-9A-Za-z. ]/, "", s)
+          b = (k in bytes) ? bytes[k] : ""
+          if (b !~ /^[0-9]+$/) b = 0
+          m = split(d, t, ":")
+          secs = 0
+          if (m == 3) secs = t[1] * 3600 + t[2] * 60 + t[3]
+          else if (m == 2) secs = t[1] * 60 + t[2]
+          else secs = t[1] + 0
+          printf "%s\t%s\t%s\t%s\t%s\n", k, d, secs, s, b
+        }
+      }
+    ')"
+  local idx dur secs size bytes n=0
+  while IFS=$'\t' read -r idx dur secs size bytes; do
+    [[ "$idx" == <-> ]] || continue
+    printf '{"no":%d,"duration":"%s","seconds":%d,"size":"%s","bytes":%d}\n' \
+      "$idx" "$dur" "$secs" "$size" "$bytes"
+    n=$(( n + 1 ))
+  done <<< "$rows"
+  (( n > 0 )) || { log_error "rip: disc scan found no titles"; return 1 }
+  return 0
+}
+
+# rip::session_have <movie> — does the server already hold this movie? The
+# disc cannot say which film it is, but the operator's TMDB pick can, so the
+# panel asks the moment a movie is picked and flips the feature row to Skip
+# when the answer is yes (the extras then ride along to a movie the server
+# already has — the auto-extras path).
+#
+# Prints nothing; the ANSWER is the exit code, straight through from
+# rip::_remote_has_file: 0 have, 1 confirmed absent, 2 unknown (the check
+# itself could not run). The panel treats 1 and 2 identically — silence — so
+# an unreachable cantina can never mark a disc as already-owned.
+rip::session_have() {
+  local movie="$1"
+  rip::_check_title "$movie" || return 2
+  rip::_remote_has_file "movies/$movie/$movie.mkv"
+}
+
+# rip::_plan_extras <plan.json> — the plan's extras as
+# "<no>\t<name>\t<attachTo>" lines. `.extras` is defended twice: absent, null
+# and (the real hazard) an EMPTY LIST are all the same thing here, because
+# hs.json.encode cannot tell an empty Lua list from an empty Lua map and emits
+# "{}" for both — jq would abort trying to iterate that object.
+rip::_plan_extras() {
+  jq -r '(if (.extras | type) == "array" then .extras else [] end)[]
+         | [((.no // "") | tostring), (.name // ""), (.attachTo // "")]
+         | @tsv' "$1" 2>/dev/null
+}
+
+# rip::_validate_plan <plan.json> — defense in depth. The panel already gates
+# every one of these (its nameValid() is a deliberate mirror of
+# rip::_check_extra_name, and Start stays disabled until the plan is clean),
+# but a plan is a FILE on disk naming path components under the staging root,
+# and it arrives here through a queue that outlives the panel. Re-run every
+# check, and refuse the whole plan on the first failure — rc 2, exactly like
+# the single-title enqueues.
+rip::_validate_plan() {
+  # The real rip-disc bin sources this under `set -eu -o pipefail`, and the
+  # jq calls below legitimately exit non-zero on a malformed plan — this
+  # function owns that, the caller must not die of it (same rule the workers
+  # state at length).
+  setopt localoptions noerrexit nopipefail
+  local plan="$1"
+  jq -e . "$plan" >/dev/null 2>&1 || { log_error "rip: session plan is not valid JSON: $plan"; return 2 }
+  local feat_movie feat_no no name attach n=0
+  feat_movie="$(jq -r '.feature.movie // empty' "$plan")"
+  feat_no="$(jq -r '(.feature.no // empty) | tostring' "$plan")"
+  if [[ -n "$feat_movie" ]]; then
+    rip::_check_title "$feat_movie" || return 2
+    rip::_check_title_no "$feat_no" || return 2
+  fi
+  while IFS=$'\t' read -r no name attach; do
+    [[ -n "$no$name$attach" ]] || continue
+    rip::_check_title_no "$no" || return 2
+    rip::_check_extra_name "$name" || return 2
+    # The attach target composes into movies/<attachTo>/extras/… exactly like
+    # a feature title does, so it gets the title rule, not the name rule.
+    rip::_check_title "$attach" || return 2
+    n=$(( n + 1 ))
+  done < <(rip::_plan_extras "$plan")
+  if [[ -z "$feat_movie" ]] && (( n == 0 )); then
+    log_error "rip: session plan selects nothing — no feature and no extras"
+    return 2
+  fi
+  return 0
+}
+
+# rip::session_enqueue <plan.json> — validate, then ONE heavy-group job for
+# the whole session (parallelism 1 also serializes drive access, which is
+# physical anyway). Titled after the feature, falling back to the disc's
+# volume label for an extras-only session.
+rip::session_enqueue() {
+  setopt localoptions noerrexit nopipefail
+  local plan="$1"
+  [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
+  rip::_validate_plan "$plan" || return 2
+
+  # The plan the panel hands us is a TEMP file written by Hammerspoon; the
+  # job it launches may not run for minutes (the heavy group is serialized)
+  # and pueue stores the command LINE, not the file. Copy the plan into .work
+  # under a name of this enqueue's own before the path goes on a queue —
+  # .work is rip.zsh's scratch area, unwatched and never pushed, and a
+  # leftover from a job that never ran is swept at Hammerspoon startup with
+  # the rest of it.
+  local work_dir; work_dir="$(rip::staging_root)/.work"
+  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  local queued="$work_dir/session-$$-$RANDOM.json"
+  cp -- "$plan" "$queued" || { log_error "rip: cannot stage the session plan at $queued"; return 1 }
+
+  local title
+  title="$(jq -r '.feature.movie // .volume // empty' "$plan")"
+  [[ -n "$title" ]] || title="disc"
+
+  rip::_load_jobs || { log_error "rip: job runner unavailable"; rm -f -- "$queued"; return 1 }
+  job::start --group heavy --title "rip session: $title" --icon "$RIP_JOB_ICON" \
+    -- "$RIP_BIN_DIR/rip-disc" --session-worker "$queued"
+}
+
+# rip::session_worker <plan.json> — the enqueued body, three phases in one
+# capsule:
+#
+#   0–50   RIP     makemkvcon rips each selected title into .work/session/.
+#                  The drive is free the moment this phase ends.
+#   50–85  ENCODE  HandBrake encodes each ripped file (RIP_HB_ARGS, from FILE
+#                  — the pipeline worker's path) and publishes it by atomic
+#                  rename: feature → movies/<Movie>/<Movie>.mkv, extra →
+#                  movies/<attachTo>/extras/<Name>.mkv.
+#   85–100 PUSH    one rip::push_worker movies for the whole session.
+#
+# Each band is split evenly across the session's items, so a four-title
+# session's capsule advances four times per phase rather than jumping.
+#
+# FAILURE HONESTY (spec, and the same rules the sibling workers already
+# state):
+#   * A rip failure is a DISC failure — the drive could not read a title, and
+#     the rest of the session is built on the same disc. Abort the whole
+#     thing, remove .work/session, propagate the rc. Nothing was published
+#     yet, so nothing is stranded.
+#   * ONE item's encode failure is that ITEM's failure. Remove its temp, log
+#     it, keep going with the rest, and remember the rc — a bad extra must
+#     never cost the operator the feature they already waited for.
+#   * A publish or push failure keeps the local file exactly where it is, for
+#     a plain `rip-push movies` retry with no re-encode.
+#   * .work/session is removed on FULL success only. After a failure the
+#     ripped titles stay: they are the expensive part (the whole disc pass),
+#     and .work is swept at the next Hammerspoon start anyway.
+rip::session_worker() {
+  setopt localoptions noerrexit nopipefail
+  rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
+  local plan="$1"
+  [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
+  rip::_validate_plan "$plan" || return 2
+
+  # Items in rip order: the feature first, then the extras as the panel
+  # ordered them. Three parallel arrays rather than one array of records —
+  # zsh has no struct, and the three are only ever indexed together.
+  local -a item_no=() item_rel=() item_label=()
+  local feat_movie feat_no no name attach
+  feat_movie="$(jq -r '.feature.movie // empty' "$plan")"
+  feat_no="$(jq -r '(.feature.no // empty) | tostring' "$plan")"
+  if [[ -n "$feat_movie" ]]; then
+    item_no+=("$feat_no")
+    item_rel+=("movies/$feat_movie/$feat_movie.mkv")
+    item_label+=("$feat_movie")
+  fi
+  while IFS=$'\t' read -r no name attach; do
+    [[ "$no" == <-> ]] || continue
+    item_no+=("$no")
+    item_rel+=("movies/$attach/extras/$name.mkv")
+    item_label+=("$attach — $name")
+  done < <(rip::_plan_extras "$plan")
+  local n=${#item_no}
+  (( n > 0 )) || { log_error "rip: session plan selects nothing"; return 2 }
+
+  local mkc="${RIP_MAKEMKVCON_BIN:-/Applications/MakeMKV.app/Contents/MacOS/makemkvcon}"
+  local hb_bin="${RIP_HANDBRAKE_BIN:-HandBrakeCLI}"
+  local work_dir sess_dir out_tmp
+  work_dir="$(rip::staging_root)/.work"
+  sess_dir="$work_dir/session"
+  # Same kill-proof-by-construction shape as every other encode here: both
+  # the ripped titles and the in-flight encode live under .work, which
+  # nothing watches and rip-push never ships, so a SIGKILLed worker (plain
+  # `pueue kill` on pueue 4.x) can only ever leave debris where debris is
+  # harmless. movies/ receives whole files by rename or nothing at all.
+  out_tmp="$work_dir/session-encode.mkv"
+  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  rm -rf -- "$sess_dir"
+  mkdir -p "$sess_dir" || { log_error "rip: cannot create $sess_dir"; return 1 }
+
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  # Every bare `local` below is declared ONCE, here, outside the loops: zsh
+  # PRINTS "name=value" to stdout when a bare `local name` re-declares a
+  # variable that already holds a value in the same scope, so a bare local
+  # inside a loop leaks the previous iteration's values as stdout garbage
+  # (live-caught in rip::_enrich_music, 2026-08-20 — same rule, same file).
+  local i rc base span line rest cur total produced f
+  local src rel out out_dir remote_rc pct failed=0 published=0 push_rc=0
+  local -a fresh=()
+
+  #--- RIP phase (0–50) ------------------------------------------------------
+  # Nothing is published yet, so a cancel here throws the scratch away whole.
+  trap 'rm -rf -- "$sess_dir"
+        log_error "rip: cancelled during the disc rip — session scratch removed"
+        exit 130' TERM INT
+  for (( i = 1; i <= n; i++ )); do
+    base=$(( 50 * (i - 1) / n ))
+    span=$(( 50 * i / n - base ))
+    RIP_PROGRESS_BASE=$base RIP_PROGRESS_SPAN=$span \
+      rip::_progress 0 "ripping title ${item_no[i]} — ${item_label[i]}"
+    # The disc worker's exact makemkvcon idiom: pty wrap (real makemkvcon
+    # block-buffers into a pipe and emits NO progress at all otherwise),
+    # `LC_ALL=C tr -d '\r'` for the pty's ONLCR translation and for byte
+    # safety, and an unanchored *PRGV:* match so the pty's own echo/erase
+    # bytes on the first line cannot suppress the first update.
+    "${pty_wrap[@]}" "$mkc" -r --progress=-same mkv disc:0 "${item_no[i]}" "$sess_dir" 2>&1 \
+      | LC_ALL=C tr -d '\r' \
+      | while IFS= read -r line; do
+          case "$line" in
+            *PRGV:*)
+              rest="${line#*PRGV:}"; total="${rest##*,}"; cur="${rest%%,*}"
+              [[ "$cur" == <-> && "$total" == <1-> ]] \
+                && RIP_PROGRESS_BASE=$base RIP_PROGRESS_SPAN=$span \
+                   rip::_progress $(( cur * 100 / total )) "ripping title ${item_no[i]} — ${item_label[i]}"
+              ;;
+          esac
+        done
+    rc=$pipestatus[1]
+    # MakeMKV names its own output ("title_t01.mkv", or whatever it decides
+    # from the disc's metadata) and gives no way to ask what it wrote, so the
+    # file is identified positionally — newest first (glob qualifier `om`),
+    # skipping anything this loop has already claimed. Because each title is
+    # renamed IMMEDIATELY below, there is normally exactly one unclaimed file
+    # here and the mtime ordering is belt-and-braces rather than load-bearing.
+    fresh=("$sess_dir"/*.mkv(N.om))
+    produced=""
+    for f in "${fresh[@]}"; do
+      [[ "${f:t}" == title-*.mkv ]] && continue
+      produced="$f"; break
+    done
+    if (( rc != 0 )) || [[ -z "$produced" ]]; then
+      trap - TERM INT
+      rm -rf -- "$sess_dir"
+      log_error "rip: session rip failed on title ${item_no[i]} (rc=$rc) — disc unreadable, nothing kept"
+      return $(( rc ? rc : 1 ))
+    fi
+    if ! mv -f -- "$produced" "$sess_dir/title-${item_no[i]}.mkv"; then
+      trap - TERM INT
+      rm -rf -- "$sess_dir"
+      log_error "rip: could not stage the ripped title ${item_no[i]}"
+      return 1
+    fi
+  done
+  trap - TERM INT
+
+  #--- ENCODE phase (50–85) --------------------------------------------------
+  for (( i = 1; i <= n; i++ )); do
+    src="$sess_dir/title-${item_no[i]}.mkv"
+    rel="${item_rel[i]}"
+    base=$(( 50 + 35 * (i - 1) / n ))
+    span=$(( 50 + 35 * i / n - base ))
+    # SERVER IDEMPOTENCY PER ITEM, before any encode (the operator's rule,
+    # already honored by rip::extra_worker): only a confirmed HAVE (rc 0)
+    # skips. rc 2 is "unknown" and must never block work.
+    rip::_remote_has_file "$rel"
+    remote_rc=$?
+    if (( remote_rc == 0 )); then
+      print -r -- "rip: server already has $rel — skipping this item"
+      continue
+    fi
+    rm -f -- "$out_tmp"
+    RIP_PROGRESS_BASE=$base RIP_PROGRESS_SPAN=$span \
+      rip::_progress 0 "encoding — ${item_label[i]}"
+    # Scoped to THIS item's encode: items already published are complete and
+    # keep-for-retry (the standard rule), so a cancel may only take the temp.
+    trap 'rm -f -- "$out_tmp"
+          log_error "rip: cancelled during a session encode — partial removed, published items kept"
+          exit 130' TERM INT
+    "${pty_wrap[@]}" "$hb_bin" "${RIP_HB_ARGS[@]}" -i "$src" -o "$out_tmp" 2>&1 \
+      | LC_ALL=C tr '\r' '\n' \
+      | while IFS= read -r line; do
+          case "$line" in
+            *Encoding:*%*)
+              pct="${line%\%*}"; pct="${pct##*, }"; pct="${pct%%.*}"; pct="${pct// /}"
+              [[ "$pct" == <-> ]] \
+                && RIP_PROGRESS_BASE=$base RIP_PROGRESS_SPAN=$span \
+                   rip::_progress "$pct" "encoding — ${item_label[i]}"
+              ;;
+          esac
+        done
+    rc=$pipestatus[1]
+    trap - TERM INT
+    if (( rc != 0 )); then
+      rm -f -- "$out_tmp"
+      log_error "rip: session encode failed (rc=$rc) — item dropped, session continues: ${item_label[i]}"
+      failed=1
+      continue
+    fi
+    out="$(rip::staging_root)/$rel"
+    out_dir="${out:h}"
+    if ! { mkdir -p "$out_dir" && mv -f -- "$out_tmp" "$out" }; then
+      rm -f -- "$out_tmp"
+      log_error "rip: could not publish $rel — item dropped, session continues"
+      failed=1
+      continue
+    fi
+    published=$(( published + 1 ))
+  done
+
+  #--- PUSH phase (85–100) ---------------------------------------------------
+  if (( published > 0 )); then
+    RIP_PUSH_MIN_AGE_S=0 RIP_PROGRESS_BASE=85 RIP_PROGRESS_SPAN=15 \
+      rip::push_worker movies
+    push_rc=$?
+  else
+    # Every item was already on the server (or every one failed): an empty
+    # rsync job is noise, not work — the same judgement rip::push_enqueue makes.
+    print -r -- "rip: session published nothing new — nothing to push"
+  fi
+
+  if (( failed == 0 && push_rc == 0 )); then
+    rm -rf -- "$sess_dir"
+    rip::_progress 100 "session done"
+    return 0
+  fi
+  log_error "rip: session finished with failures (items=$failed push=$push_rc) — ripped titles kept at $sess_dir"
+  (( push_rc != 0 )) && return $push_rc
+  return 1
 }
