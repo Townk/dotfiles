@@ -11,6 +11,18 @@
 [ -n "${__RIP_ZSH_LOADED:-}" ] && return 0
 __RIP_ZSH_LOADED=1
 
+# LOCALE GUARD (live 2026-08-21 — the real root of the lyrics corruption):
+# pueue spawns workers with NO locale, and under C metaflac transliterates
+# non-ASCII on BOTH sides — tag reads became "A'i c^e falou" (silent LRCLIB
+# misses) and every accented character in every push-embedded lyric shipped
+# to the server as "##". Force a UTF-8 LC_CTYPE whenever the environment
+# doesn't already provide one. The parse pipes' per-command LC_ALL=C stays
+# authoritative where written (LC_ALL outranks LC_CTYPE).
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) ;;
+  *) export LC_CTYPE="en_US.UTF-8" ;;
+esac
+
 RIP_LIB_SELF_DIR="${${(%):-%x}:A:h}"
 source "$RIP_LIB_SELF_DIR/common.zsh"
 

@@ -781,6 +781,18 @@ EOF
   # lookups (LRCLIB especially) match bytes, so NFD queries missed lyrics
   # that NFC finds. _track_meta must hand out NFC; paths never come from
   # tags (fs-derived reldirs), so normalizing here is query-only.
+  # Live 2026-08-21 (the real root of the lyrics corruption): pueue spawns
+  # workers with NO locale — under C, metaflac transliterates non-ASCII on
+  # BOTH read (queries became "A'i c^e falou" → LRCLIB misses) and write
+  # (every accented char in every push-embedded lyric shipped as "##").
+  # Sourcing rip.zsh must guarantee a UTF-8 LC_CTYPE; the scoped
+  # LC_ALL=C tr pipes are unaffected (LC_ALL outranks LC_CTYPE per-command).
+  It 'lib: sourcing under a bare C locale exports a UTF-8 LC_CTYPE'
+    When run env -u LANG -u LC_ALL -u LC_CTYPE zsh -c "source $RIPLIB && print -r -- \$LC_CTYPE"
+    The status should equal 0
+    The output should include "UTF-8"
+  End
+
   It 'track meta: decomposed (NFD) tags are normalized to NFC'
     enrich_setup
     cat > "$RIP_SANDBOX/metaflac" <<EOF
