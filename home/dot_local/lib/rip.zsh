@@ -135,7 +135,7 @@ rip::push_worker() {
   local line pct file
   "$rsync_bin" -a --partial --exclude=.DS_Store --files-from="$listfile" \
       --info=progress2,name1 "$src/" "$dest" \
-    | tr '\r' '\n' \
+    | LC_ALL=C tr '\r' '\n' \
     | while IFS= read -r line; do
         case "$line" in
           *%*)
@@ -761,7 +761,7 @@ rip::pipeline_worker() {
         exit 130' TERM INT
   local line pct
   "$hb_bin" "${RIP_HB_ARGS[@]}" -i "$input" -o "$out_tmp" 2>&1 \
-    | tr '\r' '\n' \
+    | LC_ALL=C tr '\r' '\n' \
     | while IFS= read -r line; do
         case "$line" in
           *Encoding:*%*)
@@ -872,7 +872,7 @@ rip::disc_worker() {
   # never suppress the first real progress update.
   local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
   "${pty_wrap[@]}" "$mkc" -r --progress=-same mkv disc:0 "$best_idx" "$rip_dir" 2>&1 \
-    | tr -d '\r' \
+    | LC_ALL=C tr -d '\r' \
     | while IFS= read -r line; do
         case "$line" in
           *PRGV:*)
@@ -1077,8 +1077,13 @@ rip::extra_worker() {
         log_error "rip: cancelled during extra encode — partial removed: $movie — $name"
         exit 130' TERM INT
   local line pct
+  # LC_ALL=C on every tr in these parse pipes (this file, all sites): the
+  # streams are raw bytes, and under a UTF-8 locale macOS tr ABORTS on an
+  # invalid sequence — the collapsing pipe then SIGPIPEs the still-writing
+  # encoder, killing a good encode at rc=141 (live: Elvis TTWII title 5,
+  # 2026-08-20; regression-pinned in tests/rip-extra_spec.sh).
   rip::_hb_dvd "$hb_bin" -t "$title_no" -i "$vol" "${RIP_HB_ARGS[@]}" -o "$out_tmp" 2>&1 \
-    | tr '\r' '\n' \
+    | LC_ALL=C tr '\r' '\n' \
     | while IFS= read -r line; do
         case "$line" in
           *Encoding:*%*)

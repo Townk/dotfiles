@@ -159,6 +159,43 @@ EOF
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "100"
   End
 
+  # Live failure 2026-08-20 (Elvis TTWII title 5, exit 141): HandBrake's
+  # stream carried a byte that is invalid UTF-8; under a UTF-8 locale macOS
+  # `tr` aborts on it ("tr: Illegal byte sequence"), the pipe collapses, and
+  # the still-writing encoder dies of SIGPIPE — a good encode killed by the
+  # progress PARSER. The fake reproduces it deterministically: one bad byte,
+  # then >64KB more output, so if tr exits early the writer must overrun the
+  # pipe buffer and take the SIGPIPE (141) rather than sneaking out on a
+  # buffered exit. The parse pipes must run tr under LC_ALL=C (byte-safe).
+  It 'encode survives invalid UTF-8 bytes in the HandBrake stream (the tr/SIGPIPE 141)'
+    export JOB_ID="job-extra-badbyte"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    cat > "$RIP_SANDBOX/HandBrakeCLI" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_HB_LOG"
+case "$*" in
+  *--scan*) exit 0 ;;
+  *)
+    out=""; prev=""
+    for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+    printf 'libdvdread: raw \251 metadata\r\n'
+    i=0
+    while [ "$i" -lt 3000 ]; do
+      printf 'Encoding: task 1 of 1, 42.50 %%\r'
+      i=$((i+1))
+    done
+    printf 'Encoding: task 1 of 1, 100.00 %%\n'
+    printf 'encoded' > "$out"
+    exit 0
+    ;;
+esac
+EOF
+    chmod +x "$RIP_SANDBOX/HandBrakeCLI"
+    When run zsh -c "export LC_ALL=en_US.UTF-8; source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    The status should equal 0
+    The output should include "verified"
+    The path "$RIP_SANDBOX/server/movies/A Movie (2001)/extras/Behind the Scenes.mkv" should be exist
+  End
+
   # Progress composition: encode owns 0-85, push owns 85-100 — proven by
   # forcing the encode to fail right after a known percentage so the
   # sidecar's last write (job::progress overwrites, it doesn't append) can
