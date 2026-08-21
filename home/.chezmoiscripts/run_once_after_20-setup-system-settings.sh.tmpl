@@ -159,8 +159,12 @@ defaults write com.apple.digihub com.apple.digihub.cd.music.appeared -dict actio
 defaults write jp.tmkk.XLD AutoMountDisc -int 1
 defaults write jp.tmkk.XLD AutoQueryCDDB -int 1
 
-echo "📀  Video DVD insert opens MakeMKV (rip flow: human selects titles incl. extras, pipeline encodes+pushes)"
-defaults write com.apple.digihub com.apple.digihub.dvd.video.appeared -dict action 100 custom "/Applications/MakeMKV.app"
+echo "📀  Video DVD insert: no auto-open (the Hammerspoon Rip Session panel owns disc inserts)"
+# action 1 = ignore. Was action 100 -> MakeMKV.app while the rip flow needed
+# the GUI; retired 2026-08-21 — the session panel opens on the volume-mount
+# event and drives makemkvcon itself, so ANY auto-launched app (MakeMKV,
+# DVD Player) is just a second reader fighting the scan for the drive head.
+defaults write com.apple.digihub com.apple.digihub.dvd.video.appeared -dict action 1
 
 {{- end }}
 
