@@ -30,8 +30,9 @@
 --     unmounts, so nothing loops on a disc left in the drive), and Start
 --     produces ONE plan that becomes one `rip-disc --session` job. The
 --     disc itself is never touched by Lua: `rip-disc --scan` reads the
---     titles, `rip-disc --have` answers the auto-extras question, and
---     makemkvcon plus the rest of the chain live in rip.zsh.
+--     titles, `rip-disc --library` lists the movies an extra can attach to,
+--     `rip-disc --have` answers the auto-extras question, and makemkvcon
+--     plus the rest of the chain live in rip.zsh.
 --     Spec: docs/superpowers/specs/2026-08-20-rip-session-review-design.md.
 --   * The old consent alert + TMDB hs.chooser (tmdbNameAndRip,
 --     plainTitlePrompt, tmdbChoices, labelToQuery) are still here but no
@@ -84,7 +85,9 @@ local nextTaskId = 0
 local previewTimer = nil -- M.preview("scanning")'s populate timer (anchors it against GC)
 local scanTask = nil -- in-flight `rip-disc --scan` (anchors it against GC)
 local haveTask = nil -- in-flight `rip-disc --have` (anchors it against GC)
+local libraryTask = nil -- in-flight `rip-disc --library` (anchors it against GC)
 local sessionVolume = nil -- the volume the open session panel is reviewing
+local sessionState = nil -- the open session's payload; also the staleness token
 local planSeq = 0 -- monotonic suffix for plan temp files
 
 local function fileSize(p)
@@ -473,10 +476,29 @@ local sessionCallbacks = {
 	end,
 }
 
+-- A session panel is filled by TWO independent answers — the disc scan and
+-- the server's movie list — which are asked in parallel and land in either
+-- order. Both write into `sessionState` and then re-render, so whichever
+-- lands last paints a panel carrying both. session.show() on an open panel
+-- injects __setSession rather than rebuilding the webview, which is what
+-- makes a re-render free (no flicker, no lost key window, no lost typing).
+--
+-- The isShown() gate is the consent guard: the panel IS the consent dialog,
+-- so a reply arriving after the operator hit Esc must never reopen it and
+-- steal focus back (the preview timer's guard, same reasoning).
+local function renderSession()
+	if not sessionState or not session.isShown() then
+		return
+	end
+	session.show(sessionState, sessionCallbacks)
+end
+
 -- `rip-disc --scan` — makemkvcon's own title list, one JSON line per title.
 -- Absolute path and identity-anchored, exactly like the TMDB search task.
-local function runSessionScan(vol)
-	local label = volLabel(vol)
+-- `state` is the session this answer belongs to: a second disc replaces
+-- sessionState outright, and a late reply for the previous one must not
+-- write into the new session's panel.
+local function runSessionScan(state)
 	if scanTask then
 		scanTask:terminate()
 		scanTask = nil
@@ -486,16 +508,15 @@ local function runSessionScan(vol)
 		if scanTask == thisTask then
 			scanTask = nil
 		end
-		-- The scan takes a few seconds and the panel IS the consent dialog:
-		-- if the operator hit Esc meanwhile, session.show() here would
-		-- reopen a panel they already declined and steal focus back (the
-		-- preview timer's guard, same reasoning).
-		if not session.isShown() then
+		if sessionState ~= state then
 			return
 		end
+		state.scanning = false
 		if rc ~= 0 then
-			log.ef("disc scan failed rc=%d: %s", rc, label)
-			session.show({ volume = label, kind = "DVD", scanFailed = true }, sessionCallbacks)
+			log.ef("disc scan failed rc=%d: %s", rc, state.volume)
+			state.scanFailed = true
+			state.titles = {}
+			renderSession()
 			return
 		end
 		local titles = {}
@@ -505,20 +526,70 @@ local function runSessionScan(vol)
 				titles[#titles + 1] = obj
 			end
 		end
-		log.f("disc scan: %d title(s) on %s", #titles, label)
-		session.show({ volume = label, kind = "DVD", titles = titles }, sessionCallbacks)
+		log.f("disc scan: %d title(s) on %s", #titles, state.volume)
+		state.titles = titles
+		renderSession()
 	end, { "--scan" })
 	scanTask = thisTask
 	thisTask:start()
 end
 
--- Open the panel in its scanning state and start reading the disc. The panel
--- re-renders in place when the scan lands (session.show on an open panel
--- injects __setSession rather than rebuilding the webview).
+-- `rip-disc --library` — the movies the server already holds, one directory
+-- name per line. This is what an extra's attach chip offers, and on an
+-- EXTRAS-ONLY disc (the feature is already in the library, so there is no
+-- Feature row and no TMDB pick to inherit from) it is the only way to name
+-- an attach target at all: with no list, such a session cannot be started.
+--
+-- rc 2 means the listing could not run (unreachable server, no movies/): the
+-- panel gets an empty list and renders a disabled "library unavailable" chip
+-- rather than a picker that opens on nothing. Asked ONCE per session open,
+-- alongside the scan — one ssh round trip against seconds of drive time.
+local function runLibraryFetch(state)
+	if libraryTask then
+		libraryTask:terminate()
+		libraryTask = nil
+	end
+	local thisTask
+	thisTask = hs.task.new(RIP_DISC, function(rc, stdout)
+		if libraryTask == thisTask then
+			libraryTask = nil
+		end
+		if sessionState ~= state then
+			return
+		end
+		local movies = {}
+		if rc == 0 then
+			for line in (stdout or ""):gmatch("[^\n]+") do
+				-- Jellyfin's own layout is "<Name> (<Year>)" per directory.
+				-- A name that does not match still becomes an entry, title
+				-- only — the chip is a picker over what the server actually
+				-- holds, not a naming validator.
+				local title, year = line:match("^(.-)%s*%((%d%d%d%d)%)$")
+				if title and title ~= "" then
+					movies[#movies + 1] = { title = title, year = year }
+				else
+					movies[#movies + 1] = { title = line }
+				end
+			end
+			log.f("library: %d movie(s) on the server", #movies)
+		else
+			log.f("library list unavailable (rc=%s) — the attach chip will say so", tostring(rc))
+		end
+		state.library = movies
+		renderSession()
+	end, { "--library" })
+	libraryTask = thisTask
+	thisTask:start()
+end
+
+-- Open the panel in its scanning state, then ask the disc and the server in
+-- parallel; each answer re-renders the panel in place (renderSession).
 local function startSession(vol)
 	sessionVolume = vol
-	session.show({ volume = volLabel(vol), kind = "DVD", scanning = true }, sessionCallbacks)
-	runSessionScan(vol)
+	sessionState = { volume = volLabel(vol), kind = "DVD", scanning = true }
+	session.show(sessionState, sessionCallbacks)
+	runSessionScan(sessionState)
+	runLibraryFetch(sessionState)
 end
 
 local function considerVolume(vol)
@@ -730,7 +801,12 @@ function M.cleanup()
 		haveTask:terminate()
 		haveTask = nil
 	end
+	if libraryTask then
+		libraryTask:terminate()
+		libraryTask = nil
+	end
 	sessionVolume = nil
+	sessionState = nil
 	session.cleanup()
 end
 
@@ -750,6 +826,22 @@ function M.start()
 			considerVolume(info.path)
 		elseif event == hs.fs.volume.didUnmount and info and info.path then
 			declinedVolumes[info.path] = nil
+			-- The disc the open panel is reviewing just left the drive, so
+			-- the panel is asking about titles that no longer exist. Close
+			-- it — and clear sessionVolume FIRST, because onDismiss records
+			-- a decline for whatever sessionVolume names: ejecting with the
+			-- panel up and then pressing Esc would otherwise mark the disc
+			-- declined AFTER its unmount already cleared that flag, and the
+			-- NEXT insert of the same disc would be silently ignored (it
+			-- takes an eject to clear it, so the poisoning survives exactly
+			-- one insert). Decline-until-eject is unchanged for the normal
+			-- case: onDismiss with a mounted sessionVolume still records it.
+			if sessionVolume == info.path then
+				log.f("disc ejected while the session panel was open: %s", info.path)
+				sessionVolume = nil
+				sessionState = nil
+				session.hide()
+			end
 		end
 	end):start()
 	sweepIntermediate()

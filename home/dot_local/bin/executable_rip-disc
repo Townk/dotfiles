@@ -14,6 +14,7 @@
 #   rip-disc --worker "<title>"         auto: internal, the job body
 #   rip-disc --scan                     session: one JSON line per disc title
 #   rip-disc --have "<Movie (Year)>"    session: 0 have / 1 absent / 2 unknown
+#   rip-disc --library                  session: the server's movies, one per line
 #   rip-disc --session <plan.json>      session: enqueue the plan
 #   rip-disc --session-worker <plan>    session: internal, the job body
 
@@ -28,9 +29,10 @@ source "$RIP_LIB_DIR/rip.zsh" || {
 case "${1:-}" in
   --scan) rip::session_scan ;;
   --have) shift; rip::session_have "${1:?movie title required}" ;;
+  --library) rip::session_library ;;
   --session) shift; rip::session_enqueue "${1:?plan file required}" ;;
   --session-worker) shift; rip::session_worker "${1:?plan file required}" ;;
   --worker) shift; rip::disc_worker "${1:?title required}" ;;
-  "" | --help) print -ru2 -- 'usage: rip-disc "<Title (Year)>" | --scan | --have "<Movie (Year)>" | --session <plan.json>'; exit 2 ;;
+  "" | --help) print -ru2 -- 'usage: rip-disc "<Title (Year)>" | --scan | --have "<Movie (Year)>" | --library | --session <plan.json>'; exit 2 ;;
   *) rip::disc_enqueue "$1" ;;
 esac

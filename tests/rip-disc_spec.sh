@@ -106,6 +106,9 @@ EOF
     cat > "$RIP_SANDBOX/rsync" <<'EOF'
 #!/bin/sh
 case "$*" in *-rcn*) exit 0 ;; esac
+# RIP_FAKE_RSYNC_RC fails the TRANSFER only (the verify dry-run above has
+# already returned): the push-failure path, with everything published.
+[ -n "${RIP_FAKE_RSYNC_RC:-}" ] && exit "$RIP_FAKE_RSYNC_RC"
 lf="" a1="" a2=""
 for a in "$@"; do
   case "$a" in
@@ -251,6 +254,58 @@ EOF
     The stderr should include "slash"
   End
 
+  # --- --library: the movies the extras can attach to -----------------------
+
+  It '--library lists the movie directories the server already holds'
+    mkdir -p "$RIP_SANDBOX/server/movies/A Movie (2001)" \
+             "$RIP_SANDBOX/server/movies/Elvis TTWII (1970)"
+    When run zsh "$RIPBIN" --library
+    The status should equal 0
+    The line 1 of output should equal "A Movie (2001)"
+    The line 2 of output should equal "Elvis TTWII (1970)"
+  End
+
+  It '--library on a reachable but empty library prints nothing and exits 0'
+    When run zsh "$RIPBIN" --library
+    The status should equal 0
+    The output should equal ""
+  End
+
+  It '--library exits 2 when the listing itself cannot run (unknown, never guess)'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"; chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh "$RIPBIN" --library
+    The status should equal 2
+    The output should equal ""
+    The stderr should include "library"
+  End
+
+  # The remote branch end to end, through a fake ssh that runs the command the
+  # way sshd does — `/bin/sh -c "<command>"`. A base path with a SPACE in it
+  # is the point: only ${(q)} quoting survives that round trip, and the same
+  # quoting is what keeps a crafted path off cantina's shell.
+  It '--library quotes the remote path and asks with BatchMode'
+    mkdir -p "$RIP_SANDBOX/server dir/movies/A Movie (2001)"
+    export RIP_REMOTE_BASE="media@cantina:$RIP_SANDBOX/server dir"
+    export RIP_FAKE_SSH_LOG="$RIP_SANDBOX/ssh.log"; : > "$RIP_FAKE_SSH_LOG"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${RIP_FAKE_SSH_LOG:-/dev/null}"
+while [ $# -gt 0 ]; do
+  case "$1" in -o) shift 2 ;; *) break ;; esac
+done
+shift                      # the host
+exec /bin/sh -c "$*"       # sshd hands the command to a remote shell
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"; export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh "$RIPBIN" --library
+    The status should equal 0
+    The line 1 of output should equal "A Movie (2001)"
+    The contents of file "$RIP_FAKE_SSH_LOG" should include "BatchMode=yes"
+    The contents of file "$RIP_FAKE_SSH_LOG" should include "ConnectTimeout=5"
+  End
+
   # --- session worker ------------------------------------------------------
 
   It 'session worker: feature + two extras rip, encode, publish and push'
@@ -335,6 +390,39 @@ EOF
     The path "$RIP_SANDBOX/server/movies/U2 (2010)/extras/Trailer.mkv" should be exist
     The path "$RIP_SANDBOX/server/movies/U2 (2010)/extras/Squaring the Circle.mkv" should not be exist
     The path "$RIP_STAGING_ROOT/.work/session-encode.mkv" should not be exist
+    # The raw rips are 8-12 GB of dead weight the moment the session ends:
+    # nothing re-encodes from them, and nothing else ever reclaims them
+    # (ripper's sweepWork skips directories). A failure keeps the PUBLISHED
+    # items for a re-push, never the scratch.
+    The path "$RIP_STAGING_ROOT/.work/session" should not be exist
+  End
+
+  It 'session worker: a push failure keeps the published files and drops the rips'
+    export JOB_ID="job-session-pushfail"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_RSYNC_RC=23
+    write_plan <<'EOF'
+{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
+EOF
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 23
+    The stderr should include "rsync failed"
+    The stderr should include "session finished with failures"
+    # keep-for-retry: `rip-push movies` re-ships this with no re-encode
+    The path "$RIP_STAGING_ROOT/movies/U2 (2010)/U2 (2010).mkv" should be exist
+    The path "$RIP_STAGING_ROOT/.work/session" should not be exist
+  End
+
+  It 'session worker removes the queued plan file it was handed'
+    export JOB_ID="job-session-planrm"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    write_plan <<'EOF'
+{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
+EOF
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 0
+    The output should include "verified"
+    # .work/session-plans/ is outside the startup sweep by design, so the
+    # only thing that can reclaim a queued plan is the job that consumed it.
+    The path "$RIP_SANDBOX/plan.json" should not be exist
   End
 
   It 'session worker: a mid-session rip failure aborts the whole session'
@@ -408,9 +496,44 @@ EOF
     The path "$JOB_FAKE_LOG" should not be exist
   End
 
+  # BOTH ends of the duplicate rule (review finding, 2026-08-20): two extras
+  # with the same name and the same attach target compose the SAME published
+  # path, and the second publish's `mv -f` would silently overwrite the first
+  # — one rip discarded, worker rc 0, capsule 100. The panel gates it, and so
+  # does the plan validator, because a plan is a file that outlives the panel.
+  It '--session rejects two extras composing the same file and enqueues nothing'
+    write_plan <<'EOF'
+{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},
+ "extras":[{"no":2,"name":"Trailer","attachTo":"U2 (2010)"},
+           {"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
+ "skipped":[]}
+EOF
+    When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
+    The status should equal 2
+    The stderr should include "same file twice"
+    The path "$JOB_FAKE_LOG" should not be exist
+  End
+
+  It 'session worker: duplicate extras are refused before the disc is touched'
+    export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
+    write_plan <<'EOF'
+{"volume":"U2","feature":null,
+ "extras":[{"no":2,"name":"Trailer","attachTo":"U2 (2010)"},
+           {"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
+ "skipped":[]}
+EOF
+    When run zsh -c "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 2
+    The stderr should include "same file twice"
+    The contents of file "$RIP_FAKE_MKC_LOG" should equal ""
+    The path "$RIP_STAGING_ROOT/.work/session" should not be exist
+    # the worker owns the queued plan: rejected or ripped, it does not survive
+    The path "$RIP_SANDBOX/plan.json" should not be exist
+  End
+
   It '--session enqueues one heavy job and stages its own copy of the plan'
     titles() { cat "$JOB_STATE_ROOT"/*/meta.json 2>/dev/null; }
-    staged() { cat "$RIP_STAGING_ROOT"/.work/session-*.json 2>/dev/null; }
+    staged() { cat "$RIP_STAGING_ROOT"/.work/session-plans/session-*.json 2>/dev/null; }
     write_plan <<'EOF'
 {"volume":"U2_360_ROSE_BOWL",
  "feature":{"no":1,"movie":"U2 360 at the Rose Bowl (2010)"},
@@ -422,9 +545,13 @@ EOF
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group heavy"
     The contents of file "$JOB_FAKE_LOG" should include "/rip-disc --session-worker"
-    # the job's command line points at the STAGED copy under .work, never at
-    # the caller's temp file (which is gone by the time the job runs)
-    The contents of file "$JOB_FAKE_LOG" should include "/.work/session-"
+    # the job's command line points at the STAGED copy under
+    # .work/session-plans/, never at the caller's temp file (which is gone by
+    # the time the job runs). The SUBDIRECTORY is load-bearing: ripper's
+    # sweepWork() unlinks every plain file directly in .work at each
+    # Hammerspoon start, so a plan queued behind a long heavy job would not
+    # survive a reload if it were staged in .work itself.
+    The contents of file "$JOB_FAKE_LOG" should include "/.work/session-plans/session-"
     The result of function titles should include "rip session: U2 360 at the Rose Bowl (2010)"
     The result of function staged should include "Squaring the Circle"
   End

@@ -1287,6 +1287,51 @@ rip::session_have() {
   rip::_remote_has_file "movies/$movie/$movie.mkv"
 }
 
+# rip::session_library — the movies the server already holds, one directory
+# name per line ("Elvis TTWII (1970)"), in `ls` order.
+#
+# The panel's attach chip is what points an EXTRA at a movie, and on an
+# extras-only disc (the feature is already in the library, so there is no
+# Feature row and no TMDB pick to inherit) that chip is the ONLY way to name
+# an attach target — with no list to open, the session cannot be started at
+# all. So the list has to come from the one place that knows it: the server's
+# own movies/ directory. Jellyfin's layout is one directory per movie and
+# nothing else there, so `ls -1` IS the library.
+#
+# Same host/path split, ${(q)} quoting and BatchMode/ConnectTimeout as
+# rip::_remote_has_file (see its long note: an apostrophe in a movie title
+# and a network black hole are both routine here), and the same tri-state
+# honesty:
+#   rc 0  the listing ran — the lines printed are the library, and NO lines
+#         is a real answer ("the server has no movies yet")
+#   rc 2  the listing could not run at all (host unreachable, no movies/
+#         directory) — prints nothing, and the panel says so rather than
+#         showing an empty picker that looks like an empty library.
+rip::session_library() {
+  setopt localoptions noerrexit nopipefail
+  local base; base="$(rip::remote_base)"
+  local out rc line
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    local rdir="$rpath/movies"
+    out="$("$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 \
+      "$host" "ls -1 -- ${(q)rdir}" 2>/dev/null)"
+    rc=$?
+  else
+    # No ':' — the hermetic tests' plain local dir.
+    out="$(ls -1 -- "$base/movies" 2>/dev/null)"
+    rc=$?
+  fi
+  (( rc == 0 )) || { log_error "rip: could not list the movie library on the server"; return 2 }
+  # A here-string over an empty capture still feeds one empty line; drop it,
+  # so "reachable but empty" prints nothing at all.
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && print -r -- "$line"
+  done <<< "$out"
+  return 0
+}
+
 # rip::_plan_extras <plan.json> — the plan's extras as
 # "<no>\t<name>\t<attachTo>" lines. `.extras` is defended twice: absent, null
 # and (the real hazard) an EMPTY LIST are all the same thing here, because
@@ -1313,12 +1358,23 @@ rip::_validate_plan() {
   setopt localoptions noerrexit nopipefail
   local plan="$1"
   jq -e . "$plan" >/dev/null 2>&1 || { log_error "rip: session plan is not valid JSON: $plan"; return 2 }
-  local feat_movie feat_no no name attach n=0
+  local feat_movie feat_no no name attach rel n=0
+  # Every relpath this plan would compose, so a COLLISION can be caught here
+  # rather than discovered as a missing rip. Two extras sharing a name and an
+  # attach target compose the same movies/<attachTo>/extras/<Name>.mkv; the
+  # publish is an `mv -f`, so the second one would quietly overwrite the
+  # first and the worker would still exit 0 with a full capsule — an entire
+  # rip lost with nothing anywhere saying so (review finding, 2026-08-20).
+  # The feature's own path joins the set for completeness; it cannot collide
+  # with an extra's by construction, but the rule belongs to the SET of
+  # published paths, not to extras specifically.
+  local -A composed=()
   feat_movie="$(jq -r '.feature.movie // empty' "$plan")"
   feat_no="$(jq -r '(.feature.no // empty) | tostring' "$plan")"
   if [[ -n "$feat_movie" ]]; then
     rip::_check_title "$feat_movie" || return 2
     rip::_check_title_no "$feat_no" || return 2
+    composed["movies/$feat_movie/$feat_movie.mkv"]=1
   fi
   while IFS=$'\t' read -r no name attach; do
     [[ -n "$no$name$attach" ]] || continue
@@ -1327,6 +1383,12 @@ rip::_validate_plan() {
     # The attach target composes into movies/<attachTo>/extras/… exactly like
     # a feature title does, so it gets the title rule, not the name rule.
     rip::_check_title "$attach" || return 2
+    rel="movies/$attach/extras/$name.mkv"
+    if [[ -n "${composed["$rel"]-}" ]]; then
+      log_error "rip: session plan composes the same file twice: $rel"
+      return 2
+    fi
+    composed["$rel"]=1
     n=$(( n + 1 ))
   done < <(rip::_plan_extras "$plan")
   if [[ -z "$feat_movie" ]] && (( n == 0 )); then
@@ -1348,12 +1410,20 @@ rip::session_enqueue() {
 
   # The plan the panel hands us is a TEMP file written by Hammerspoon; the
   # job it launches may not run for minutes (the heavy group is serialized)
-  # and pueue stores the command LINE, not the file. Copy the plan into .work
-  # under a name of this enqueue's own before the path goes on a queue —
-  # .work is rip.zsh's scratch area, unwatched and never pushed, and a
-  # leftover from a job that never ran is swept at Hammerspoon startup with
-  # the rest of it.
-  local work_dir; work_dir="$(rip::staging_root)/.work"
+  # and pueue stores the command LINE, not the file. Copy the plan into a
+  # name of this enqueue's own before the path goes on a queue — .work is
+  # rip.zsh's scratch area, unwatched and never pushed.
+  #
+  # The SUBDIRECTORY is load-bearing, not tidiness: ripper/init.lua's
+  # sweepWork() unlinks every plain FILE sitting directly in .work at each
+  # Hammerspoon start (and reload), which is exactly right for the
+  # deterministic encode temps and push stamps — and exactly wrong for a
+  # queued plan, whose whole job is to outlive the panel and wait behind a
+  # two-hour heavy job. sweepWork skips directories, so a plan under
+  # .work/session-plans/ survives a reload; the worker removes its own copy
+  # when it has read it (rip::session_worker), which is the only thing that
+  # ever reclaims one.
+  local work_dir; work_dir="$(rip::staging_root)/.work/session-plans"
   mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
   local queued="$work_dir/session-$$-$RANDOM.json"
   cp -- "$plan" "$queued" || { log_error "rip: cannot stage the session plan at $queued"; return 1 }
@@ -1390,17 +1460,30 @@ rip::session_enqueue() {
 #   * ONE item's encode failure is that ITEM's failure. Remove its temp, log
 #     it, keep going with the rest, and remember the rc — a bad extra must
 #     never cost the operator the feature they already waited for.
-#   * A publish or push failure keeps the local file exactly where it is, for
-#     a plain `rip-push movies` retry with no re-encode.
-#   * .work/session is removed on FULL success only. After a failure the
-#     ripped titles stay: they are the expensive part (the whole disc pass),
-#     and .work is swept at the next Hammerspoon start anyway.
+#   * A publish or push failure keeps the PUBLISHED file exactly where it is,
+#     for a plain `rip-push movies` retry with no re-encode.
+#   * .work/session is removed on EVERY exit path. The published items are
+#     what a retry needs, and they are already keep-for-retry above; the raw
+#     rips under .work/session are 8–12 GB that nothing re-reads (a re-push
+#     never re-encodes) and that nothing else reclaims — ripper's sweepWork
+#     only unlinks plain files in .work and skips directories entirely, so
+#     "the next Hammerspoon start will clear it" was never true of this
+#     directory (review finding, 2026-08-20).
 rip::session_worker() {
   setopt localoptions noerrexit nopipefail
   rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
   local plan="$1"
   [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
-  rip::_validate_plan "$plan" || return 2
+  # This file is the job's OWN copy, staged by rip::session_enqueue under
+  # .work/session-plans/ — deliberately out of the startup sweep's reach, so
+  # this worker is the only thing that can ever reclaim it. It goes away as
+  # soon as it has been read, on every path: a rejected plan leaves its
+  # reason in the log (that is the artifact worth keeping), and a plan that
+  # parsed has nothing left to say once the arrays below exist.
+  if ! rip::_validate_plan "$plan"; then
+    rm -f -- "$plan"
+    return 2
+  fi
 
   # Items in rip order: the feature first, then the extras as the panel
   # ordered them. Three parallel arrays rather than one array of records —
@@ -1420,6 +1503,7 @@ rip::session_worker() {
     item_rel+=("movies/$attach/extras/$name.mkv")
     item_label+=("$attach — $name")
   done < <(rip::_plan_extras "$plan")
+  rm -f -- "$plan" # read in full: see the note above rip::_validate_plan's call
   local n=${#item_no}
   (( n > 0 )) || { log_error "rip: session plan selects nothing"; return 2 }
 
@@ -1568,12 +1652,17 @@ rip::session_worker() {
     print -r -- "rip: session published nothing new — nothing to push"
   fi
 
+  # The scratch goes either way. On success it is spent; on failure it is
+  # STILL spent — the retry path is `rip-push movies` over the published
+  # files, which never looks at .work/session, and keeping 8–12 GB of raw
+  # rips that no code path reads (and that no sweep removes: sweepWork skips
+  # directories) is not caution, it is a slow leak of the staging disk.
+  rm -rf -- "$sess_dir"
   if (( failed == 0 && push_rc == 0 )); then
-    rm -rf -- "$sess_dir"
     rip::_progress 100 "session done"
     return 0
   fi
-  log_error "rip: session finished with failures (items=$failed push=$push_rc) — ripped titles kept at $sess_dir"
+  log_error "rip: session finished with failures (items=$failed push=$push_rc) — published files kept for a plain \`rip-push movies\` retry"
   (( push_rc != 0 )) && return $push_rc
   return 1
 }

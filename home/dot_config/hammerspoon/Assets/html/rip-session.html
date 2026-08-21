@@ -209,11 +209,21 @@
       }
       // extra
       var target = attachFor(r);
-      var chip = target
-        ? '<span class="attach" data-attach="' + i + '">&rarr; ' + esc(target) + '</span>'
-        : (featureRow()
-          ? '<span class="attach" data-attach="' + i + '">&rarr; feature</span>'
-          : '<span class="attach open" data-attach="' + i + '">&rarr; choose movie&hellip;</span>');
+      var chip;
+      if (target) {
+        chip = '<span class="attach" data-attach="' + i + '">&rarr; ' + esc(target) + '</span>';
+      } else if (featureRow()) {
+        chip = '<span class="attach" data-attach="' + i + '">&rarr; feature</span>';
+      } else if (library.length === 0) {
+        // No feature to inherit from AND no library list (`rip-disc
+        // --library` could not reach the server, or movies/ is empty). The
+        // picker would open on nothing, so the chip is rendered as what it
+        // is — disabled, dimmed, carrying NO data-attach so it is not even
+        // clickable — instead of an inert control that swallows clicks.
+        chip = '<span class="attach" style="opacity:var(--dim)">&rarr; library unavailable</span>';
+      } else {
+        chip = '<span class="attach open" data-attach="' + i + '">&rarr; choose movie&hellip;</span>';
+      }
       var bad = (r.name !== '' && !nameValid(r.name)) ? ' invalid' : '';
       return '<div class="detail">'
         + '<input class="name-input' + bad + '" type="text" data-name="' + i + '"'
@@ -288,11 +298,32 @@
       // plan the pipeline would bounce after the operator committed.
       else if (feat && !nameValid(feat.movie.title)) { ok = false; reason = 'that title has a slash — pick another'; }
       else {
+        // Two extras composing the SAME movies/<Movie>/extras/<Name>.mkv is
+        // the one plan error the operator cannot see: downstream publishes
+        // by `mv -f`, so the second rip would overwrite the first and the
+        // job would still finish green, one title short. The key is the
+        // pair (attach target, trimmed name) — the same name under two
+        // different movies is two different files and perfectly fine.
+        // rip::_validate_plan enforces the identical rule on the queued
+        // plan file; this is the half that keeps the operator out of it.
+        var seen = Object.create(null);
         for (var j = 0; j < extras.length; j++) {
           if (!nameValid(extras[j].name)) { ok = false; reason = 'name every extra to enable Start'; break; }
           var at = attachFor(extras[j]);
-          if (!at) { ok = false; reason = 'choose the movie each extra attaches to'; break; }
+          if (!at) {
+            ok = false;
+            reason = library.length === 0
+              ? 'no movie library to attach these extras to'
+              : 'choose the movie each extra attaches to';
+            break;
+          }
           if (!nameValid(at)) { ok = false; reason = 'attached movie title has a slash — pick another'; break; }
+          // NUL joins the pair: no movie title and no extra name can
+          // contain one, so ("A B", "C") can never key the same as
+          // ("A", "B C").
+          var key = at + '\u0000' + String(extras[j].name).trim();
+          if (seen[key]) { ok = false; reason = 'two extras share a name'; break; }
+          seen[key] = true;
         }
       }
       return { feature: feat, extras: extras, skipped: skipped, libSkips: libSkips, ok: ok, reason: reason };
