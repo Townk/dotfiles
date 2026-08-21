@@ -209,17 +209,29 @@ end
 -- some later rip happens to overwrite it. Clearing it at startup means a
 -- reload is enough. Sweeping under a push that is somehow still running is
 -- safe: rip.zsh treats a missing stamp as "keep everything local".
+-- AGE GATE (post-incident, 2026-08-21): this sweep runs on EVERY reload,
+-- and reloads DO happen while heavy jobs run — a mid-encode hs.reload
+-- unlinked the session's in-flight encode temp, HandBrake finished into a
+-- deleted inode, and the publish mv found nothing (a whole disc pass
+-- lost). A live temp is written constantly, so its mtime stays fresh;
+-- debris from a killed job stops aging the moment the job dies. Only
+-- files quiet for SWEEP_MIN_AGE_S are debris.
+local SWEEP_MIN_AGE_S = 3600
 local function sweepWork()
 	local iter, dir = hs.fs.dir(WORK)
 	if not iter then
 		return
 	end
 	local swept = 0
+	local now = os.time()
 	for name in iter, dir do
 		if name ~= "." and name ~= ".." then
 			local p = WORK .. "/" .. name
 			local a = hs.fs.attributes(p)
-			if a and a.mode == "file" and os.remove(p) then
+			if a and a.mode == "file"
+				and (now - (a.modification or 0)) > SWEEP_MIN_AGE_S
+				and os.remove(p)
+			then
 				swept = swept + 1
 			end
 		end
