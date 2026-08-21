@@ -13,21 +13,23 @@
 --   * stall rendering must never do cold glyph I/O (resolver cache is
 --     shared with osd, which pre-warms the hourglass).
 --   * the cancel affordance never dims.
--- KNOWN ISSUE (observed live 2026-08-19): a brand-new `progress: "expected"`
--- job that never calls job::progress (a raw one-off, no sidecar writes at
--- all) can enqueue with NO capsule ever appearing, recoverable only via
--- `job::hud show`/toggle. armTimer()'s synchronous tick() -- run the instant
--- the pathwatcher re-arms a stopped timer -- can land in job::start's
--- mkdir-before-meta.json-write window; scanJobs() then reads 0 jobs and
--- tick() calls stopAll(), killing the timer it just started. A job that
--- calls job::progress gets more watcher events (its own tmp+mv sidecar
--- writes) to retry on; a silent one gets none until `result` lands, and by
--- then scanJobs already excludes it. Not a one-line fix: the honest options
--- are either a real grace window before trusting an empty first scan (this
--- module's GHOST_GRACE pattern, extended to cover "job dir exists but
--- meta.json isn't readable yet") or dropping armTimer()'s synchronous
--- initial tick() in favor of the timer's own first fire -- both are
--- behavior changes, not a condition fix.
+-- KNOWN ISSUE (observed live 2026-08-19, hardened 2026-08-20): capsules
+-- could fail to appear for a fresh job. Two mechanisms are closed:
+--   1. armTimer()'s synchronous tick() landing in job::start's mkdir-
+--      before-meta.json window read 0 jobs and stopAll()'d the timer it
+--      just started; a job that never writes a sidecar produced no
+--      further watcher event to recover on. Fixed: tick stands down only
+--      after two consecutive empty scans.
+--   2. stopAll() reset pueueByLabel but left the in-flight poll running;
+--      its callback then repopulated the snapshot post-reset with
+--      pre-enqueue data, so the next arm read a fresh job as
+--      `kind=nil -> gone` and stood down again (probe trace 2026-08-20).
+--      Fixed: stopAll retires the poll with the reset.
+-- Honesty note: the 2026-08-20 no-capsule reports (rip-extra encodes,
+-- 19:41/20:29) happened in an instance whose console was cleared before
+-- it could be read — mechanism 2 is the only one caught on tape, so if a
+-- capsule ever fails to show again: read the HS console FIRST, reload
+-- second.
 -- Interaction: ✕ cancels that job (via libexec/job -> pueue kill; the
 -- task's own TERM trap decides what cancel means). Mouse-down anywhere
 -- else on a capsule dismisses the whole stack without touching the tasks;
@@ -74,6 +76,7 @@ local canvases = {} -- id -> hs.canvas
 local hovered = {} -- id -> cancel-hover bool
 local knownIds = {} -- id -> true, every job id ever seen this session
 local knownIdsInitialized = false -- true once the first scan has populated knownIds
+local emptyScans = 0 -- consecutive ticks that scanned zero jobs (see tick's stand-down gate)
 
 local function readFile(path)
 	local f = io.open(path, "r")
@@ -359,9 +362,22 @@ local function stopAll()
 		timer = nil
 	end
 	for id in pairs(canvases) do dropCanvas(id) end
+	-- Retire any in-flight poll WITH the snapshot reset. Leaving it running
+	-- let its callback repopulate pueueByLabel after this reset with a
+	-- snapshot from BEFORE the reset — and a job enqueued in between then
+	-- read `kind=nil -> gone` on the next arm, killing its own freshly
+	-- armed timer (probe trace 2026-08-20 20:34:35: two consecutive
+	-- arm/stop cycles died exactly this way before the poll caught up).
+	-- The callback's `pollTask ~= me` identity guard drops the late reply.
+	if pollTask then
+		pollTask:terminate()
+		pollTask = nil
+		pollTaskStarted = nil
+	end
 	pueueByLabel = nil
 	pueueFails = 0
 	tickCount = 0
+	emptyScans = 0
 end
 
 local function repaint(job, index, now)
@@ -419,12 +435,24 @@ local function tick()
 
 	local jobs = scanJobs()
 	noteNewJobs(jobs)
-	if #jobs == 0 or pueueFails >= PUEUE_DEAD_AFTER then
-		-- Done-or-dead: nothing active, or the backbone is gone. Either way
-		-- the capsules must not linger.
+	if pueueFails >= PUEUE_DEAD_AFTER then
+		-- The backbone is gone: the capsules must not linger.
 		stopAll()
 		return
 	end
+	if #jobs == 0 then
+		-- Empty scan: stand down only after TWO consecutive ones. armTimer's
+		-- synchronous tick can land inside job::start's mkdir-before-
+		-- meta.json window (the KNOWN ISSUE above): a single-empty-scan
+		-- stopAll killed the timer the watcher just armed, and a job that
+		-- never writes a sidecar produced no further event to recover on.
+		-- One extra 0.25s tick re-scans past the window; genuinely idle
+		-- re-arms pay one spare tick and stand down as before.
+		emptyScans = emptyScans + 1
+		if emptyScans >= 2 then stopAll() end
+		return
+	end
+	emptyScans = 0
 
 	-- pueue says a labeled task is done/absent but no result file exists
 	-- (callback missed): drop that capsule anyway.
