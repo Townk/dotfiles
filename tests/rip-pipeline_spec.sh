@@ -43,6 +43,7 @@ exit 0
 EOF
     chmod +x "$RIP_SANDBOX/HandBrakeCLI"
     export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
+    export RIP_PTY_WRAP="" # hermetic: no real pty in tests (the disc suite's rule)
     cat > "$RIP_SANDBOX/rsync" <<'EOF'
 #!/bin/sh
 case "$*" in

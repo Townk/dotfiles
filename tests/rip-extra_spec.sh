@@ -58,6 +58,9 @@ case "$*" in
 esac
 EOF
     chmod +x "$RIP_SANDBOX/HandBrakeCLI"; export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
+    # Hermetic: no real pty in tests (the disc suite's rule). The pty-wrap
+    # example below overrides this with a logging fake.
+    export RIP_PTY_WRAP=""
 
     # copying fake (mirrors rip-push_spec.sh's fake_copy_rsync): actually
     # `cp`s the listed files from src to the local sandbox "remote" so a
@@ -157,6 +160,28 @@ EOF
     The contents of file "$RIP_FAKE_HB_LOG" should include "-t 2"
     The contents of file "$RIP_FAKE_HB_LOG" should include "$RIP_SANDBOX/dvd"
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "100"
+  End
+
+  # Live failure 2026-08-20 (U2 360°, capsule stall-grey at 10% for 46s):
+  # HandBrakeCLI block-buffers progress into a pipe — updates land in ~4KB
+  # bursts a minute apart, tripping the HUD's 3s stall rendering between
+  # them. The encode must run under the pty wrap (RIP_PTY_WRAP, default
+  # `script -q /dev/null`) so HB line-buffers — the same treatment
+  # makemkvcon already gets in the disc worker.
+  It 'encode runs under the pty wrap (HandBrake line-buffers only on a tty)'
+    export JOB_ID="job-extra-pty"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_PTY_LOG="$RIP_SANDBOX/pty.log"; : > "$RIP_FAKE_PTY_LOG"
+    cat > "$RIP_SANDBOX/ptywrap" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_PTY_LOG"
+exec "$@"
+EOF
+    chmod +x "$RIP_SANDBOX/ptywrap"
+    export RIP_PTY_WRAP="$RIP_SANDBOX/ptywrap"
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_FAKE_PTY_LOG" should include "HandBrakeCLI"
   End
 
   # Live failure 2026-08-20 (U2 360°, "no progress in the capsule"): every

@@ -768,7 +768,10 @@ rip::pipeline_worker() {
         log_error "rip: cancelled during encode — partial removed, intermediate kept: $input"
         exit 130' TERM INT
   local line pct
-  "$hb_bin" "${RIP_HB_ARGS[@]}" -i "$input" -o "$out_tmp" 2>&1 \
+  # pty wrap: see rip::_hb_dvd — piped HandBrake block-buffers progress
+  # into minute-apart bursts; a pty keeps the sidecar ticking steadily.
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  "${pty_wrap[@]}" "$hb_bin" "${RIP_HB_ARGS[@]}" -i "$input" -o "$out_tmp" 2>&1 \
     | LC_ALL=C tr '\r' '\n' \
     | while IFS= read -r line; do
         case "$line" in
@@ -969,7 +972,15 @@ rip::_dvd_volume() {
 rip::_hb_dvd() {
   local hb_bin="$1"; shift
   local dyld="${RIP_DYLD_FALLBACK_PATH:-/opt/homebrew/lib}"
-  sh -c 'export DYLD_FALLBACK_LIBRARY_PATH="$1"; shift; exec "$@"' \
+  # pty wrap (same seam and reason as the disc worker's makemkvcon):
+  # HandBrakeCLI block-buffers progress into a pipe — updates arrived in
+  # ~4KB bursts a minute apart, tripping the HUD's stall rendering between
+  # them (live 2026-08-20: capsule grey at 10% with a 46s-stale sidecar).
+  # Under a pty HB line-buffers and the sidecar ticks steadily. The scan
+  # path rides through harmlessly (its output is parsed after exit).
+  local -a pty_wrap=(${=RIP_PTY_WRAP-script -q /dev/null})
+  "${pty_wrap[@]}" \
+    sh -c 'export DYLD_FALLBACK_LIBRARY_PATH="$1"; shift; exec "$@"' \
     _ "$dyld" "$hb_bin" "$@"
 }
 
