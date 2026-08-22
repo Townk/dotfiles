@@ -1,0 +1,91 @@
+#!/usr/bin/env zsh
+# rip-provider-libation — the Audible/Libation acquire provider.
+#
+# THE PROVIDER CONTRACT (spec: 2026-08-22-audiobook-rip-design.md). Three
+# verbs, and nothing downstream of `acquire` knows which provider ran:
+#
+#   capabilities        one JSON object describing this provider
+#   list                JSON lines, one per owned title, common row schema
+#   acquire <id> <dir>  produce <dir>/<Author>/<Title>/…, emit
+#                       `progress <pct> <message>` lines, non-zero on failure
+#
+# `set-status` IS BANNED HERE AND EVERYWHERE (spec, Global Constraints): it
+# derives liberation status from files-on-disk, and this pipeline
+# deliberately empties staging after a verified push — one run would mark
+# the whole library un-liberated and queue a full re-download.
+
+set -eu -o pipefail
+
+LIB_BIN="${RIP_LIBATION_BIN:-/Applications/Libation.app/Contents/MacOS/LibationCli}"
+IMAGES="${RIP_LIBATION_IMAGES:-$HOME/Library/Application Support/Libation/Images}"
+VERSION="13.7.10"
+
+die() { print -ru2 -- "rip-provider-libation: $*"; exit 3 }
+
+need_bin() { [[ -x "$LIB_BIN" ]] || die "LibationCli not found at $LIB_BIN" }
+
+cmd_capabilities() {
+  jq -nc --arg v "$VERSION" \
+    '{name: "libation", version: $v, can_acquire: true, needs_gui: false}'
+}
+
+# Rows come from ONE `export -j` call — 460 titles in a single invocation,
+# never a call per title. BookStatus is Libation's own view of what it has
+# downloaded; whether cantina holds it is a different question, answered by
+# rip-audiobook --server-library.
+cmd_list() {
+  need_bin
+  # Not `local`: the EXIT trap fires after this function returns, and a
+  # local var is already out of scope by then — under `set -u` that reads
+  # as an unset-parameter error, not a silent no-op.
+  tmp="$(mktemp -t riplib)"
+  trap 'rm -f -- "$tmp"' EXIT INT TERM
+  "$LIB_BIN" export -j -p "$tmp" >/dev/null 2>&1 \
+    || die "LibationCli export failed"
+  # Which cover thumbnails Libation has already cached, as a JSON array of
+  # picture ids. Computed ONCE here so the row builder below can pick
+  # cache-or-CDN per title without a filesystem test per row (and without
+  # any request at all for a cached one).
+  local cached
+  cached="$(print -rl -- "$IMAGES"/*_80x80.jpg(N:t:r) \
+    | sed 's/_80x80$//' | jq -R . | jq -sc .)"
+  [[ -n "$cached" ]] || cached='[]'
+  jq -c --arg images "$IMAGES" --arg v "$VERSION" --argjson cached "$cached" '
+    .[]
+    | (.AuthorNames // "" | split(",")[0] | gsub("^\\s+|\\s+$"; "")) as $author
+    # The <title> token composes "Title: Subtitle" — the folder on disk and
+    # on the server carries BOTH (Global Constraints). $title is the bare
+    # field for display; $folder is the path component.
+    | (.Title // "") as $title
+    | (if (.Subtitle // "") == "" then $title else "\($title): \(.Subtitle)" end) as $folder
+    | (.PictureId // "") as $pic
+    | {id: (.AudibleProductId // ""),
+       title: $title,
+       subtitle: (if (.Subtitle // "") == "" then null else .Subtitle end),
+       authors: (.AuthorNames // "" | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))),
+       narrators: (.NarratorNames // "" | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))),
+       duration_s: ((.LengthInMinutes // 0) * 60),
+       series: (if (.SeriesNames // "") == "" then null else .SeriesNames end),
+       series_position: (if (.SeriesOrder // "") == "" then null
+                         else (.SeriesOrder | split(":")[0] | gsub("^\\s+|\\s+$"; "")) end),
+       language: (.Language // null),
+       abridged: (.IsAbridged // false),
+       has_pdf: (.HasPdf // false),
+       cover: (if $pic == "" then null
+               elif ($cached | index($pic)) then "file://\($images)/\($pic)_80x80.jpg"
+               else "https://m.media-amazon.com/images/I/\($pic).jpg" end),
+       acquired: ((.BookStatus // "") == "Liberated"),
+       acquired_utc: (.LastDownloaded // null),
+       ids: {"audible.asin": (.AudibleProductId // "")},
+       path: "\($author)/\($folder)",
+       provider: "libation",
+       provider_version: $v,
+       format: "m4b"}' "$tmp"
+}
+
+case "${1:-}" in
+  capabilities) cmd_capabilities ;;
+  list) cmd_list ;;
+  "" | --help) print -ru2 -- 'usage: rip-provider-libation capabilities | list | acquire <id> <destdir>'; exit 2 ;;
+  *) die "unknown verb: $1" ;;
+esac
