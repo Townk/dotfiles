@@ -1479,7 +1479,7 @@ EOF
       rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should be exist
-    The stderr should include "hop_boom"
+    The stderr should include "enrichment hop failed: hop_boom"
   End
 
   It 'enrichment: an UNregistered file is neither pushed nor deleted'
