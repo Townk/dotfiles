@@ -1405,9 +1405,9 @@ EOF
     printf '%s\n' '{"path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"narrators":["MacLeod Andrews"],"duration_s":45720,"series":"Reckoners","series_position":"1","language":"en","abridged":false,"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' \
       > "$RIP_SANDBOX/index.jsonl"
     export RIP_AB_META_INDEX="$RIP_SANDBOX/index.jsonl"
-    When run zsh -c "source $RIPLIB && rip::_book_meta_for 'Brandon Sanderson/Steelheart' > $RIP_SANDBOX/m.json && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.schema,.kind,.title,.ids[\"audible.asin\"],.work,.source.provider]' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run zsh -c "source $RIPLIB && rip::_book_meta_for 'Brandon Sanderson/Steelheart' > $RIP_SANDBOX/m.json && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.schema,.kind,.title,.ids[\"audible.asin\"],.work,.source.provider,.abridged]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
-    The output should equal '[1,"audiobook","Steelheart","B00ECDZ08I",null,"libation"]'
+    The output should equal '[1,"audiobook","Steelheart","B00ECDZ08I",null,"libation",false]'
   End
 
   It 'sidecar: minimal identity when the book is not in the index'
@@ -1432,7 +1432,7 @@ EOF
   It 'sidecar: re-running leaves the file byte-identical'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"ids":{},"provider":"unknown","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && sleep 1 && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && [ ! -e $RIP_SANDBOX/bk/.fleet-book.json.tmp ] && echo stable"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && mtime1=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && sleep 1 && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && mtime2=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && [ -z \"\$(find $RIP_SANDBOX/bk -name '.fleet-book.json.tmp.*' 2>/dev/null)\" ] && [ \"\$mtime1\" = \"\$mtime2\" ] && echo stable"
     The status should equal 0
     The output should equal "stable"
   End

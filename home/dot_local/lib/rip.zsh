@@ -406,7 +406,7 @@ rip::_book_sidecar() {
                 else {name: $r.series, position: ($r.series_position // null)} end),
        duration_s: ($r.duration_s // null),
        language: ($r.language // null),
-       abridged: ($r.abridged // null),
+       abridged: (if ($r|has("abridged")) then $r.abridged else null end),
        ids: ($r.ids // {}),
        work: null,
        source: {provider: ($r.provider // "unknown"),
