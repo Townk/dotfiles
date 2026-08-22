@@ -78,6 +78,12 @@ EOF
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
+  # ssh_calls() — how many times the fake ssh ran. --server-library must
+  # make exactly ONE ssh call regardless of library size (the panel's
+  # hide-filter is a set-membership test against its output; 460 rows must
+  # never become 460 round-trips).
+  ssh_calls() { wc -l < "$RIP_SANDBOX/ssh.count" 2>/dev/null | tr -d ' '; }
+
   It 'provider: capabilities describes itself'
     When run zsh "$PROVIDER" capabilities
     The status should equal 0
@@ -140,5 +146,68 @@ EOF
     When run zsh "$PROVIDER" acquire B00ECDZ08I "$RIP_STAGING_ROOT/audiobooks"
     The status should equal 4
     The stderr should include "download failed"
+  End
+
+  It 'CLI: --library passes the provider rows through'
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --library
+    The status should equal 0
+    The line 1 should include '"id":"B00ECDZ08I"'
+  End
+
+  It 'CLI: --server-library lists Author/Title with ONE ssh call'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cd "$RIP_SANDBOX/server/audiobooks" || exit 2
+find . -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||'
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-library
+    The status should equal 0
+    The output should equal "Brandon Sanderson/Steelheart"
+    The result of function ssh_calls should equal "1"
+  End
+
+  It 'CLI: --server-library works against a plain local remote base'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B" "$RIP_SANDBOX/server/audiobooks/A/C"
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-library
+    The status should equal 0
+    The output should include "A/B"
+    The output should include "A/C"
+  End
+
+  # CONTROLLER OVERRIDE of the brief's local-directory NFC example: macOS
+  # APFS path lookup is normalization-insensitive, so an NFD query finds an
+  # NFC file whether or not rip::ab_have (via rip::_remote_has_file) ever
+  # normalizes anything — that example cannot fail against a broken
+  # rip::_nfc. Exercised on the ssh branch instead, mirroring
+  # tests/rip-push_spec.sh's 'remote-existence check NFC-normalizes its
+  # relpath (NFD local vs NFC server)': a byte-strict fake ssh answers
+  # "exists" ONLY to the composed (NFC) bytes, and the call is made with
+  # the decomposed (NFD) form — the real server (ext4 over ssh) is
+  # byte-strict, so this is the shape that made rip::_remote_has_file
+  # NFC-normalize in the first place.
+  It 'CLI: --have is tri-state and NFC-normalizes the path (ssh branch, byte-strict)'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<FAKESSH
+#!/bin/sh
+case "\$*" in
+  *"audiobooks/$(printf 'Ant\xc3\xb4nio')/Livro/Livro.m4b"*) exit 0 ;;
+esac
+exit 1
+FAKESSH
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::ab_have \"\$(printf 'Anto\xcc\x82nio/Livro')\"; echo rc=\$?"
+    The status should equal 0
+    The output should equal "rc=0"
+  End
+
+  It 'CLI: --have reports absent'
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --have "Nobody/Nothing"
+    The status should equal 1
   End
 End

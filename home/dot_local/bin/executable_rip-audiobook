@@ -1,0 +1,40 @@
+#!/usr/bin/env zsh
+# rip-audiobook — acquire audiobooks from a provider and push them to
+# cantina as ONE observable job:: job. Thin by design: behavior lives in
+# rip.zsh (the rip-disc pattern).
+#
+#   rip-audiobook --library                 provider rows, JSON lines
+#   rip-audiobook --server-library          <Author>/<Title> cantina holds
+#   rip-audiobook --have "<Author>/<Title>" 0 have / 1 absent / 2 unknown
+#   rip-audiobook --session <plan.json>     enqueue a session
+#   rip-audiobook --session-worker <plan>   internal: the job body
+#
+# --provider <name> selects the provider (default: libation).
+
+set -eu -o pipefail
+
+RIP_LIB_DIR="${RIP_LIB_DIR:-$HOME/.local/lib}"
+source "$RIP_LIB_DIR/rip.zsh" || {
+  print -ru2 -- "rip-audiobook: cannot source rip.zsh from $RIP_LIB_DIR"
+  exit 1
+}
+
+provider=""
+if [[ "${1:-}" == "--provider" ]]; then
+  shift
+  provider="${1:?--provider: name required}"
+  shift
+fi
+
+case "${1:-}" in
+  --library) rip::ab_library "$provider" ;;
+  --server-library) rip::ab_server_library ;;
+  --have) shift; rip::ab_have "${1:?book path required}" ;;
+  --session) shift; rip::ab_enqueue "${1:?plan file required}" ;;
+  --session-worker) shift; rip::ab_worker "${1:?plan file required}" ;;
+  "" | --help)
+    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --server-library | --have "<Author>/<Title>" | --session <plan.json>'
+    exit 2
+    ;;
+  *) print -ru2 -- "rip-audiobook: unknown option: $1"; exit 2 ;;
+esac

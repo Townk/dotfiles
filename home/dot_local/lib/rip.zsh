@@ -1971,3 +1971,82 @@ rip::session_worker() {
   (( push_rc != 0 )) && return $push_rc
   return 1
 }
+
+# --- audiobook provider seam -----------------------------------------------
+#
+# A provider is ONE executable, ~/.local/libexec/rip-provider-<name>,
+# implementing capabilities / list / acquire (spec). Everything downstream
+# of acquire is provider-blind, which is what lets a second store (a
+# DRM-free seller, or the `manual` importer) arrive as a new file rather
+# than a rewrite of this one.
+RIP_LIBEXEC_DIR="${RIP_LIBEXEC_DIR:-$HOME/.local/libexec}"
+
+# rip::ab_provider_bin [name] — absolute path to the named provider's
+# executable (default: $RIP_AB_PROVIDER, else "libation"). Chezmoi's source
+# names carry the executable_ prefix; the deployed name does not. Accept
+# either so the suite can run against the source tree without a chezmoi
+# apply.
+rip::ab_provider_bin() {
+  local name="${1:-${RIP_AB_PROVIDER:-libation}}"
+  case "$name" in
+    */* | "" | . | ..) log_error "rip: bad provider name: $name"; return 2 ;;
+  esac
+  local p
+  for p in "$RIP_LIBEXEC_DIR/rip-provider-$name" "$RIP_LIBEXEC_DIR/executable_rip-provider-$name"; do
+    [[ -f "$p" ]] && { print -r -- "$p"; return 0 }
+  done
+  log_error "rip: no such provider: $name"
+  return 2
+}
+
+# rip::ab_library [name] — the provider's JSON lines, passed through
+# unmodified (the panel's own jq does the shaping).
+rip::ab_library() {
+  setopt localoptions noerrexit nopipefail
+  local bin; bin="$(rip::ab_provider_bin "${1:-}")" || return 2
+  zsh "$bin" list
+}
+
+# rip::ab_server_library — every <Author>/<Title> cantina holds, from ONE
+# ssh. The panel's hide filter is a set-membership test against this, never
+# a --have per row: 460 rows would be 460 round-trips and a panel that
+# takes a minute to open. The audiobook library is two levels deep
+# (<Author>/<Title>) where movies are one — that is why this needs its own
+# function rather than reusing rip::session_library. Same host/path split,
+# ${(q)} quoting and BatchMode/ConnectTimeout as rip::_remote_has_file /
+# rip::session_library, and the plain-local-dir fallback the hermetic tests
+# rely on.
+rip::ab_server_library() {
+  setopt localoptions noerrexit nopipefail
+  local base; base="$(rip::remote_base)"
+  local out rc line
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    local rdir="$rpath/audiobooks"
+    out="$("$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 \
+      "$host" "cd ${(q)rdir} && find . -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||'" 2>/dev/null)"
+    rc=$?
+  else
+    # No ':' — the hermetic tests' plain local dir.
+    out="$(cd "$base/audiobooks" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')"
+    rc=$?
+  fi
+  (( rc == 0 )) || { log_error "rip: could not list the audiobook library on the server"; return 2 }
+  # A here-string over an empty capture still feeds one empty line; drop it,
+  # so "reachable but empty" prints nothing at all.
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && print -r -- "$line"
+  done <<< "$out"
+  return 0
+}
+
+# rip::ab_have <Author/Title> — tri-state, the rip-disc --have shape: 0
+# have / 1 confirmed absent / 2 unknown, straight through from
+# rip::_remote_has_file. The .m4b is named after the title, which is the
+# relpath's last segment.
+rip::ab_have() {
+  local rel="$1"
+  [[ -n "$rel" ]] || { log_error "rip: empty book path"; return 2 }
+  rip::_remote_has_file "audiobooks/$rel/${rel:t}.m4b"
+}
