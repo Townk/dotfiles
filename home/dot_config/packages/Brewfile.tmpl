@@ -137,6 +137,7 @@ cask 'obs'                          # Studio
 # Other Apps
 cask 'affinity'                     # Vector and Image editor
 cask 'autodesk-fusion'              # 3D modeling
+cask 'openscad@snapshot'            # 3D modeling
 cask 'bambu-studio'                 # 3D Printing
 cask 'claude'                       # AI for developers desktop app
 cask 'discord'                      # Chat (a more open Slack)
@@ -187,6 +188,14 @@ cask 'musicbrainz-picard'           # Tag editor for after-the-fact fixes over
                                     # the cantina SMB share (fingerprint lookup
                                     # for loose files — the one thing XLD can't
                                     # do; see fleet runbooks/rip-media.md)
+
+# Audiobooks — NOT disc ripping (server half is cantina's `audiobooks`
+# service; fleet spec docs/superpowers/specs/2026-08-21-audiobookshelf-design.md).
+# Libation downloads and decrypts the Audible library to M4B with chapters
+# intact, laid out Author/Title/ for Audiobookshelf's scanner. Unlike the
+# makemkv/xld casks above, this one is healthy — no Gatekeeper deprecation.
+# It also ships LibationCli (headless), the seam an automated push would use.
+cask 'libation'                     # Audible -> M4B, chapters preserved
 {{- end }}
 
 cask '1password'                    # Password manager
