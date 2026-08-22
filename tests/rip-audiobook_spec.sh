@@ -234,6 +234,20 @@ FAKESSH
     The stderr should include "may not be . or .."
   End
 
+  # author/title are derived from the FIRST/LAST slash only
+  # (${bpath%%/*} / ${bpath##*/}), so a middle "../../etc" segment is
+  # silently dropped by the split and never reaches rip::_check_title:
+  # "A/../../etc/passwd" splits clean to author "A" title "passwd". Only
+  # the roundtrip check (author/title reassembles to the original bpath)
+  # catches this (review finding, 2026-08-22).
+  It 'plan: rejects a mid-string traversal payload the split alone would miss'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/../../etc/passwd"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    The status should equal 2
+    The stderr should include "must be exactly <Author>/<Title>"
+    The path "$JOB_FAKE_LOG" should not be exist
+  End
+
   It 'plan: rejects two items composing the same book path'
     printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B"},{"id":"Y","path":"A/B"}]}' > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
@@ -255,5 +269,28 @@ FAKESSH
     When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function queued_plans should equal "1"
+  End
+
+  # The "n > 0" empty-selection guard, hit directly with a well-formed but
+  # empty items array — distinct from the missing-FILE example above,
+  # which never reaches plan content at all.
+  It 'plan: rejects a plan whose items array is empty'
+    printf '%s\n' '{"provider":"libation","items":[]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    The status should equal 2
+    The stderr should include "selects nothing"
+  End
+
+  # A malformed item (no id, no path) must be REJECTED, not silently
+  # dropped from validation — the blanket "both empty, skip" the earlier
+  # implementation had would let a batch of one good item plus one "{}"
+  # enqueue one book short with no error at all (review finding,
+  # 2026-08-22).
+  It 'plan: rejects an item with neither id nor path, and enqueues nothing'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B"},{}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    The status should equal 2
+    The stderr should include "plan item has no id"
+    The path "$JOB_FAKE_LOG" should not be exist
   End
 End

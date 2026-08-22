@@ -2069,7 +2069,12 @@ rip::_validate_ab_plan() {
   # repo's zsh (5.9.999.3-test) before landing.
   local id bpath author title n=0
   while IFS=$'\t' read -r id bpath; do
-    [[ -n "$id$bpath" ]] || continue
+    # No blanket "both empty, skip" here: well-formed jq @tsv output over
+    # an array never emits a genuinely blank line, so a blank id here
+    # means a malformed item (e.g. "{}") that must be REJECTED, not
+    # silently dropped from validation — a batch of one good item plus
+    # one "{}" would otherwise enqueue one book short with no error at
+    # all (review finding, 2026-08-22).
     [[ -n "$id" ]] || { log_error "rip: plan item has no id"; return 2 }
     author="${bpath%%/*}"; title="${bpath##*/}"
     # A book path is exactly two segments, each of which becomes a
@@ -2077,9 +2082,20 @@ rip::_validate_ab_plan() {
     # (no slash, never . or ..) — "../etc/x" splits to author ".." and
     # would compose staging/audiobooks/Books/../etc, escaping the tree.
     [[ "$bpath" == */* ]] || { log_error "rip: book path must be <Author>/<Title>: $bpath"; return 2 }
-    [[ "$author" == */* || "$title" == */* ]] && { log_error "rip: book path must be exactly <Author>/<Title>: $bpath"; return 2 }
     rip::_check_title "$author" || return 2
     rip::_check_title "$title" || return 2
+    # author/title above are derived from the FIRST and LAST slash only
+    # (${bpath%%/*} / ${bpath##*/}), so a MIDDLE segment is silently
+    # dropped by the split and never reaches rip::_check_title at all:
+    # "A/../../etc/passwd" splits to author "A" title "passwd", both
+    # individually clean, and would compose straight through to the
+    # staging tree — a traversal hole (review finding, 2026-08-22). The
+    # roundtrip below is what actually enforces "exactly two segments":
+    # reassembling author/title must reproduce bpath byte-for-byte, or
+    # something in the middle was lost. Ordered AFTER rip::_check_title
+    # so a bad first/last segment (e.g. "..") still reports its own
+    # specific reason rather than the generic segment-count one.
+    [[ "$author/$title" == "$bpath" ]] || { log_error "rip: book path must be exactly <Author>/<Title>: $bpath"; return 2 }
     if [[ -n "${composed["$bpath"]-}" ]]; then
       log_error "rip: session plan composes the same book twice: $bpath"
       return 2
