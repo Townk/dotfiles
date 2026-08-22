@@ -175,7 +175,13 @@ rip::push_worker() {
 
   rip::_progress 0 "pushing $type"
   local line pct file
-  "$rsync_bin" -a --partial --exclude=.DS_Store --files-from="$listfile" \
+  # --iconv=utf-8-mac,utf-8 on BOTH rsync invocations (here and the
+  # verify): the library is NFC-canonical. A macOS-decomposed (NFD) staged
+  # name shipped byte-identically leaves the server holding a file the
+  # macOS SMB client cannot OPEN — it lists NFD but opens NFC, so Samba
+  # byte-compares and 404s (live 2026-08-21: Picard ENOENT on "05 Há
+  # quanto tempo.flac" through the metadata-fix share).
+  "$rsync_bin" -a --iconv=utf-8-mac,utf-8 --partial --exclude=.DS_Store --files-from="$listfile" \
       --info=progress2,name1 "$src/" "$dest" \
     | LC_ALL=C tr '\r' '\n' \
     | while IFS= read -r line; do
@@ -232,7 +238,9 @@ rip::_verify_and_clean() {
   # The verify must see exactly the tree the push shipped, so the two rsync
   # calls have to agree on --exclude and the file list; otherwise excluded
   # or unlisted files show up as differences and the clean never runs.
-  if ! diffs="$("$rsync_bin" -rcn --exclude=.DS_Store --files-from="$listfile" \
+  # --iconv matches the push: the verify must compare against the
+  # NFC names the push created, or every accented file reads "missing".
+  if ! diffs="$("$rsync_bin" -rcn --iconv=utf-8-mac,utf-8 --exclude=.DS_Store --files-from="$listfile" \
       --out-format='%n' "$src/" "$dest" 2>&1)"; then
     log_error "rip: verify pass failed to run for $type — keeping local files"
     rm -f -- "$listfile"
@@ -303,8 +311,10 @@ rip::_verify_and_clean() {
 # finds (live 2026-08-21, XLD-converted Jota Quest album). iconv's
 # utf-8-mac codec is exactly the NFD→NFC leg; already-composed text passes
 # through unchanged. Best-effort: on any iconv failure the original text
-# stands. SAFE ONLY FOR QUERY/DISPLAY TEXT — filesystem and server paths
-# come from on-disk names, which stay NFD; never normalize those.
+# stands. Contract (revised 2026-08-21, NFC-canonical server): normalize
+# QUERY/DISPLAY text and REMOTE/server paths (the push ships NFC via
+# rsync --iconv, so server names ARE composed); never normalize LOCAL
+# staging paths — those must keep matching the on-disk bytes.
 rip::_nfc() {
   local out
   if out="$(print -rn -- "$1" | iconv -f utf-8-mac -t utf-8 2>/dev/null)" \
@@ -454,7 +464,12 @@ rip::_remote_has_file() {
   # rip::session_have (the `rip-disc --have` body) is a bare helper call
   # straight from the bin, which is where the gap showed up.
   setopt localoptions noerrexit nopipefail
-  local relpath="$1"
+  # The server is NFC-canonical (the push's --iconv guarantees it), but
+  # this relpath is composed from LOCAL folder names, which macOS keeps in
+  # whatever form they were created (often NFD). Normalize before asking,
+  # or a present NFC file reads "confirmed absent" — and for the cover
+  # check that verdict green-lights a refetch over curated art.
+  local relpath; relpath="$(rip::_nfc "$1")"
   local base; base="$(rip::remote_base)"
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"

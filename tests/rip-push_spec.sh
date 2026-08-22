@@ -781,6 +781,58 @@ EOF
   # lookups (LRCLIB especially) match bytes, so NFD queries missed lyrics
   # that NFC finds. _track_meta must hand out NFC; paths never come from
   # tags (fs-derived reldirs), so normalizing here is query-only.
+  # Companion to the --iconv rule: the server is NFC-canonical, but the
+  # remote-existence checks compose their relpaths from LOCAL folder names
+  # — which can be NFD. Unnormalized, the cover check would read a
+  # present NFC cover.jpg as "confirmed absent" and refetch over curated
+  # art. _remote_has_file must NFC-normalize the relpath it asks about.
+  It 'remote-existence check NFC-normalizes its relpath (NFD local vs NFC server)'
+    enrich_setup
+    # ssh mode ON PURPOSE: local-dir mode cannot catch this — macOS APFS
+    # path lookup is normalization-insensitive, so an NFD path finds an
+    # NFC file and the example passes with or without the fix. The real
+    # server (ext4 over ssh) is byte-strict; the fake ssh below stands in
+    # for it, answering "exists" ONLY to the composed (NFC) bytes.
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<FAKESSH
+#!/bin/sh
+case "\$*" in
+  *"music/$(printf 'P\xc3\xa9')/artist.jpg"*) exit 0 ;;
+esac
+exit 1
+FAKESSH
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::_remote_has_file \"music/$(printf 'Pe\xcc\x81')/artist.jpg\""
+    The status should equal 0
+  End
+
+  # Live 2026-08-21 (Picard over the SMB share): a staged file named in
+  # macOS-decomposed Unicode (NFD) ships byte-identically, and the server
+  # then holds a name the macOS SMB client cannot OPEN — it lists NFD but
+  # opens NFC, so Samba byte-compares and 404s. The library is
+  # NFC-canonical from here on: both rsync invocations (push AND verify)
+  # must translate names on the wire via --iconv=utf-8-mac,utf-8.
+  It 'push and verify rsync both normalize names on the wire (--iconv)'
+    export RIP_PUSH_MIN_AGE_S=0
+    mkdir -p "$RIP_STAGING_ROOT/music/N/Alb"
+    printf 'x' > "$RIP_STAGING_ROOT/music/N/Alb/01 T.flac"
+    export RIP_FAKE_RSYNC_ARGS="$RIP_SANDBOX/rsync-args.log"
+    : > "$RIP_FAKE_RSYNC_ARGS"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_FAKE_RSYNC_ARGS"
+case "$*" in *-rcn*) exit 0 ;; *) exit 0 ;; esac
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The output should include "verified"
+    The line 1 of contents of file "$RIP_FAKE_RSYNC_ARGS" should include "--iconv=utf-8-mac,utf-8"
+    The line 2 of contents of file "$RIP_FAKE_RSYNC_ARGS" should include "--iconv=utf-8-mac,utf-8"
+  End
+
   # Live 2026-08-21 (Spirit of Africa): the transfer group runs 4 wide, and
   # a second music push enqueued mid-transfer of the first read the same
   # staged files — then had them verify-DELETED from under its rsync
