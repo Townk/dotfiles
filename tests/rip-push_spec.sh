@@ -54,6 +54,15 @@ EOF
     print -r -- "${#f}"
   }
 
+  # server_file_count() — every regular file the server holds under
+  # audiobooks/, dotfiles included. The no-op assertion needs an EXACT
+  # count, not just "the sidecar is there": a hop-free enrichment pass must
+  # add one file and not one byte more.
+  server_file_count() {
+    local -a f=("$RIP_SANDBOX"/server/audiobooks/**/*(DN.))
+    print -r -- "${#f}"
+  }
+
   # mb_*_call_count() — read back the counter files the MB-retry regression
   # tests' fake curl scripts bump on each call to the given endpoint, so an
   # example can assert the retry actually fired (count 2) rather than just
@@ -1435,5 +1444,61 @@ EOF
     When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && mtime1=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && sleep 1 && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && mtime2=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && [ -z \"\$(find $RIP_SANDBOX/bk -name '.fleet-book.json.tmp.*' 2>/dev/null)\" ] && [ \"\$mtime1\" = \"\$mtime2\" ] && echo stable"
     The status should equal 0
     The output should equal "stable"
+  End
+
+  It 'enrichment with no hops changes exactly one thing: the sidecar appears'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    printf 'art\n'   > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.jpg"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should equal "audio"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/B.jpg" should equal "art"
+    The path "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should be exist
+    The result of function server_file_count should equal "3"
+  End
+
+  It 'enrichment: a hop that adds a registered file gets it pushed and cleaned'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB
+      hop_note() { printf 'note\n' > \"\$1/note.txt\"; rip::_enrich_add \"\$3/note.txt\"; }
+      RIP_AB_ENRICH_HOPS=(hop_note)
+      rip::push_worker audiobooks"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/note.txt" should equal "note"
+    The path "$RIP_STAGING_ROOT/audiobooks/Books/A/B/note.txt" should not be exist
+  End
+
+  It 'enrichment: a failing hop is logged and never fails the push'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB
+      hop_boom() { return 1; }
+      RIP_AB_ENRICH_HOPS=(hop_boom)
+      rip::push_worker audiobooks"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should be exist
+    The stderr should include "hop_boom"
+  End
+
+  It 'enrichment: an UNregistered file is neither pushed nor deleted'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB
+      hop_sneaky() { printf 'x\n' > \"\$1/sneaky.txt\"; }
+      RIP_AB_ENRICH_HOPS=(hop_sneaky)
+      rip::push_worker audiobooks"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/A/B/sneaky.txt" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/Books/A/B/sneaky.txt" should be exist
+  End
+
+  It 'enrichment: music pushes are untouched by the audiobook stage'
+    mkdir -p "$RIP_STAGING_ROOT/music/Artist/Album"
+    printf 'flac\n' > "$RIP_STAGING_ROOT/music/Artist/Album/01 T.flac"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/music/Artist/Album/.fleet-book.json" should not be exist
   End
 End

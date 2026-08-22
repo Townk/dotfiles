@@ -178,6 +178,8 @@ rip::push_worker() {
 
   if [[ "$type" == music ]]; then
     rip::_enrich_music "$src" "$listfile" || log_warn "rip: enrich pass had failures — pushing anyway"
+  elif [[ "$type" == audiobooks ]]; then
+    rip::_enrich_audiobooks "$src" "$listfile" || log_warn "rip: enrich pass had failures — pushing anyway"
   fi
 
   local marker; marker="$(rip::staging_root)/.work/push-$type.stamp"
@@ -430,6 +432,77 @@ rip::_book_sidecar() {
   print -r -- "$merged" > "$tmp" || { rm -f -- "$tmp"; return 1 }
   mv -f -- "$tmp" "$sidecar" || { rm -f -- "$tmp"; return 1 }
   return 0
+}
+
+# --- audiobook enrichment --------------------------------------------------
+#
+# TWO registries, both EMPTY today, because the deletion doctrine forces the
+# distinction (spec):
+#   RIP_AB_ENRICH_HOPS  local, pre-push: runs while the files are still here.
+#   RIP_AB_REMOTE_HOPS  post-verify: runs against cantina, for anything too
+#                       heavy for the laptop (force-alignment, X-ray index).
+# After a verified push the local copy is GONE, so a future stage that needs
+# the audio must live in one of these two slots. Naming both now is what
+# stops someone later discovering there is nowhere to put it.
+#
+# Hop contract (inherited verbatim from the music enrichment's hard-won
+# rules): idempotent, best-effort — a failure logs and continues and NEVER
+# fails the push — bounded, and ADDITIVE: a hop may modify files in place or
+# add files inside the book dir, and every file it adds must be registered
+# with rip::_enrich_add or it will be neither pushed nor cleaned.
+typeset -ga RIP_AB_ENRICH_HOPS
+typeset -ga RIP_AB_REMOTE_HOPS
+(( ${+RIP_AB_ENRICH_HOPS} )) || RIP_AB_ENRICH_HOPS=()
+(( ${+RIP_AB_REMOTE_HOPS} )) || RIP_AB_REMOTE_HOPS=()
+
+# rip::_enrich_add <relpath> — register a file (relative to the type's
+# staging dir) into the running push's list, so it is pushed, verified and
+# cleaned as part of the same fixed set. The music enrichment's cover.jpg /
+# artist.jpg idiom, made a function now that third-party hops need it.
+rip::_enrich_add() {
+  local rel="$1"
+  [[ -n "${RIP_ENRICH_LISTFILE:-}" ]] || return 0
+  grep -qxF -- "$rel" "$RIP_ENRICH_LISTFILE" 2>/dev/null \
+    || print -r -- "$rel" >> "$RIP_ENRICH_LISTFILE"
+}
+
+# rip::_enrich_audiobooks <src> <listfile> — per book dir holding listed
+# files: write the identity sidecar, then run each local hop. The book dir
+# set is derived from the LISTFILE (the age gate's admitted set), never a
+# directory glob — the same rule the music stage follows, so a book still
+# being written is invisible to this pass.
+rip::_enrich_audiobooks() {
+  setopt localoptions noerrexit nopipefail
+  local src="$1" listfile="$2"
+  local -a rels=()
+  local rel
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] && rels+=("${rel:h}")
+  done < "$listfile"
+  local -a dirs=(${(u)rels})
+  (( ${#dirs} )) || return 0
+
+  local RIP_ENRICH_LISTFILE="$listfile"
+  local d meta hop failed=0
+  for d in "${dirs[@]}"; do
+    [[ -d "$src/$d" ]] || continue
+    meta="$(rip::staging_root)/.work/book-meta.$$.json"
+    mkdir -p "${meta:h}"
+    if rip::_book_meta_for "$d" > "$meta" 2>/dev/null \
+       && rip::_book_sidecar "$src/$d" "$meta"; then
+      rip::_enrich_add "$d/.fleet-book.json"
+    else
+      log_warn "rip: could not write the identity sidecar for $d"
+      failed=1
+    fi
+    rm -f -- "$meta"
+    for hop in "${RIP_AB_ENRICH_HOPS[@]}"; do
+      (( $+functions[$hop] )) || { log_warn "rip: no such enrichment hop: $hop"; failed=1; continue }
+      "$hop" "$src/$d" "$src/$d/.fleet-book.json" "$d" \
+        || { log_warn "rip: enrichment hop failed: $hop ($d)"; failed=1 }
+    done
+  done
+  return $failed
 }
 
 rip::_track_meta() {
