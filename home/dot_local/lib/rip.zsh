@@ -215,7 +215,21 @@ rip::push_worker() {
     rm -f -- "$listfile"
     return $rc
   fi
+  # Snapshot the pushed set before the verify: _verify_and_clean removes
+  # the listfile on EVERY exit path, and the remote hops need to know what
+  # landed. Copied to a sibling name so the two never share a path.
+  local hooklist=""
+  if [[ "$type" == audiobooks ]] && (( ${#RIP_AB_REMOTE_HOPS} )); then
+    hooklist="$listfile.hooks"
+    cp -- "$listfile" "$hooklist" 2>/dev/null || hooklist=""
+  fi
   rip::_verify_and_clean "$type" "$src" "$dest" "$marker" "$listfile"
+  local vrc=$?
+  if (( vrc == 0 )) && [[ -n "$hooklist" ]]; then
+    rip::_enrich_audiobooks_remote "$hooklist"
+  fi
+  [[ -n "$hooklist" ]] && rm -f -- "$hooklist"
+  return $vrc
 }
 
 # rip::_verify_and_clean <type> <src> <dest> <marker> <listfile> — deleting
@@ -503,6 +517,31 @@ rip::_enrich_audiobooks() {
     done
   done
   return $failed
+}
+
+# rip::_enrich_audiobooks_remote <listfile> — the post-verify slot. The
+# files are on cantina and the local copies are gone, so a hop here works
+# against REMOTE paths: it is handed the remote base and every relpath the
+# push landed. Failure is logged and swallowed by contract — the push
+# already delivered everything it promised, and a stalled aligner must not
+# turn a successful transfer into a failed job.
+rip::_enrich_audiobooks_remote() {
+  setopt localoptions noerrexit nopipefail
+  local listfile="$1"
+  (( ${#RIP_AB_REMOTE_HOPS} )) || return 0
+  [[ -f "$listfile" ]] || return 0
+  local -a rels=()
+  local rel hop
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] && rels+=("$rel")
+  done < "$listfile"
+  (( ${#rels} )) || return 0
+  for hop in "${RIP_AB_REMOTE_HOPS[@]}"; do
+    (( $+functions[$hop] )) || { log_warn "rip: no such remote hop: $hop"; continue }
+    "$hop" "$(rip::remote_base)" "${rels[@]}" \
+      || log_warn "rip: remote enrichment hop failed: $hop (files are on the server regardless)"
+  done
+  return 0
 }
 
 rip::_track_meta() {

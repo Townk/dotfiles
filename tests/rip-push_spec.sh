@@ -1501,4 +1501,54 @@ EOF
     The status should equal 0
     The path "$RIP_SANDBOX/server/music/Artist/Album/.fleet-book.json" should not be exist
   End
+
+  # --- enrichment: post-verify remote hops ----------------------------------
+
+  It 'remote hops run after a clean verify, with the pushed relpaths'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB
+      hop_remote() { printf '%s\n' \"\$@\" > $RIP_SANDBOX/remote.log; }
+      RIP_AB_REMOTE_HOPS=(hop_remote)
+      rip::push_worker audiobooks"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/remote.log" should include "$RIP_SANDBOX/server"
+    The contents of file "$RIP_SANDBOX/remote.log" should include "A/B/B.m4b"
+  End
+
+  It 'remote hops never run when the verify found differences'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+case "$*" in *-rcn*) echo "A/B/B.m4b"; exit 0 ;; esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    When run zsh -c "source $RIPLIB
+      hop_remote() { printf 'ran\n' > $RIP_SANDBOX/remote.log; }
+      RIP_AB_REMOTE_HOPS=(hop_remote)
+      rip::push_worker audiobooks"
+    The status should not equal 0
+    The path "$RIP_SANDBOX/remote.log" should not be exist
+    The stderr should include "verify found differences"
+  End
+
+  # hop_boom writes hop.log ITSELF (rather than the test merely grepping
+  # stderr for its name) — "no such remote hop: hop_boom" would ALSO put
+  # the substring "hop_boom" on stderr, so a defect that silently skips an
+  # undefined-looking hop must be provable by more than name-matching.
+  # Writing the file is only possible if the hop function actually ran.
+  It 'a failing remote hop never fails the job — the files are already safe'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB
+      hop_boom() { printf 'boomed\n' > $RIP_SANDBOX/hop.log; return 9; }
+      RIP_AB_REMOTE_HOPS=(hop_boom)
+      rip::push_worker audiobooks"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/hop.log" should equal "boomed"
+    The stderr should include "hop_boom"
+  End
 End
