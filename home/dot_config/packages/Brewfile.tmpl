@@ -183,6 +183,10 @@ brew 'libdvdcss'                    # CSS decryption — lets HandBrake read
                                     # the brew lib; set up 2026-08-19)
 cask 'xld'                          # CD -> FLAC with MusicBrainz tagging
 brew 'flac'                         # metaflac — the enrichment stage's tag/art embedder
+cask 'musicbrainz-picard'           # Tag editor for after-the-fact fixes over
+                                    # the cantina SMB share (fingerprint lookup
+                                    # for loose files — the one thing XLD can't
+                                    # do; see fleet runbooks/rip-media.md)
 {{- end }}
 
 cask '1password'                    # Password manager
