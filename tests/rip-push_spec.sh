@@ -781,6 +781,63 @@ EOF
   # lookups (LRCLIB especially) match bytes, so NFD queries missed lyrics
   # that NFC finds. _track_meta must hand out NFC; paths never come from
   # tags (fs-derived reldirs), so normalizing here is query-only.
+  # Live 2026-08-21 (Spirit of Africa): the transfer group runs 4 wide, and
+  # a second music push enqueued mid-transfer of the first read the same
+  # staged files — then had them verify-DELETED from under its rsync
+  # (rc 24 "file has vanished"; every file was already safe via the first
+  # push, but the loser failed a job and alarmed the operator). Same-type
+  # pushes must SERIALIZE: a blocking flock, taken BEFORE the file list is
+  # built, so the waiter globs post-clean staging and ships only the new.
+  It 'concurrent same-type pushes serialize instead of racing (rc-24 vanish)'
+    export RIP_PUSH_MIN_AGE_S=0
+    export RIP_FAKE_RSYNC_ORDER="$RIP_SANDBOX/order.log"
+    : > "$RIP_FAKE_RSYNC_ORDER"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+case "$*" in *-rcn*) exit 0 ;; esac
+printf 'start\n' >> "$RIP_FAKE_RSYNC_ORDER"
+sleep 1
+lf=""
+for a in "$@"; do case "$a" in --files-from=*) lf="${a#--files-from=}";; esac; done
+src=""; dst=""
+for a in "$@"; do case "$a" in -*|--*) continue;; *) [ -z "$src" ] && src="$a" || dst="$a";; esac; done
+if [ -n "$lf" ] && [ -n "$src" ] && [ -n "$dst" ]; then
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    mkdir -p "$dst/$(dirname "$rel")"
+    cp "$src/$rel" "$dst/$rel"
+  done < "$lf"
+fi
+printf 'end\n' >> "$RIP_FAKE_RSYNC_ORDER"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    serialize_run() {
+      mkdir -p "$RIP_STAGING_ROOT/music/Art/Alpha"
+      printf 'a' > "$RIP_STAGING_ROOT/music/Art/Alpha/01 One.flac"
+      zsh -c "source $RIPLIB && rip::push_worker music" >/dev/null 2>&1 &
+      local first=$!
+      sleep 0.3
+      mkdir -p "$RIP_STAGING_ROOT/music/Art/Beta"
+      printf 'b' > "$RIP_STAGING_ROOT/music/Art/Beta/01 Two.flac"
+      zsh -c "source $RIPLIB && rip::push_worker music" >/dev/null 2>&1
+      local rc2=$?
+      wait $first
+      local rc1=$?
+      printf '%s %s\n' "$rc1" "$rc2"
+    }
+    When call serialize_run
+    The output should equal "0 0"
+    # strict serialization: start end start end — never start start
+    The line 1 of contents of file "$RIP_FAKE_RSYNC_ORDER" should equal "start"
+    The line 2 of contents of file "$RIP_FAKE_RSYNC_ORDER" should equal "end"
+    The line 3 of contents of file "$RIP_FAKE_RSYNC_ORDER" should equal "start"
+    The line 4 of contents of file "$RIP_FAKE_RSYNC_ORDER" should equal "end"
+    The path "$RIP_SANDBOX/server/music/Art/Alpha/01 One.flac" should be exist
+    The path "$RIP_SANDBOX/server/music/Art/Beta/01 Two.flac" should be exist
+  End
+
   # Live 2026-08-21 (the real root of the lyrics corruption): pueue spawns
   # workers with NO locale — under C, metaflac transliterates non-ASCII on
   # BOTH read (queries became "A'i c^e falou" → LRCLIB misses) and write

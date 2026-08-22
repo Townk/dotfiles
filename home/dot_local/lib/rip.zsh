@@ -110,6 +110,29 @@ rip::push_worker() {
   dest="$(rip::remote_base)/$type/"
   [ -d "$src" ] || { log_error "rip: no staging dir $src"; return 1 }
 
+  # SERIALIZE same-type pushes (live 2026-08-21, Spirit of Africa): the
+  # transfer group runs 4 wide, and a second music push enqueued while the
+  # first was mid-transfer listed the same staged files — then had them
+  # verify-DELETED out from under its rsync (rc 24 "file has vanished").
+  # Nothing was lost (the first push had verified every byte before
+  # deleting) but the loser failed a job over files that were already
+  # safe. A BLOCKING flock taken BEFORE the list is built makes the
+  # second push wait and then glob the post-clean staging, shipping only
+  # what is genuinely new. The fd releases the lock at process exit on
+  # every path, kills included. Touched on acquire so sweepWork's age
+  # gate never reaps a lock file that sees regular use.
+  zmodload zsh/system 2>/dev/null
+  local push_lock_fd push_lock
+  push_lock="$(rip::staging_root)/.work/push-$type.lock"
+  mkdir -p "${push_lock:h}"
+  # touch BEFORE flock: zsystem flock does not create the file (verified
+  # live — ENOENT on first use), and the fresh mtime doubles as the
+  # sweepWork age-gate protection.
+  touch "$push_lock" 2>/dev/null
+  if zmodload -e zsh/system; then
+    zsystem flock -f push_lock_fd "$push_lock" 2>/dev/null
+  fi
+
   # AGE GATE (spec UX-v2, live-bitten 2026-08-19): a half-written track that
   # holds still for the ~2s push+verify window can ship truncated and be
   # verify-deleted from under its writer. Only files that have been quiet
