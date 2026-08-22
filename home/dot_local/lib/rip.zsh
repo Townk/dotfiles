@@ -339,6 +339,99 @@ rip::_nfc() {
   fi
 }
 
+# --- audiobook identity ----------------------------------------------------
+#
+# Every book folder carries .fleet-book.json: WHO this book is, independent
+# of where it was bought. Two levels on purpose (spec):
+#   ids  — EDITION identity, namespaced per source (audible.asin, isbn13, …),
+#          so the same book from two stores gains a key, not a second folder.
+#   work — WORK identity (openlibrary / wikidata), null at ingest. An
+#          audiobook's ASIN and its ebook's ISBN are different editions of
+#          one work and never match each other, so this is the key the
+#          future whispersync and X-ray services join on. A later resolver
+#          hop fills it; NOTHING here may ever overwrite a resolved one.
+# NOT metadata.json — Audiobookshelf reserves that name for its own import
+# format and would read ours as instructions.
+
+# rip::_book_meta_for <relpath> — one JSON object for the book at
+# <Author>/<Title>. The provider's rows, when a session wrote them, live in
+# the JSON-lines index at $RIP_AB_META_INDEX keyed by `path`. There is no
+# index on the watcher path (a title liberated through Libation's own GUI),
+# and an import provider may have none either, so a MINIMAL identity derived
+# from the path is a first-class outcome, not an error: the folder names are
+# the only truth available and they are still worth recording.
+rip::_book_meta_for() {
+  setopt localoptions noerrexit nopipefail
+  local rel; rel="$(rip::_nfc "$1")"
+  local idx="${RIP_AB_META_INDEX:-}"
+  local row=""
+  if [[ -n "$idx" && -f "$idx" ]]; then
+    row="$(jq -c --arg p "$rel" 'select((.path // "") == $p)' "$idx" 2>/dev/null | head -1)"
+  fi
+  if [[ -n "$row" ]]; then
+    print -r -- "$row"
+    return 0
+  fi
+  jq -nc --arg author "${rel%%/*}" --arg title "${rel##*/}" \
+    '{path: ($author + "/" + $title), title: $title, authors: [$author],
+      ids: {}, provider: "unknown", format: "m4b"}'
+}
+
+# rip::_book_sidecar <book_dir> <meta_json_file> — write or MERGE the
+# sidecar. Merge rule: the existing file wins at every depth (jq's `*` with
+# the old object on the right), which is what protects a resolved `work` and
+# any ids a different source contributed. New keys from the provider row
+# fill gaps; nothing already recorded is rewritten.
+#
+# Byte-stability matters beyond tidiness: this runs on EVERY push of a book
+# folder, and a sidecar that churned would re-enter the push set forever and
+# make "the enrichment stage is a no-op" untestable. Unchanged content is
+# left completely alone — same bytes, same mtime.
+rip::_book_sidecar() {
+  setopt localoptions noerrexit nopipefail
+  local dir="$1" meta="$2"
+  local sidecar="$dir/.fleet-book.json"
+  [[ -d "$dir" ]] || { log_error "rip: no such book dir: $dir"; return 1 }
+  [[ -f "$meta" ]] || { log_error "rip: no such book meta: $meta"; return 1 }
+
+  local built
+  built="$(jq -n --slurpfile m "$meta" '
+    ($m[0] // {}) as $r
+    | {schema: 1, kind: "audiobook",
+       title: ($r.title // ""),
+       subtitle: ($r.subtitle // null),
+       authors: ($r.authors // []),
+       narrators: ($r.narrators // []),
+       series: (if ($r.series // "") == "" then null
+                else {name: $r.series, position: ($r.series_position // null)} end),
+       duration_s: ($r.duration_s // null),
+       language: ($r.language // null),
+       abridged: ($r.abridged // null),
+       ids: ($r.ids // {}),
+       work: null,
+       source: {provider: ($r.provider // "unknown"),
+                provider_version: ($r.provider_version // null),
+                acquired_utc: ($r.acquired_utc // null),
+                format: ($r.format // "m4b")}}' 2>/dev/null)" \
+    || { log_error "rip: could not build a sidecar for $dir"; return 1 }
+
+  local merged="$built"
+  if [[ -f "$sidecar" ]] && jq -e . "$sidecar" >/dev/null 2>&1; then
+    merged="$(jq -n --argjson new "$built" --slurpfile old "$sidecar" \
+      '$new * ($old[0] // {})' 2>/dev/null)" \
+      || { log_error "rip: could not merge the sidecar at $sidecar"; return 1 }
+  fi
+
+  # Unchanged → touch nothing at all.
+  if [[ -f "$sidecar" ]] && [[ "$merged" == "$(cat "$sidecar")" ]]; then
+    return 0
+  fi
+  local tmp="$sidecar.tmp.$$"
+  print -r -- "$merged" > "$tmp" || { rm -f -- "$tmp"; return 1 }
+  mv -f -- "$tmp" "$sidecar" || { rm -f -- "$tmp"; return 1 }
+  return 0
+}
+
 rip::_track_meta() {
   local mf="${RIP_METAFLAC_BIN:-metaflac}" f="$1"
   local artist album title date year samples rate dur=0

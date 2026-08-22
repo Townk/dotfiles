@@ -1399,4 +1399,41 @@ EOF
     The output should not include "rel2="
     The output should not include "artist_rel="
   End
+
+  It 'sidecar: written from the meta index, work key null at ingest'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf '%s\n' '{"path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"narrators":["MacLeod Andrews"],"duration_s":45720,"series":"Reckoners","series_position":"1","language":"en","abridged":false,"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' \
+      > "$RIP_SANDBOX/index.jsonl"
+    export RIP_AB_META_INDEX="$RIP_SANDBOX/index.jsonl"
+    When run zsh -c "source $RIPLIB && rip::_book_meta_for 'Brandon Sanderson/Steelheart' > $RIP_SANDBOX/m.json && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.schema,.kind,.title,.ids[\"audible.asin\"],.work,.source.provider]' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal '[1,"audiobook","Steelheart","B00ECDZ08I",null,"libation"]'
+  End
+
+  It 'sidecar: minimal identity when the book is not in the index'
+    mkdir -p "$RIP_SANDBOX/bk"
+    export RIP_AB_META_INDEX="$RIP_SANDBOX/missing.jsonl"
+    When run zsh -c "source $RIPLIB && rip::_book_meta_for 'Some Author/Some Title' > $RIP_SANDBOX/m.json && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.title,.authors,.ids,.work,.source.provider]' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal '["Some Title",["Some Author"],{},null,"unknown"]'
+  End
+
+  It 'sidecar: merge never clobbers a resolved work key or foreign ids'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"Steelheart","ids":{"audible.asin":"B00ECDZ08I","isbn13":"9780593344",  "librofm.id":"x1"},"work":{"openlibrary":"OL15168631W"},"source":{"provider":"libation"}}' \
+      | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
+    printf '%s\n' '{"path":"A/B","title":"Steelheart","authors":["Brandon Sanderson"],"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' \
+      > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.work.openlibrary,.ids[\"librofm.id\"],.authors]' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal '["OL15168631W","x1",["Brandon Sanderson"]]'
+  End
+
+  It 'sidecar: re-running leaves the file byte-identical'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"ids":{},"provider":"unknown","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && sleep 1 && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && [ ! -e $RIP_SANDBOX/bk/.fleet-book.json.tmp ] && echo stable"
+    The status should equal 0
+    The output should equal "stable"
+  End
 End
