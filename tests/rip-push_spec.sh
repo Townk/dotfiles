@@ -12,7 +12,8 @@ Describe 'rip.zsh push'
     export JOB_STATE_ROOT="$RIP_SANDBOX/state"
     export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
     mkdir -p "$RIP_STAGING_ROOT/movies" "$RIP_STAGING_ROOT/music" \
-             "$RIP_SANDBOX/server/movies" "$RIP_SANDBOX/server/music"
+             "$RIP_STAGING_ROOT/audiobooks/Books" \
+             "$RIP_SANDBOX/server/movies" "$RIP_SANDBOX/server/music" "$RIP_SANDBOX/server/audiobooks"
     cat > "$RIP_SANDBOX/pueue" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
@@ -93,6 +94,35 @@ EOF
     The output should not equal ""
     The result of function titles should include "rip push: movies"
     The result of function titles should include "rip push: music"
+  End
+
+  It 'maps staging dirs per type, absorbing Libation Books level'
+    When run zsh -c "source $RIPLIB && rip::staging_for movies && rip::staging_for music && rip::staging_for audiobooks"
+    The status should equal 0
+    The line 1 should equal "$RIP_STAGING_ROOT/movies"
+    The line 2 should equal "$RIP_STAGING_ROOT/music"
+    The line 3 should equal "$RIP_STAGING_ROOT/audiobooks/Books"
+  End
+
+  It 'accepts audiobooks as a type and enqueues from the Books level'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart"
+    touch "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+    When run zsh -c "source $RIPLIB && rip::push_enqueue audiobooks"
+    The status should equal 0
+    The output should not equal ""
+    The contents of file "$JOB_FAKE_LOG" should include "--group transfer"
+    The result of function titles should include "rip push: audiobooks"
+    The contents of file "$JOB_FAKE_LOG" should include "/rip-push --worker audiobooks"
+  End
+
+  It 'pushes audiobooks to the server WITHOUT the Books level'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart"
+    touch "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
+    The stdout should include "verified"
   End
 
   It 'worker streams progress into the job sidecar'

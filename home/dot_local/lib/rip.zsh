@@ -40,6 +40,20 @@ RIP_BIN_DIR="${RIP_BIN_DIR:-$HOME/.local/bin}"
 rip::staging_root() { print -r -- "${RIP_STAGING_ROOT:-$HOME/Depot/Rips}"; }
 rip::remote_base()  { print -r -- "${RIP_REMOTE_BASE:-media@cantina:/srv/media}"; }
 
+# rip::staging_for <type> — the staging dir for a media type. movies and
+# music are <root>/<type>; audiobooks carries ONE extra level because
+# Libation always creates a "Books" directory under its configured Books
+# folder and that is not configurable. Absorbing it here (rather than
+# renaming directories under a running downloader) keeps every caller
+# using one accessor and keeps the REMOTE path Books-free — the server
+# layout is audiobooks/<Author>/<Title>/, per the fleet spec.
+rip::staging_for() {
+  case "$1" in
+    audiobooks) print -r -- "${RIP_AB_STAGING:-$(rip::staging_root)/audiobooks/Books}" ;;
+    *) print -r -- "$(rip::staging_root)/$1" ;;
+  esac
+}
+
 rip::_load_jobs() {
   [ -n "${__JOB_ZSH_LOADED:-}" ] && return 0
   local lib="$RIP_LIB_SELF_DIR/job.zsh"
@@ -61,7 +75,7 @@ rip::_progress() {
 
 rip::_check_type() {
   case "$1" in
-    movies | music) return 0 ;;
+    movies | music | audiobooks) return 0 ;;
     *) log_error "rip: unknown type: $1"; return 2 ;;
   esac
 }
@@ -72,7 +86,7 @@ rip::_check_type() {
 rip::push_enqueue() {
   local type="$1"
   rip::_check_type "$type" || return 2
-  local src; src="$(rip::staging_root)/$type"
+  local src; src="$(rip::staging_for "$type")"
   local -a files=("$src"/**/*(N.))
   if (( ${#files} == 0 )); then
     print -r -- "rip: nothing to push for $type"
@@ -106,7 +120,7 @@ rip::push_worker() {
   local type="$1"
   rip::_check_type "$type" || return 2
   local src dest rsync_bin="${RIP_RSYNC_BIN:-rsync}"
-  src="$(rip::staging_root)/$type"
+  src="$(rip::staging_for "$type")"
   dest="$(rip::remote_base)/$type/"
   [ -d "$src" ] || { log_error "rip: no staging dir $src"; return 1 }
 
