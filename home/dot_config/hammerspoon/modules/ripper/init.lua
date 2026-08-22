@@ -56,6 +56,7 @@ local HOME = os.getenv("HOME")
 local ROOT = HOME .. "/Depot/Rips"
 local INTERMEDIATE = ROOT .. "/intermediate"
 local MUSIC = ROOT .. "/music"
+local AUDIOBOOKS = ROOT .. "/audiobooks/Books"
 local WORK = ROOT .. "/.work"
 local RIP_PIPELINE = HOME .. "/.local/bin/rip-pipeline"
 local RIP_PUSH = HOME .. "/.local/bin/rip-push"
@@ -71,12 +72,20 @@ local STABLE_SECS = 30
 -- restart the timer. Keeping this above the age gate guarantees the timer
 -- can never fire before the gate would already admit the content.
 local MUSIC_QUIET_SECS = 120
+-- Same invariant as MUSIC_QUIET_SECS: must exceed rip.zsh's
+-- RIP_PUSH_MIN_AGE_S (default 90s), or a single quiet book could fire the
+-- timer, hit "nothing settled", and leave nothing behind to re-arm it.
+-- Libation moves finished files in from its own InProgress directory, so
+-- partial files are never visible here — this debounce is noise control,
+-- not a completeness check.
+local AUDIOBOOK_QUIET_SECS = 120
 
 local log = hs.logger.new("ripper", "info")
 local declined = {} -- path -> size at decline time
 local declinedVolumes = {} -- volume path -> true until unmount
 local pending = {} -- path -> stability timer object while one runs (anchors it against GC)
 local musicTimer = nil
+local audiobookTimer = nil
 local searchTask = nil -- in-flight rip-tmdb-search hs.task (anchors it, cancels the previous one)
 local chooser = nil -- open TMDB hs.chooser (anchors it against GC while shown)
 local chooserDebounce = nil -- debounce timer for the chooser's queryChangedCallback
@@ -162,6 +171,15 @@ local function armMusicTimer()
 	end)
 end
 
+local function armAudiobookTimer()
+	if audiobookTimer then
+		audiobookTimer:stop()
+	end
+	audiobookTimer = hs.timer.doAfter(AUDIOBOOK_QUIET_SECS, function()
+		enqueue(RIP_PUSH, { "audiobooks" }, "rip-push")
+	end)
+end
+
 -- hs.pathwatcher only sees events after it starts; sweep once at startup
 -- so a rip that finished while Hammerspoon was down/reloading isn't
 -- stranded. considerMovie already filters non-.mkv and zero-size entries,
@@ -197,6 +215,24 @@ local function sweepMusic()
 		if name ~= "." and name ~= ".." then
 			log.f("sweep: existing music content at startup, arming quiet-period timer")
 			armMusicTimer()
+			return
+		end
+	end
+end
+
+-- Same startup gap as music: a title liberated while Hammerspoon was down
+-- would otherwise sit in staging until an unrelated later write. rip-push
+-- audiobooks is skip-if-empty and incremental, so a false-positive sweep
+-- costs nothing.
+local function sweepAudiobooks()
+	local iter, dir = hs.fs.dir(AUDIOBOOKS)
+	if not iter then
+		return
+	end
+	for name in iter, dir do
+		if name ~= "." and name ~= ".." then
+			log.f("sweep: existing audiobook content at startup, arming quiet-period timer")
+			armAudiobookTimer()
 			return
 		end
 	end
@@ -834,7 +870,7 @@ function M.cleanup()
 end
 
 function M.start()
-	for _, d in ipairs({ ROOT, INTERMEDIATE, MUSIC, WORK, ROOT .. "/movies" }) do
+	for _, d in ipairs({ ROOT, INTERMEDIATE, MUSIC, ROOT .. "/audiobooks", AUDIOBOOKS, WORK, ROOT .. "/movies" }) do
 		hs.fs.mkdir(d)
 	end
 	sweepWork()
@@ -844,6 +880,7 @@ function M.start()
 		end
 	end):start()
 	M.musicWatcher = hs.pathwatcher.new(MUSIC, armMusicTimer):start()
+	M.audiobookWatcher = hs.pathwatcher.new(AUDIOBOOKS, armAudiobookTimer):start()
 	M.volumeWatcher = hs.fs.volume.new(function(event, info)
 		if event == hs.fs.volume.didMount and info and info.path then
 			considerVolume(info.path)
@@ -869,6 +906,7 @@ function M.start()
 	end):start()
 	sweepIntermediate()
 	sweepMusic()
+	sweepAudiobooks()
 	log.f("watching %s", ROOT)
 	return M
 end
