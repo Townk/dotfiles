@@ -83,9 +83,43 @@ cmd_list() {
        format: "m4b"}' "$tmp"
 }
 
+# cmd_acquire <asin> <destdir> — one title. The destination is passed
+# EXPLICITLY with -o Books="<dir>" rather than inherited from the GUI's
+# settings: a worker must never depend on where the app happens to be
+# pointed, and a session that ran while the operator was changing settings
+# would otherwise scatter files. Libation still appends its own "Books"
+# level under whatever it is given (that is what rip::staging_for absorbs).
+#
+# Progress: LibationCli prints human lines, not a machine stream. Any line
+# carrying an N% is scaled straight through; everything else is ignored.
+# Failure is the CLI's own rc, passed up untouched. Only stdout feeds the
+# parser — stderr is left connected to our own stderr so a failure message
+# (e.g. "download failed") reaches the caller verbatim instead of being
+# swallowed by the % filter below.
+cmd_acquire() {
+  setopt localoptions noerrexit nopipefail
+  need_bin
+  local id="${1:?acquire: id required}" dest="${2:?acquire: destdir required}"
+  mkdir -p "$dest" || die "cannot create $dest"
+  local line pct
+  "$LIB_BIN" liberate --id "$id" -o Books="$dest" \
+    | while IFS= read -r line; do
+        case "$line" in
+          *%*)
+            pct="${line%\%*}"; pct="${pct##* }"
+            [[ "$pct" == <-> ]] && print -r -- "progress $pct $id"
+            ;;
+        esac
+      done
+  local rc=$pipestatus[1]
+  (( rc == 0 )) || return $rc
+  return 0
+}
+
 case "${1:-}" in
   capabilities) cmd_capabilities ;;
   list) cmd_list ;;
+  acquire) shift; cmd_acquire "${1:?acquire: id required}" "${2:?acquire: destdir required}" ;;
   "" | --help) print -ru2 -- 'usage: rip-provider-libation capabilities | list | acquire <id> <destdir>'; exit 2 ;;
   *) die "unknown verb: $1" ;;
 esac

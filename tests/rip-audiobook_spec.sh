@@ -52,6 +52,21 @@ JSON
   echo "Library exported to: $out"
   exit 0
 fi
+if [ "$1" = "liberate" ]; then
+  books=""
+  while [ $# -gt 0 ]; do
+    case "$1" in -o|--override) case "$2" in Books=*) books="${2#Books=}" ;; esac ;; esac
+    shift
+  done
+  [ -n "$books" ] || { echo "no Books override" >&2; exit 1; }
+  [ -n "${FAKE_LIBERATE_FAIL:-}" ] && { echo "download failed" >&2; exit 4; }
+  mkdir -p "$books/Books/Brandon Sanderson/Steelheart"
+  printf 'audio\n' > "$books/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+  echo "Decrypting  25%"
+  echo "Decrypting  90%"
+  echo "Completed"
+  exit 0
+fi
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
@@ -108,5 +123,22 @@ EOF
     When run zsh "$PROVIDER" list
     The status should equal 3
     The stderr should include "LibationCli not found"
+  End
+
+  It 'provider: acquire writes into the given dir and reports progress'
+    When run zsh "$PROVIDER" acquire B00ECDZ08I "$RIP_STAGING_ROOT/audiobooks"
+    The status should equal 0
+    The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    The output should include "progress 25"
+    The output should include "progress 90"
+    The contents of file "$RIP_SANDBOX/libation.log" should include "--id B00ECDZ08I"
+    The contents of file "$RIP_SANDBOX/libation.log" should include "Books=$RIP_STAGING_ROOT/audiobooks"
+  End
+
+  It 'provider: acquire propagates a download failure'
+    export FAKE_LIBERATE_FAIL=1
+    When run zsh "$PROVIDER" acquire B00ECDZ08I "$RIP_STAGING_ROOT/audiobooks"
+    The status should equal 4
+    The stderr should include "download failed"
   End
 End
