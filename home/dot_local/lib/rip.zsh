@@ -2050,3 +2050,70 @@ rip::ab_have() {
   [[ -n "$rel" ]] || { log_error "rip: empty book path"; return 2 }
   rip::_remote_has_file "audiobooks/$rel/${rel:t}.m4b"
 }
+
+# rip::_validate_ab_plan <plan.json> — defense in depth. The panel gates all
+# of this, but a plan is a FILE naming path components under the staging
+# root and it arrives through a queue that outlives the panel. Re-check
+# everything and refuse the whole plan on the first failure (rc 2), exactly
+# like rip::_validate_plan does for a disc session.
+rip::_validate_ab_plan() {
+  setopt localoptions noerrexit nopipefail
+  local plan="$1"
+  jq -e . "$plan" >/dev/null 2>&1 || { log_error "rip: session plan is not valid JSON: $plan"; return 2 }
+  local -A composed=()
+  # NOTE: the local var is named "bpath", not "path" — zsh's lowercase
+  # "path" is a special parameter perpetually tied to $PATH (array-valued),
+  # and `local path` does not detach that tie. `read -r id path` into it
+  # silently fails to assign (read's array-tied-scalar case), so the loop
+  # body never runs and every plan looks empty. Verified live against this
+  # repo's zsh (5.9.999.3-test) before landing.
+  local id bpath author title n=0
+  while IFS=$'\t' read -r id bpath; do
+    [[ -n "$id$bpath" ]] || continue
+    [[ -n "$id" ]] || { log_error "rip: plan item has no id"; return 2 }
+    author="${bpath%%/*}"; title="${bpath##*/}"
+    # A book path is exactly two segments, each of which becomes a
+    # directory name: <Author>/<Title>. Validate BOTH with the title rule
+    # (no slash, never . or ..) — "../etc/x" splits to author ".." and
+    # would compose staging/audiobooks/Books/../etc, escaping the tree.
+    [[ "$bpath" == */* ]] || { log_error "rip: book path must be <Author>/<Title>: $bpath"; return 2 }
+    [[ "$author" == */* || "$title" == */* ]] && { log_error "rip: book path must be exactly <Author>/<Title>: $bpath"; return 2 }
+    rip::_check_title "$author" || return 2
+    rip::_check_title "$title" || return 2
+    if [[ -n "${composed["$bpath"]-}" ]]; then
+      log_error "rip: session plan composes the same book twice: $bpath"
+      return 2
+    fi
+    composed["$bpath"]=1
+    n=$(( n + 1 ))
+  done < <(jq -r '(if (.items | type) == "array" then .items else [] end)[]
+                  | [(.id // ""), (.path // "")] | @tsv' "$plan" 2>/dev/null)
+  (( n > 0 )) || { log_error "rip: session plan selects nothing"; return 2 }
+  return 0
+}
+
+# rip::ab_enqueue <plan.json> — validate, copy the plan somewhere it can
+# outlive the panel, then ONE heavy job for the whole batch. The .work
+# SUBDIRECTORY is load-bearing: ripper's sweepWork() unlinks plain files
+# sitting directly in .work at every Hammerspoon start and skips
+# directories, so a queued plan waiting behind a long job survives only
+# under a subdir (the disc session's own hard-won rule).
+rip::ab_enqueue() {
+  setopt localoptions noerrexit nopipefail
+  local plan="$1"
+  [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
+  rip::_validate_ab_plan "$plan" || return 2
+
+  local work_dir; work_dir="$(rip::staging_root)/.work/ab-plans"
+  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  local queued="$work_dir/ab-$$-$RANDOM.json"
+  cp -- "$plan" "$queued" || { log_error "rip: cannot stage the session plan at $queued"; return 1 }
+
+  local n; n="$(jq -r '(.items // []) | length' "$plan")"
+  local title="$n books"
+  (( n == 1 )) && title="$(jq -r '.items[0].title // .items[0].path' "$plan")"
+
+  rip::_load_jobs || { log_error "rip: job runner unavailable"; rm -f -- "$queued"; return 1 }
+  job::start --group heavy --title "rip audiobooks: $title" --icon "$RIP_JOB_ICON" \
+    -- "$RIP_BIN_DIR/rip-audiobook" --session-worker "$queued"
+}

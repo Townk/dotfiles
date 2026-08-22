@@ -210,4 +210,50 @@ FAKESSH
     When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --have "Nobody/Nothing"
     The status should equal 1
   End
+
+  # --- session plan validation + enqueue -----------------------------------
+
+  queued_plans() {
+    local -a f=("$RIP_STAGING_ROOT"/.work/ab-plans/*.json(N))
+    print -r -- "${#f}"
+  }
+
+  # titles() — read every enqueued job's title straight from its meta.json
+  titles() { cat "$JOB_STATE_ROOT"/*/meta.json 2>/dev/null; }
+
+  It 'plan: rejects a plan selecting nothing'
+    When run zsh -c "source $RIPLIB && rip::ab_enqueue \$(printf '%s' '$RIP_SANDBOX/empty.json')"
+    The status should equal 2
+    The stderr should include "no such session plan"
+  End
+
+  It 'plan: rejects an item whose path escapes the library'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"../etc/Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    The status should equal 2
+    The stderr should include "may not be . or .."
+  End
+
+  It 'plan: rejects two items composing the same book path'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B"},{"id":"Y","path":"A/B"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    The status should equal 2
+    The stderr should include "composes the same book twice"
+  End
+
+  It 'plan: enqueues ONE heavy job titled by the batch'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B","title":"B"},{"id":"Y","path":"A/C","title":"C"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The contents of file "$JOB_FAKE_LOG" should include "--group heavy"
+    The result of function titles should include "rip audiobooks: 2 books"
+    The contents of file "$JOB_FAKE_LOG" should include "/rip-audiobook --session-worker"
+  End
+
+  It 'plan: the queued copy survives under .work/ab-plans, not loose in .work'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B","title":"B"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function queued_plans should equal "1"
+  End
 End
