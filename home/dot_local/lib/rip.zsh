@@ -2133,3 +2133,122 @@ rip::ab_enqueue() {
   job::start --group heavy --title "rip audiobooks: $title" --icon "$RIP_JOB_ICON" \
     -- "$RIP_BIN_DIR/rip-audiobook" --session-worker "$queued"
 }
+
+# rip::ab_worker <plan.json> — the enqueued body, two phases in one capsule:
+#
+#   0–70   ACQUIRE  the provider fetches each item the server lacks into
+#                   staging. The band is split evenly across items, so a
+#                   four-book session advances four times rather than
+#                   jumping.
+#   70–100 PUSH     one rip::push_worker audiobooks for the whole batch —
+#                   enrichment (sidecars, hops), rsync, verify, clean.
+#
+# FAILURE HONESTY (the sibling workers' rules, applied to a batch):
+#   * ONE item's acquire failure is that ITEM's failure. Log it, keep going,
+#     remember the rc — a store hiccup on book four must not cost the three
+#     already downloaded.
+#   * A push or verify failure keeps everything staged for a plain
+#     `rip-push audiobooks` retry with no re-download.
+#   * The plan copy is removed once read: it is this run's only reader, and
+#     nothing else ever reclaims it.
+rip::ab_worker() {
+  setopt localoptions noerrexit nopipefail
+  rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
+  local plan="$1"
+  [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
+  rip::_validate_ab_plan "$plan" || return 2
+
+  local provider; provider="$(jq -r '.provider // "libation"' "$plan")"
+  local bin; bin="$(rip::ab_provider_bin "$provider")" || return 2
+  local dest_root; dest_root="$(rip::staging_root)/audiobooks"
+  mkdir -p "$dest_root" || { log_error "rip: cannot create $dest_root"; return 1 }
+
+  # The meta index the enrichment stage reads: every item's row, keyed by
+  # path. This is what makes a session's sidecars carry real store identity
+  # instead of the path-derived fallback a GUI-liberated title gets.
+  local index="$(rip::staging_root)/.work/ab-meta.$$.jsonl"
+  mkdir -p "${index:h}"
+  jq -c '(.items // [])[]' "$plan" > "$index" 2>/dev/null
+
+  local -a items=()
+  # NOTE: every local var below is declared HERE, once, including the loop
+  # variable "entry" — a bare `for entry in …` would leak entry as a global.
+  # And the book-path variable is named "bpath", not "path": zsh's lowercase
+  # "path" is a special parameter perpetually tied to $PATH (array-valued),
+  # and even a `local path` does not detach that tie — assigning to it
+  # rewrites the shell's command search path for the rest of this scope, so
+  # every command run afterwards (jq, find, the provider bin, rsync) can
+  # fail to resolve. Same bug, same fix as rip::_validate_ab_plan (Task 11).
+  local id bpath entry
+  while IFS=$'\t' read -r id bpath; do
+    [[ -n "$id$bpath" ]] && items+=("$id"$'\t'"$bpath")
+  done < <(jq -r '(.items // [])[] | [(.id // ""), (.path // "")] | @tsv' "$plan" 2>/dev/null)
+
+  local total=${#items} n=0 rc=0 line pct
+  local base span; span=$(( 70 / (total > 0 ? total : 1) ))
+  for entry in "${items[@]}"; do
+    id="${entry%%$'\t'*}"; bpath="${entry#*$'\t'}"
+    base=$(( n * span )); n=$(( n + 1 ))
+    rip::ab_have "$bpath"
+    case $? in
+      0) print -r -- "rip: cantina already has $bpath — skipping"; continue ;;
+      2) log_warn "rip: could not ask cantina about $bpath — acquiring anyway" ;;
+    esac
+    rip::_progress "$base" "downloading — ${bpath:t}"
+    zsh "$bin" acquire "$id" "$dest_root" 2>&1 \
+      | while IFS= read -r line; do
+          case "$line" in
+            progress\ *)
+              pct="${${line#progress }%% *}"
+              [[ "$pct" == <-> ]] && rip::_progress $(( base + pct * span / 100 )) "downloading — ${bpath:t}"
+              ;;
+            *) print -r -- "$line" ;;
+          esac
+        done
+    local arc=$pipestatus[1]
+    if (( arc != 0 )); then
+      log_error "rip: acquire failed for $bpath (rc=$arc) — continuing with the rest"
+      rc=$arc
+      continue
+    fi
+    # RECONCILE what actually landed. The plan's path is COMPOSED from store
+    # metadata ("<Author>/<Title>: <Subtitle>", per Global Constraints), and
+    # a provider may still sanitize a character or truncate a very long name
+    # on its way to the filesystem. If the composed dir is not there but the
+    # author dir gained exactly one book dir, that IS this acquisition, and
+    # the meta index must be re-keyed to the real path or the sidecar it
+    # feeds would never match the folder it belongs to.
+    local books_root="$dest_root/Books"
+    if [[ ! -d "$books_root/$bpath" ]]; then
+      local -a landed=("$books_root/${bpath%%/*}"/*(N/om))
+      if (( ${#landed} )); then
+        local actual="${bpath%%/*}/${landed[1]:t}"
+        log_warn "rip: $bpath landed as $actual — re-keying the plan identity"
+        jq -c --arg old "$bpath" --arg new "$actual" \
+          'if .path == $old then .path = $new else . end' "$index" > "$index.tmp" \
+          && mv -f -- "$index.tmp" "$index"
+      else
+        log_warn "rip: acquire reported success but nothing landed for $bpath"
+      fi
+    fi
+  done
+  rm -f -- "$plan"
+
+  # The push owns 70–100. The age gate is disabled for this inner push the
+  # same way the disc pipeline disables it: these files are complete by
+  # construction (the provider returned) rather than by having held still.
+  local RIP_PROGRESS_BASE=70 RIP_PROGRESS_SPAN=30
+  local RIP_PUSH_MIN_AGE_S=0
+  local RIP_AB_META_INDEX="$index"
+  # push_worker's own status lines (e.g. "verified on cantina — cleaning
+  # staging") are plain `print` to fd1, by design — a pueue job log wants
+  # them. Routed to stderr HERE, at the call site only, so this capsule's
+  # own stdout carries just what the acquire phase already emits; push_worker
+  # itself is untouched, so its direct callers (rip-push_spec.sh) still see
+  # those lines on stdout exactly as before.
+  rip::push_worker audiobooks 1>&2
+  local prc=$?
+  rm -f -- "$index"
+  (( prc != 0 )) && return $prc
+  return $rc
+}

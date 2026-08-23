@@ -293,4 +293,65 @@ FAKESSH
     The stderr should include "plan item has no id"
     The path "$JOB_FAKE_LOG" should not be exist
   End
+
+  # --- session worker -------------------------------------------------------
+
+  It 'worker: acquires only what the server lacks, then pushes'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Have"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Have/Have.m4b"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"HAVE","path":"A/Have","title":"Have"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","authors":["Brandon Sanderson"],"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/libation.log" should include "--id B00ECDZ08I"
+    The contents of file "$RIP_SANDBOX/libation.log" should not include "--id HAVE"
+    The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
+  End
+
+  It 'worker: the sidecar carries the plan identity, not the path fallback'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"narrators":["MacLeod Andrews"],"duration_s":45720,"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json && jq -c '[.subtitle,.ids[\"audible.asin\"],.source.provider,.work]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    The status should equal 0
+    The output should equal '["The Reckoners, Book 1","B00ECDZ08I","libation",null]'
+  End
+
+  It 'worker: one failing acquire does not abort the batch'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"BAD","path":"A/Bad","title":"Bad"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
+    cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
+case "$*" in
+  *"--id BAD"*) echo "download failed" >&2; exit 4 ;;
+esac
+books=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o|--override) case "$2" in Books=*) books="${2#Books=}" ;; esac ;; esac
+  shift
+done
+mkdir -p "$books/Books/Brandon Sanderson/Steelheart"
+printf 'audio\n' > "$books/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should not equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    The stderr should include "acquire failed"
+  End
+
+  It 'worker: re-keys the identity when the folder that landed differs'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart: The Reckoners, Book 1","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    The status should equal 0
+    The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
+    The stderr should include "re-keying"
+  End
+
+  It 'worker: the queued plan copy is removed once read'
+    cp "$RIP_SANDBOX/plan.json" "$RIP_STAGING_ROOT/.work/ab-plans/x.json" 2>/dev/null || mkdir -p "$RIP_STAGING_ROOT/.work/ab-plans"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_STAGING_ROOT/.work/ab-plans/x.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_STAGING_ROOT/.work/ab-plans/x.json"
+    The status should equal 0
+    The path "$RIP_STAGING_ROOT/.work/ab-plans/x.json" should not be exist
+  End
 End
