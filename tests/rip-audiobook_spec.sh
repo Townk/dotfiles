@@ -148,6 +148,50 @@ EOF
     The stderr should include "download failed"
   End
 
+  # --- rip::ab_provider_bin's name guard (final-review finding, 2026-08-22:
+  # "verified correct by inspection only" — these examples are the missing
+  # executable proof, not a bug fix). ------------------------------------
+
+  It 'ab_provider_bin: rejects a name containing a slash'
+    When run zsh -c "source $RIPLIB && rip::ab_provider_bin 'a/b'"
+    The status should equal 2
+    The stderr should include "bad provider name"
+  End
+
+  # NOTE (found while writing this proof, 2026-08-22): the "" arm of the
+  # guard's case pattern is unreachable dead code, NOT a gap this fix is
+  # scoped to close — `local name="${1:-${RIP_AB_PROVIDER:-libation}}"`
+  # treats an explicitly-empty $1 exactly like an unset one (zsh/bash `:-`
+  # semantics), so it always falls through to the "libation" default before
+  # the case statement ever sees an empty string; there is no call shape
+  # that reaches the "" branch. Confirmed live: `zsh -c 'f() { local
+  # name="${1:-${RIP_AB_PROVIDER:-libation}}"; print -r -- "$name"; }; f
+  # ""'` prints "libation". Left unchanged (out of this fix's scope, which
+  # is test proof for the existing guard, not new guard behavior) — flagged
+  # in the fix report instead.
+
+  It 'ab_provider_bin: rejects "."'
+    When run zsh -c "source $RIPLIB && rip::ab_provider_bin '.'"
+    The status should equal 2
+    The stderr should include "bad provider name"
+  End
+
+  It 'ab_provider_bin: rejects ".."'
+    When run zsh -c "source $RIPLIB && rip::ab_provider_bin '..'"
+    The status should equal 2
+    The stderr should include "bad provider name"
+  End
+
+  It 'ab_provider_bin: resolves the DEPLOYED (non-executable_-prefixed) name when present'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec-deployed"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    printf '#!/bin/sh\n' > "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_provider_bin libation"
+    The status should equal 0
+    The output should equal "$RIP_LIBEXEC_DIR/rip-provider-libation"
+  End
+
   It 'CLI: --library passes the provider rows through'
     When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --library
     The status should equal 0
