@@ -73,6 +73,23 @@
     var ROWS = [];            // provider rows, as given
     var SELECTED = new Set(); // row ids the operator marked Rip
     var SERVER = new Set();   // "<Author>/<Title>" paths cantina already holds
+    // Tri-state guard for SERVER: false until __setServerLibrary's fetch
+    // actually lands. SERVER reads empty in THREE different situations —
+    // cantina genuinely has nothing, --server-library failed (mini
+    // offline, VPN down), or the fetch just hasn't landed yet (routine:
+    // the rows fetch and the server fetch run concurrently by design,
+    // library.setRows/setServerLibrary populate the panel additively in
+    // whichever order they land) — and only the middle one, "we asked and
+    // it failed", is even close to a positive claim, which still is NOT
+    // "cantina lacks this book". Gates neverPushedHtml below: without it,
+    // every liberated row would flash (or permanently assert, on a
+    // --server-library failure) "never pushed" before/without the server
+    // answer ever confirming the book is actually missing (2026-08-23
+    // re-review finding). The hide filter above is unaffected on purpose —
+    // "unknown" already means "show everything" there, which is correct;
+    // this only stops the panel from making a positive claim it can't
+    // support.
+    var SERVER_KNOWN = false;
     var SHOW_LIBRARY = false; // the "show library" chip
     var QUERY = "";           // debounced search text
     var LOADING = false;
@@ -168,6 +185,7 @@
 
     window.__setServerLibrary = function (paths) {
       SERVER = new Set(arr(paths));
+      SERVER_KNOWN = true;
       render();
     };
 
@@ -238,7 +256,11 @@
     // that never happened, and it stays visible with this line rather than
     // silently blending into an ordinary not-yet-ripped row.
     function neverPushedHtml(r, inLibrary) {
-      if (r.acquired !== true || inLibrary) return '';
+      // Tri-state: only assert the claim once the server fetch has
+      // actually landed (SERVER_KNOWN — see its declaration above). While
+      // it hasn't, SERVER being empty says nothing about whether cantina
+      // lacks this book, so render nothing rather than a false positive.
+      if (!SERVER_KNOWN || r.acquired !== true || inLibrary) return '';
       return '<div class="detail"><div class="never-pushed">' + SVG_WARN_SM
         + '<span>liberated, never pushed</span></div></div>';
     }

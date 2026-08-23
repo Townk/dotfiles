@@ -841,11 +841,27 @@ function M.library()
 	-- Absolute path: Hammerspoon's PATH lacks ~/.local/bin.
 	local thisTask
 	thisTask = hs.task.new(RIP_AUDIOBOOK, function(rc, out, err)
-		if audiobookLibraryTask == thisTask then
+		-- Captured BEFORE the nil-out below, and reused by the failure
+		-- branch: terminate() only sends SIGTERM, so a run M.library()
+		-- superseded (a fresh open while the old fetch was still in
+		-- flight) still delivers this callback later — almost always with
+		-- a non-zero rc, since a killed process reports one. Without this
+		-- gate, that late reply would run the failure UI against whatever
+		-- panel happens to be open NOW (a reopened one, mid its OWN fresh
+		-- fetch): clearing its loading state, painting "nothing to show"
+		-- over a fetch that is still running, and toasting an error about
+		-- a run the code itself killed (2026-08-23 re-review finding). The
+		-- success path below does not need this same explicit early-return
+		-- — a terminated task essentially never lands here with rc == 0.
+		local stale = audiobookLibraryTask ~= thisTask
+		if not stale then
 			audiobookLibraryTask = nil
 		end
 		if rc ~= 0 then
 			log.ef("library: rip-audiobook --library failed rc=%d: %s", rc, err or "")
+			if stale then
+				return
+			end
 			-- An unauthenticated or mid-update LibationCli is an ordinary
 			-- failure, not an exotic one, and the panel opened in `loading =
 			-- true` — LOADING is only ever cleared by __setRows/__setLibrary
