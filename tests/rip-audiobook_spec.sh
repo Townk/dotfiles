@@ -635,4 +635,61 @@ EOF
     The stderr should include "remote enrichment hop failed"
     The result of function hop_call_count should equal "1"
   End
+
+  # --- import (manual provider) ----------------------------------------------
+
+  It 'import: stages a single file as <Author>/<Title>/<Title>.<ext>'
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice'"
+    The status should equal 0
+    The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
+    The contents of file "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "audio"
+  End
+
+  It 'import: stages a directory by copying its contents into the book dir'
+    mkdir -p "$RIP_SANDBOX/incoming"
+    printf 'audio\n' > "$RIP_SANDBOX/incoming/part1.m4b"
+    printf 'art\n' > "$RIP_SANDBOX/incoming/cover.jpg"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'Ann Leckie' 'Ancillary Sword'"
+    The status should equal 0
+    The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Sword/part1.m4b" should be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Sword/cover.jpg" should be exist
+  End
+
+  It 'import: records a manual-provider identity row in the meta index'
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice' && jq -c '{path,title,authors,provider}' \$(rip::_ab_meta_index_default)"
+    The status should equal 0
+    The output should equal '{"path":"Ann Leckie/Ancillary Justice","title":"Ancillary Justice","authors":["Ann Leckie"],"provider":"manual"}'
+  End
+
+  It 'import: rejects a traversing author or title'
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' '..' 'X'"
+    The status should equal 2
+    The stderr should include "may not be . or .."
+  End
+
+  It 'import: refuses a missing source'
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/nope.m4b' 'A' 'B'"
+    The status should equal 2
+    The stderr should include "no such source"
+  End
+
+  It 'import: refuses to clobber a book already staged'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice"
+    printf 'old\n' > "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+    printf 'new\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice'"
+    The status should equal 2
+    The stderr should include "already staged"
+    The contents of file "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "old"
+  End
+
+  It 'manual provider: capabilities says it cannot acquire, list is empty'
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_rip-provider-manual" capabilities
+    The status should equal 0
+    The output should include '"name":"manual"'
+    The output should include '"can_acquire":false'
+  End
 End

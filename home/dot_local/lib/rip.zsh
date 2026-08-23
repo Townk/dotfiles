@@ -2163,6 +2163,53 @@ rip::ab_have() {
   rip::_remote_has_file "audiobooks/$rel/${rel:t}.m4b"
 }
 
+# rip::ab_import <src> <author> <title> — take a DRM-free file or folder the
+# operator already has and stage it exactly as an acquired book would land,
+# so it rides the same enrich → push → verify → clean path as everything else.
+# The provider seam's `manual` entry reports can_acquire:false precisely
+# because this is the import door: nothing is downloaded, we only place bytes.
+#
+# The identity row is written to the shared meta index (the same file
+# rip::_book_meta_for defaults to), so the sidecar carries provider "manual"
+# rather than the path-derived fallback.
+rip::ab_import() {
+  setopt localoptions noerrexit nopipefail
+  local src="$1" author="$2" title="$3"
+  [[ -n "$src" ]] || { log_error "rip: import needs a source path"; return 2 }
+  [[ -e "$src" ]] || { log_error "rip: no such source: $src"; return 2 }
+  rip::_check_title "$author" || return 2
+  rip::_check_title "$title" || return 2
+
+  local root; root="$(rip::staging_for audiobooks)"
+  local rel; rel="$(rip::_nfc "$author/$title")"
+  local dest="$root/$rel"
+  # Refuse only when the destination actually holds files. Note the glob
+  # qualifier (N) so an empty match expands to nothing rather than erroring —
+  # and count the array, never test a captured string: a `$(print …)` capture
+  # with any literal whitespace inside the quotes is non-empty even on zero
+  # matches, which would refuse every import.
+  local -a existing=("$dest"/*(N))
+  if (( ${#existing} )); then
+    log_error "rip: already staged, refusing to clobber: $rel"
+    return 2
+  fi
+  mkdir -p "$dest" || { log_error "rip: cannot create $dest"; return 1 }
+
+  if [[ -d "$src" ]]; then
+    cp -R -- "$src"/. "$dest"/ || { log_error "rip: could not copy $src"; return 1 }
+  else
+    cp -- "$src" "$dest/$title.${src:e}" || { log_error "rip: could not copy $src"; return 1 }
+  fi
+
+  local index; index="$(rip::_ab_meta_index_default)"
+  mkdir -p "${index:h}"
+  jq -nc --arg p "$rel" --arg t "$title" --arg a "$author" \
+    '{path:$p, title:$t, authors:[$a], ids:{}, provider:"manual", format:"m4b"}' \
+    >> "$index" || log_warn "rip: staged $rel but could not record its identity"
+  print -ru2 -- "rip: imported $rel — the watcher will push it"
+  return 0
+}
+
 # rip::_validate_ab_plan <plan.json> — defense in depth. The panel gates all
 # of this, but a plan is a FILE naming path components under the staging
 # root and it arrives through a queue that outlives the panel. Re-check

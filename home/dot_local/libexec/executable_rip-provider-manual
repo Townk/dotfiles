@@ -1,0 +1,18 @@
+#!/usr/bin/env zsh
+# rip-provider-manual — the import-only provider.
+#
+# It implements the provider contract's shape so the panel can list providers
+# uniformly, but it acquires NOTHING: `can_acquire:false` is the whole point.
+# Books arrive through `rip-audiobook --import`, which places bytes the
+# operator already has into staging; everything downstream (identity sidecar,
+# push, verify, clean, author enrichment) is identical to an acquired book.
+
+set -eu -o pipefail
+
+case "${1:-}" in
+  capabilities) jq -nc '{name:"manual", version:"1", can_acquire:false, needs_gui:false}' ;;
+  list) : ;;  # nothing to list — this provider owns no catalogue
+  acquire) print -ru2 -- "rip-provider-manual: cannot acquire; use rip-audiobook --import"; exit 2 ;;
+  "" | --help) print -ru2 -- 'usage: rip-provider-manual capabilities | list'; exit 2 ;;
+  *) print -ru2 -- "rip-provider-manual: unknown verb: $1"; exit 3 ;;
+esac
