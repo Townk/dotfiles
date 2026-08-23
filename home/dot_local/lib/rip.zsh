@@ -2183,11 +2183,13 @@ rip::ab_import() {
   local root; root="$(rip::staging_for audiobooks)"
   local rel; rel="$(rip::_nfc "$author/$title")"
   local dest="$root/$rel"
-  # Refuse only when the destination actually holds files. Note the glob
-  # qualifier (N) so an empty match expands to nothing rather than erroring —
-  # and count the array, never test a captured string: a `$(print …)` capture
-  # with any literal whitespace inside the quotes is non-empty even on zero
-  # matches, which would refuse every import.
+  # Refuse only when the destination actually holds real files (not just
+  # dotfiles like .DS_Store from Finder). Use glob qualifiers (N) to expand
+  # empty matches to nothing (no error) and (D) to include dotfiles. Count
+  # the array, never test a captured string: a `$(print …)` capture with any
+  # literal whitespace inside the quotes is non-empty even on zero matches.
+  # Dotfile-only directories (e.g., .DS_Store-only) don't count as "already
+  # staged" — we'll remove them before the rename to prevent mv nesting.
   local -a existing=("$dest"/*(N))
   if (( ${#existing} )); then
     log_error "rip: already staged, refusing to clobber: $rel"
@@ -2236,9 +2238,15 @@ rip::ab_import() {
     detected_fmt="$ext"
   fi
 
-  # Publish atomically: remove any existing empty destination, create parent,
-  # then rename temp into place (same filesystem ensures atomic mv).
-  rmdir "$dest" 2>/dev/null || true
+  # Publish atomically: remove any existing destination (including dotfiles),
+  # create parent, then rename temp into place (same filesystem ensures atomic mv).
+  # The clobber guard above does not see dotfiles, so a directory with only
+  # .DS_Store (from Finder) reads as empty for refusal but we must remove it
+  # here to prevent mv nesting the temp inside it.
+  if [[ -d "$dest" ]]; then
+    find "$dest" -maxdepth 1 -type f -delete 2>/dev/null || true
+    rmdir "$dest" 2>/dev/null || true
+  fi
   mkdir -p "$dest:h" 2>/dev/null || true
   mv -- "$temp" "$dest" || {
     rm -rf "$temp"
@@ -2251,8 +2259,6 @@ rip::ab_import() {
   mkdir -p "${index:h}"
   # Format is operator-supplied and goes through --arg to prevent injection.
   # Omit the key if no format was detected (sidecar writer's default applies).
-  local -a fmt_args=()
-  [[ -n "$detected_fmt" ]] && fmt_args=(--arg f "$detected_fmt")
   if [[ -n "$detected_fmt" ]]; then
     jq -nc --arg p "$rel" --arg t "$title" --arg a "$author" --arg f "$detected_fmt" \
       '{path:$p, title:$t, authors:[$a], ids:{}, provider:"manual", format:$f}' \

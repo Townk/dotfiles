@@ -768,4 +768,29 @@ FAKECP
     # No temp debris left anywhere: count .rip-import.* dirs in parent
     The result of function find_temp_dirs should equal "0"
   End
+
+  It 'import: dotfile-only destination (e.g. .DS_Store) is treated as empty'
+    # Create destination containing only .DS_Store, which Finder creates
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Author/Title"
+    printf 'macOS\n' > "$RIP_STAGING_ROOT/audiobooks/Author/Title/.DS_Store"
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
+    The status should equal 0
+    # Book lands directly under Title/, not nested
+    The path "$RIP_STAGING_ROOT/audiobooks/Author/Title/Title.m4b" should be exist
+    # .DS_Store is gone (cleaned before rename)
+    The path "$RIP_STAGING_ROOT/audiobooks/Author/Title/.DS_Store" should not be exist
+  End
+
+  It 'import: refuses destination with real files, even if it also has dotfiles'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Author/Title"
+    printf 'old\n' > "$RIP_STAGING_ROOT/audiobooks/Author/Title/old.m4b"
+    printf 'macOS\n' > "$RIP_STAGING_ROOT/audiobooks/Author/Title/.DS_Store"
+    printf 'new\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
+    The status should equal 2
+    The stderr should include "already staged"
+    # Old file remains unchanged
+    The contents of file "$RIP_STAGING_ROOT/audiobooks/Author/Title/old.m4b" should equal "old"
+  End
 End
