@@ -2193,18 +2193,61 @@ rip::ab_import() {
     log_error "rip: already staged, refusing to clobber: $rel"
     return 2
   fi
-  mkdir -p "$dest" || { log_error "rip: cannot create $dest"; return 1 }
 
+  # Build in a temp location (.work is unwatched) and publish atomically
+  # to avoid leaving half-copied books in the watched staging tree.
+  local work; work="$(rip::staging_root)/.work"
+  local temp="$work/import.$$"
+  mkdir -p "$temp" || { log_error "rip: cannot create temp dir $temp"; return 1 }
+
+  local format="" detected_fmt=""
   if [[ -d "$src" ]]; then
-    cp -R -- "$src"/. "$dest"/ || { log_error "rip: could not copy $src"; return 1 }
+    # Copy directory; detect format from first audio file
+    cp -R -- "$src"/. "$temp"/ || {
+      rm -rf "$temp"
+      log_error "rip: could not copy $src"
+      return 1
+    }
+    # Scan for first audio file to determine format
+    local -a audio=("$temp"/*.(m4b|mp3|m4a)(N))
+    if (( ${#audio} )); then
+      detected_fmt="${audio[1]:e}"
+      format="\"$detected_fmt\""
+    fi
   else
-    cp -- "$src" "$dest/$title.${src:e}" || { log_error "rip: could not copy $src"; return 1 }
+    # Single file: reject if extension-less
+    local ext="${src:e}"
+    [[ -n "$ext" ]] || {
+      rm -rf "$temp"
+      log_error "rip: imported file has no extension; cannot determine format"
+      return 2
+    }
+    # Use NFC-normalized tail from rel path for the filename
+    cp -- "$src" "$temp/${rel:t}.$ext" || {
+      rm -rf "$temp"
+      log_error "rip: could not copy $src"
+      return 1
+    }
+    detected_fmt="$ext"
+    format="\"$detected_fmt\""
   fi
 
+  # Publish atomically: create parent, then rename temp into place
+  mkdir -p "$dest:h" 2>/dev/null || true
+  mv -- "$temp" "$dest" || {
+    rm -rf "$temp"
+    log_error "rip: could not publish to $dest"
+    return 1
+  }
+
+  # Record identity in the meta index
   local index; index="$(rip::_ab_meta_index_default)"
   mkdir -p "${index:h}"
+  # Build jq args: format is conditional, others always present
+  local fmt_jq=""
+  [[ -n "$format" ]] && fmt_jq=", format:$format"
   jq -nc --arg p "$rel" --arg t "$title" --arg a "$author" \
-    '{path:$p, title:$t, authors:[$a], ids:{}, provider:"manual", format:"m4b"}' \
+    "{path:\$p, title:\$t, authors:[\$a], ids:{}, provider:\"manual\"$fmt_jq}" \
     >> "$index" || log_warn "rip: staged $rel but could not record its identity"
   print -ru2 -- "rip: imported $rel — the watcher will push it"
   return 0

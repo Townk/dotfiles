@@ -692,4 +692,60 @@ EOF
     The output should include '"name":"manual"'
     The output should include '"can_acquire":false'
   End
+
+  It 'import: single-file basename is NFC-normalized (accented title)'
+    nfc=$(printf 'Ant\xc3\xb4nio')
+    nfd=$(printf 'Anto\xcc\x82nio')
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Test Author' '${nfd}'"
+    The status should equal 0
+    # The staged file must use NFC bytes in its name, even though the title arg was NFD
+    The path "$RIP_STAGING_ROOT/audiobooks/Test Author/${nfc}/${nfc}.m4b" should be exist
+  End
+
+  It 'import: a failed copy leaves nothing in the watched staging tree'
+    mkdir -p "$RIP_SANDBOX/fake-cp-bin"
+    cat > "$RIP_SANDBOX/fake-cp-bin/cp" <<'FAKECP'
+#!/bin/sh
+# Fake cp: fail on recursive copy (directory import case)
+if [ "$1" = "-R" ]; then
+  echo "I/O error: cannot copy" >&2
+  exit 1
+fi
+# Otherwise, copy like normal cp
+exec /bin/cp "$@"
+FAKECP
+    chmod +x "$RIP_SANDBOX/fake-cp-bin/cp"
+    export PATH="$RIP_SANDBOX/fake-cp-bin:$PATH"
+    mkdir -p "$RIP_SANDBOX/incoming"
+    printf 'part1\n' > "$RIP_SANDBOX/incoming/part1.m4b"
+    printf 'part2\n' > "$RIP_SANDBOX/incoming/part2.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B'"
+    The status should equal 1
+    The stderr should include "could not copy"
+    # Verify the destination directory does not exist (not even empty)
+    The path "$RIP_STAGING_ROOT/audiobooks/A/B" should not be exist
+  End
+
+  It 'import: rejects a source file with no extension'
+    printf 'audio\n' > "$RIP_SANDBOX/incoming"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B'"
+    The status should equal 2
+    The stderr should include "no extension"
+  End
+
+  It 'import: records the actual format from a single-file import'
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.mp3"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.mp3' 'Ann Leckie' 'Test' && jq -c '.format' \$(rip::_ab_meta_index_default)"
+    The status should equal 0
+    The output should equal '"mp3"'
+  End
+
+  It 'import: directory with no audio files omits the format key'
+    mkdir -p "$RIP_SANDBOX/incoming"
+    printf 'text\n' > "$RIP_SANDBOX/incoming/readme.txt"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B' && jq -c 'has(\"format\")' \$(rip::_ab_meta_index_default)"
+    The status should equal 0
+    The output should equal 'false'
+  End
 End
