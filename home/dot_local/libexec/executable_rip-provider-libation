@@ -104,7 +104,13 @@ cmd_acquire() {
   local id="${1:?acquire: id required}" dest="${2:?acquire: destdir required}"
   mkdir -p "$dest" || die "cannot create $dest"
   local line pct
-  "$LIB_BIN" liberate --id "$id" -o Books="$dest" \
+  # </dev/null is load-bearing (live 2026-08-22): `liberate` optionally reads
+  # a license file from STDIN, and under the job runner stdin is a PIPE that
+  # never closes — the CLI then blocks before printing a single line, with no
+  # output, no network and no error, looking exactly like a hung download. It
+  # sat that way for 13 minutes under pueue; the same command with stdin
+  # closed printed "DownloadDecryptBook Begin" instantly.
+  "$LIB_BIN" liberate --id "$id" -o Books="$dest" </dev/null \
     | while IFS= read -r line; do
         case "$line" in
           *%*)
