@@ -24,7 +24,7 @@
 ---   local library = require("ripper.library-dialog")
 ---   library.show(data, callbacks)       -- open, or re-render in place if already open
 ---   library.setRows(rows)               -- additive repaint of an open panel
----   library.setServerLibrary(paths)     -- the hide-filter set (a later task fills it)
+---   library.setServerLibrary(paths)     -- the hide-filter set, fed by `rip-audiobook --server-library`
 ---   library.hide()                      -- dismiss (fires callbacks.onDismiss once)
 ---   library.isShown()                   -- true while the panel is up
 ---   library.cleanup()                   -- delete the webview (register with lifecycle)
@@ -32,7 +32,15 @@
 --- `data`:
 ---   { rows = { <row>, ... }, loading = false, provider = "libation" }
 ---
---- Row shape (the provider contract's row, verbatim):
+--- Row shape: the FULL provider row rides through unmodified end to end —
+--- `ids` (e.g. `audible.asin`), `provider`, `provider_version`, `format`,
+--- `language`, `abridged`, `acquired_utc`, and anything else a provider
+--- ever adds all survive past this module into the plan `onStart` hands
+--- back (a 2026-08-23 Critical: an earlier display-only whitelist here on
+--- the CLIENT side silently dropped them, and the sidecar recorded a
+--- false "provider: unknown" for every book queued through this panel —
+--- do not reintroduce that shape). What rip-library.html's DOM actually
+--- renders is this subset of the row:
 ---   { id, title, subtitle, authors, narrators, duration_s, series,
 ---     series_position, cover, acquired, path }
 ---
