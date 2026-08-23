@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+%%CSS%%
+</style>
+</head>
+<body>
+  <div class="panel" id="panel">
+    <div class="toolbar">
+      <input class="search-input" id="search" type="text" autocomplete="off" spellcheck="false"
+        placeholder="Search title, author, narrator, series…">
+      <span class="chip" id="chipShowLibrary" data-active="false">Show library</span>
+    </div>
+    <div class="rows" id="rows"></div>
+    <div class="footer">
+      <span id="summary"></span>
+      <span class="spacer"></span>
+      <span class="btn-ghost" id="btnDismiss">Not now</span>
+      <span class="btn-primary disabled" id="btnStart">Start Rip</span>
+    </div>
+  </div>
+
+  <!-- Diagnostic trap, deliberately its OWN script element and first on the
+       page — same reason rip-session.html and clipboard-picker.html carry
+       one: a parse error in the main block below aborts that block whole,
+       silently, and WebKit reports it nowhere Hammerspoon can see. -->
+  <script>
+    window.__lastError = null;
+    window.onerror = function (msg, src, line, col) {
+      window.__lastError = String(msg) + " @" + String(line) + ":" + String(col);
+    };
+  </script>
+  <script>
+  (function () {
+    'use strict';
+
+    // The panel as library-dialog.lua built it (library_payload, embedded
+    // through json_for_script — see rip-session.html for why every '<' is
+    // <-escaped there; same rule applies here).
+    var PAYLOAD = %%LIBRARY_JSON%%;
+
+    //----------------------------------------------------------------------
+    // Inline SVG icons. No Nerd Font / @font-face anywhere in this panel
+    // (same reason as rip-session.html): every glyph below is markup.
+    //----------------------------------------------------------------------
+    var SVG_BOOK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.8"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5a1 1 0 0 1-1 1H6.5A2.5 2.5 0 0 0 4 22Z"></path><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H19"></path></svg>';
+
+    //----------------------------------------------------------------------
+    // State — every row, plus the derived sets/flags the UI needs.
+    //----------------------------------------------------------------------
+    var ROWS = [];            // provider rows, as given
+    var SELECTED = new Set(); // row ids the operator marked Rip
+    var SERVER = new Set();   // "<Author>/<Title>" paths cantina already holds
+    var SHOW_LIBRARY = false; // the "show library" chip
+    var QUERY = "";           // debounced search text
+    var LOADING = false;
+    var PROVIDER = (PAYLOAD && PAYLOAD.provider) || "libation";
+
+    // Posts the raw object, NOT JSON.stringify'd — WebKit bridges a plain JS
+    // object/array/string/number straight to a Lua table/string/number, and
+    // library-dialog.lua's handle_message(msg.body) reads it as a table
+    // directly. Same mechanic as rip-session.html's post() and
+    // clipboard-picker.html's, both of which post the bare object too.
+    function post(msg) {
+      try { window.webkit.messageHandlers.ripLibrary.postMessage(msg); } catch (e) {}
+    }
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    // hs.json.encode cannot distinguish an empty Lua LIST from an empty Lua
+    // MAP and emits "{}" for both (documented at length in rip-session.html
+    // / session-dialog.lua's session_payload comment) — so any array that
+    // COULD be empty on the Lua side must be read back through this guard,
+    // never trusted bare. Applied both to the row list itself and to each
+    // row's authors/narrators, which a provider row is free to leave empty.
+    function arr(v) { return Array.isArray(v) ? v : []; }
+
+    // Normalize one provider row: force id to a string (so Set membership
+    // and dataset round-trips never mismatch on JS's number-vs-string JSON
+    // quirks — the same boundary lesson as session-dialog.lua's title_no,
+    // applied at ingestion instead of at every consumer) and arr()-guard
+    // the two fields that can arrive empty.
+    function normalizeRow(r) {
+      r = r || {};
+      return {
+        id: String(r.id),
+        title: r.title || '',
+        subtitle: r.subtitle || '',
+        authors: arr(r.authors),
+        narrators: arr(r.narrators),
+        duration_s: Number(r.duration_s) || 0,
+        series: r.series || '',
+        series_position: r.series_position || null,
+        cover: r.cover || '',
+        acquired: r.acquired,
+        path: r.path || ''
+      };
+    }
+
+    function normalizeRows(rows) { return arr(rows).map(normalizeRow); }
+
+    //----------------------------------------------------------------------
+    // Lua -> JS entry points
+    //----------------------------------------------------------------------
+    // Additive repaint of an open panel: rows arriving here always end the
+    // loading state (library-dialog.lua's preview "loading" fixture relies
+    // on exactly this — open with loading:true and no rows, then 2.5s later
+    // deliver the real rows through this same entry point).
+    window.__setRows = function (rows) {
+      ROWS = normalizeRows(rows);
+      LOADING = false;
+      render();
+    };
+
+    window.__setServerLibrary = function (paths) {
+      SERVER = new Set(arr(paths));
+      render();
+    };
+
+    //----------------------------------------------------------------------
+    // Derived view
+    //----------------------------------------------------------------------
+    function visible() {
+      var q = QUERY.trim().toLowerCase();
+      return ROWS.filter(function (r) {
+        if (!SHOW_LIBRARY && SERVER.has(r.path)) return false;
+        if (!q) return true;
+        return (r.title + " " + (r.subtitle || "") + " " + r.authors.join(" ") +
+                " " + r.narrators.join(" ") + " " + (r.series || "")).toLowerCase().indexOf(q) !== -1;
+      });
+    }
+
+    function hms(s) {
+      if (!s) return "";
+      var h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+      return h ? (h + "h " + m + "m") : (m + "m");
+    }
+
+    //----------------------------------------------------------------------
+    // Render
+    //----------------------------------------------------------------------
+    function bylineHtml(r) {
+      var bits = [];
+      if (r.authors.length) bits.push(r.authors.join(", "));
+      if (r.narrators.length) bits.push("read by " + r.narrators.join(", "));
+      return esc(bits.join(" · "));
+    }
+
+    function metaHtml(r) {
+      var bits = [];
+      if (r.series) bits.push(r.series + (r.series_position ? " #" + r.series_position : ""));
+      var d = hms(r.duration_s);
+      if (d) bits.push(d);
+      return esc(bits.join(" · "));
+    }
+
+    function rowHtml(r) {
+      var selected = SELECTED.has(r.id);
+      var inLibrary = SERVER.has(r.path);
+      var name = esc(r.title) + (r.subtitle ? ': ' + esc(r.subtitle) : '');
+      var cover = r.cover
+        ? '<div class="cover">' + SVG_BOOK + '<img src="' + esc(r.cover) + '" onerror="this.remove()"></div>'
+        : '<div class="cover">' + SVG_BOOK + '</div>';
+      return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '">'
+        + cover
+        + '<div class="text"><div class="name">' + name + '</div><div class="byline">' + bylineHtml(r) + '</div></div>'
+        + '<div class="meta">' + metaHtml(r) + '</div>'
+        + '<span class="toggle" data-toggle="' + esc(r.id) + '" data-on="' + selected + '">' + (selected ? 'Rip' : 'Skip') + '</span>'
+        + '</div>';
+    }
+
+    function render() {
+      var el = document.getElementById('rows');
+      if (LOADING && ROWS.length === 0) {
+        el.innerHTML = '<div class="empty">loading library…</div>';
+        renderFooter();
+        return;
+      }
+      var list = visible();
+      if (list.length === 0) {
+        el.innerHTML = '<div class="empty">' + (ROWS.length === 0 ? 'nothing to show' : 'no matches') + '</div>';
+        renderFooter();
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < list.length; i++) html += rowHtml(list[i]);
+      el.innerHTML = html;
+      renderFooter();
+    }
+
+    function renderFooter() {
+      var n = SELECTED.size;
+      var sumEl = document.getElementById('summary');
+      var btn = document.getElementById('btnStart');
+      if (n === 0) {
+        sumEl.textContent = '';
+        btn.classList.add('disabled');
+        return;
+      }
+      btn.classList.remove('disabled');
+      var secs = ROWS.filter(function (r) { return SELECTED.has(r.id); })
+                     .reduce(function (a, r) { return a + (r.duration_s || 0); }, 0);
+      sumEl.innerHTML = '<span class="sum-strong">' + n + ' book' + (n === 1 ? '' : 's')
+        + '</span> <span class="meta-text">· ' + esc(hms(secs)) + ' &rarr; rip &amp; push</span>';
+    }
+
+    //----------------------------------------------------------------------
+    // Interaction
+    //----------------------------------------------------------------------
+    // Independent per-row toggle: no radio semantics, nothing here ever
+    // demotes another row (unlike rip-session's Feature control).
+    function toggleRow(id) {
+      if (SELECTED.has(id)) SELECTED.delete(id); else SELECTED.add(id);
+      render();
+    }
+
+    function start() {
+      if (SELECTED.size === 0) return;
+      var items = ROWS.filter(function (r) { return SELECTED.has(r.id); });
+      post({ action: 'start', provider: PROVIDER, items: items });
+    }
+
+    function dismiss() { post({ action: 'dismiss' }); }
+
+    //----------------------------------------------------------------------
+    // Events
+    //----------------------------------------------------------------------
+    function closestAttr(node, attr) {
+      while (node && node.getAttribute) {
+        if (node.getAttribute(attr) != null) return node;
+        node = node.parentNode;
+      }
+      return null;
+    }
+
+    function bindEvents() {
+      var rowsEl = document.getElementById('rows');
+
+      rowsEl.addEventListener('mousedown', function (e) {
+        var toggle = closestAttr(e.target, 'data-toggle');
+        if (!toggle) return;
+        e.preventDefault();
+        toggleRow(toggle.getAttribute('data-toggle'));
+      });
+
+      var searchTimer = null;
+      document.getElementById('search').addEventListener('input', function (e) {
+        var val = e.target.value;
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(function () {
+          searchTimer = null;
+          QUERY = val;
+          render();
+        }, 150);
+      });
+
+      document.getElementById('chipShowLibrary').addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        SHOW_LIBRARY = !SHOW_LIBRARY;
+        this.setAttribute('data-active', String(SHOW_LIBRARY));
+        render();
+      });
+
+      document.getElementById('btnStart').addEventListener('mousedown', function (e) { e.preventDefault(); start(); });
+      document.getElementById('btnDismiss').addEventListener('mousedown', function (e) { e.preventDefault(); dismiss(); });
+
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
+      });
+    }
+
+    //----------------------------------------------------------------------
+    // Boot
+    //----------------------------------------------------------------------
+    LOADING = !!(PAYLOAD && PAYLOAD.loading);
+    ROWS = normalizeRows(PAYLOAD && PAYLOAD.rows);
+    bindEvents();
+    render();
+  })();
+  </script>
+</body>
+</html>

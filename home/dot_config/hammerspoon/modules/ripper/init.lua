@@ -42,6 +42,12 @@
 --     stub callbacks that only print and toast — a UI harness: no disc is
 --     read and nothing is ever enqueued. See the Mode B section near the
 --     bottom.
+--   * M.previewLibrary(<fixture>) is the same harness for the Audiobook
+--     Library panel (ripper/library-dialog.lua): a canned row list with
+--     stub callbacks, no Libation call and nothing ever enqueued. That
+--     panel is currently a SHELL — it renders fixture rows only; a later
+--     task feeds it real provider rows, hides books the server already
+--     has, and wires Start to the session worker.
 --   * The volume watcher only sees mounts that happen after M.start()
 --     runs, so a disc already sitting in the drive at launch/reload needs
 --     a manual nudge: M.ripDisc() rescans /Volumes for a VIDEO_TS/ dir,
@@ -51,6 +57,7 @@ local M = {}
 
 local osd = require("osd")
 local session = require("ripper.session-dialog")
+local library = require("ripper.library-dialog")
 
 local HOME = os.getenv("HOME")
 local ROOT = HOME .. "/Depot/Rips"
@@ -92,6 +99,7 @@ local chooserDebounce = nil -- debounce timer for the chooser's queryChangedCall
 local tasks = {} -- id -> hs.task object while running (anchors it against GC)
 local nextTaskId = 0
 local previewTimer = nil -- M.preview("scanning")'s populate timer (anchors it against GC)
+local previewLibraryTimer = nil -- M.previewLibrary("loading")'s populate timer (anchors it against GC)
 local scanTask = nil -- in-flight `rip-disc --scan` (anchors it against GC)
 local haveTask = nil -- in-flight `rip-disc --have` (anchors it against GC)
 local libraryTask = nil -- in-flight `rip-disc --library` (anchors it against GC)
@@ -845,12 +853,223 @@ function M.preview(name)
 	session.show(previewData(name), previewCallbacks)
 end
 
+--------------------------------------------------------------------------------
+-- Audiobook Library panel preview harness (library-dialog.lua). Same
+-- discipline as M.preview above: `M.previewLibrary(<fixture>)` opens the
+-- panel on canned rows with stub callbacks that only print and toast — no
+-- Libation, no server, nothing ever enqueued.
+--------------------------------------------------------------------------------
+
+--- One provider-contract row. `path` is derived the same way a real
+--- provider row's would be — "<Author>/<Title>" — since that is the exact
+--- string the hide-filter (M.setServerLibrary) matches against.
+local function libraryRow(id, title, subtitle, authors, narrators, durationS, seriesName, seriesPos, acquired)
+	return {
+		id = id,
+		title = title,
+		subtitle = subtitle,
+		authors = authors,
+		narrators = narrators,
+		duration_s = durationS,
+		series = seriesName,
+		series_position = seriesPos,
+		cover = "",
+		acquired = acquired,
+		path = authors[1] .. "/" .. title,
+	}
+end
+
+-- Built fresh on each call so a previous preview can never leak state into
+-- the next one (same discipline as previewData above).
+local function previewLibrarySmallRows()
+	return {
+		libraryRow(
+			"1",
+			"Project Hail Mary",
+			nil,
+			{ "Andy Weir" },
+			{ "Ray Porter" },
+			16 * 3600 + 10 * 60,
+			nil,
+			nil,
+			"2026-01-04"
+		),
+		libraryRow(
+			"2",
+			"The Fellowship of the Ring",
+			"Being the First Part of The Lord of the Rings",
+			{ "J.R.R. Tolkien" },
+			{ "Rob Inglis" },
+			19 * 3600 + 6 * 60,
+			"The Lord of the Rings",
+			1,
+			"2026-02-11"
+		),
+		libraryRow(
+			"3",
+			"The Two Towers",
+			"Being the Second Part of The Lord of the Rings",
+			{ "J.R.R. Tolkien" },
+			{ "Rob Inglis" },
+			17 * 3600 + 42 * 60,
+			"The Lord of the Rings",
+			2,
+			"2026-02-11"
+		),
+		libraryRow(
+			"4",
+			"Piranesi",
+			nil,
+			{ "Susanna Clarke" },
+			{ "Chiwetel Ejiofor" },
+			6 * 3600 + 58 * 60,
+			nil,
+			nil,
+			"2026-03-02"
+		),
+		libraryRow(
+			"5",
+			"A Memory Called Empire",
+			nil,
+			{ "Arkady Martine" },
+			{ "Amy Landon" },
+			11 * 3600 + 22 * 60,
+			"Teixcalaan",
+			1,
+			"2026-03-19"
+		),
+		libraryRow(
+			"6",
+			"Klara and the Sun",
+			nil,
+			{ "Kazuo Ishiguro" },
+			{ "Sura Siu" },
+			10 * 3600 + 16 * 60,
+			nil,
+			nil,
+			"2026-04-01"
+		),
+	}
+end
+
+-- 460 synthetic rows — proves scrolling and filter responsiveness at real
+-- scale (the client-side arr()/filter path has no pagination; a 460-row
+-- .rows list is the thing that actually exercises it).
+local function previewLibraryBigRows()
+	local authorsPool = { "A. Author", "B. Writer", "C. Novelist", "D. Storyteller", "E. Penman" }
+	local narratorsPool = { "N. Reader", "M. Voice", "P. Narrator" }
+	local rows = {}
+	for i = 1, 460 do
+		local author = authorsPool[((i - 1) % #authorsPool) + 1]
+		local narrator = narratorsPool[((i - 1) % #narratorsPool) + 1]
+		local seriesIdx = math.floor((i - 1) / 5) + 1
+		local seriesPos = ((i - 1) % 5) + 1
+		rows[i] = libraryRow(
+			tostring(i),
+			string.format("Audiobook %03d", i),
+			nil,
+			{ author },
+			{ narrator },
+			3600 * (4 + (i % 12)),
+			"Series " .. seriesIdx,
+			seriesPos,
+			nil
+		)
+	end
+	return rows
+end
+
+-- Stub callbacks: they print and toast, and that is ALL they do. Nothing
+-- here enqueues a job or talks to Libation/the server — same rule as
+-- previewCallbacks above.
+local previewLibraryCallbacks = {
+	onStart = function(plan)
+		hs.printf("ripper.previewLibrary: START (nothing enqueued)  provider=%s", tostring(plan.provider))
+		local items = plan.items or {}
+		for _, item in ipairs(items) do
+			hs.printf("ripper.previewLibrary:   rip  id=%s  title=%s", tostring(item.id), tostring(item.title))
+		end
+		osd.notify(
+			"glyph:nf-md-book_music",
+			string.format("preview: would rip %d book%s", #items, (#items == 1) and "" or "s"),
+			"Frog"
+		)
+	end,
+	onImport = function(spec)
+		hs.printf(
+			"ripper.previewLibrary: import (nothing imported)  src=%s  author=%s  title=%s",
+			tostring(spec.src),
+			tostring(spec.author),
+			tostring(spec.title)
+		)
+	end,
+	onDismiss = function()
+		hs.printf("ripper.previewLibrary: dismissed — nothing enqueued")
+	end,
+}
+
+--- Open the Audiobook Library panel on a fixture. Mode B validation only:
+--- no Libation call and no job is ever enqueued.
+--- @param name string|nil "small" (default) | "big" | "loading"
+function M.previewLibrary(name)
+	name = name or "small"
+
+	if previewLibraryTimer then
+		previewLibraryTimer:stop()
+		previewLibraryTimer = nil
+	end
+
+	if name == "loading" then
+		-- Opens with no rows and loading=true, then populates 2.5s later via
+		-- library.setRows — the ONLY path that ever ends the loading state
+		-- (see rip-library.html's window.__setRows), anchored against GC
+		-- exactly as previewTimer is above.
+		library.show({ rows = {}, loading = true, provider = "libation" }, previewLibraryCallbacks)
+		local thisTimer
+		thisTimer = hs.timer.doAfter(2.5, function()
+			if previewLibraryTimer == thisTimer then
+				previewLibraryTimer = nil
+			end
+			-- Only populate a panel that is still up: if the operator
+			-- dismissed during the fake load, calling setRows here would be
+			-- a silent no-op on a hidden webview — fine either way, but
+			-- mirrors M.preview("scanning")'s own guard for clarity.
+			if library.isShown() then
+				library.setRows(previewLibrarySmallRows())
+			end
+		end)
+		previewLibraryTimer = thisTimer
+		return
+	end
+
+	if name == "big" then
+		library.show({ rows = previewLibraryBigRows(), loading = false, provider = "libation" }, previewLibraryCallbacks)
+		return
+	end
+
+	if name ~= "small" then
+		hs.printf("ripper.previewLibrary: unknown fixture %q (small | big | loading)", tostring(name))
+		return
+	end
+
+	local rows = previewLibrarySmallRows()
+	library.show({ rows = rows, loading = false, provider = "libation" }, previewLibraryCallbacks)
+	-- Two of the six pretend to already be on the server — demonstrates the
+	-- hide-filter (hidden until "show library" is toggled, then dimmed but
+	-- still selectable) with no server anywhere in the loop.
+	library.setServerLibrary({ rows[2].path, rows[3].path })
+end
+
 -- Teardown for the session panel's webview (registered in the root
 -- init.lua via lifecycle.registerCleanup, alongside the other panels).
 function M.cleanup()
 	if previewTimer then
 		previewTimer:stop()
 		previewTimer = nil
+	end
+	if previewLibraryTimer then
+		previewLibraryTimer:stop()
+		previewLibraryTimer = nil
 	end
 	if scanTask then
 		scanTask:terminate()
@@ -867,6 +1086,7 @@ function M.cleanup()
 	sessionVolume = nil
 	sessionState = nil
 	session.cleanup()
+	library.cleanup()
 end
 
 function M.start()

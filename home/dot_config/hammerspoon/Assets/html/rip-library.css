@@ -1,0 +1,238 @@
+/* rip-library.css — the "Audiobook Library" panel (hs.webview), sibling of
+ * rip-session.css. SAME house panel identity as clipboard-picker.css,
+ * which-key-overlay.css and rip-session.css: the SAME literal tokens —
+ * background rgba(30,30,36,0.97), 1px rgba(217,217,217,1) border, 12px
+ * radius, rgba(255,255,255,0.08) hairlines, 13px base, dim = opacity 0.45.
+ * The :root block, .panel, .footer and its two buttons below are lifted
+ * verbatim from rip-session.css (see that file's own header comment for why
+ * — no #181825 backdrop, no @font-face, every icon is inline SVG).
+ *
+ * New here, and nothing else: a .toolbar (search + filter chips) replacing
+ * rip-session's disc .hdr, and a four-column .row grid (cover | text | meta
+ * | control) replacing its per-title card. Every row's control is an
+ * INDEPENDENT Rip/Skip toggle — unlike rip-session's .seg, this is not a
+ * radio: nothing here ever demotes another row.
+ *
+ * See modules/ripper/library-dialog.lua for the webview lifecycle and
+ * rip-library.html for the DOM + interaction JS.
+ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { background: transparent; }
+body { background: transparent; overflow: hidden; }
+
+:root {
+  --base-size: 13px;
+  --meta-size: 11.7px;   /* the mockups' literal 0.9x metadata size */
+  --ui-font: -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono-font: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+
+  --bright-white: rgb(255, 255, 255);
+  --meta-label: rgb(150, 150, 150);
+  --hairline: rgba(255, 255, 255, 0.08);
+
+  /* Catppuccin Mocha roles, same vocabulary as rip-session.css: mauve = the
+     primary action AND the "selected for Rip" accent here (this panel has
+     no feature/extra distinction, so those two roles are unused). */
+  --mauve: rgb(203, 166, 247);
+  --green: rgb(166, 227, 161);
+
+  --dim: 0.45; /* the house "dimmed" level — already-on-server rows, disabled Start */
+}
+
+/* Same literal tokens as rip-session.css's .panel; sized from
+ * library-dialog.lua's PANEL_W/PANEL_H rather than a fixed mockup width. */
+.panel {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(30, 30, 36, 0.97);
+  border: 1px solid rgba(217, 217, 217, 1);
+  border-radius: 12px;
+  color: rgba(224, 224, 224, 1);
+  font-family: var(--ui-font);
+  font-size: var(--base-size);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* --- toolbar (search + filter chips), pinned at the top --------------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--hairline);
+  flex: 0 0 auto;
+}
+.search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: rgba(224, 224, 224, 1);
+  font-family: var(--ui-font);
+  font-size: var(--base-size);
+  outline: none;
+}
+.search-input:focus { border-color: rgba(203, 166, 247, 0.5); }
+.search-input::placeholder { color: rgba(150, 150, 150, 0.7); }
+
+.chip {
+  padding: 5px 11px;
+  border-radius: 8px;
+  font-size: var(--meta-size);
+  color: rgba(150, 150, 150, 0.9);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  cursor: default; /* a panel control, not a web link */
+  user-select: none;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.chip[data-active="true"] {
+  background: rgba(203, 166, 247, 0.18);
+  color: var(--mauve);
+  border-color: rgba(203, 166, 247, 0.4);
+}
+
+/* --- row list ----------------------------------------------------------- */
+/* flex: 1 1 auto + overflow-y: auto sized so roughly eight rows are
+ * visible (see library-dialog.lua's PANEL_H) — a 460-row fixture scrolls
+ * inside here, it never grows the panel. */
+.rows {
+  padding: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* cover | text | meta | control */
+.row {
+  display: grid;
+  grid-template-columns: 48px 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border-left: 2px solid transparent;
+  flex: 0 0 auto;
+}
+/* Mauve left border, the same primary accent as "Start Rip" below — every
+ * row's selection state is independent, so this never demotes a sibling. */
+.row[data-selected="true"] { border-left-color: var(--mauve); }
+/* Titles the server already holds: rendered ONLY while the "show library"
+ * chip is on (rip-library.html's visible() hides them entirely otherwise),
+ * dimmed but still selectable for a deliberate re-rip. */
+.row[data-inlibrary="true"] { opacity: var(--dim); }
+
+.row .cover {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.10);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 48px;
+  overflow: hidden;
+}
+.row .cover img {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.row .text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.row .name {
+  font-size: var(--base-size);
+  color: var(--bright-white);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row .byline {
+  font-size: var(--meta-size);
+  color: rgba(224, 224, 224, 1);
+  opacity: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row .meta {
+  font-size: var(--meta-size);
+  color: rgba(224, 224, 224, 1);
+  opacity: var(--dim);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* --- per-row Rip/Skip toggle -------------------------------------------- */
+/* Deliberately NOT rip-session's .seg: this is one control with two states,
+ * independent per row, never a group of siblings that demote each other. */
+.toggle {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: var(--meta-size);
+  color: rgb(180, 180, 180);
+  background: rgba(255, 255, 255, 0.10);
+  cursor: default;
+  user-select: none;
+  flex: 0 0 auto;
+}
+.toggle[data-on="true"] { background: rgba(203, 166, 247, 0.22); color: var(--mauve); }
+
+/* --- zero-results state --------------------------------------------------*/
+.empty {
+  padding: 18px 15px;
+  opacity: var(--dim);
+  font-size: var(--base-size);
+}
+
+/* --- footer -------------------------------------------------------------- */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 15px;
+  border-top: 1px solid var(--hairline);
+  flex: 0 0 auto;
+}
+.spacer { flex: 1 1 auto; }
+.meta-text { color: var(--meta-label); font-size: var(--meta-size); }
+.sum-strong { color: var(--bright-white); }
+.btn-primary {
+  background: var(--mauve);
+  color: #11111b;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: var(--base-size);
+  cursor: default;
+  user-select: none;
+}
+/* Disabled must read GREY, not "mauve but shy" — same rip-session lesson
+ * (operator, 2026-08-21: "enabled while reading titles"), applied here to
+ * "disabled while nothing is selected". */
+.btn-primary.disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgb(150, 150, 150);
+  pointer-events: none;
+}
+.btn-ghost {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: rgba(224, 224, 224, 1);
+  cursor: default;
+  user-select: none;
+}
