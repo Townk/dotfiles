@@ -215,6 +215,13 @@ kb.setup({
 						{ key = "h", icon = "󰟀", desc = "Hardware Information", action = apps.raycastSystemMonitor },
 					},
 				},
+				{
+					key = "m", icon = "󰪡", desc = "Media rips",
+					group = {
+						{ key = "a", icon = "󰹠", desc = "Audiobook Library", action = ripper.library },
+						{ key = "d", icon = "󰪡", desc = "Rip Session (re-offer disc)", action = ripper.ripDisc },
+					},
+				},
 			},
 		},
 		-- System shortcuts (numeric actions pass through to macOS)
