@@ -1087,7 +1087,7 @@ end
 --- One provider-contract row. `path` is derived the same way a real
 --- provider row's would be — "<Author>/<Title>" — since that is the exact
 --- string the hide-filter (M.setServerLibrary) matches against.
-local function libraryRow(id, title, subtitle, authors, narrators, durationS, seriesName, seriesPos, acquired)
+local function libraryRow(id, title, subtitle, authors, narrators, durationS, seriesName, seriesPos, acquired, cover)
 	return {
 		id = id,
 		title = title,
@@ -1097,7 +1097,7 @@ local function libraryRow(id, title, subtitle, authors, narrators, durationS, se
 		duration_s = durationS,
 		series = seriesName,
 		series_position = seriesPos,
-		cover = "",
+		cover = cover or "",
 		acquired = acquired,
 		path = authors[1] .. "/" .. title,
 	}
@@ -1123,7 +1123,8 @@ local function previewLibrarySmallRows()
 			16 * 3600 + 10 * 60,
 			nil,
 			nil,
-			true
+			true,
+			"file:///Users/thiago/Library/Application%20Support/Libation/Images/21fgp4T9arL_80x80.jpg"
 		),
 		libraryRow(
 			"2",
@@ -1134,7 +1135,8 @@ local function previewLibrarySmallRows()
 			19 * 3600 + 6 * 60,
 			"The Lord of the Rings",
 			1,
-			true
+			true,
+			"file:///Users/thiago/Library/Application%20Support/Libation/Images/21G-BfBMNuL_80x80.jpg"
 		),
 		libraryRow(
 			"3",
@@ -1145,7 +1147,8 @@ local function previewLibrarySmallRows()
 			17 * 3600 + 42 * 60,
 			"The Lord of the Rings",
 			2,
-			true
+			true,
+			"file:///Users/thiago/Library/Application%20Support/Libation/Images/31CtEpdRivL_80x80.jpg"
 		),
 		libraryRow(
 			"4",
@@ -1156,7 +1159,8 @@ local function previewLibrarySmallRows()
 			6 * 3600 + 58 * 60,
 			nil,
 			nil,
-			false
+			false,
+			"file:///Users/thiago/Library/Application%20Support/Libation/Images/31f4f4NcE8L_80x80.jpg"
 		),
 		libraryRow(
 			"5",
@@ -1167,7 +1171,8 @@ local function previewLibrarySmallRows()
 			11 * 3600 + 22 * 60,
 			"Teixcalaan",
 			1,
-			false
+			false,
+			"file:///Users/thiago/Library/Application%20Support/Libation/Images/31mrPs%2BfbSL_80x80.jpg"
 		),
 		libraryRow(
 			"6",
@@ -1178,7 +1183,8 @@ local function previewLibrarySmallRows()
 			10 * 3600 + 16 * 60,
 			nil,
 			nil,
-			false
+			false,
+			"file:///Users/thiago/Library/Application%20Support/Libation/Images/31XwdUFnItL_80x80.jpg"
 		),
 	}
 end

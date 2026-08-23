@@ -57,6 +57,15 @@ local dismissOnBlur = require("system.dismiss-on-blur")
 
 local ASSETS_DIR = hs.configdir .. "/Assets/html"
 
+-- Libation's own thumbnail cache, as a percent-encoded file:// URL. It is the
+-- base URL every panel page is rendered against so the provider's `file://`
+-- cover URLs resolve (see the webview:html call in M.show for the full why).
+-- Only the space in "Application Support" needs encoding here; keep this in
+-- sync with rip-provider-libation's IMAGES default if that ever moves.
+local COVER_BASE_URL = "file://"
+	.. ((os.getenv("HOME") or ""):gsub(" ", "%%20"))
+	.. "/Library/Application%20Support/Libation/Images/"
+
 --------------------------------------------------------------------------------
 -- Template loading (session-dialog: ensure_templates/substitute)
 --------------------------------------------------------------------------------
@@ -292,7 +301,15 @@ function M.show(data, cbs)
 	ensure_webview()
 	savedWindow = hs.window.focusedWindow()
 	webview:frame(panel_frame(savedWindow))
-	webview:html(build_html(data))
+	-- BASE URL (live 2026-08-23): the cover thumbnails the provider hands us
+	-- are `file://` URLs into Libation's own image cache, and a page handed to
+	-- webview:html() with no base URL has an about:blank origin — WebKit
+	-- refuses every file:// subresource from there, so each <img> fired its
+	-- onerror and silently fell back to the book glyph. Every cover was
+	-- missing and nothing said why. Giving the page a file:// base in the
+	-- cache directory puts it in the same origin as the images it asks for.
+	-- The path is percent-encoded because "Application Support" has a space.
+	webview:html(build_html(data), COVER_BASE_URL)
 	webview:show()
 	webview:bringToFront(true)
 	-- (session-dialog) Hammerspoon is a background/accessory app: showing a

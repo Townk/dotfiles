@@ -129,6 +129,14 @@ body { background: transparent; overflow: hidden; }
 /* Mauve left border, the same primary accent as "Start Rip" below — every
  * row's selection state is independent, so this never demotes a sibling. */
 .row[data-selected="true"] { border-left-color: var(--mauve); }
+
+/* Keyboard focus is a DIFFERENT axis from selection: the arrow keys move a
+   highlight, Space marks the highlighted row Rip. So focus must not reuse
+   the mauve left border selection owns, or the two states become
+   indistinguishable exactly when both are in play. A faint wash plus a
+   brighter hairline reads as "you are here" without competing. */
+.row[data-focused="true"] { background: rgba(255, 255, 255, 0.06); }
+.row[data-focused="true"] + .row { border-top-color: rgba(255, 255, 255, 0.16); }
 /* Titles the server already holds: rendered ONLY while the "show library"
  * chip is on (rip-library.html's visible() hides them entirely otherwise),
  * dimmed but still selectable for a deliberate re-rip. */
