@@ -308,6 +308,26 @@ FAKESSH
     The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
   End
 
+  # Regression guard (final-review finding, 2026-08-22): rip::staging_for
+  # honors RIP_AB_STAGING, but rip::ab_worker used to hardcode
+  # "$(rip::staging_root)/audiobooks" as its acquire destination and derive
+  # books_root from THAT — with the override set, the session acquired into
+  # one tree and pushed from another (rip::push_worker's src IS
+  # rip::staging_for audiobooks), so the push saw an empty staging dir and
+  # the session vanished silently. Both must derive from the same seam.
+  It 'worker: honors RIP_AB_STAGING — acquires into and pushes from the overridden tree'
+    local custom="$RIP_SANDBOX/custom-staging/Books"
+    export RIP_AB_STAGING="$custom"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    # nothing was ever acquired into (or left behind in) the default tree
+    The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson" should not be exist
+    # the override tree itself is empty again after the verified push
+    The path "$custom/Brandon Sanderson" should not be exist
+  End
+
   It 'worker: the sidecar carries the plan identity, not the path fallback'
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"narrators":["MacLeod Andrews"],"duration_s":45720,"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"],.source.provider,.work]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"

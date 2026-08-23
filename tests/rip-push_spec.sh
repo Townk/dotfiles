@@ -63,6 +63,11 @@ EOF
     print -r -- "${#f}"
   }
 
+  # provider_call_count() — how many times the fake provider's `list` ran,
+  # for the fallback-cache regression guard below: a 20-book push must make
+  # ONE provider call, not one per book.
+  provider_call_count() { wc -l < "$RIP_SANDBOX/provider-calls.log" 2>/dev/null | tr -d ' '; }
+
   # mb_*_call_count() — read back the counter files the MB-retry regression
   # tests' fake curl scripts bump on each call to the given endpoint, so an
   # example can assert the retry actually fired (count 2) rather than just
@@ -1438,12 +1443,134 @@ EOF
     The output should equal '["OL15168631W","x1",["Brandon Sanderson"]]'
   End
 
+  # Regression guard (final-review finding, 2026-08-22): jq's `*` gives the
+  # RIGHT operand priority even when its value is null, so a sidecar that
+  # recorded `subtitle: null` (the minimal-identity shape a verify-failure
+  # retry writes first) permanently shadowed a later pass's real subtitle —
+  # `jq -n --argjson new '{"subtitle":"S"}' --argjson old '{"subtitle":null}'
+  # '$new * $old'` returns `{"subtitle":null}`. A null in the OLD sidecar is
+  # not something "already recorded" (spec: nothing already recorded is
+  # rewritten), so it must not out-rank a later pass's real value. Old
+  # values that ARE recorded — a resolved `work` and a foreign `ids` entry —
+  # must still win, in the very same merge.
+  It 'sidecar: a null in the OLD sidecar is upgraded by a later pass, while a resolved work key and foreign ids survive'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"Steelheart","subtitle":null,"ids":{"isbn13":"9780593344","librofm.id":"x1"},"work":{"openlibrary":"OL15168631W"},"source":{"provider":"unknown"}}' \
+      | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
+    printf '%s\n' '{"path":"A/B","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' \
+      > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.subtitle,.work.openlibrary,.ids[\"librofm.id\"],.ids[\"audible.asin\"]]' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal '["The Reckoners, Book 1","OL15168631W","x1","B00ECDZ08I"]'
+  End
+
+  # --- sidecar: the watcher/GUI seam (final-review finding 3, 2026-08-22) --
+  #
+  # rip::_book_meta_for used to read store identity ONLY from
+  # $RIP_AB_META_INDEX, which only rip::ab_worker ever set — a title
+  # liberated through Libation's own GUI enqueues a plain `rip-push
+  # audiobooks` with no index at all, so every such book got ids: {},
+  # subtitle: null, narrators: [] forever. Two-part fix: (a) the index now
+  # lives at a STABLE path rip::_book_meta_for defaults to when the caller
+  # sets no override, so a session's rows outlive that one session's own
+  # push; (b) failing that, a best-effort, at-most-once provider `list`
+  # call is tried before falling back to the path-derived minimal identity.
+
+  It 'sidecar: a watcher-triggered push (no RIP_AB_META_INDEX set) reads the stable default index path'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart" "$RIP_STAGING_ROOT/.work"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+    printf '%s\n' '{"path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}' \
+      > "$RIP_STAGING_ROOT/.work/ab-meta.jsonl"
+    # RIP_AB_META_INDEX is deliberately NOT set — this is the watcher's own
+    # call shape (rip-push audiobooks, no session, no override).
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    The status should equal 0
+    The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
+  End
+
+  It 'sidecar: no index at all, but a working provider fallback yields a rich sidecar'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+case "$1" in
+  list) printf '%s\n' '{"path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}' ;;
+esac
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    The status should equal 0
+    The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
+  End
+
+  It 'sidecar: no index and a FAILING provider still succeeds with the minimal identity'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    printf '#!/bin/sh\nexit 9\n' > "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Some Author/Some Title"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/Some Author/Some Title/Some Title.m4b"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.title,.authors,.ids]' '$RIP_SANDBOX/server/audiobooks/Some Author/Some Title/.fleet-book.json'"
+    The status should equal 0
+    The output should equal '["Some Title",["Some Author"],{}]'
+  End
+
+  It 'sidecar: the provider fallback is invoked at most once for a multi-book push'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    export RIP_FAKE_PROVIDER_LOG="$RIP_SANDBOX/provider-calls.log"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+echo called >> "$RIP_FAKE_PROVIDER_LOG"
+case "$1" in
+  list)
+    printf '%s\n' '{"path":"A/One","title":"One","ids":{},"provider":"libation","format":"m4b"}'
+    printf '%s\n' '{"path":"A/Two","title":"Two","ids":{},"provider":"libation","format":"m4b"}'
+    ;;
+esac
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/One" "$RIP_STAGING_ROOT/audiobooks/Books/A/Two"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/One/One.m4b"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/Two/Two.m4b"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The result of function provider_call_count should equal "1"
+  End
+
   It 'sidecar: re-running leaves the file byte-identical'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"ids":{},"provider":"unknown","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' > "$RIP_SANDBOX/m.json"
     When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && mtime1=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && sleep 1 && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && mtime2=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && [ -z \"\$(find $RIP_SANDBOX/bk -name '.fleet-book.json.tmp.*' 2>/dev/null)\" ] && [ \"\$mtime1\" = \"\$mtime2\" ] && echo stable"
     The status should equal 0
     The output should equal "stable"
+  End
+
+  # Regression guard (final-review finding, minor #6, 2026-08-22): the
+  # scratch write used to be "$sidecar.tmp.$$" — INSIDE the book dir. A
+  # process killed mid-write left a stray there that a LATER push's
+  # age-gated `find` would pick up and ship to the server. The write now
+  # goes to .work/ and is mv'd in, so the book dir NEVER (even
+  # transiently, as far as anything outside this function can observe)
+  # holds anything but the sidecar itself, and the scratch file lives under
+  # this file's own established .work/ scratch idiom.
+  # Renaming the finished tmp file OVER the sidecar means it's already gone
+  # from the book dir by the time a synchronous test can `ls` it, old
+  # location or new — the bug is about what a process KILLED mid-write
+  # leaves behind. So this shadows `mv` (a zsh function of the same name
+  # shadows the external command for the sourced session) to capture the
+  # exact tmp PATH the rename used, which is observable without a crash.
+  It 'sidecar: the scratch write goes to a tmp path under .work/, never inside the book dir'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"ids":{},"provider":"unknown","format":"m4b"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB
+      mv() { local -a a=(\"\$@\"); print -r -- \"MV_SRC:\${a[3]}\"; command mv \"\$@\" }
+      rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json"
+    The status should equal 0
+    The output should include "MV_SRC:$RIP_STAGING_ROOT/.work/fleet-book."
+    The output should not include "MV_SRC:$RIP_SANDBOX/bk/"
   End
 
   It 'enrichment with no hops changes exactly one thing: the sidecar appears'

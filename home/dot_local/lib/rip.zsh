@@ -369,20 +369,62 @@ rip::_nfc() {
 # NOT metadata.json — Audiobookshelf reserves that name for its own import
 # format and would read ours as instructions.
 
+# rip::_ab_meta_index_default — the STABLE, session-independent path the
+# meta index lives at when the caller does not set RIP_AB_META_INDEX
+# explicitly. rip::ab_worker writes every session's rows here now (review
+# finding, 2026-08-22: it used to write a $$-suffixed path and remove it
+# mid-session, so a watcher-triggered push — which never sets the var at
+# all — could never see a session's rich rows). ANY audiobooks push,
+# session-triggered or watcher-triggered, reads from here by default.
+rip::_ab_meta_index_default() { print -r -- "$(rip::staging_root)/.work/ab-meta.jsonl"; }
+
+# Provider-fallback cache (fix 3b, review finding 2026-08-22): a push with
+# NO usable index row (the watcher path, or an import provider with none)
+# tries the provider's own `list` ONCE per push run and matches by `.path`,
+# rather than falling straight to the path-derived minimal identity. GLOBAL
+# and process-scoped on purpose — every real invocation (rip-push
+# --worker, rip-audiobook --session-worker) is its own fresh zsh process
+# (see executable_rip-push: --worker handles exactly one type per
+# process), so "reset once per push run" falls out of normal process
+# lifetime with no explicit reset needed; guarded like RIP_AB_ENRICH_HOPS
+# above so re-sourcing this file mid-process never clobbers a run already
+# under way. _RIP_AB_PROVIDER_FETCHED flips exactly once — success or
+# failure — so a 20-book push makes at most ONE provider call, never one
+# per book, and a missing/failing provider is never retried within the run.
+typeset -g _RIP_AB_PROVIDER_ROWS
+typeset -g _RIP_AB_PROVIDER_FETCHED
+(( ${+_RIP_AB_PROVIDER_FETCHED} )) || { _RIP_AB_PROVIDER_ROWS=""; _RIP_AB_PROVIDER_FETCHED=0 }
+
 # rip::_book_meta_for <relpath> — one JSON object for the book at
 # <Author>/<Title>. The provider's rows, when a session wrote them, live in
-# the JSON-lines index at $RIP_AB_META_INDEX keyed by `path`. There is no
-# index on the watcher path (a title liberated through Libation's own GUI),
-# and an import provider may have none either, so a MINIMAL identity derived
-# from the path is a first-class outcome, not an error: the folder names are
+# the JSON-lines index at $RIP_AB_META_INDEX (default: the stable path
+# above) keyed by `path`. Below that: a best-effort, at-most-once provider
+# `list` fallback for a push with no matching index row at all — the
+# watcher path (a title liberated through Libation's own GUI enqueues a
+# plain `rip-push audiobooks` with no index) and an import provider that
+# keeps none either. Only once BOTH give up is a MINIMAL identity derived
+# from the path a first-class outcome, not an error: the folder names are
 # the only truth available and they are still worth recording.
 rip::_book_meta_for() {
   setopt localoptions noerrexit nopipefail
   local rel; rel="$(rip::_nfc "$1")"
-  local idx="${RIP_AB_META_INDEX:-}"
+  local idx="${RIP_AB_META_INDEX:-$(rip::_ab_meta_index_default)}"
   local row=""
   if [[ -n "$idx" && -f "$idx" ]]; then
     row="$(jq -c --arg p "$rel" 'select((.path // "") == $p)' "$idx" 2>/dev/null | head -1)"
+  fi
+  if [[ -z "$row" ]]; then
+    # Best-effort, best-once: never let a missing/failing provider slow
+    # down or fail the push — every step here is guarded so the worst case
+    # is exactly today's path-derived minimal identity.
+    if (( ! _RIP_AB_PROVIDER_FETCHED )); then
+      _RIP_AB_PROVIDER_FETCHED=1
+      local pbin=""
+      pbin="$(rip::ab_provider_bin 2>/dev/null)"
+      [[ -n "$pbin" ]] && _RIP_AB_PROVIDER_ROWS="$(zsh "$pbin" list 2>/dev/null)"
+    fi
+    [[ -n "$_RIP_AB_PROVIDER_ROWS" ]] && row="$(print -r -- "$_RIP_AB_PROVIDER_ROWS" \
+      | jq -c --arg p "$rel" 'select((.path // "") == $p)' 2>/dev/null | head -1)"
   fi
   if [[ -n "$row" ]]; then
     print -r -- "$row"
@@ -433,8 +475,18 @@ rip::_book_sidecar() {
 
   local merged="$built"
   if [[ -f "$sidecar" ]] && jq -e . "$sidecar" >/dev/null 2>&1; then
+    # jq's `*` gives the RIGHT operand (the old file) priority at every
+    # depth, even when its value is null — a sidecar that recorded
+    # `subtitle: null` (the minimal-identity shape a verify-failure retry
+    # writes first) would then permanently shadow a later pass's real
+    # subtitle: `jq -n --argjson new '{"subtitle":"S"}' --argjson old
+    # '{"subtitle":null}' '$new * $old'` → `{"subtitle":null}` (review
+    # finding, 2026-08-22). A null in the OLD object is not something
+    # "already recorded" (see the merge-rule note above), so strip
+    # null-valued keys from it before merging — a resolved `work` and a
+    # foreign `ids` entry are non-null and still win untouched.
     merged="$(jq -n --argjson new "$built" --slurpfile old "$sidecar" \
-      '$new * ($old[0] // {})' 2>/dev/null)" \
+      '$new * (($old[0] // {}) | with_entries(select(.value != null)))' 2>/dev/null)" \
       || { log_error "rip: could not merge the sidecar at $sidecar"; return 1 }
   fi
 
@@ -442,7 +494,17 @@ rip::_book_sidecar() {
   if [[ -f "$sidecar" ]] && [[ "$merged" == "$(cat "$sidecar")" ]]; then
     return 0
   fi
-  local tmp="$sidecar.tmp.$$"
+  # The scratch write lives under .work/, never inside the book dir itself
+  # (review finding, 2026-08-22): a process killed mid-write used to leave
+  # ".fleet-book.json.tmp.$$" sitting IN the book dir, where it is just
+  # another file — a LATER push's age-gated find would pick it up and ship
+  # it to the server. .work/ is this file's own established idiom for
+  # exactly this kind of scratch (book-meta.$$.json, the ab-meta index,
+  # push listfiles/locks/markers all live there), and it can never be
+  # listed by a push regardless of book dir or push type.
+  local work_dir; work_dir="$(rip::staging_root)/.work"
+  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  local tmp="$work_dir/fleet-book.$$.json.tmp"
   print -r -- "$merged" > "$tmp" || { rm -f -- "$tmp"; return 1 }
   mv -f -- "$tmp" "$sidecar" || { rm -f -- "$tmp"; return 1 }
   return 0
@@ -2160,15 +2222,40 @@ rip::ab_worker() {
 
   local provider; provider="$(jq -r '.provider // "libation"' "$plan")"
   local bin; bin="$(rip::ab_provider_bin "$provider")" || return 2
-  local dest_root; dest_root="$(rip::staging_root)/audiobooks"
+  # ONE source of truth for both the acquire destination and the push
+  # source: rip::staging_for audiobooks (the RIP_AB_STAGING seam) IS the
+  # Books-level dir rip::push_worker reads from. Deriving dest_root as its
+  # OWN literal "$(rip::staging_root)/audiobooks" ignored that override —
+  # the session would acquire into one tree and push from another,
+  # silently losing the session to an empty push (review finding,
+  # 2026-08-22). Libation always creates its own "Books" level under
+  # whatever dir it is given (not configurable — see rip::staging_for's own
+  # comment), so the acquire destination is books_root's PARENT.
+  local books_root; books_root="$(rip::staging_for audiobooks)"
+  local dest_root="${books_root:h}"
   mkdir -p "$dest_root" || { log_error "rip: cannot create $dest_root"; return 1 }
 
   # The meta index the enrichment stage reads: every item's row, keyed by
-  # path. This is what makes a session's sidecars carry real store identity
-  # instead of the path-derived fallback a GUI-liberated title gets.
-  local index="$(rip::staging_root)/.work/ab-meta.$$.jsonl"
+  # path. STABLE path now (review finding, 2026-08-22), not a $$-suffixed
+  # one: rip::_book_meta_for defaults RIP_AB_META_INDEX to this exact path,
+  # which is what lets a watcher-triggered `rip-push audiobooks` — no
+  # session, no index var set at all — pick up a session's rich rows too,
+  # not just a session-triggered push. Merged by `path`, never truncated:
+  # a stable shared path must not erase another session's still-unpushed
+  # rows (heavy-group parallelism is 1, but a prior session's push can
+  # still be sitting there having failed verify, kept staged for a manual
+  # `rip-push audiobooks` retry per the failure-honesty rule below).
+  local index; index="$(rip::_ab_meta_index_default)"
   mkdir -p "${index:h}"
-  jq -c '(.items // [])[]' "$plan" > "$index" 2>/dev/null
+  [[ -f "$index" ]] || : > "$index"
+  local idx_tmp="$index.tmp.$$"
+  jq -c -s '
+    [.[] | select((.path // "") != "")]
+    | reduce .[] as $r ({}; .[$r.path] = $r)
+    | .[]
+  ' "$index" <(jq -c '(.items // [])[]' "$plan" 2>/dev/null) > "$idx_tmp" 2>/dev/null \
+    && mv -f -- "$idx_tmp" "$index" \
+    || { log_warn "rip: could not update the meta index at $index — enrichment for this batch may fall back to minimal identity"; rm -f -- "$idx_tmp" }
 
   local -a items=()
   # NOTE: every local var below is declared HERE, once, including the loop
@@ -2220,7 +2307,6 @@ rip::ab_worker() {
     # robust even when a pre-existing sibling book dir is already there —
     # and the meta index must be re-keyed to the real path or the sidecar it
     # feeds would never match the folder it belongs to.
-    local books_root="$dest_root/Books"
     if [[ ! -d "$books_root/$bpath" ]]; then
       local -a landed=("$books_root/${bpath%%/*}"/*(N/om))
       if (( ${#landed} )); then
@@ -2252,6 +2338,13 @@ rip::ab_worker() {
   local RIP_AB_META_INDEX="$index"
   rip::push_worker audiobooks
   local prc=$?
+  # Removed at the END, after the push (not "once read" mid-session as
+  # before, review finding 2026-08-22): the index is stable now, so a
+  # watcher-triggered push racing this session mid-acquire — the
+  # AUDIOBOOK_QUIET_SECS timer fires well inside a multi-book session's
+  # total download time — still finds it. heavy-group parallelism is
+  # pinned to 1 (job::_ensure_group), so no second ab_worker can be
+  # mid-write to this same path concurrently.
   rm -f -- "$index"
   (( prc != 0 )) && return $prc
   return $rc
