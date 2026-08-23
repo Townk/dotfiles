@@ -1023,7 +1023,14 @@ local function libraryRow(id, title, subtitle, authors, narrators, durationS, se
 end
 
 -- Built fresh on each call so a previous preview can never leak state into
--- the next one (same discipline as previewData above).
+-- the next one (same discipline as previewData above). `acquired` is
+-- Libation's own BookStatus flag — a BOOLEAN in the real provider contract
+-- (see the spec's row example), not the date string this fixture used to
+-- pass (inert until the "never pushed" detail line existed to render it —
+-- wrong the moment it did, 2026-08-23 review finding). Row 1 is acquired
+-- but absent from the server set below on purpose: it is the fixture that
+-- exercises that line at all. Rows 2-3 are acquired AND on the server (the
+-- hide-filter demo); 4-6 are ordinary not-yet-liberated candidates.
 local function previewLibrarySmallRows()
 	return {
 		libraryRow(
@@ -1035,7 +1042,7 @@ local function previewLibrarySmallRows()
 			16 * 3600 + 10 * 60,
 			nil,
 			nil,
-			"2026-01-04"
+			true
 		),
 		libraryRow(
 			"2",
@@ -1046,7 +1053,7 @@ local function previewLibrarySmallRows()
 			19 * 3600 + 6 * 60,
 			"The Lord of the Rings",
 			1,
-			"2026-02-11"
+			true
 		),
 		libraryRow(
 			"3",
@@ -1057,7 +1064,7 @@ local function previewLibrarySmallRows()
 			17 * 3600 + 42 * 60,
 			"The Lord of the Rings",
 			2,
-			"2026-02-11"
+			true
 		),
 		libraryRow(
 			"4",
@@ -1068,7 +1075,7 @@ local function previewLibrarySmallRows()
 			6 * 3600 + 58 * 60,
 			nil,
 			nil,
-			"2026-03-02"
+			false
 		),
 		libraryRow(
 			"5",
@@ -1079,7 +1086,7 @@ local function previewLibrarySmallRows()
 			11 * 3600 + 22 * 60,
 			"Teixcalaan",
 			1,
-			"2026-03-19"
+			false
 		),
 		libraryRow(
 			"6",
@@ -1090,7 +1097,7 @@ local function previewLibrarySmallRows()
 			10 * 3600 + 16 * 60,
 			nil,
 			nil,
-			"2026-04-01"
+			false
 		),
 	}
 end
@@ -1116,7 +1123,7 @@ local function previewLibraryBigRows()
 			3600 * (4 + (i % 12)),
 			"Series " .. seriesIdx,
 			seriesPos,
-			nil
+			false
 		)
 	end
 	return rows

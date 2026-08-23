@@ -36,6 +36,7 @@ body { background: transparent; overflow: hidden; }
      no feature/extra distinction, so those two roles are unused). */
   --mauve: rgb(203, 166, 247);
   --green: rgb(166, 227, 161);
+  --peach: rgb(250, 179, 135); /* "liberated, never pushed" — a divergence to flag, not celebrate */
 
   --dim: 0.45; /* the house "dimmed" level — already-on-server rows, disabled Start */
 }
@@ -113,12 +114,13 @@ body { background: transparent; overflow: hidden; }
   min-height: 0;
 }
 
-/* cover | text | meta | control */
+/* Outer row: a flex column so an optional detail line (the "liberated,
+ * never pushed" divergence — see rip-library.html's neverPushedHtml) can
+ * sit below the cover|text|meta|control line without disturbing its grid.
+ * Same two-tier shape as rip-session.css's .row/.rowline/.detail. */
 .row {
-  display: grid;
-  grid-template-columns: 48px 1fr auto auto;
-  align-items: center;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
   padding: 6px 10px;
   border-radius: 8px;
   border-left: 2px solid transparent;
@@ -131,6 +133,27 @@ body { background: transparent; overflow: hidden; }
  * chip is on (rip-library.html's visible() hides them entirely otherwise),
  * dimmed but still selectable for a deliberate re-rip. */
 .row[data-inlibrary="true"] { opacity: var(--dim); }
+
+/* cover | text | meta | control */
+.rowline {
+  display: grid;
+  grid-template-columns: 48px 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+/* "liberated, never pushed" (rip-session.css's .detail/.have, same idiom:
+ * an icon + text line indented under the cover). 48px cover + 10px gap. */
+.detail { display: flex; align-items: center; gap: 8px; padding-left: 58px; padding-top: 2px; }
+.never-pushed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--peach);
+  font-size: var(--meta-size);
+  min-width: 0;
+}
+.never-pushed span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .row .cover {
   position: relative;

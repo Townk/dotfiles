@@ -62,6 +62,11 @@
     //----------------------------------------------------------------------
     var SVG_BOOK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="1.8"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5a1 1 0 0 1-1 1H6.5A2.5 2.5 0 0 0 4 22Z"></path><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H19"></path></svg>';
 
+    // "liberated, never pushed" detail line (rip-session.html's SVG_CHECK_SM,
+    // same 12x12 sizing, a warning triangle instead of a check — this is a
+    // divergence to flag, not a state to celebrate).
+    var SVG_WARN_SM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgb(250,179,135)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
+
     //----------------------------------------------------------------------
     // State — every row, plus the derived sets/flags the UI needs.
     //----------------------------------------------------------------------
@@ -225,6 +230,19 @@
       return esc(bits.join(" · "));
     }
 
+    // "liberated, never pushed": the spec's own name for the divergence
+    // between Libation's acquired flag and cantina's server set — a title
+    // Libation calls liberated (acquired === true, strict: a truthy
+    // non-boolean acquired_utc-ish value must not light this up) that
+    // cantina does not hold (r.path absent from SERVER) is exactly a push
+    // that never happened, and it stays visible with this line rather than
+    // silently blending into an ordinary not-yet-ripped row.
+    function neverPushedHtml(r, inLibrary) {
+      if (r.acquired !== true || inLibrary) return '';
+      return '<div class="detail"><div class="never-pushed">' + SVG_WARN_SM
+        + '<span>liberated, never pushed</span></div></div>';
+    }
+
     function rowHtml(r) {
       var selected = SELECTED.has(r.id);
       var inLibrary = SERVER.has(r.path);
@@ -233,10 +251,13 @@
         ? '<div class="cover">' + SVG_BOOK + '<img src="' + esc(r.cover) + '" onerror="this.remove()"></div>'
         : '<div class="cover">' + SVG_BOOK + '</div>';
       return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '">'
+        + '<div class="rowline">'
         + cover
         + '<div class="text"><div class="name">' + name + '</div><div class="byline">' + bylineHtml(r) + '</div></div>'
         + '<div class="meta">' + metaHtml(r) + '</div>'
         + '<span class="toggle" data-toggle="' + esc(r.id) + '" data-on="' + selected + '">' + (selected ? 'Rip' : 'Skip') + '</span>'
+        + '</div>'
+        + neverPushedHtml(r, inLibrary)
         + '</div>';
     }
 
