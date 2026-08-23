@@ -155,6 +155,13 @@
     function visible() {
       var q = QUERY.trim().toLowerCase();
       return ROWS.filter(function (r) {
+        // NFC-sensitive by design, not by oversight: r.path is composed by
+        // the provider from JSON that is already NFC, and SERVER's entries
+        // come off the server's `find` listing, which rip-push's --iconv
+        // makes NFC-canonical before it ever lands there (rip.zsh). Both
+        // sides are guaranteed NFC at the source — do not "simplify" this
+        // into a normalizing/case-folding compare; a decomposed name on
+        // either side would silently re-offer a book the operator owns.
         if (!SHOW_LIBRARY && SERVER.has(r.path)) return false;
         if (!q) return true;
         return (r.title + " " + (r.subtitle || "") + " " + r.authors.join(" ") +

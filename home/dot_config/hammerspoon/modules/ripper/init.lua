@@ -109,6 +109,12 @@ local libraryTask = nil -- in-flight `rip-disc --library` (anchors it against GC
 -- Audiobook Library panel's own rows (`rip-audiobook --library`). Same name
 -- would have collided two unrelated in-flight tasks onto one anchor.
 local audiobookLibraryTask = nil
+-- The Audiobook Library panel's OTHER fetch: `rip-audiobook --server-library`,
+-- the hide-filter set. Distinct anchor from audiobookLibraryTask above (the
+-- provider rows) — the two run concurrently and land in either order, each
+-- populating the panel additively, so one must never be able to clobber the
+-- other's in-flight task.
+local serverTask = nil
 local sessionVolume = nil -- the volume the open session panel is reviewing
 local sessionState = nil -- the open session's payload; also the staleness token
 local planSeq = 0 -- monotonic suffix for plan temp files
@@ -788,6 +794,38 @@ function M.library()
 	end, { "--library" })
 	audiobookLibraryTask = thisTask
 	thisTask:start()
+
+	-- Concurrent with the fetch above, not sequential: the hide-set and the
+	-- rows are independent answers that land in either order and each
+	-- populate the panel additively (library.setRows / library.setServerLibrary),
+	-- exactly as the DVD session panel's scan and library fetch do.
+	if serverTask then
+		serverTask:terminate()
+		serverTask = nil
+	end
+	local thisServerTask
+	thisServerTask = hs.task.new(RIP_AUDIOBOOK, function(rc, out, err)
+		if serverTask == thisServerTask then
+			serverTask = nil
+		end
+		if rc ~= 0 then
+			-- Reachability failure means "we do not know what the server has".
+			-- Show everything rather than wrongly hiding a book the operator
+			-- does not own — a false hide is invisible and unrecoverable from
+			-- the UI; a false show costs one skipped row.
+			log.ef("library: --server-library failed rc=%d: %s", rc, err or "")
+			return
+		end
+		local paths = {}
+		for line in (out or ""):gmatch("[^\n]+") do
+			paths[#paths + 1] = line
+		end
+		if library.isShown() then
+			library.setServerLibrary(paths)
+		end
+	end, { "--server-library" })
+	serverTask = thisServerTask
+	thisServerTask:start()
 end
 
 --------------------------------------------------------------------------------
@@ -1173,6 +1211,10 @@ function M.cleanup()
 	if audiobookLibraryTask then
 		audiobookLibraryTask:terminate()
 		audiobookLibraryTask = nil
+	end
+	if serverTask then
+		serverTask:terminate()
+		serverTask = nil
 	end
 	sessionVolume = nil
 	sessionState = nil
