@@ -96,26 +96,43 @@
     // row's authors/narrators, which a provider row is free to leave empty.
     function arr(v) { return Array.isArray(v) ? v : []; }
 
-    // Normalize one provider row: force id to a string (so Set membership
+    // Normalize one provider row. This object is BOTH what the DOM renders
+    // AND — verbatim, per row the operator marks Rip — what start() posts
+    // back as the plan payload that rip::ab_worker merges into the meta
+    // index (plan items win) and rip::_book_meta_for reads to write the
+    // once-only, permanent .fleet-book.json sidecar. A prior version built
+    // this as a DISPLAY-ONLY whitelist of 11 keys, which silently dropped
+    // `ids` (audible.asin), `provider`, `provider_version`, `format`,
+    // `language`, `abridged` and `acquired_utc` from every book queued
+    // through this panel — the sidecar recorded "ids": {} and "provider":
+    // "unknown" for a book that demonstrably came from Libation, and
+    // because staging is deleted after a verified push and the merge rule
+    // never lets a later write overwrite an already-recorded provider, that
+    // falsehood was permanent (2026-08-23 review finding).
+    //
+    // Fix: copy every OWN key of the incoming row first, so unknown/future
+    // provider keys survive untouched, then override ONLY what the DOM
+    // itself requires a specific shape for: id as a string (Set membership
     // and dataset round-trips never mismatch on JS's number-vs-string JSON
-    // quirks — the same boundary lesson as session-dialog.lua's title_no,
-    // applied at ingestion instead of at every consumer) and arr()-guard
-    // the two fields that can arrive empty.
+    // quirks — the same boundary lesson as session-dialog.lua's title_no)
+    // and authors/narrators forced through arr() (the empty-LIST-vs-empty-
+    // MAP ambiguity hs.json.encode has crossing the Lua bridge — see arr()
+    // above). Nothing else is coerced: a null/absent subtitle or
+    // duration_s now reaches the payload exactly as the provider sent it,
+    // instead of the invented '' / 0 the old whitelist forced on it (both
+    // of which also ended up in the sidecar for no reason). Every display
+    // call site below already guards optional fields with `||`/truthiness
+    // (bylineHtml, metaHtml, hms), so this is safe for rendering too.
     function normalizeRow(r) {
       r = r || {};
-      return {
-        id: String(r.id),
-        title: r.title || '',
-        subtitle: r.subtitle || '',
-        authors: arr(r.authors),
-        narrators: arr(r.narrators),
-        duration_s: Number(r.duration_s) || 0,
-        series: r.series || '',
-        series_position: r.series_position || null,
-        cover: r.cover || '',
-        acquired: r.acquired || null,
-        path: r.path || ''
-      };
+      var out = {};
+      for (var k in r) {
+        if (Object.prototype.hasOwnProperty.call(r, k)) out[k] = r[k];
+      }
+      out.id = String(r.id);
+      out.authors = arr(r.authors);
+      out.narrators = arr(r.narrators);
+      return out;
     }
 
     function normalizeRows(rows) { return arr(rows).map(normalizeRow); }
