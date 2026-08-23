@@ -254,10 +254,15 @@ end
 --------------------------------------------------------------------------------
 
 --- Open the panel on `data`, or — if it is already open — re-render it in
---- place with fresh rows. Re-rendering goes through the same injected
---- window.__setRows a plain M.setRows call uses (not a full HTML rebuild):
---- rebuilding would drop the key window, flicker, and throw away any
---- in-flight search text.
+--- place with the FULL fresh payload. Re-rendering goes through the
+--- injected window.__setLibrary (not window.__setRows, and not a full HTML
+--- rebuild): rebuilding would drop the key window, flicker, and throw away
+--- any in-flight search text; __setRows alone would forward `rows` but drop
+--- `loading`/`provider` — it unconditionally ends the loading state, so a
+--- caller re-showing with `loading = true` (Task 4's refresh path) would
+--- otherwise see "nothing to show" instead of the loading state. Same
+--- reasoning as rip-session.html's window.__setSession, which is also a
+--- full reset for the scanning -> titles transition.
 --- @param data table { rows = <array>, loading = <bool>, provider = "libation" }
 --- @param cbs table|nil { onStart = fun(plan), onImport = fun(spec), onDismiss = fun() }
 function M.show(data, cbs)
@@ -268,7 +273,7 @@ function M.show(data, cbs)
 	local payload = library_payload(data)
 
 	if isShown and webview then
-		webview:evaluateJavaScript("window.__setRows && window.__setRows(" .. json_for_script(payload.rows) .. ")")
+		webview:evaluateJavaScript("window.__setLibrary && window.__setLibrary(" .. json_for_script(payload) .. ")")
 		return
 	end
 

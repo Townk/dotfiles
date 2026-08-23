@@ -98,12 +98,22 @@
         series: r.series || '',
         series_position: r.series_position || null,
         cover: r.cover || '',
-        acquired: r.acquired,
+        acquired: r.acquired || null,
         path: r.path || ''
       };
     }
 
     function normalizeRows(rows) { return arr(rows).map(normalizeRow); }
+
+    // A row that dropped out of ROWS (a refresh no longer includes it) must
+    // drop out of SELECTED too — otherwise renderFooter()'s SELECTED.size
+    // overcounts what start() will actually send (it filters against the
+    // CURRENT ROWS). Called from every entry point that replaces ROWS.
+    function purgeStaleSelection() {
+      var ids = {};
+      for (var i = 0; i < ROWS.length; i++) ids[ROWS[i].id] = true;
+      Array.from(SELECTED).forEach(function (id) { if (!ids[id]) SELECTED.delete(id); });
+    }
 
     //----------------------------------------------------------------------
     // Lua -> JS entry points
@@ -115,11 +125,27 @@
     window.__setRows = function (rows) {
       ROWS = normalizeRows(rows);
       LOADING = false;
+      purgeStaleSelection();
       render();
     };
 
     window.__setServerLibrary = function (paths) {
       SERVER = new Set(arr(paths));
+      render();
+    };
+
+    // Lua -> JS: replace the WHOLE payload in place (library-dialog.lua's
+    // M.show re-render branch, fired when the panel is already open).
+    // Deliberately distinct from __setRows: a fresh `data` from the caller
+    // carries loading/provider too, and those must survive a second show()
+    // exactly as they did the first time (mirrors rip-session.html's
+    // window.__setSession, which is also a full reset for the same reason).
+    window.__setLibrary = function (data) {
+      if (!data) return;
+      LOADING = !!data.loading;
+      PROVIDER = data.provider || PROVIDER;
+      ROWS = normalizeRows(data.rows);
+      purgeStaleSelection();
       render();
     };
 
