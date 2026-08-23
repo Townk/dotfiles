@@ -69,6 +69,7 @@ local RIP_PIPELINE = HOME .. "/.local/bin/rip-pipeline"
 local RIP_PUSH = HOME .. "/.local/bin/rip-push"
 local RIP_DISC = HOME .. "/.local/bin/rip-disc"
 local RIP_TMDB = HOME .. "/.local/bin/rip-tmdb-search"
+local RIP_AUDIOBOOK = HOME .. "/.local/bin/rip-audiobook"
 local STABLE_SECS = 30
 -- INVARIANT: this must exceed rip.zsh's RIP_PUSH_MIN_AGE_S (default 90s).
 -- If it didn't, a fully-quiet album (a single track, or just a fast rip)
@@ -103,9 +104,39 @@ local previewLibraryTimer = nil -- M.previewLibrary("loading")'s populate timer 
 local scanTask = nil -- in-flight `rip-disc --scan` (anchors it against GC)
 local haveTask = nil -- in-flight `rip-disc --have` (anchors it against GC)
 local libraryTask = nil -- in-flight `rip-disc --library` (anchors it against GC)
+-- Distinct from `libraryTask` above: that one fetches the DVD session's
+-- server movie list for the extras-attach chip; this one fetches the
+-- Audiobook Library panel's own rows (`rip-audiobook --library`). Same name
+-- would have collided two unrelated in-flight tasks onto one anchor.
+local audiobookLibraryTask = nil
 local sessionVolume = nil -- the volume the open session panel is reviewing
 local sessionState = nil -- the open session's payload; also the staleness token
 local planSeq = 0 -- monotonic suffix for plan temp files
+
+-- Task 5 wires these to the session enqueue / import worker; until then they
+-- only log what the panel handed back, so pressing Start or Import in the
+-- Audiobook Library panel is safe but enqueues nothing (same discipline as
+-- the Mode B preview harness's stub callbacks further down this file).
+local libraryCallbacks = {
+	onStart = function(plan)
+		log.f(
+			"library: start requested, %d item(s), provider=%s (not yet enqueued — Task 5)",
+			#(plan.items or {}),
+			tostring(plan.provider)
+		)
+	end,
+	onImport = function(spec)
+		log.f(
+			"library: import requested src=%s author=%s title=%s (not yet enqueued — Task 5)",
+			tostring(spec.src),
+			tostring(spec.author),
+			tostring(spec.title)
+		)
+	end,
+	onDismiss = function()
+		log.f("library: dismissed")
+	end,
+}
 
 local function fileSize(p)
 	local a = hs.fs.attributes(p)
@@ -704,6 +735,62 @@ function M.ripDisc()
 end
 
 --------------------------------------------------------------------------------
+-- Audiobook Library panel — the real provider
+--------------------------------------------------------------------------------
+-- Opens the panel in its loading state, then fills it from Libation via
+-- `rip-audiobook --library` (one JSON row per line, Phase 2's provider
+-- contract). isShown() is both the idempotence guard (a second call while
+-- the panel is already up is a no-op, matching M.ripDisc()'s own shape) and
+-- the consent guard for the reply: a dismiss that lands before the task
+-- returns must not reopen the panel and steal focus back (previewTimer's
+-- and runSessionScan's rule).
+
+--- Open the Audiobook Library panel and populate it from the real provider.
+function M.library()
+	if library.isShown() then
+		return
+	end
+	library.show({ loading = true }, libraryCallbacks)
+	if audiobookLibraryTask then
+		audiobookLibraryTask:terminate()
+		audiobookLibraryTask = nil
+	end
+	-- terminate() only sends SIGTERM; the terminated task's own callback
+	-- still fires later, asynchronously. Identity-check against `thisTask`
+	-- (not a bare `audiobookLibraryTask = nil`) so a late reply from a
+	-- terminated run can't clobber a newer run's anchor — same discipline as
+	-- tmdbChoices/runLibraryFetch above and rip-tmdb-search's task in
+	-- session-dialog.lua.
+	--
+	-- Absolute path: Hammerspoon's PATH lacks ~/.local/bin.
+	local thisTask
+	thisTask = hs.task.new(RIP_AUDIOBOOK, function(rc, out, err)
+		if audiobookLibraryTask == thisTask then
+			audiobookLibraryTask = nil
+		end
+		if rc ~= 0 then
+			log.ef("library: rip-audiobook --library failed rc=%d: %s", rc, err or "")
+			return
+		end
+		local rows = {}
+		for line in (out or ""):gmatch("[^\n]+") do
+			-- A malformed line (partial write, stray log noise) must not
+			-- abort the whole load — skip it and keep the rest.
+			local ok, row = pcall(hs.json.decode, line)
+			if ok and row then
+				rows[#rows + 1] = row
+			end
+		end
+		log.f("library: %d row(s)", #rows)
+		if library.isShown() then
+			library.setRows(rows)
+		end
+	end, { "--library" })
+	audiobookLibraryTask = thisTask
+	thisTask:start()
+end
+
+--------------------------------------------------------------------------------
 -- Rip Session Review — Mode B preview harness
 --------------------------------------------------------------------------------
 -- The session dialog now drives the real DVD flow above; this harness stays
@@ -1082,6 +1169,10 @@ function M.cleanup()
 	if libraryTask then
 		libraryTask:terminate()
 		libraryTask = nil
+	end
+	if audiobookLibraryTask then
+		audiobookLibraryTask:terminate()
+		audiobookLibraryTask = nil
 	end
 	sessionVolume = nil
 	sessionState = nil
