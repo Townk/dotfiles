@@ -14,7 +14,7 @@ Describe 'rip audiobooks'
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
     export RIP_LIBEXEC_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec"
     export RIP_PUSH_MIN_AGE_S=0
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books" "$RIP_SANDBOX/server/audiobooks"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks" "$RIP_SANDBOX/server/audiobooks"
     cat > "$RIP_SANDBOX/pueue" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
@@ -60,8 +60,8 @@ if [ "$1" = "liberate" ]; then
   done
   [ -n "$books" ] || { echo "no Books override" >&2; exit 1; }
   [ -n "${FAKE_LIBERATE_FAIL:-}" ] && { echo "download failed" >&2; exit 4; }
-  mkdir -p "$books/Books/Brandon Sanderson/Steelheart"
-  printf 'audio\n' > "$books/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+  mkdir -p "$books/Brandon Sanderson/Steelheart"
+  printf 'audio\n' > "$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
   echo "Decrypting  25%"
   echo "Decrypting  90%"
   echo "Completed"
@@ -134,7 +134,7 @@ EOF
   It 'provider: acquire writes into the given dir and reports progress'
     When run zsh "$PROVIDER" acquire B00ECDZ08I "$RIP_STAGING_ROOT/audiobooks"
     The status should equal 0
-    The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     The output should include "progress 25"
     The output should include "progress 90"
     The contents of file "$RIP_SANDBOX/libation.log" should include "--id B00ECDZ08I"
@@ -349,7 +349,7 @@ FAKESSH
     The contents of file "$RIP_SANDBOX/libation.log" should include "--id B00ECDZ08I"
     The contents of file "$RIP_SANDBOX/libation.log" should not include "--id HAVE"
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
-    The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
   End
 
   # Regression guard (final-review finding, 2026-08-22): rip::staging_for
@@ -360,14 +360,14 @@ FAKESSH
   # rip::staging_for audiobooks), so the push saw an empty staging dir and
   # the session vanished silently. Both must derive from the same seam.
   It 'worker: honors RIP_AB_STAGING — acquires into and pushes from the overridden tree'
-    local custom="$RIP_SANDBOX/custom-staging/Books"
+    local custom="$RIP_SANDBOX/custom-staging"
     export RIP_AB_STAGING="$custom"
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     # nothing was ever acquired into (or left behind in) the default tree
-    The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson" should not be exist
     # the override tree itself is empty again after the verified push
     The path "$custom/Brandon Sanderson" should not be exist
   End
@@ -392,8 +392,8 @@ while [ $# -gt 0 ]; do
   case "$1" in -o|--override) case "$2" in Books=*) books="${2#Books=}" ;; esac ;; esac
   shift
 done
-mkdir -p "$books/Books/Brandon Sanderson/Steelheart"
-printf 'audio\n' > "$books/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+mkdir -p "$books/Brandon Sanderson/Steelheart"
+printf 'audio\n' > "$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
@@ -451,8 +451,8 @@ while [ \$# -gt 0 ]; do
   case "\$1" in -o|--override) case "\$2" in Books=*) books="\${2#Books=}" ;; esac ;; esac
   shift
 done
-mkdir -p "\$books/Books/Brandon Sanderson/${nfd}"
-printf 'audio\n' > "\$books/Books/Brandon Sanderson/${nfd}/${nfd}.m4b"
+mkdir -p "\$books/Brandon Sanderson/${nfd}"
+printf 'audio\n' > "\$books/Brandon Sanderson/${nfd}/${nfd}.m4b"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"

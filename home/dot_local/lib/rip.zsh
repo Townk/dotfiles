@@ -40,16 +40,19 @@ RIP_BIN_DIR="${RIP_BIN_DIR:-$HOME/.local/bin}"
 rip::staging_root() { print -r -- "${RIP_STAGING_ROOT:-$HOME/Depot/Rips}"; }
 rip::remote_base()  { print -r -- "${RIP_REMOTE_BASE:-media@cantina:/srv/media}"; }
 
-# rip::staging_for <type> — the staging dir for a media type. movies and
-# music are <root>/<type>; audiobooks carries ONE extra level because
-# Libation always creates a "Books" directory under its configured Books
-# folder and that is not configurable. Absorbing it here (rather than
-# renaming directories under a running downloader) keeps every caller
-# using one accessor and keeps the REMOTE path Books-free — the server
-# layout is audiobooks/<Author>/<Title>/, per the fleet spec.
+# rip::staging_for <type> — the staging dir for a media type. All three
+# types are <root>/<type>, no exceptions. audiobooks was briefly believed
+# to carry an extra "Books" level under Libation's configured Books
+# folder; that was a misreading of one stale tree. Verified live
+# 2026-08-22 against a real liberation with Libation's Books location set
+# to <root>/audiobooks: the title landed directly at
+# <root>/audiobooks/<Author>/<Title>/ — the configured folder IS the
+# <Author>/<Title> parent, with no directory inserted in between. The
+# server layout is unaffected either way: audiobooks/<Author>/<Title>/,
+# per the fleet spec.
 rip::staging_for() {
   case "$1" in
-    audiobooks) print -r -- "${RIP_AB_STAGING:-$(rip::staging_root)/audiobooks/Books}" ;;
+    audiobooks) print -r -- "${RIP_AB_STAGING:-$(rip::staging_root)/audiobooks}" ;;
     *) print -r -- "$(rip::staging_root)/$1" ;;
   esac
 }
@@ -2142,7 +2145,7 @@ rip::_validate_ab_plan() {
     # A book path is exactly two segments, each of which becomes a
     # directory name: <Author>/<Title>. Validate BOTH with the title rule
     # (no slash, never . or ..) — "../etc/x" splits to author ".." and
-    # would compose staging/audiobooks/Books/../etc, escaping the tree.
+    # would compose staging/audiobooks/../etc, escaping the tree.
     [[ "$bpath" == */* ]] || { log_error "rip: book path must be <Author>/<Title>: $bpath"; return 2 }
     rip::_check_title "$author" || return 2
     rip::_check_title "$title" || return 2
@@ -2224,16 +2227,18 @@ rip::ab_worker() {
   local bin; bin="$(rip::ab_provider_bin "$provider")" || return 2
   # ONE source of truth for both the acquire destination and the push
   # source: rip::staging_for audiobooks (the RIP_AB_STAGING seam) IS the
-  # Books-level dir rip::push_worker reads from. Deriving dest_root as its
-  # OWN literal "$(rip::staging_root)/audiobooks" ignored that override —
-  # the session would acquire into one tree and push from another,
-  # silently losing the session to an empty push (review finding,
-  # 2026-08-22). Libation always creates its own "Books" level under
-  # whatever dir it is given (not configurable — see rip::staging_for's own
-  # comment), so the acquire destination is books_root's PARENT.
-  local books_root; books_root="$(rip::staging_for audiobooks)"
-  local dest_root="${books_root:h}"
-  mkdir -p "$dest_root" || { log_error "rip: cannot create $dest_root"; return 1 }
+  # dir rip::push_worker reads from AND the dir the provider is told to
+  # write into — there is no separate parent/child pair here (verified
+  # live 2026-08-22: Libation's configured Books folder IS the
+  # <Author>/<Title> parent, no extra level inserted). An earlier version
+  # derived the acquire destination as its OWN literal
+  # "$(rip::staging_root)/audiobooks", which ignored the RIP_AB_STAGING
+  # override — the session would acquire into one tree and push from
+  # another, silently losing the session to an empty push (review finding,
+  # 2026-08-22). Both roles now share this one variable so that bug class
+  # cannot recur.
+  local ab_root; ab_root="$(rip::staging_for audiobooks)"
+  mkdir -p "$ab_root" || { log_error "rip: cannot create $ab_root"; return 1 }
 
   # The meta index the enrichment stage reads: every item's row, keyed by
   # path. STABLE path now (review finding, 2026-08-22), not a $$-suffixed
@@ -2282,7 +2287,7 @@ rip::ab_worker() {
       2) log_warn "rip: could not ask cantina about $bpath — acquiring anyway" ;;
     esac
     rip::_progress "$base" "downloading — ${bpath:t}"
-    zsh "$bin" acquire "$id" "$dest_root" 2>&1 \
+    zsh "$bin" acquire "$id" "$ab_root" 2>&1 \
       | while IFS= read -r line; do
           case "$line" in
             progress\ *)
@@ -2307,8 +2312,8 @@ rip::ab_worker() {
     # robust even when a pre-existing sibling book dir is already there —
     # and the meta index must be re-keyed to the real path or the sidecar it
     # feeds would never match the folder it belongs to.
-    if [[ ! -d "$books_root/$bpath" ]]; then
-      local -a landed=("$books_root/${bpath%%/*}"/*(N/om))
+    if [[ ! -d "$ab_root/$bpath" ]]; then
+      local -a landed=("$ab_root/${bpath%%/*}"/*(N/om))
       if (( ${#landed} )); then
         # NFC-normalize the landed folder name before writing it as the new
         # key: rip::_book_meta_for (this index's only reader) NFC-normalizes

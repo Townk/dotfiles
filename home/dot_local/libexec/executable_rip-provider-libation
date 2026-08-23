@@ -87,8 +87,10 @@ cmd_list() {
 # EXPLICITLY with -o Books="<dir>" rather than inherited from the GUI's
 # settings: a worker must never depend on where the app happens to be
 # pointed, and a session that ran while the operator was changing settings
-# would otherwise scatter files. Libation still appends its own "Books"
-# level under whatever it is given (that is what rip::staging_for absorbs).
+# would otherwise scatter files. "Books" here is only the name of
+# Libation's override flag — <dir> itself becomes the export root, with
+# the title landing directly at <dir>/<Author>/<Title>/ (verified live
+# 2026-08-22; no extra directory level is inserted).
 #
 # Progress: LibationCli prints human lines, not a machine stream. Any line
 # carrying an N% is scaled straight through; everything else is ignored.

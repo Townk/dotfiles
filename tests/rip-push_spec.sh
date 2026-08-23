@@ -15,7 +15,7 @@ Describe 'rip.zsh push'
     export JOB_STATE_ROOT="$RIP_SANDBOX/state"
     export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
     mkdir -p "$RIP_STAGING_ROOT/movies" "$RIP_STAGING_ROOT/music" \
-             "$RIP_STAGING_ROOT/audiobooks/Books" \
+             "$RIP_STAGING_ROOT/audiobooks" \
              "$RIP_SANDBOX/server/movies" "$RIP_SANDBOX/server/music" "$RIP_SANDBOX/server/audiobooks"
     cat > "$RIP_SANDBOX/pueue" <<'EOF'
 #!/bin/sh
@@ -123,17 +123,17 @@ EOF
     The result of function titles should include "rip push: music"
   End
 
-  It 'maps staging dirs per type, absorbing Libation Books level'
+  It 'maps staging dirs per type — all three are <root>/<type>, no extra level'
     When run zsh -c "source $RIPLIB && rip::staging_for movies && rip::staging_for music && rip::staging_for audiobooks"
     The status should equal 0
     The line 1 should equal "$RIP_STAGING_ROOT/movies"
     The line 2 should equal "$RIP_STAGING_ROOT/music"
-    The line 3 should equal "$RIP_STAGING_ROOT/audiobooks/Books"
+    The line 3 should equal "$RIP_STAGING_ROOT/audiobooks"
   End
 
-  It 'accepts audiobooks as a type and enqueues from the Books level'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart"
-    touch "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+  It 'accepts audiobooks as a type and enqueues from the staging root'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
+    touch "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
     When run zsh -c "source $RIPLIB && rip::push_enqueue audiobooks"
     The status should equal 0
     The output should not equal ""
@@ -142,13 +142,13 @@ EOF
     The contents of file "$JOB_FAKE_LOG" should include "/rip-push --worker audiobooks"
   End
 
-  It 'pushes audiobooks to the server WITHOUT the Books level'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart"
-    touch "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+  It 'pushes audiobooks to the server and clears the verified staging file'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
+    touch "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
-    The path "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
     The stdout should include "verified"
   End
 
@@ -1490,8 +1490,8 @@ EOF
   # call is tried before falling back to the path-derived minimal identity.
 
   It 'sidecar: a watcher-triggered push (no RIP_AB_META_INDEX set) reads the stable default index path'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart" "$RIP_STAGING_ROOT/.work"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart" "$RIP_STAGING_ROOT/.work"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
     printf '%s\n' '{"path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}' \
       > "$RIP_STAGING_ROOT/.work/ab-meta.jsonl"
     # RIP_AB_META_INDEX is deliberately NOT set — this is the watcher's own
@@ -1511,8 +1511,8 @@ case "$1" in
 esac
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
@@ -1523,8 +1523,8 @@ EOF
     mkdir -p "$RIP_LIBEXEC_DIR"
     printf '#!/bin/sh\nexit 9\n' > "$RIP_LIBEXEC_DIR/rip-provider-libation"
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/Some Author/Some Title"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/Some Author/Some Title/Some Title.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Some Author/Some Title"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Some Author/Some Title/Some Title.m4b"
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.title,.authors,.ids]' '$RIP_SANDBOX/server/audiobooks/Some Author/Some Title/.fleet-book.json'"
     The status should equal 0
     The output should equal '["Some Title",["Some Author"],{}]'
@@ -1545,9 +1545,9 @@ case "$1" in
 esac
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/One" "$RIP_STAGING_ROOT/audiobooks/Books/A/Two"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/One/One.m4b"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/Two/Two.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/One" "$RIP_STAGING_ROOT/audiobooks/A/Two"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/One/One.m4b"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/Two/Two.m4b"
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The result of function provider_call_count should equal "1"
@@ -1587,9 +1587,9 @@ EOF
   End
 
   It 'enrichment with no hops changes exactly one thing: the sidecar appears'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
-    printf 'art\n'   > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.jpg"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
+    printf 'art\n'   > "$RIP_STAGING_ROOT/audiobooks/A/B/B.jpg"
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should equal "audio"
@@ -1599,20 +1599,20 @@ EOF
   End
 
   It 'enrichment: a hop that adds a registered file gets it pushed and cleaned'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run zsh -c "source $RIPLIB
       hop_note() { printf 'note\n' > \"\$1/note.txt\"; rip::_enrich_add \"\$3/note.txt\"; }
       RIP_AB_ENRICH_HOPS=(hop_note)
       rip::push_worker audiobooks"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/note.txt" should equal "note"
-    The path "$RIP_STAGING_ROOT/audiobooks/Books/A/B/note.txt" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/A/B/note.txt" should not be exist
   End
 
   It 'enrichment: a failing hop is logged and never fails the push'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run zsh -c "source $RIPLIB
       hop_boom() { return 1; }
       RIP_AB_ENRICH_HOPS=(hop_boom)
@@ -1623,15 +1623,15 @@ EOF
   End
 
   It 'enrichment: an UNregistered file is neither pushed nor deleted'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run zsh -c "source $RIPLIB
       hop_sneaky() { printf 'x\n' > \"\$1/sneaky.txt\"; }
       RIP_AB_ENRICH_HOPS=(hop_sneaky)
       rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/A/B/sneaky.txt" should not be exist
-    The path "$RIP_STAGING_ROOT/audiobooks/Books/A/B/sneaky.txt" should be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/A/B/sneaky.txt" should be exist
   End
 
   It 'enrichment: music pushes are untouched by the audiobook stage'
@@ -1645,8 +1645,8 @@ EOF
   # --- enrichment: post-verify remote hops ----------------------------------
 
   It 'remote hops run after a clean verify, with the pushed relpaths'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run zsh -c "source $RIPLIB
       hop_remote() { printf '%s\n' \"\$@\" > $RIP_SANDBOX/remote.log; }
       RIP_AB_REMOTE_HOPS=(hop_remote)
@@ -1657,8 +1657,8 @@ EOF
   End
 
   It 'remote hops never run when the verify found differences'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     cat > "$RIP_SANDBOX/rsync" <<'EOF'
 #!/bin/sh
 case "$*" in *-rcn*) echo "A/B/B.m4b"; exit 0 ;; esac
@@ -1681,8 +1681,8 @@ EOF
   # undefined-looking hop must be provable by more than name-matching.
   # Writing the file is only possible if the hop function actually ran.
   It 'a failing remote hop never fails the job — the files are already safe'
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Books/A/B"
-    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Books/A/B/B.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run zsh -c "source $RIPLIB
       hop_boom() { printf 'boomed\n' > $RIP_SANDBOX/hop.log; return 9; }
       RIP_AB_REMOTE_HOPS=(hop_boom)

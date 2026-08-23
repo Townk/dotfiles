@@ -56,7 +56,7 @@ local HOME = os.getenv("HOME")
 local ROOT = HOME .. "/Depot/Rips"
 local INTERMEDIATE = ROOT .. "/intermediate"
 local MUSIC = ROOT .. "/music"
-local AUDIOBOOKS = ROOT .. "/audiobooks/Books"
+local AUDIOBOOKS = ROOT .. "/audiobooks"
 local WORK = ROOT .. "/.work"
 local RIP_PIPELINE = HOME .. "/.local/bin/rip-pipeline"
 local RIP_PUSH = HOME .. "/.local/bin/rip-push"
@@ -870,7 +870,7 @@ function M.cleanup()
 end
 
 function M.start()
-	for _, d in ipairs({ ROOT, INTERMEDIATE, MUSIC, ROOT .. "/audiobooks", AUDIOBOOKS, WORK, ROOT .. "/movies" }) do
+	for _, d in ipairs({ ROOT, INTERMEDIATE, MUSIC, AUDIOBOOKS, WORK, ROOT .. "/movies" }) do
 		hs.fs.mkdir(d)
 	end
 	sweepWork()
