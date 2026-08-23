@@ -38,7 +38,7 @@ cmd_list() {
   # Not `local`: the EXIT trap fires after this function returns, and a
   # local var is already out of scope by then — under `set -u` that reads
   # as an unset-parameter error, not a silent no-op.
-  tmp="$(mktemp -t riplib)"
+  tmp="$(mktemp -t riplib.XXXXXX)"
   trap 'rm -f -- "$tmp"' EXIT INT TERM
   "$LIB_BIN" export -j -p "$tmp" >/dev/null 2>&1 \
     || die "LibationCli export failed"
