@@ -839,6 +839,21 @@ function M.library()
 	-- session-dialog.lua.
 	--
 	-- Absolute path: Hammerspoon's PATH lacks ~/.local/bin.
+	--
+	-- STREAMING CALLBACK, not the completion callback's `out` (live
+	-- 2026-08-23). hs.task's completion callback only receives output the
+	-- pipe managed to hold: with 461 titles this fetch writes ~280 KB, the
+	-- ~64 KB pipe buffer fills, the child blocks forever on write, and the
+	-- completion callback is never called at all — the panel sat on
+	-- "loading library…" indefinitely with a live `jq` stuck mid-write.
+	-- Reproduced in isolation: a task emitting 300 KB never returns, while
+	-- the same task with a streaming callback delivers it in 19 chunks and
+	-- exits 0. The sibling panels never hit this because rip-tmdb-search
+	-- returns ~12 rows and rip-disc --library a handful of movies.
+	--
+	-- Chunks are accumulated and parsed once at completion: a chunk
+	-- boundary can fall mid-line, so parsing per chunk would corrupt rows.
+	local chunks = {}
 	local thisTask
 	thisTask = hs.task.new(RIP_AUDIOBOOK, function(rc, out, err)
 		-- Captured BEFORE the nil-out below, and reused by the failure
@@ -878,7 +893,7 @@ function M.library()
 			return
 		end
 		local rows = {}
-		for line in (out or ""):gmatch("[^\n]+") do
+		for line in (table.concat(chunks)):gmatch("[^\n]+") do
 			-- A malformed line (partial write, stray log noise) must not
 			-- abort the whole load — skip it and keep the rest.
 			local ok, row = pcall(hs.json.decode, line)
@@ -886,10 +901,17 @@ function M.library()
 				rows[#rows + 1] = row
 			end
 		end
-		log.f("library: %d row(s)", #rows)
+		log.f("library: %d row(s) from %d chunk(s)", #rows, #chunks)
 		if library.isShown() then
 			library.setRows(rows)
 		end
+	end, function(_, so, _)
+		-- Drain as it arrives. Returning true keeps the stream open; the
+		-- accumulated text is parsed once, above, when the task completes.
+		if so and so ~= "" then
+			chunks[#chunks + 1] = so
+		end
+		return true
 	end, { "--library" })
 	audiobookLibraryTask = thisTask
 	thisTask:start()
