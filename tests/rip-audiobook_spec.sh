@@ -310,7 +310,7 @@ FAKESSH
 
   It 'worker: the sidecar carries the plan identity, not the path fallback'
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"narrators":["MacLeod Andrews"],"duration_s":45720,"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json && jq -c '[.subtitle,.ids[\"audible.asin\"],.source.provider,.work]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"],.source.provider,.work]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I","libation",null]'
   End
@@ -341,7 +341,58 @@ EOF
 
   It 'worker: re-keys the identity when the folder that landed differs'
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart: The Reckoners, Book 1","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    The status should equal 0
+    The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
+    The stderr should include "re-keying"
+  End
+
+  # The re-key writes the LANDED folder name (raw directory-listing bytes)
+  # as the index's new lookup key, but rip::_book_meta_for (the index's only
+  # reader) NFC-normalizes its own query key before matching .path. A
+  # provider that lands an NFD-decomposed name — composed (NFC) in the plan,
+  # decomposed (NFD) on disk, byte-explicit here the same way the ssh/--have
+  # example above is (review finding, same bug class as 21322287) — must
+  # still re-key to something the NFC-normalized lookup can find, or the
+  # sidecar silently falls back to the path-derived minimal identity.
+  #
+  # PLATFORM NOTE (found while verifying this example can fail against the
+  # un-normalized code): unlike the ssh/--have example above, this step has
+  # no remote/byte-strict branch to exercise instead — `landed` comes ONLY
+  # from a local zsh glob (`*(N/om)`) over the acquire destination. On this
+  # fleet's zsh (verified on both the custom build AND stock /bin/zsh 5.9),
+  # that glob itself already returns NFC-composed names for an on-disk NFD
+  # directory — confirmed by comparison: `ls`/`find`/python's listdir() all
+  # return the raw NFD bytes for the SAME directory, only zsh's own glob
+  # normalizes. So on THIS platform `${landed[1]:t}` is already NFC before
+  # rip::_nfc ever runs, and this example cannot itself fail against a
+  # broken (un-normalized) re-key — same caveat as the ab_have example
+  # above, for a different underlying reason. The explicit rip::_nfc call
+  # is kept anyway: it is the consistent, defensive contract every other
+  # filesystem-derived identity lookup key in this file already follows,
+  # and it is what protects a zsh build or platform (e.g. the project's
+  # Linux dev-shell) whose glob does NOT do this normalization. This
+  # example still guards the full round trip end-to-end (NFD-on-disk name
+  # in, correct plan identity out) even though it cannot pin the specific
+  # line.
+  It 'worker: the reconcile re-key is NFC-normalized, so an NFD landed name still resolves'
+    nfc=$(printf 'Ant\xc3\xb4nio')
+    nfd=$(printf 'Anto\xcc\x82nio')
+    printf '%s\n' "{\"provider\":\"libation\",\"items\":[{\"id\":\"B00ECDZ08I\",\"path\":\"Brandon Sanderson/${nfc}: The Reckoners, Book 1\",\"title\":\"${nfc}\",\"subtitle\":\"The Reckoners, Book 1\",\"ids\":{\"audible.asin\":\"B00ECDZ08I\"},\"provider\":\"libation\",\"format\":\"m4b\"}]}" > "$RIP_SANDBOX/plan.json"
+    cat > "$RIP_SANDBOX/LibationCli" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "\$RIP_SANDBOX/libation.log"
+books=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in -o|--override) case "\$2" in Books=*) books="\${2#Books=}" ;; esac ;; esac
+  shift
+done
+mkdir -p "\$books/Books/Brandon Sanderson/${nfd}"
+printf 'audio\n' > "\$books/Books/Brandon Sanderson/${nfd}/${nfd}.m4b"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/${nfc}/.fleet-book.json'"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
     The stderr should include "re-keying"

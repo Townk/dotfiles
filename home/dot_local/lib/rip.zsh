@@ -2214,15 +2214,25 @@ rip::ab_worker() {
     # RECONCILE what actually landed. The plan's path is COMPOSED from store
     # metadata ("<Author>/<Title>: <Subtitle>", per Global Constraints), and
     # a provider may still sanitize a character or truncate a very long name
-    # on its way to the filesystem. If the composed dir is not there but the
-    # author dir gained exactly one book dir, that IS this acquisition, and
-    # the meta index must be re-keyed to the real path or the sidecar it
+    # on its way to the filesystem. If the composed dir is not there, the
+    # newest book dir under the author dir (glob qualifier (N/om): dirs
+    # only, most-recently-modified first) is taken to BE this acquisition —
+    # robust even when a pre-existing sibling book dir is already there —
+    # and the meta index must be re-keyed to the real path or the sidecar it
     # feeds would never match the folder it belongs to.
     local books_root="$dest_root/Books"
     if [[ ! -d "$books_root/$bpath" ]]; then
       local -a landed=("$books_root/${bpath%%/*}"/*(N/om))
       if (( ${#landed} )); then
-        local actual="${bpath%%/*}/${landed[1]:t}"
+        # NFC-normalize the landed folder name before writing it as the new
+        # key: rip::_book_meta_for (this index's only reader) NFC-normalizes
+        # its lookup via rip::_nfc before matching .path, so a provider that
+        # lands an NFD-decomposed name — the exact case this reconcile step
+        # exists for — would otherwise re-key to bytes the lookup can never
+        # match, silently falling back to the path-derived minimal identity.
+        # Same bug class as 21322287 (NFC-canonical server names) in this
+        # same file.
+        local actual="${bpath%%/*}/$(rip::_nfc "${landed[1]:t}")"
         log_warn "rip: $bpath landed as $actual — re-keying the plan identity"
         jq -c --arg old "$bpath" --arg new "$actual" \
           'if .path == $old then .path = $new else . end' "$index" > "$index.tmp" \
@@ -2240,13 +2250,7 @@ rip::ab_worker() {
   local RIP_PROGRESS_BASE=70 RIP_PROGRESS_SPAN=30
   local RIP_PUSH_MIN_AGE_S=0
   local RIP_AB_META_INDEX="$index"
-  # push_worker's own status lines (e.g. "verified on cantina — cleaning
-  # staging") are plain `print` to fd1, by design — a pueue job log wants
-  # them. Routed to stderr HERE, at the call site only, so this capsule's
-  # own stdout carries just what the acquire phase already emits; push_worker
-  # itself is untouched, so its direct callers (rip-push_spec.sh) still see
-  # those lines on stdout exactly as before.
-  rip::push_worker audiobooks 1>&2
+  rip::push_worker audiobooks
   local prc=$?
   rm -f -- "$index"
   (( prc != 0 )) && return $prc
