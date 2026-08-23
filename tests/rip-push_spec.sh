@@ -1,6 +1,9 @@
 # rip-push — enqueue validation, skip-if-empty, worker transfer/verify/delete.
 # Hermetic: sandboxed staging + JOB_STATE_ROOT, recording fake pueue
-# (JOB_PUEUE_BIN) and fake rsync (RIP_RSYNC_BIN). No ssh, no daemon.
+# (JOB_PUEUE_BIN) and fake rsync (RIP_RSYNC_BIN), and a sandboxed
+# RIP_LIBEXEC_DIR so an audiobook index miss's provider fallback (see
+# rip::_book_meta_for) can never resolve the real deployed provider. No
+# ssh, no daemon.
 Describe 'rip.zsh push'
   RIPLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/rip.zsh"
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
@@ -24,6 +27,16 @@ EOF
     export JOB_PUEUE_BIN="$RIP_SANDBOX/pueue"
     # the bins under test must source the SOURCE-TREE lib, not ~/.local/lib
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+    # rip::ab_provider_bin defaults to $HOME/.local/libexec when unset — an
+    # audiobook index miss's provider fallback (rip::_book_meta_for, review
+    # finding 2026-08-22) would otherwise resolve the REAL deployed
+    # ~/.local/libexec/rip-provider-libation once this branch ships via
+    # `chezmoi apply`, and run a live `LibationCli export -j` against the
+    # user's real Audible library on every push_worker example that misses
+    # its index. Point it at an empty sandbox dir so the fallback always
+    # sees "no such provider" here; the examples that need a working
+    # provider export their own override over this.
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
     # Every pre-existing example here stages files moments before running
     # the worker, so they'd all sit inside the default 90s age gate. Disable
     # it suite-wide; the three age-gate examples below re-export the real
