@@ -40,8 +40,8 @@
 ---   plan: { provider = "libation", items = { <row>, ... } } -- the full rows
 ---         for every id the operator marked Rip.
 ---   spec: { src = "...", author = "...", title = "..." } -- a manual/DRM-free
----         import (rip-library.html has no UI for this yet; the dispatch
----         exists so a later task can add it without touching this file).
+---         import (rip-library.html's collapsed "Import a file you already
+---         have" disclosure is that UI; this module only relays the spec).
 
 local M = {}
 

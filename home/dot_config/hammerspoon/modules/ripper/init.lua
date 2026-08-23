@@ -728,13 +728,49 @@ end
 -- returns must not reopen the panel and steal focus back (previewTimer's
 -- and runSessionScan's rule).
 
+-- Same failure pairing as sessionCallbacks.onStart's own hs.task callback
+-- above (the can't-miss immediate osd.notify + the durable hs.notify item —
+-- Focus can swallow either alone): unlike `enqueue` (console-log-only,
+-- correct for the background movie/music watchers, which have no panel an
+-- operator is looking at), Start and Import are direct operator actions on
+-- a panel that has ALREADY CLOSED by the time this callback runs, so a log
+-- line alone is invisible.
+local function enqueueVisible(bin, args, what, failTitle)
+	nextTaskId = nextTaskId + 1
+	local id = nextTaskId
+	local t = hs.task.new(bin, function(rc, stdout, stderr)
+		tasks[id] = nil
+		if rc == 0 then
+			return
+		end
+		print(
+			string.format(
+				"ripper: %s failed exit=%s\n-- stdout --\n%s\n-- stderr --\n%s",
+				what,
+				tostring(rc),
+				stdout or "",
+				stderr or ""
+			)
+		)
+		local reason = lastLine(stderr) or ("could not " .. what)
+		osd.notify("glyph:nf-md-alert", failTitle .. " — " .. reason, "Basso")
+		hs.notify.new(nil, { title = failTitle, informativeText = reason, withdrawAfter = 0 }):send()
+	end, args)
+	tasks[id] = t
+	t:start()
+end
+
 -- The plan is a TEMP file the worker copies into .work/ab-plans and then
 -- owns; see rip::ab_enqueue. Write it under the OS temp dir, not the staging
 -- tree — staging is watched, and a stray .json there would enter a push
 -- list (same reasoning as the DVD session plan, which instead lands in
--- .work/ because rip-disc's worker copies it out immediately; this plan's
--- worker is asynchronous — pueue may not run it for minutes — so it cannot
--- share .work/'s own sweep-at-startup lifetime).
+-- .work/ because rip-disc's worker copies it out immediately). The two
+-- flows are NOT asymmetric in timing, despite living in different dirs:
+-- rip::ab_enqueue (like rip::session_enqueue) copies the handed-in plan
+-- out synchronously, before touching pueue at all — only the heavy job
+-- itself queues, in both flows equally. This plan just has no .work/-based
+-- owner of its own the way the DVD session plan has rip-disc's worker; the
+-- OS temp dir is correct on that ownership ground alone.
 local function enqueueLibrarySession(plan)
 	if not plan or not plan.items or #plan.items == 0 then
 		return
@@ -743,24 +779,40 @@ local function enqueueLibrarySession(plan)
 	local fh = io.open(file, "w")
 	if not fh then
 		log.ef("library: cannot write the session plan")
+		osd.notify("glyph:nf-md-alert", "Rip failed — cannot write the session plan", "Basso")
 		return
 	end
 	fh:write(hs.json.encode({ provider = plan.provider or "libation", items = plan.items }))
 	fh:close()
-	enqueue(RIP_AUDIOBOOK, { "--session", file }, "rip-audiobook")
+	enqueueVisible(RIP_AUDIOBOOK, { "--session", file }, "rip audiobook session enqueue", "Rip session failed")
 end
 
 local function enqueueImport(spec)
 	if not spec or not spec.src or spec.src == "" then
 		return
 	end
-	enqueue(RIP_AUDIOBOOK, { "--import", spec.src, spec.author or "", spec.title or "" }, "rip-audiobook")
+	enqueueVisible(
+		RIP_AUDIOBOOK,
+		{ "--import", spec.src, spec.author or "", spec.title or "" },
+		"audiobook import",
+		"Audiobook import failed"
+	)
 end
 
 -- Real wiring: Start writes the session plan and enqueues the acquire->push
--- worker; Import stages a DRM-free file the operator already owns. Both
--- reuse `enqueue` so a failure surfaces the same way the movie/music
--- watchers' jobs do.
+-- worker; Import stages a DRM-free file the operator already owns. Both go
+-- through enqueueVisible, NOT the plain `enqueue` the movie/music watchers
+-- use: those are background jobs with no panel to have closed, so a
+-- console-only log.ef is enough. Start and Import are direct operator
+-- actions on a panel that has ALREADY CLOSED by the time this callback
+-- runs (library-dialog.lua's handle_message closes on "start" before
+-- calling onStart; the import form clears its fields on submit too) — a
+-- rejected plan (an empty AudibleProductId, two rows composing the same
+-- <Author>/<Title>) or a refused import (missing/extension-less/already-
+-- staged source) would otherwise fail completely silently, reading as
+-- success. enqueueVisible reuses sessionCallbacks.onStart's own failure
+-- pairing above: the can't-miss immediate osd.notify plus the durable
+-- hs.notify (Focus can swallow either alone).
 local libraryCallbacks = {
 	onStart = enqueueLibrarySession,
 	onImport = enqueueImport,
@@ -794,6 +846,19 @@ function M.library()
 		end
 		if rc ~= 0 then
 			log.ef("library: rip-audiobook --library failed rc=%d: %s", rc, err or "")
+			-- An unauthenticated or mid-update LibationCli is an ordinary
+			-- failure, not an exotic one, and the panel opened in `loading =
+			-- true` — LOADING is only ever cleared by __setRows/__setLibrary
+			-- (rip-library.html), so without this the panel would sit on
+			-- "loading library…" forever, and M.library() early-returns while
+			-- isShown() so the operator would have to dismiss before even
+			-- retrying (2026-08-23 review finding). setRows({}) both ends the
+			-- loading state (the panel falls through to "nothing to show")
+			-- and is a genuine no-op if the panel was already dismissed.
+			if library.isShown() then
+				library.setRows({})
+			end
+			osd.notify("glyph:nf-md-alert", "Couldn't load your audiobook library", "Basso")
 			return
 		end
 		local rows = {}
