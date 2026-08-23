@@ -44,10 +44,12 @@
 --     bottom.
 --   * M.previewLibrary(<fixture>) is the same harness for the Audiobook
 --     Library panel (ripper/library-dialog.lua): a canned row list with
---     stub callbacks, no Libation call and nothing ever enqueued. That
---     panel is currently a SHELL — it renders fixture rows only; a later
---     task feeds it real provider rows, hides books the server already
---     has, and wires Start to the session worker.
+--     stub callbacks, no Libation call and nothing ever enqueued. The real
+--     panel (M.library()) is fed by rip-audiobook --library/--server-library
+--     and its Start/Import presses land on enqueueLibrarySession/
+--     enqueueImport below, which write a session plan and hand off to
+--     rip-audiobook --session / --import — same as this harness looks,
+--     minus the "nothing enqueued" part.
 --   * The volume watcher only sees mounts that happen after M.start()
 --     runs, so a disc already sitting in the drive at launch/reload needs
 --     a manual nudge: M.ripDisc() rescans /Volumes for a VIDEO_TS/ dir,
@@ -118,31 +120,6 @@ local serverTask = nil
 local sessionVolume = nil -- the volume the open session panel is reviewing
 local sessionState = nil -- the open session's payload; also the staleness token
 local planSeq = 0 -- monotonic suffix for plan temp files
-
--- Task 5 wires these to the session enqueue / import worker; until then they
--- only log what the panel handed back, so pressing Start or Import in the
--- Audiobook Library panel is safe but enqueues nothing (same discipline as
--- the Mode B preview harness's stub callbacks further down this file).
-local libraryCallbacks = {
-	onStart = function(plan)
-		log.f(
-			"library: start requested, %d item(s), provider=%s (not yet enqueued — Task 5)",
-			#(plan.items or {}),
-			tostring(plan.provider)
-		)
-	end,
-	onImport = function(spec)
-		log.f(
-			"library: import requested src=%s author=%s title=%s (not yet enqueued — Task 5)",
-			tostring(spec.src),
-			tostring(spec.author),
-			tostring(spec.title)
-		)
-	end,
-	onDismiss = function()
-		log.f("library: dismissed")
-	end,
-}
 
 local function fileSize(p)
 	local a = hs.fs.attributes(p)
@@ -750,6 +727,47 @@ end
 -- the consent guard for the reply: a dismiss that lands before the task
 -- returns must not reopen the panel and steal focus back (previewTimer's
 -- and runSessionScan's rule).
+
+-- The plan is a TEMP file the worker copies into .work/ab-plans and then
+-- owns; see rip::ab_enqueue. Write it under the OS temp dir, not the staging
+-- tree — staging is watched, and a stray .json there would enter a push
+-- list (same reasoning as the DVD session plan, which instead lands in
+-- .work/ because rip-disc's worker copies it out immediately; this plan's
+-- worker is asynchronous — pueue may not run it for minutes — so it cannot
+-- share .work/'s own sweep-at-startup lifetime).
+local function enqueueLibrarySession(plan)
+	if not plan or not plan.items or #plan.items == 0 then
+		return
+	end
+	local file = os.tmpname() .. ".json"
+	local fh = io.open(file, "w")
+	if not fh then
+		log.ef("library: cannot write the session plan")
+		return
+	end
+	fh:write(hs.json.encode({ provider = plan.provider or "libation", items = plan.items }))
+	fh:close()
+	enqueue(RIP_AUDIOBOOK, { "--session", file }, "rip-audiobook")
+end
+
+local function enqueueImport(spec)
+	if not spec or not spec.src or spec.src == "" then
+		return
+	end
+	enqueue(RIP_AUDIOBOOK, { "--import", spec.src, spec.author or "", spec.title or "" }, "rip-audiobook")
+end
+
+-- Real wiring: Start writes the session plan and enqueues the acquire->push
+-- worker; Import stages a DRM-free file the operator already owns. Both
+-- reuse `enqueue` so a failure surfaces the same way the movie/music
+-- watchers' jobs do.
+local libraryCallbacks = {
+	onStart = enqueueLibrarySession,
+	onImport = enqueueImport,
+	onDismiss = function()
+		log.f("library: dismissed")
+	end,
+}
 
 --- Open the Audiobook Library panel and populate it from the real provider.
 function M.library()

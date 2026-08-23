@@ -198,6 +198,61 @@ body { background: transparent; overflow: hidden; }
   font-size: var(--base-size);
 }
 
+/* --- import a file you already have -------------------------------------- */
+/* The rare path: collapsed by default (import-body starts [hidden]) so it
+ * never competes with the library list above it. Toggled open by clicking
+ * the disclosure row; nothing here is ever shown expanded on first paint. */
+.import {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--hairline);
+}
+.import-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 15px;
+  font-size: var(--meta-size);
+  color: rgba(150, 150, 150, 0.9);
+  cursor: default;
+  user-select: none;
+}
+.import-caret {
+  display: inline-block;
+  transition: transform 0.1s ease;
+}
+.import-toggle[data-open="true"] .import-caret { transform: rotate(90deg); }
+.import-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 15px 12px;
+}
+/* .import-body's own `display: flex` above and the [hidden] attribute
+ * selector carry equal specificity, so without this the LATER rule (ours)
+ * would always win the cascade and the collapsed state would never
+ * actually hide — toggleImport() sets/clears the `hidden` attribute in JS,
+ * this is what makes that have any visual effect. */
+.import-body[hidden] { display: none; }
+.import-input {
+  flex: 1 1 0;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: rgba(224, 224, 224, 1);
+  font-family: var(--ui-font);
+  font-size: var(--meta-size);
+  outline: none;
+}
+.import-input:focus { border-color: rgba(203, 166, 247, 0.5); }
+.import-input::placeholder { color: rgba(150, 150, 150, 0.7); }
+/* Empty or rejected (slash-only, "." / "..") — same rule rip::_check_title
+ * enforces server-side, mirrored here (rip-session.css's .name-input.invalid,
+ * same literal color). */
+.import-input.invalid { border-color: rgba(243, 139, 168, 0.7); }
+#importSrc { flex: 2 1 0; }
+
 /* --- footer -------------------------------------------------------------- */
 .footer {
   display: flex;

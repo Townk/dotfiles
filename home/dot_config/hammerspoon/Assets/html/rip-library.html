@@ -14,6 +14,21 @@
       <span class="chip" id="chipShowLibrary" data-active="false">Show library</span>
     </div>
     <div class="rows" id="rows"></div>
+    <div class="import">
+      <div class="import-toggle" id="importToggle" data-open="false">
+        <span class="import-caret">&#9656;</span>
+        <span>Import a file you already have</span>
+      </div>
+      <div class="import-body" id="importBody" hidden>
+        <input class="import-input" id="importSrc" type="text" autocomplete="off" spellcheck="false"
+          placeholder="Path to file or folder">
+        <input class="import-input" id="importAuthor" type="text" autocomplete="off" spellcheck="false"
+          placeholder="Author">
+        <input class="import-input" id="importTitle" type="text" autocomplete="off" spellcheck="false"
+          placeholder="Title">
+        <span class="btn-primary disabled" id="btnImport">Import</span>
+      </div>
+    </div>
     <div class="footer">
       <span id="summary"></span>
       <span class="spacer"></span>
@@ -262,6 +277,60 @@
     function dismiss() { post({ action: 'dismiss' }); }
 
     //----------------------------------------------------------------------
+    // Import a file you already have — the rare path, collapsed by default
+    // so it never competes with the library list above it.
+    //----------------------------------------------------------------------
+    var IMPORT_OPEN = false;
+
+    // Mirrors rip::_check_title (home/dot_local/lib/rip.zsh): non-empty, no
+    // slash (it becomes a path component under <Author>/<Title>), never "."
+    // or "..". Applied to both the author and title fields, exactly as the
+    // disc panel's nameValid mirrors rip::_check_extra_name — the server-side
+    // check still runs regardless; this is feedback only.
+    function titleValid(n) {
+      n = String(n || '').trim();
+      return n !== '' && n !== '.' && n !== '..' && n.indexOf('/') === -1;
+    }
+
+    function importValid() {
+      var src = document.getElementById('importSrc').value.trim();
+      var author = document.getElementById('importAuthor').value;
+      var title = document.getElementById('importTitle').value;
+      return src !== '' && titleValid(author) && titleValid(title);
+    }
+
+    function renderImportButton() {
+      var btn = document.getElementById('btnImport');
+      if (importValid()) btn.classList.remove('disabled'); else btn.classList.add('disabled');
+    }
+
+    function toggleImport() {
+      IMPORT_OPEN = !IMPORT_OPEN;
+      document.getElementById('importBody').hidden = !IMPORT_OPEN;
+      document.getElementById('importToggle').setAttribute('data-open', String(IMPORT_OPEN));
+    }
+
+    function doImport() {
+      if (!importValid()) return;
+      post({
+        action: 'import',
+        src: document.getElementById('importSrc').value.trim(),
+        author: document.getElementById('importAuthor').value.trim(),
+        title: document.getElementById('importTitle').value.trim()
+      });
+      // Reset rather than collapse: nothing in this panel reports back
+      // whether the import landed (that surfaces as a job capsule outside
+      // it), so clearing the fields is the only guard against an accidental
+      // second click re-posting the same import.
+      document.getElementById('importSrc').value = '';
+      document.getElementById('importAuthor').value = '';
+      document.getElementById('importTitle').value = '';
+      document.getElementById('importAuthor').classList.remove('invalid');
+      document.getElementById('importTitle').classList.remove('invalid');
+      renderImportButton();
+    }
+
+    //----------------------------------------------------------------------
     // Events
     //----------------------------------------------------------------------
     function closestAttr(node, attr) {
@@ -302,6 +371,31 @@
 
       document.getElementById('btnStart').addEventListener('mousedown', function (e) { e.preventDefault(); start(); });
       document.getElementById('btnDismiss').addEventListener('mousedown', function (e) { e.preventDefault(); dismiss(); });
+
+      document.getElementById('importToggle').addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        toggleImport();
+      });
+      document.getElementById('btnImport').addEventListener('mousedown', function (e) { e.preventDefault(); doImport(); });
+
+      // `input` bubbles, so one delegated listener covers all three import
+      // fields. Author/title strip slashes as they are typed (rip::_check_title
+      // would reject the name outright, same as the disc panel's name
+      // fields); "." / ".." can only be judged once typing stops, so those
+      // just mark the field invalid.
+      document.getElementById('importBody').addEventListener('input', function (e) {
+        var t = e.target;
+        if (t.id === 'importAuthor' || t.id === 'importTitle') {
+          var cleaned = t.value.replace(/\//g, '');
+          if (cleaned !== t.value) {
+            var caret = Math.max(0, (t.selectionStart || 1) - 1);
+            t.value = cleaned;
+            t.setSelectionRange(caret, caret);
+          }
+          t.classList.toggle('invalid', t.value !== '' && !titleValid(t.value));
+        }
+        renderImportButton();
+      });
 
       document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') { e.preventDefault(); dismiss(); }
