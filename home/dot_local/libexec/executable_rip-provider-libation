@@ -113,9 +113,30 @@ cmd_acquire() {
   "$LIB_BIN" liberate --id "$id" -o Books="$dest" </dev/null \
     | while IFS= read -r line; do
         case "$line" in
+          # Kept for a future LibationCli that reports a percentage — this
+          # version does not (see below), and a real one should win over the
+          # indeterminate fallback the moment it appears.
           *%*)
             pct="${line%\%*}"; pct="${pct##* }"
             [[ "$pct" == <-> ]] && print -r -- "progress $pct $id"
+            ;;
+          # LibationCli 13.7.10 emits NO percentage anywhere, on either
+          # stream (live 2026-08-23) — its entire output for a liberate run
+          # is three lifecycle lines: "DownloadDecryptBook Begin: …",
+          # "DownloadDecryptBook Completed: …", "Done. …". So the capsule
+          # never moved for the whole download and the jobs HUD greyed it
+          # out as stalled, then jumped when the next title started.
+          #
+          # -1 is the sidecar's INDETERMINATE value (job.zsh: "pct -1 =
+          # indeterminate"), which is the honest answer: a multi-gigabyte
+          # download is genuinely running and we genuinely cannot say how
+          # far along it is. Better a capsule that says "working, duration
+          # unknown" than a number invented to look precise.
+          "DownloadDecryptBook Begin"*)
+            print -r -- "progress -1 downloading"
+            ;;
+          "DownloadDecryptBook Completed"*)
+            print -r -- "progress -1 decrypting"
             ;;
         esac
       done

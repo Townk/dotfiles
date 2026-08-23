@@ -2474,7 +2474,21 @@ rip::ab_worker() {
           case "$line" in
             progress\ *)
               pct="${${line#progress }%% *}"
-              [[ "$pct" == <-> ]] && rip::_progress $(( base + pct * span / 100 )) "downloading — ${bpath:t}"
+              if [[ "$pct" == <-> ]]; then
+                rip::_progress $(( base + pct * span / 100 )) "downloading — ${bpath:t}"
+              elif [[ "$pct" == "-1" ]]; then
+                # Indeterminate, passed straight through UNSCALED — rescaling
+                # a sentinel would turn -1 into a real percentage and the HUD
+                # would draw a definite bar for something we cannot measure.
+                # rip::_progress only rescales values matching <-> (which is
+                # non-negative), so -1 already survives it untouched; this
+                # branch exists because the <-> test above would otherwise
+                # drop the line on the floor, leaving the capsule frozen at
+                # its band start for the whole download and greyed out as
+                # stalled (live 2026-08-23). The per-item band still advances
+                # at each item boundary below.
+                rip::_progress -1 "${${line#progress }#* } — ${bpath:t}"
+              fi
               ;;
             *) print -r -- "$line" ;;
           esac
