@@ -1,9 +1,10 @@
 # rip-push — enqueue validation, skip-if-empty, worker transfer/verify/delete.
 # Hermetic: sandboxed staging + JOB_STATE_ROOT, recording fake pueue
-# (JOB_PUEUE_BIN) and fake rsync (RIP_RSYNC_BIN), and a sandboxed
-# RIP_LIBEXEC_DIR so an audiobook index miss's provider fallback (see
-# rip::_book_meta_for) can never resolve the real deployed provider. No
-# ssh, no daemon.
+# (JOB_PUEUE_BIN) and fake rsync (RIP_RSYNC_BIN), a sandboxed RIP_LIBEXEC_DIR
+# so an audiobook index miss's provider fallback (see rip::_book_meta_for)
+# can never resolve the real deployed provider, and a sandboxed RIP_BIN_DIR
+# so the ABS author-enrichment remote hop can never resolve the real
+# deployed rip-abs-authors either. No ssh, no daemon.
 Describe 'rip.zsh push'
   RIPLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/rip.zsh"
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
@@ -37,6 +38,16 @@ EOF
     # sees "no such provider" here; the examples that need a working
     # provider export their own override over this.
     export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    # Same class of risk, one hop over: rip::_abs_match_authors (the first
+    # RIP_AB_REMOTE_HOPS entry) shells out to "$RIP_BIN_DIR/rip-abs-authors",
+    # which defaults to $HOME/.local/bin — a REAL path once this branch
+    # ships via `chezmoi apply`. Left unsandboxed, every audiobooks
+    # push_worker example below would, on a machine with the real
+    # AUDIOBOOKSHELF_API_KEY exported (system-secrets), make live match
+    # calls against cantina after its verified push. Empty sandbox dir: the
+    # shell-out 404s and the hop's own `|| log_warn` swallows it.
+    export RIP_BIN_DIR="$RIP_SANDBOX/bin"
+    mkdir -p "$RIP_BIN_DIR"
     # Every pre-existing example here stages files moments before running
     # the worker, so they'd all sit inside the default 90s age gate. Disable
     # it suite-wide; the three age-gate examples below re-export the real

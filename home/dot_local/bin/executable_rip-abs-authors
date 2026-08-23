@@ -1,0 +1,177 @@
+#!/usr/bin/env zsh
+# rip-abs-authors — ask Audiobookshelf to backfill an author's image + bio
+# via ABS's OWN Audnexus match endpoint. ABS keeps author image/description
+# in its OWN database (the `authors` table), never in the media tree — so
+# nothing a push writes into /srv/media can ever populate it. ABS already
+# knows how to fill it in: POST /api/authors/{id}/match makes ABS query
+# Audnexus (keyless) and write image+bio+ASIN itself. This bin just decides
+# WHICH authors get asked.
+#
+#   rip-abs-authors --all           match every author in the book library
+#                                    missing BOTH image and bio
+#   rip-abs-authors "<Name>"...     match only the named authors — this is
+#                                    what rip::_abs_match_authors (the first
+#                                    RIP_AB_REMOTE_HOPS entry, rip.zsh) calls
+#                                    after a verified push
+#
+# "First sighting" rule: an author is matched ONLY when imagePath AND
+# description are BOTH empty/null. Either one already set means skip — that
+# is what makes a re-run free and protects hand-curated ABS data from ever
+# being overwritten by a later push. Skips are reported distinctly from
+# matches.
+#
+# A named author not yet visible in ABS's authors list (the library scan
+# that creates the row hasn't caught up with the just-landed folder yet) is
+# polled a bounded number of times — RIP_ABS_AUTHOR_POLL_TRIES attempts,
+# RIP_ABS_AUTHOR_POLL_INTERVAL_S apart (default 12 × 5s, ~a minute) — before
+# being given up on. Giving up is a logged non-event, not an error: the hop
+# this bin serves can NEVER fail a push — the files are already safely on
+# the server.
+#
+# Auth: header "Authorization: Bearer $AUDIOBOOKSHELF_API_KEY"
+# (system-secrets). The key rides a curl header only — never a URL, never
+# the process command line, never printed. Exit 3 = no key, mirroring
+# executable_rip-tmdb-search exactly.
+#
+# Base URL seam: RIP_ABS_URL, default http://cantina:13378 — the bare
+# hostname is deliberate, the FQDN is a forbidden leak pattern in this repo
+# and must never appear in a committed file.
+
+set -eu -o pipefail
+
+[ -n "${AUDIOBOOKSHELF_API_KEY:-}" ] || { print -ru2 -- "rip-abs-authors: AUDIOBOOKSHELF_API_KEY is not set (system-secrets)"; exit 3 }
+
+curl_bin="${RIP_CURL_BIN:-curl}"
+base="${RIP_ABS_URL:-http://cantina:13378}"
+poll_tries="${RIP_ABS_AUTHOR_POLL_TRIES:-12}"
+poll_interval="${RIP_ABS_AUTHOR_POLL_INTERVAL_S:-5}"
+auth_header="Authorization: Bearer $AUDIOBOOKSHELF_API_KEY"
+
+# _abs_get <api-path> — bounded, auth'd GET; prints the raw body, empty on
+# any failure. --max-time on every call: a hung ABS must never wedge the
+# caller (a push's remote hop).
+_abs_get() {
+  "$curl_bin" -sf --max-time 10 -H "$auth_header" "$base$1" 2>/dev/null
+}
+
+# _abs_book_library_id — the id of the FIRST library whose mediaType is
+# "book". Never hardcode an id: discover it every run.
+_abs_book_library_id() {
+  _abs_get "/api/libraries" \
+    | jq -r '(.libraries // []) | map(select(.mediaType=="book")) | .[0].id // empty' 2>/dev/null
+}
+
+# _abs_authors_json <library_id> — the raw authors array (compact JSON) for
+# that library, or "" on any failure.
+_abs_authors_json() {
+  _abs_get "/api/libraries/$1/authors" | jq -c '.authors // []' 2>/dev/null
+}
+
+# _abs_author_row <authors_json> <name> — the first author row whose name
+# is exactly <name>, or "" when absent.
+_abs_author_row() {
+  jq -c --arg n "$2" 'map(select(.name == $n)) | .[0] // empty' <<<"$1" 2>/dev/null
+}
+
+# _abs_needs_match <row> — true when imagePath AND description are BOTH
+# empty/null (the "first sighting" rule); <row> must be a non-empty object.
+_abs_needs_match() {
+  local img desc
+  img="$(jq -r '.imagePath // ""' <<<"$1" 2>/dev/null)"
+  desc="$(jq -r '.description // ""' <<<"$1" 2>/dev/null)"
+  [[ -z "$img" && -z "$desc" ]]
+}
+
+# _abs_match <id> <name> — POST the match request. Best-effort: logs and
+# returns non-zero on any failure (network, non-2xx, no match found,
+# malformed body) — never aborts the caller.
+_abs_match() {
+  local id="$1" name="$2" body resp updated
+  body="$(jq -nc --arg q "$name" '{q: $q, region: "us"}')"
+  resp="$("$curl_bin" -sf --max-time 20 -X POST \
+      -H "$auth_header" -H 'Content-Type: application/json' \
+      --data "$body" "$base/api/authors/$id/match" 2>/dev/null)" || {
+    print -ru2 -- "rip-abs-authors: match request failed — $name"
+    return 1
+  }
+  updated="$(jq -r '.updated // false' <<<"$resp" 2>/dev/null)"
+  if [[ "$updated" == "true" ]]; then
+    print -r -- "rip-abs-authors: matched $name"
+    return 0
+  fi
+  print -ru2 -- "rip-abs-authors: no match found — $name"
+  return 1
+}
+
+# _abs_match_one <authors_json> <name> — match <name> if present and
+# needing it (rc 0), skip if present and already populated (rc 0), or
+# report absent (rc 2) so the caller can decide whether to poll. A failed
+# match attempt is also rc 1, logged by _abs_match itself.
+_abs_match_one() {
+  local authors_json="$1" name="$2" row id
+  row="$(_abs_author_row "$authors_json" "$name")"
+  [[ -n "$row" ]] || return 2
+  if ! _abs_needs_match "$row"; then
+    print -r -- "rip-abs-authors: skip (already populated) — $name"
+    return 0
+  fi
+  id="$(jq -r '.id' <<<"$row" 2>/dev/null)"
+  _abs_match "$id" "$name"
+}
+
+# cmd_all — every author in the book library, no polling (they are already
+# there by definition of being listed). noerrexit/nopipefail here (and in
+# cmd_names below) is the same "one bounded scope, everything under it
+# inherits the guard" idiom rip.zsh's own enrichment orchestrators use: a
+# malformed response or a curl miss anywhere below must never abort this
+# script — it can only ever cause one author to be skipped or logged.
+cmd_all() {
+  setopt localoptions noerrexit nopipefail
+  local lib_id authors_json
+  lib_id="$(_abs_book_library_id)"
+  [[ -n "$lib_id" ]] || { print -ru2 -- "rip-abs-authors: no book library found on $base"; return 1 }
+  authors_json="$(_abs_authors_json "$lib_id")"
+  [[ -n "$authors_json" && "$authors_json" != "null" ]] || {
+    print -ru2 -- "rip-abs-authors: could not list authors on $base"; return 1
+  }
+  local -a names=()
+  local name
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && names+=("$name")
+  done <<<"$(jq -r '.[].name' <<<"$authors_json" 2>/dev/null)"
+  for name in "${names[@]}"; do
+    _abs_match_one "$authors_json" "$name"
+  done
+  return 0
+}
+
+# cmd_names <name…> — match only the given authors, polling ABS's authors
+# list a bounded number of times when one is not there yet.
+cmd_names() {
+  setopt localoptions noerrexit nopipefail
+  local lib_id authors_json name rc try
+  lib_id="$(_abs_book_library_id)"
+  [[ -n "$lib_id" ]] || { print -ru2 -- "rip-abs-authors: no book library found on $base"; return 1 }
+  for name in "$@"; do
+    authors_json="$(_abs_authors_json "$lib_id")"
+    _abs_match_one "$authors_json" "$name"; rc=$?
+    try=1
+    while (( rc == 2 && try < poll_tries )); do
+      sleep "$poll_interval"
+      authors_json="$(_abs_authors_json "$lib_id")"
+      _abs_match_one "$authors_json" "$name"; rc=$?
+      (( try++ ))
+    done
+    (( rc == 2 )) && print -r -- "rip-abs-authors: gave up waiting for ABS to see — $name"
+  done
+  return 0
+}
+
+case "${1:-}" in
+  --all) cmd_all ;;
+  "" | --help)
+    print -ru2 -- 'usage: rip-abs-authors --all | "<Author Name>"...'
+    exit 2
+    ;;
+  *) cmd_names "$@" ;;
+esac

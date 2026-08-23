@@ -4,6 +4,7 @@
 Describe 'rip audiobooks'
   RIPLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/rip.zsh"
   PROVIDER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_rip-provider-libation"
+  ABS_BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-abs-authors"
 
   setup() {
     export RIP_SANDBOX=$(mktemp -d)
@@ -14,7 +15,17 @@ Describe 'rip audiobooks'
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
     export RIP_LIBEXEC_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec"
     export RIP_PUSH_MIN_AGE_S=0
-    mkdir -p "$RIP_STAGING_ROOT/audiobooks" "$RIP_SANDBOX/server/audiobooks"
+    # rip::_abs_match_authors (rip.zsh) is a DEFAULT RIP_AB_REMOTE_HOPS
+    # entry, so EVERY audiobooks push in this whole file now shells out to
+    # "$RIP_BIN_DIR/rip-abs-authors" after a verified push. Left at its
+    # production default ($HOME/.local/bin) that would resolve to a REAL
+    # path on whatever machine runs the suite — exactly the live-network
+    # escape this suite has already been bitten by once. An empty sandbox
+    # dir means the shell-out 404s (command not found) and the hop's own
+    # `|| log_warn` swallows it — hermetic by construction, not by
+    # per-example discipline.
+    export RIP_BIN_DIR="$RIP_SANDBOX/bin"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks" "$RIP_SANDBOX/server/audiobooks" "$RIP_BIN_DIR"
     cat > "$RIP_SANDBOX/pueue" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
@@ -468,5 +479,160 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_STAGING_ROOT/.work/ab-plans/x.json"
     The status should equal 0
     The path "$RIP_STAGING_ROOT/.work/ab-plans/x.json" should not be exist
+  End
+
+  # --- ABS author enrichment (rip-abs-authors + the RIP_AB_REMOTE_HOPS
+  # first entry, rip::_abs_match_authors) ------------------------------------
+  #
+  # Hermetic per the file header's own doctrine: fake curl behind
+  # RIP_CURL_BIN, RIP_ABS_URL pointed at a sandbox value, never the real
+  # cantina. AUDIOBOOKSHELF_API_KEY is explicitly unset before every use so
+  # a value sitting in the real environment can never leak in.
+
+  abs_get_calls() { grep -c '/api/libraries/lib-book/authors' "$RIP_SANDBOX/abscurl.log" 2>/dev/null || true; }
+
+  # fake_abs_curl <authors_json> — a fake ABS: /api/libraries answers with
+  # a DECOY podcast library FIRST and the book library second (so a test
+  # that hardcoded "the first library" instead of filtering on mediaType
+  # would pick the wrong one and fail), /api/libraries/lib-book/authors
+  # answers with <authors_json>, and /api/authors/<id>/match always
+  # succeeds and logs which id it was called for.
+  fake_abs_curl() {
+    export RIP_ABS_URL="http://cantina:13378"
+    printf '%s' "$1" > "$RIP_SANDBOX/abs-authors.json"
+    cat > "$RIP_SANDBOX/abscurl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/abscurl.log"
+url=""
+for a in "\$@"; do case "\$a" in http*) url="\$a";; esac; done
+case "\$url" in
+  */api/libraries)
+    echo '{"libraries":[{"id":"lib-pod","name":"Podcasts","mediaType":"podcast"},{"id":"lib-book","name":"Audiobooks","mediaType":"book"}]}' ;;
+  */api/libraries/lib-book/authors)
+    cat "$RIP_SANDBOX/abs-authors.json" ;;
+  */api/authors/*/match)
+    id="\${url%/match}"; id="\${id##*/}"
+    printf '{"updated":true,"author":{"id":"%s"}}' "\$id" ;;
+  *) echo '{}' ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/abscurl"
+    export RIP_CURL_BIN="$RIP_SANDBOX/abscurl"
+  }
+
+  It 'abs-authors: the book library is discovered by mediaType, not hardcoded'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[{"id":"auth-1","name":"Brandon Sanderson","asin":null,"description":null,"imagePath":null}]}'
+    When run zsh -f "$ABS_BIN" "Brandon Sanderson"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/libraries/lib-book/authors"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should not include "/api/libraries/lib-pod/authors"
+  End
+
+  It 'abs-authors: an author with both fields empty gets matched'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[{"id":"auth-1","name":"Brandon Sanderson","asin":null,"description":null,"imagePath":null}]}'
+    When run zsh -f "$ABS_BIN" "Brandon Sanderson"
+    The status should equal 0
+    The output should include "matched Brandon Sanderson"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/authors/auth-1/match"
+  End
+
+  It 'abs-authors: an author with an existing image is skipped — no match call'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[{"id":"auth-1","name":"Brandon Sanderson","asin":null,"description":null,"imagePath":"/var/lib/audiobookshelf/metadata/authors/auth-1.jpg"}]}'
+    When run zsh -f "$ABS_BIN" "Brandon Sanderson"
+    The status should equal 0
+    The output should include "skip (already populated)"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should not include "/match"
+  End
+
+  It 'abs-authors: an author with an existing bio is skipped — no match call'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[{"id":"auth-1","name":"Brandon Sanderson","asin":null,"description":"Already has a bio.","imagePath":null}]}'
+    When run zsh -f "$ABS_BIN" "Brandon Sanderson"
+    The status should equal 0
+    The output should include "skip (already populated)"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should not include "/match"
+  End
+
+  It 'abs-authors: --all matches every needing author and skips the rest'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[
+      {"id":"auth-1","name":"Brandon Sanderson","asin":null,"description":null,"imagePath":null},
+      {"id":"auth-2","name":"Andy Weir","asin":"B123","description":"has one","imagePath":"/x.jpg"}
+    ]}'
+    When run zsh -f "$ABS_BIN" --all
+    The status should equal 0
+    The output should include "matched Brandon Sanderson"
+    The output should include "skip (already populated)"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/authors/auth-1/match"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should not include "/api/authors/auth-2/match"
+  End
+
+  It 'abs-authors: a missing API key exits 3 without any HTTP call'
+    # zsh -f: skip ~/.zshenv, which re-injects the real AUDIOBOOKSHELF_API_KEY
+    # from system-secrets — a bare unset is not hermetic once the key exists
+    # in the real environment (same gotcha as rip-tmdb-search's TMDB_API_KEY
+    # example).
+    unset AUDIOBOOKSHELF_API_KEY
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" "Brandon Sanderson"
+    The status should equal 3
+    The stderr should include "AUDIOBOOKSHELF_API_KEY"
+    The path "$RIP_SANDBOX/abscurl.log" should not be exist
+  End
+
+  It 'abs-authors: an author absent from ABS is polled then given up on without error'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[]}'
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    When run zsh -f "$ABS_BIN" "Nobody Home"
+    The status should equal 0
+    The output should include "gave up waiting"
+    The result of function abs_get_calls should equal "2"
+  End
+
+  # --- rip::_abs_match_authors (the RIP_AB_REMOTE_HOPS entry itself) --------
+
+  # fake_rip_abs_authors_bin — a stand-in for the deployed CLI, logging one
+  # line per invocation with its full argv, so an example can assert both
+  # HOW MANY TIMES the hop invoked it and WITH WHAT.
+  fake_rip_abs_authors_bin() {
+    cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/hop-calls.log"
+${1:-exit 0}
+EOF
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+  }
+
+  hop_call_count() { wc -l < "$RIP_SANDBOX/hop-calls.log" 2>/dev/null | tr -d ' '; }
+
+  It 'hop: derives and dedupes author names from relpaths — one call for two books by one author'
+    fake_rip_abs_authors_bin
+    When run zsh -c "source $RIPLIB && rip::_abs_match_authors '$RIP_SANDBOX/server' 'Brandon Sanderson/Steelheart/Steelheart.m4b' 'Brandon Sanderson/Wind and Truth/Wind and Truth.m4b' 'Other Author/Book/Book.m4b'"
+    The status should equal 0
+    The result of function hop_call_count should equal "1"
+    The contents of file "$RIP_SANDBOX/hop-calls.log" should include "Brandon Sanderson"
+    The contents of file "$RIP_SANDBOX/hop-calls.log" should include "Other Author"
+  End
+
+  It 'hop: no relpaths means no call at all'
+    fake_rip_abs_authors_bin
+    When run zsh -c "source $RIPLIB && rip::_abs_match_authors '$RIP_SANDBOX/server'"
+    The status should equal 0
+    The path "$RIP_SANDBOX/hop-calls.log" should not be exist
+  End
+
+  It 'hop: a failing/hanging ABS never fails the push — rip::_enrich_audiobooks_remote swallows it'
+    fake_rip_abs_authors_bin "exit 1"
+    printf '%s\n' "Brandon Sanderson/Steelheart/Steelheart.m4b" > "$RIP_SANDBOX/listfile"
+    When run zsh -c "source $RIPLIB && rip::_enrich_audiobooks_remote $RIP_SANDBOX/listfile"
+    The status should equal 0
+    The stderr should include "remote enrichment hop failed"
+    The result of function hop_call_count should equal "1"
   End
 End

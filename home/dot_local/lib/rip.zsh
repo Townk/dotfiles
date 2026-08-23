@@ -534,6 +534,14 @@ typeset -ga RIP_AB_REMOTE_HOPS
 (( ${+RIP_AB_ENRICH_HOPS} )) || RIP_AB_ENRICH_HOPS=()
 (( ${+RIP_AB_REMOTE_HOPS} )) || RIP_AB_REMOTE_HOPS=()
 
+# First real remote hop (the registry stops being deliberately empty here):
+# after a verified push, ask Audiobookshelf to backfill image + bio for
+# the pushed books' authors it has never populated — see
+# rip::_abs_match_authors below for the full rationale. PREPENDED, not
+# appended: "first entry" per spec, so any later remote hop that wants ABS
+# to already know about this push's authors can rely on it.
+RIP_AB_REMOTE_HOPS=(rip::_abs_match_authors "${RIP_AB_REMOTE_HOPS[@]}")
+
 # rip::_enrich_add <relpath> — register a file (relative to the type's
 # staging dir) into the running push's list, so it is pushed, verified and
 # cleaned as part of the same fixed set. The music enrichment's cover.jpg /
@@ -607,6 +615,45 @@ rip::_enrich_audiobooks_remote() {
       || log_warn "rip: remote enrichment hop failed: $hop (files are on the server regardless)"
   done
   return 0
+}
+
+# rip::_abs_match_authors <remote_base> <relpath…> — the first
+# RIP_AB_REMOTE_HOPS entry. Audiobookshelf keeps an author's image and bio
+# in its OWN database (the `authors` table), never in the media tree, so
+# nothing a push writes into /srv/media can ever populate it. ABS already
+# knows how to fill it in itself — POST /api/authors/{id}/match makes ABS
+# query Audnexus (keyless) and write image+bio+ASIN — so this hop just
+# asks it to, for the authors THIS push landed.
+#
+# <remote_base> is unused: ABS is reached over its own HTTP API
+# (rip-abs-authors, RIP_ABS_URL/RIP_CURL_BIN), never over the rsync
+# target — the parameter is kept only for signature parity with every
+# other RIP_AB_REMOTE_HOPS entry. Author names are the FIRST path segment
+# of each <Author>/<Title>/<file> relpath, deduped with the same ${(u)…}
+# idiom rip::_enrich_audiobooks uses for book dirs: two books by one
+# author in a single push make exactly ONE call into rip-abs-authors,
+# which itself makes at most one ABS match call per never-before-seen
+# author (the "first sighting" rule lives in the bin, not here).
+#
+# Best-effort by construction, not just by the caller's `|| log_warn`: the
+# bin itself never fails a lookup outward (a missing/unreachable ABS, or
+# an author ABS hasn't scanned yet, is a logged skip, never a hard exit),
+# and every HTTP call it makes carries a timeout — a hung ABS cannot wedge
+# this hop, and a failing one cannot fail the push that already landed on
+# cantina.
+rip::_abs_match_authors() {
+  setopt localoptions noerrexit nopipefail
+  shift  # remote_base — unused, see above
+  (( $# )) || return 0
+  local -a authors=()
+  local rel author
+  for rel in "$@"; do
+    author="${rel%%/*}"
+    [[ -n "$author" ]] && authors+=("$author")
+  done
+  authors=(${(u)authors})
+  (( ${#authors} )) || return 0
+  "$RIP_BIN_DIR/rip-abs-authors" "${authors[@]}"
 }
 
 rip::_track_meta() {
