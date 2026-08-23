@@ -2228,8 +2228,12 @@ rip::ab_import() {
       detected_fmt="${audio[1]:e}"
     fi
   else
-    # Single file: reject if extension-less
-    local ext="${src:e}"
+    # Single file: reject if extension-less. Lowercased ("${(L)...}"): taken
+    # verbatim, an uppercase source extension (Book.M4B) would stage
+    # <Title>.M4B and record format:"M4B", which rip::ab_have's hardcoded
+    # "${rel:t}.m4b" can never match — the book would look permanently
+    # absent from the server (2026-08-23 review finding).
+    local ext="${(L)${src:e}}"
     [[ -n "$ext" ]] || {
       rm -rf "$temp"
       log_error "rip: imported file has no extension; cannot determine format"

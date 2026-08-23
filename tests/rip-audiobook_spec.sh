@@ -763,6 +763,18 @@ FAKECP
     The output should equal '"mp3"'
   End
 
+  # rip::ab_have's --have check hardcodes the lowercase "${rel:t}.m4b" —
+  # an uppercase source extension taken verbatim would stage <Title>.M4B
+  # and record format:"M4B", so the book could never match and would look
+  # permanently absent from the server (2026-08-23 review finding).
+  It 'import: lowercases an uppercase source extension in both the staged filename and the recorded format'
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.M4B"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.M4B' 'Ann Leckie' 'Ancillary Mercy' && jq -c '.format' \$(rip::_ab_meta_index_default)"
+    The status should equal 0
+    The output should equal '"m4b"'
+    The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Mercy/Ancillary Mercy.m4b" should be exist
+  End
+
   It 'import: directory with no audio files omits the format key'
     mkdir -p "$RIP_SANDBOX/incoming"
     printf 'text\n' > "$RIP_SANDBOX/incoming/readme.txt"
