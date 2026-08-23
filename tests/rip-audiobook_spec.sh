@@ -100,6 +100,23 @@ EOF
     find "$RIP_SANDBOX" -maxdepth 2 -name '.rip-import.*' -type d 2>/dev/null | wc -l | tr -d ' '
   }
 
+  # find_temp_dirs_anywhere() — count .rip-import.* temp directories ANYWHERE
+  # under the sandbox, unbounded depth. Unlike find_temp_dirs (maxdepth 2,
+  # which only covers the top-level parent-of-staging location), this also
+  # catches a temp dir nested inside a destination — the exact failure mode
+  # of the mv-nesting bug this guard exists to prevent.
+  find_temp_dirs_anywhere() {
+    find "$RIP_SANDBOX" -name '.rip-import.*' -type d 2>/dev/null | wc -l | tr -d ' '
+  }
+
+  # dest_entry_count() — count entries directly inside the fixed
+  # Author/Title destination used by the dot-directory nesting test below,
+  # to verify the destination is left exactly as it was (nothing added,
+  # nothing removed).
+  dest_entry_count() {
+    find "$RIP_STAGING_ROOT/audiobooks/Author/Title" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' '
+  }
+
   It 'provider: capabilities describes itself'
     When run zsh "$PROVIDER" capabilities
     The status should equal 0
@@ -792,5 +809,26 @@ FAKECP
     The stderr should include "already staged"
     # Old file remains unchanged
     The contents of file "$RIP_STAGING_ROOT/audiobooks/Author/Title/old.m4b" should equal "old"
+  End
+
+  It 'import: destination containing a dot-directory refuses rather than nesting'
+    # A dot-DIRECTORY (unlike a dotfile) survives both the clobber guard's
+    # blind glob AND the pre-rename cleanup: `find -type f -delete` only
+    # removes files, so the dot-directory remains, `rmdir` then fails
+    # (directory not empty), and $dest survives to the mv. Without an
+    # explicit invariant check, mv would nest the temp inside $dest instead
+    # of publishing — the exact bug three review rounds already closed for
+    # dotfiles, reopened here for dot-directories.
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Author/Title/.stray"
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
+    The status should equal 2
+    The stderr should include "Author/Title"
+    # Destination is left exactly as it was: the dot-directory survives,
+    # nothing else was added (no nested import, no published book).
+    The path "$RIP_STAGING_ROOT/audiobooks/Author/Title/.stray" should be exist
+    The result of function dest_entry_count should equal "1"
+    # No temp directory survives anywhere, nested or not.
+    The result of function find_temp_dirs_anywhere should equal "0"
   End
 End

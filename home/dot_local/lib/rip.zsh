@@ -2183,13 +2183,19 @@ rip::ab_import() {
   local root; root="$(rip::staging_for audiobooks)"
   local rel; rel="$(rip::_nfc "$author/$title")"
   local dest="$root/$rel"
-  # Refuse only when the destination actually holds real files (not just
-  # dotfiles like .DS_Store from Finder). Use glob qualifiers (N) to expand
-  # empty matches to nothing (no error) and (D) to include dotfiles. Count
-  # the array, never test a captured string: a `$(print …)` capture with any
-  # literal whitespace inside the quotes is non-empty even on zero matches.
-  # Dotfile-only directories (e.g., .DS_Store-only) don't count as "already
-  # staged" — we'll remove them before the rename to prevent mv nesting.
+  # Refuse only when the destination actually holds real files. The glob
+  # ("$dest"/*(N)) is deliberately dot-blind — zsh's bare `*` never matches
+  # dotfiles or dot-directories, so a destination holding only Finder debris
+  # (.DS_Store, etc.) reads as "empty" here and is let through rather than
+  # refused as "already staged". The (N) qualifier just expands an empty
+  # match to nothing instead of erroring. Count the array, never test a
+  # captured string: a `$(print …)` capture with any literal whitespace
+  # inside the quotes is non-empty even on zero matches, which would refuse
+  # every import. Dotfiles are dealt with separately, in the cleanup block
+  # right before the rename below: this guard only decides whether to
+  # REFUSE (real content present); the invariant check right before mv
+  # catches anything that cleanup couldn't remove (e.g. a dot-directory)
+  # rather than let mv silently nest the temp inside a survivor.
   local -a existing=("$dest"/*(N))
   if (( ${#existing} )); then
     log_error "rip: already staged, refusing to clobber: $rel"
@@ -2238,15 +2244,31 @@ rip::ab_import() {
     detected_fmt="$ext"
   fi
 
-  # Publish atomically: remove any existing destination (including dotfiles),
-  # create parent, then rename temp into place (same filesystem ensures atomic mv).
-  # The clobber guard above does not see dotfiles, so a directory with only
-  # .DS_Store (from Finder) reads as empty for refusal but we must remove it
-  # here to prevent mv nesting the temp inside it.
+  # Publish atomically: create parent, then rename temp into place (same
+  # filesystem ensures atomic mv). The clobber guard above is dot-blind, so
+  # a directory holding only Finder debris (.DS_Store) reads as empty for
+  # refusal, but plain files aren't something mv can rename over — remove
+  # them first, then rmdir the now-empty (we hope) destination. This only
+  # ever deletes plain files we can positively identify as debris; it never
+  # recurses into subdirectories, so a dot-DIRECTORY (or anything else
+  # `find -type f -delete` + `rmdir` can't clear) survives on purpose here.
   if [[ -d "$dest" ]]; then
     find "$dest" -maxdepth 1 -type f -delete 2>/dev/null || true
     rmdir "$dest" 2>/dev/null || true
   fi
+
+  # Assert the invariant directly rather than trust the cleanup above: if
+  # $dest still exists — a dot-directory the cleanup above can't rmdir, a
+  # permissions failure, anything else `rm -rf` isn't authorized to force
+  # away on the operator's real staging tree — mv would nest the temp
+  # inside it and ship a mis-shaped book instead of publishing. Refuse
+  # loudly and recoverably instead.
+  if [[ -e "$dest" ]]; then
+    rm -rf "$temp"
+    log_error "rip: refusing to publish — destination still exists after cleanup (contains something other than plain files, e.g. a dot-directory): $dest"
+    return 2
+  fi
+
   mkdir -p "$dest:h" 2>/dev/null || true
   mv -- "$temp" "$dest" || {
     rm -rf "$temp"
