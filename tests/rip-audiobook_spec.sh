@@ -95,6 +95,11 @@ EOF
   # never become 460 round-trips).
   ssh_calls() { wc -l < "$RIP_SANDBOX/ssh.count" 2>/dev/null | tr -d ' '; }
 
+  # find_temp_dirs() — count .rip-import.* temp directories in the sandbox
+  find_temp_dirs() {
+    find "$RIP_SANDBOX" -maxdepth 2 -name '.rip-import.*' -type d 2>/dev/null | wc -l | tr -d ' '
+  }
+
   It 'provider: capabilities describes itself'
     When run zsh "$PROVIDER" capabilities
     The status should equal 0
@@ -747,5 +752,20 @@ FAKECP
     When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B' && jq -c 'has(\"format\")' \$(rip::_ab_meta_index_default)"
     The status should equal 0
     The output should equal 'false'
+  End
+
+  It 'import: RIP_AB_STAGING override uses same-filesystem temp, leaves no debris'
+    # Override staging to an entirely different tree outside the default root
+    local custom_staging="$RIP_SANDBOX/custom-audiobooks"
+    export RIP_AB_STAGING="$custom_staging"
+    printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Test' 'Book'"
+    The status should equal 0
+    # Book lands in the override tree
+    The path "$custom_staging/Test/Book/Book.m4b" should be exist
+    # No debris in default staging root (verify Test/ dir never created there)
+    The path "$RIP_STAGING_ROOT/audiobooks/Test" should not be exist
+    # No temp debris left anywhere: count .rip-import.* dirs in parent
+    The result of function find_temp_dirs should equal "0"
   End
 End

@@ -2194,13 +2194,19 @@ rip::ab_import() {
     return 2
   fi
 
-  # Build in a temp location (.work is unwatched) and publish atomically
-  # to avoid leaving half-copied books in the watched staging tree.
-  local work; work="$(rip::staging_root)/.work"
-  local temp="$work/import.$$"
-  mkdir -p "$temp" || { log_error "rip: cannot create temp dir $temp"; return 1 }
+  # Build in a temp location and publish atomically to avoid leaving
+  # half-copied books in the watched staging tree. Use ${root:h}/.rip-import.*
+  # to ensure: (1) same filesystem as $dest so mv is atomic, and (2) outside
+  # the watched tree (watcher watches ROOT/{intermediate,music,audiobooks},
+  # not ROOT; push enumerates only ROOT/audiobooks). Do NOT anchor to
+  # ROOT/audiobooks — temp files there would be enumerated and shipped.
+  local temp
+  temp="$(mktemp -d "${root:h}/.rip-import.XXXXXX")" || {
+    log_error "rip: cannot create an import staging dir"
+    return 1
+  }
 
-  local format="" detected_fmt=""
+  local detected_fmt=""
   if [[ -d "$src" ]]; then
     # Copy directory; detect format from first audio file
     cp -R -- "$src"/. "$temp"/ || {
@@ -2212,7 +2218,6 @@ rip::ab_import() {
     local -a audio=("$temp"/*.(m4b|mp3|m4a)(N))
     if (( ${#audio} )); then
       detected_fmt="${audio[1]:e}"
-      format="\"$detected_fmt\""
     fi
   else
     # Single file: reject if extension-less
@@ -2229,10 +2234,11 @@ rip::ab_import() {
       return 1
     }
     detected_fmt="$ext"
-    format="\"$detected_fmt\""
   fi
 
-  # Publish atomically: create parent, then rename temp into place
+  # Publish atomically: remove any existing empty destination, create parent,
+  # then rename temp into place (same filesystem ensures atomic mv).
+  rmdir "$dest" 2>/dev/null || true
   mkdir -p "$dest:h" 2>/dev/null || true
   mv -- "$temp" "$dest" || {
     rm -rf "$temp"
@@ -2243,12 +2249,19 @@ rip::ab_import() {
   # Record identity in the meta index
   local index; index="$(rip::_ab_meta_index_default)"
   mkdir -p "${index:h}"
-  # Build jq args: format is conditional, others always present
-  local fmt_jq=""
-  [[ -n "$format" ]] && fmt_jq=", format:$format"
-  jq -nc --arg p "$rel" --arg t "$title" --arg a "$author" \
-    "{path:\$p, title:\$t, authors:[\$a], ids:{}, provider:\"manual\"$fmt_jq}" \
-    >> "$index" || log_warn "rip: staged $rel but could not record its identity"
+  # Format is operator-supplied and goes through --arg to prevent injection.
+  # Omit the key if no format was detected (sidecar writer's default applies).
+  local -a fmt_args=()
+  [[ -n "$detected_fmt" ]] && fmt_args=(--arg f "$detected_fmt")
+  if [[ -n "$detected_fmt" ]]; then
+    jq -nc --arg p "$rel" --arg t "$title" --arg a "$author" --arg f "$detected_fmt" \
+      '{path:$p, title:$t, authors:[$a], ids:{}, provider:"manual", format:$f}' \
+      >> "$index" || log_warn "rip: staged $rel but could not record its identity"
+  else
+    jq -nc --arg p "$rel" --arg t "$title" --arg a "$author" \
+      '{path:$p, title:$t, authors:[$a], ids:{}, provider:"manual"}' \
+      >> "$index" || log_warn "rip: staged $rel but could not record its identity"
+  fi
   print -ru2 -- "rip: imported $rel — the watcher will push it"
   return 0
 }
