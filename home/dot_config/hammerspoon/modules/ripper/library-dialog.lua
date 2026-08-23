@@ -57,14 +57,6 @@ local dismissOnBlur = require("system.dismiss-on-blur")
 
 local ASSETS_DIR = hs.configdir .. "/Assets/html"
 
--- Libation's own thumbnail cache, as a percent-encoded file:// URL. It is the
--- base URL every panel page is rendered against so the provider's `file://`
--- cover URLs resolve (see the webview:html call in M.show for the full why).
--- Only the space in "Application Support" needs encoding here; keep this in
--- sync with rip-provider-libation's IMAGES default if that ever moves.
-local COVER_BASE_URL = "file://"
-	.. ((os.getenv("HOME") or ""):gsub(" ", "%%20"))
-	.. "/Library/Application%20Support/Libation/Images/"
 
 --------------------------------------------------------------------------------
 -- Template loading (session-dialog: ensure_templates/substitute)
@@ -151,10 +143,71 @@ local closed = true -- guards onDismiss against firing twice
 -- for both, so `rows = {}` reaches JS as an object, not an array — that is
 -- why rip-library.html reads it through its own arr() guard rather than
 -- trusting it bare.
+-- INLINE THE COVERS (live 2026-08-23, second attempt). The provider hands us
+-- `file://` URLs into Libation's thumbnail cache, and WebKit will not load
+-- them: a page built with webview:html() has no usable origin for file://
+-- subresources, and giving it a file:// base URL in the cache directory did
+-- NOT change that — hs.webview never sets the WebKit prefs
+-- (allowFileAccessFromFileURLs / allowUniversalAccessFromFileURLs) that would.
+-- Verified by trying it: every cover stayed blank, and the <img>'s onerror
+-- swallowed the failure into the book glyph so nothing said why.
+--
+-- So the bytes travel with the page instead. At ~2.8 KB per 80x80 thumbnail
+-- and 460 titles that is ~1.7 MB of base64 in the payload, which a local
+-- webview carries without complaint — and unlike the obvious alternative
+-- (rewriting each cover to its Amazon CDN URL) it needs no network, works
+-- offline, and does not fire 460 requests at Amazon every time the panel
+-- opens.
+--
+-- Anything that is not a readable file:// URL is passed through untouched:
+-- the provider's own https fallback still works, and a missing cache file
+-- just keeps the glyph it would have had anyway.
+local function inline_cover(url)
+	if type(url) ~= "string" or url:sub(1, 7) ~= "file://" then
+		return url
+	end
+	local path = url:sub(8):gsub("%%(%x%x)", function(hex)
+		return string.char(tonumber(hex, 16))
+	end)
+	local fh = io.open(path, "rb")
+	if not fh then
+		return url
+	end
+	local bytes = fh:read("*a")
+	fh:close()
+	if not bytes or bytes == "" then
+		return url
+	end
+	return "data:image/jpeg;base64," .. hs.base64.encode(bytes)
+end
+
+-- Copy each row with its cover inlined. Copies rather than mutates: the
+-- preview fixtures hand us tables they rebuild per call, and a caller's row
+-- is not ours to rewrite.
+local function with_inline_covers(rows)
+	if type(rows) ~= "table" then
+		return rows
+	end
+	local out = {}
+	for i, r in ipairs(rows) do
+		if type(r) == "table" then
+			local copy = {}
+			for k, v in pairs(r) do
+				copy[k] = v
+			end
+			copy.cover = inline_cover(r.cover)
+			out[i] = copy
+		else
+			out[i] = r
+		end
+	end
+	return out
+end
+
 local function library_payload(data)
 	data = data or {}
 	return {
-		rows = data.rows or {},
+		rows = with_inline_covers(data.rows or {}),
 		loading = data.loading and true or false,
 		provider = data.provider or "libation",
 	}
@@ -301,15 +354,7 @@ function M.show(data, cbs)
 	ensure_webview()
 	savedWindow = hs.window.focusedWindow()
 	webview:frame(panel_frame(savedWindow))
-	-- BASE URL (live 2026-08-23): the cover thumbnails the provider hands us
-	-- are `file://` URLs into Libation's own image cache, and a page handed to
-	-- webview:html() with no base URL has an about:blank origin — WebKit
-	-- refuses every file:// subresource from there, so each <img> fired its
-	-- onerror and silently fell back to the book glyph. Every cover was
-	-- missing and nothing said why. Giving the page a file:// base in the
-	-- cache directory puts it in the same origin as the images it asks for.
-	-- The path is percent-encoded because "Application Support" has a space.
-	webview:html(build_html(data), COVER_BASE_URL)
+	webview:html(build_html(data))
 	webview:show()
 	webview:bringToFront(true)
 	-- (session-dialog) Hammerspoon is a background/accessory app: showing a
@@ -344,7 +389,10 @@ function M.setRows(rows)
 	if type(rows) ~= "table" then
 		return
 	end
-	webview:evaluateJavaScript("window.__setRows && window.__setRows(" .. json_for_script(rows) .. ")")
+	-- Same cover inlining as library_payload: this is the path the real
+	-- provider fetch lands on, so it is the one that matters most.
+	webview:evaluateJavaScript(
+		"window.__setRows && window.__setRows(" .. json_for_script(with_inline_covers(rows)) .. ")")
 end
 
 --- Tell the panel which titles the server already holds, so the client can
