@@ -1447,4 +1447,145 @@ EOF
     The output should include "would remove"
     The path "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should be exist
   End
+
+  # --- the sweep's ssh branch (review findings 1-3, 2026-08-24) -------------
+  #
+  # Every sweep example above runs the plain-local-dir branch, which is why
+  # three defects lived in the ssh and failure paths unnoticed. These
+  # exercise the branch the real server actually takes.
+  #
+  # fake_ssh_server — a fake ssh that behaves like the real one in the two
+  # ways that matter here:
+  #   1. IT READS STDIN. Real ssh does, and that is the whole of finding 1:
+  #      an ssh reached from inside a `while read … done <<< "$variants"`
+  #      loop swallows the remaining variants. A fake that ignores stdin
+  #      cannot reproduce the bug, so the regression guard would be
+  #      worthless. Guarded by `[ -t 0 ]` so an interactive shellspec run
+  #      cannot hang on a terminal.
+  #   2. It RUNS the command it is given, against the sandbox, after
+  #      rewriting the remote root — so the ${(q)} quoting, the `mv -n`
+  #      no-clobber semantics and `rmdir`'s exit status are all the real
+  #      ones, not a mock's opinion of them.
+  fake_ssh_server() {
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+[ -t 0 ] || cat > /dev/null
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/ssh.log"
+cmd=""
+while [ \$# -gt 0 ]; do cmd="\$1"; shift; done
+sh -c "\$(printf '%s' "\$cmd" | sed 's|/srv/media|$RIP_SANDBOX/server|g')"
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+  }
+
+  # fake_abs_ops_bin_any — resolves every --find-item and --author-id, so an
+  # example can assert on WHICH destructive verbs were issued rather than on
+  # a lookup failing.
+  fake_abs_ops_bin_any() {
+    cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
+case "\$1" in
+  --find-item) echo item-x ;;
+  --author-id) echo auth-x ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+  }
+
+  # FINDING 1 regression guard. Four spellings of one author: the plan lists
+  # three variants, and every one of them must actually be swept. Against
+  # the pre-fix code the first ssh drains the here-string and exactly ONE
+  # variant is processed — silently, rc 0, no warning.
+  It 'sweep (ssh): every variant in a group is swept, not just the first'
+    fake_abs_ops_bin_any
+    fake_ssh_server
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
+             "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Return of the King" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit" \
+             "$RIP_SANDBOX/server/audiobooks/J R R Tolkien/Leaf by Niggle" \
+             "$RIP_SANDBOX/server/audiobooks/JRR Tolkien/Farmer Giles"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 0
+    The output should include "author variants"
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Leaf by Niggle" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Farmer Giles" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien" should not be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J R R Tolkien" should not be exist
+    The path "$RIP_SANDBOX/server/audiobooks/JRR Tolkien" should not be exist
+  End
+
+  # FINDING 2. `mv -n` exits 0 when it REFUSES, so a same-title collision
+  # leaves the book under the old spelling while every command reports
+  # success. Deleting the variant's author record there would leave the
+  # library asserting something false: book present, its item still storing
+  # the variant spelling, and the record that spelling pointed at gone.
+  # Audio is never at risk — mv -n and rmdir both refuse correctly — but the
+  # ABS record must survive too.
+  It 'sweep (ssh): a same-title collision keeps the book AND its author record'
+    fake_abs_ops_bin_any
+    fake_ssh_server
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'canon\n' > "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/h.m4b"
+    printf 'variant\n' > "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit/h.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 1
+    The output should include "author variants"
+    The stderr should include "still holds books"
+    # The only copy of the variant's audio is untouched, and unchanged.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit/h.m4b" should equal "variant"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/h.m4b" should equal "canon"
+    # …and the author record it still points at was NOT deleted.
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
+  End
+
+  # FINDING 2, second reachable path: the books move, but the canonical
+  # author cannot be resolved, so nothing gets repointed. Deleting the
+  # variant record then strands every moved item on a record that no longer
+  # exists.
+  It 'sweep (ssh): an unresolvable canonical author keeps the variant record'
+    fake_ssh_server
+    cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
+case "\$1" in
+  --find-item) echo item-x ;;
+  --author-id) case "\$2" in "J. R. R. Tolkien") exit 1 ;; *) echo auth-x ;; esac ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 1
+    The output should include "author variants"
+    The stderr should include "could not be repointed"
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" should be exist
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
+  End
+
+  # FINDING 3. An unreachable server must refuse, not assert a clean
+  # library: stderr alone is invisible to a wrapper or a cron job checking
+  # the exit status.
+  It 'sweep: an unreachable server refuses instead of claiming a clean library'
+    fake_abs_ops_bin_any
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    The status should equal 2
+    The output should not include "nothing to do"
+    The stderr should include "could not list the audiobook library"
+    The path "$RIP_SANDBOX/absbin.log" should not be exist
+  End
 End

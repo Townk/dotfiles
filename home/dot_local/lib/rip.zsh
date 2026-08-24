@@ -2579,13 +2579,23 @@ rip::ab_canonicalize_authors() {
   local apply=0
   [[ "${1:-}" == "--apply" ]] && apply=1
 
+  # Capture the listing as a VALUE and propagate its failure. Read through
+  # `< <(...)` the rc is discarded, and an unreachable server then looks
+  # byte-identical to a clean library — "nothing to do" on stdout with rc 0,
+  # which a wrapper or a cron job reads as a green light while the sweep never
+  # reached the server at all. Same class as rip::ab_backfill_published's
+  # seen==0 branch, and rip::ab_retire already refuses this way. (Review
+  # finding 3, 2026-08-24.)
+  local lib
+  lib="$(rip::ab_server_library)" || return 2
+
   local -A spelling_count=()
   local rel author
-  while IFS= read -r rel; do
+  for rel in "${(@f)lib}"; do
     [[ -n "$rel" ]] || continue
     author="${rel%%/*}"
     spelling_count[$author]=$(( ${spelling_count[$author]:-0} + 1 ))
-  done < <(rip::ab_server_library)
+  done
 
   # $nl, not a literal $'\n' inside the ${...:+...} replacement below: the
   # replacement word of a :+ expansion is NOT re-scanned for ANSI-C quoting,
@@ -2602,29 +2612,48 @@ rip::ab_canonicalize_authors() {
   done
 
   local base; base="$(rip::remote_base)"
-  local found=0 variants canon a
+  local found=0 swept_fail=0 variants canon a
+  local -a vlist
   for key in "${(@k)groups}"; do
     variants="${groups[$key]}"
     [[ "$variants" == *"$nl"* ]] || continue
     found=1
+    # MATERIALISE the variants before iterating them. A
+    # `while IFS= read -r a; …; done <<< "$variants"` loop shares fd 0 with
+    # every command it runs, and ssh READS STDIN unless told otherwise — so
+    # the first ssh reached from inside that loop swallows the rest of the
+    # here-string. rip::_canonicalize_one_author reaches three of them (two
+    # directly, one inside rip::ab_server_library), so a group with four
+    # spellings printed three variants and then swept exactly ONE: rc 0, no
+    # warning, and a dry run that looked right because it short-circuits
+    # before any ssh. Same fd-0 family as this project's
+    # `LibationCli … </dev/null` gotcha — the next person will reintroduce it.
+    # An array holds no fd. Adding -n to the two direct ssh calls would NOT
+    # be enough: the one inside rip::ab_server_library would still drain it.
+    # (Review finding 1, 2026-08-24.)
+    vlist=("${(@f)variants}")
     canon=""
-    while IFS= read -r a; do
+    for a in "${vlist[@]}"; do
       if [[ -z "$canon" ]] \
         || (( ${spelling_count[$a]:-0} > ${spelling_count[$canon]:-0} )) \
         || { (( ${spelling_count[$a]:-0} == ${spelling_count[$canon]:-0} )) && (( ${#a} > ${#canon} )) }; then
         canon="$a"
       fi
-    done <<< "$variants"
+    done
     print -r -- "author variants → \"$canon\""
-    while IFS= read -r a; do
+    for a in "${vlist[@]}"; do
       [[ "$a" == "$canon" ]] && continue
       print -r -- "    \"$a\" (${spelling_count[$a]:-0} book(s))"
       (( apply )) || continue
-      rip::_canonicalize_one_author "$base" "$a" "$canon"
-    done <<< "$variants"
+      rip::_canonicalize_one_author "$base" "$a" "$canon" || swept_fail=1
+    done
   done
   (( found )) || print -r -- "rip: nothing to do — no author spelling variants"
   (( apply )) || { (( found )) && print -r -- "(re-run with --apply)" }
+  # A variant that could not be fully swept is reported through the exit
+  # status as well as on stderr, for the same reason the unreachable-server
+  # refusal above is: stderr alone is invisible to a wrapper or a cron job.
+  (( swept_fail )) && return 1
   return 0
 }
 
@@ -2636,19 +2665,35 @@ rip::ab_canonicalize_authors() {
 # left where it is rather than overwritten — the only copy of an audiobook is
 # never clobbered to tidy a folder name. The variant directory is removed with
 # `rmdir`, which refuses unless it is genuinely empty.
+#
+# DELETING THE VARIANT'S AUTHOR RECORD IS THE LAST STEP AND IS GATED. `mv -n`
+# exits 0 when it REFUSES (verified 2026-08-24: BSD and GNU alike), so a
+# same-title collision leaves the book sitting under the old spelling while
+# every command in this function reports success. Deleting the author record
+# then leaves the library asserting something false: the book is still there,
+# its ABS item still stores the variant spelling, and the record that spelling
+# pointed at is gone. `rmdir`'s exit status is the one honest signal that the
+# variant is actually empty — capture it rather than discarding it, and keep
+# the record when any book failed to move or failed to be repointed.
+# (Review finding 2, 2026-08-24.)
 rip::_canonicalize_one_author() {
   setopt localoptions noerrexit nopipefail
   local base="$1" variant="$2" canon="$3"
   local aid; aid="$("$RIP_BIN_DIR/rip-abs-authors" --author-id "$canon" 2>/dev/null)"
   local stale; stale="$("$RIP_BIN_DIR/rip-abs-authors" --author-id "$variant" 2>/dev/null)"
 
+  local lib
+  lib="$(rip::ab_server_library)" \
+    || { log_warn "rip: could not list the library while sweeping \"$variant\" — nothing moved"; return 1 }
+
   local -a books=()
   local rel
-  while IFS= read -r rel; do
+  for rel in "${(@f)lib}"; do
     [[ "$rel" == "$variant/"* ]] && books+=("${rel#*/}")
-  done < <(rip::ab_server_library)
+  done
 
   local title item
+  local -i unrepointed=0
   for title in "${books[@]}"; do
     if [[ "$base" == *:* ]]; then
       local ssh_bin="${RIP_SSH_BIN:-ssh}"
@@ -2664,19 +2709,30 @@ rip::_canonicalize_one_author() {
     item="$("$RIP_BIN_DIR/rip-abs-authors" --find-item "$canon/$title" 2>/dev/null)"
     if [[ -n "$item" && -n "$aid" ]]; then
       "$RIP_BIN_DIR/rip-abs-authors" --repoint-item "$item" "$aid" "$canon" >/dev/null 2>&1 \
-        || log_warn "rip: moved $title but could not repoint its ABS item"
+        || { log_warn "rip: moved $title but could not repoint its ABS item"; (( unrepointed++ )) }
     else
       log_warn "rip: moved $title but could not resolve its ABS item or the canonical author"
+      (( unrepointed++ ))
     fi
   done
 
+  local -i emptied=0
   if [[ "$base" == *:* ]]; then
     local ssh_bin2="${RIP_SSH_BIN:-ssh}"
     local host2="${base%%:*}" rpath2="${base#*:}"
     "$ssh_bin2" -o BatchMode=yes -o ConnectTimeout=5 "$host2" \
-      "rmdir -- ${(q)rpath2}/audiobooks/${(q)variant}" 2>/dev/null
+      "rmdir -- ${(q)rpath2}/audiobooks/${(q)variant}" 2>/dev/null && emptied=1
   else
-    rmdir -- "$base/audiobooks/$variant" 2>/dev/null
+    rmdir -- "$base/audiobooks/$variant" 2>/dev/null && emptied=1
+  fi
+
+  if (( ! emptied )); then
+    log_warn "rip: \"$variant\" still holds books after the sweep — leaving its Audiobookshelf author record in place"
+    return 1
+  fi
+  if (( unrepointed )); then
+    log_warn "rip: $unrepointed book(s) from \"$variant\" could not be repointed — leaving its Audiobookshelf author record in place"
+    return 1
   fi
   [[ -n "$stale" ]] && "$RIP_BIN_DIR/rip-abs-authors" --delete-author "$stale" >/dev/null 2>&1
   return 0
