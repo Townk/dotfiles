@@ -2242,26 +2242,43 @@ rip::_canonicalize_staged_authors() {
   local src="$1"
   [[ -d "$src" ]] || return 0
   local -a authors=("$src"/*(N/))
-  local dir name canon book
+  (( ${#authors} == 0 )) && return 0
+  # Prime the server-author cache ONCE, right here, in THIS shell — before
+  # the loop below ever runs. Every iteration calls rip::_canonical_author
+  # through a `$(...)` capture, and `$(...)` forks a subshell in zsh: a
+  # fork taken before this cache is populated starts with
+  # _RIP_SERVER_AUTHORS_FETCHED unset in its own copy, re-fetches via
+  # rip::_server_authors -> rip::ab_server_library, and that fetch dies
+  # with the subshell — the parent's copy is never mutated. Left
+  # unprimed, a 3-author push made 3 ssh round-trips instead of 1
+  # (live-caught in review). Calling rip::_server_authors as a plain
+  # command HERE, ahead of any fork, means every subsequent `$(...)` in
+  # the loop inherits an already-populated cache and does no ssh at all.
+  rip::_server_authors >/dev/null
+  local dir name canon book ok
   for dir in "${authors[@]}"; do
     name="${dir:t}"
     canon="$(rip::_canonical_author "$name")"
     [[ "$canon" == "$name" ]] && continue
+    ok=1
     if [[ -d "$src/$canon" ]]; then
       for book in "$dir"/*(N); do
         if [[ -e "$src/$canon/${book:t}" ]]; then
           log_warn "rip: canonical author target already holds ${book:t} — leaving it staged under $name"
         else
           mv -- "$book" "$src/$canon/" 2>/dev/null \
-            || log_warn "rip: could not move ${book:t} into $canon"
+            || { log_warn "rip: could not move ${book:t} into $canon"; ok=0 }
         fi
       done
       rmdir -- "$dir" 2>/dev/null
     else
       mv -- "$dir" "$src/$canon" 2>/dev/null \
-        || log_warn "rip: could not rename $name to $canon"
+        || { log_warn "rip: could not rename $name to $canon"; ok=0 }
     fi
-    log_error "rip: canonical author — staged \"$name\" renamed to \"$canon\" (the spelling cantina already uses)"
+    # Only claim the rename happened when it actually did — the job log is
+    # the operator's one record of this event, and a failed mv/rename must
+    # never be followed by a line asserting it succeeded.
+    (( ok )) && log_error "rip: canonical author — staged \"$name\" renamed to \"$canon\" (the spelling cantina already uses)"
   done
   return 0
 }

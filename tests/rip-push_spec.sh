@@ -99,6 +99,12 @@ EOF
   mb_release_call_count() { cat "$RIP_SANDBOX/mb_release_count" 2>/dev/null; }
   mb_artist_call_count() { cat "$RIP_SANDBOX/mb_artist_count" 2>/dev/null; }
 
+  # ssh_calls() — how many times the fake ssh ran. Author canonicalization
+  # must make exactly ONE ssh call per push regardless of how many staged
+  # authors it examines (rip::_server_authors' cache, see the "fetched ONCE
+  # per push" regression guard below).
+  ssh_calls() { wc -l < "$RIP_SANDBOX/ssh.count" 2>/dev/null | tr -d ' '; }
+
   It 'rejects an unknown type'
     When run zsh -c "source $RIPLIB && rip::push_enqueue books"
     The status should equal 2
@@ -192,12 +198,76 @@ EOF
     The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
   End
 
-  It 'push: an unreachable server leaves staged authors untouched and still pushes'
+  # NOTE: RIP_REMOTE_BASE here is still the local sandbox dir — reachable —
+  # it simply holds no author that normalizes equal to the staged one. This
+  # pins the "no match" no-op path, distinct from the genuine
+  # unreachable-server example below.
+  It 'push: server reachable but holds no matching author — staged author untouched'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+  End
+
+  # The genuine failure path: rip::ab_server_library's local-dir branch
+  # `cd "$base/audiobooks"` has nothing to cd into at all (as opposed to
+  # the example above, where it cds fine and just finds no author dirs),
+  # so it returns non-zero and rip::_canonical_author falls back to
+  # "input unchanged" exactly as it does for a real unreachable ssh host.
+  It 'push: a genuinely unreachable server leaves staged authors untouched and still pushes'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_SANDBOX/unreachable"
+    export RIP_REMOTE_BASE="$RIP_SANDBOX/unreachable"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The path "$RIP_SANDBOX/unreachable/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+  End
+
+  # Regression guard (review finding): rip::_canonical_author is called
+  # through a `$(...)` capture inside the per-author loop, and `$(...)`
+  # forks a subshell in zsh — a fork taken before the server-author cache
+  # is primed re-fetches (and re-ssh's) on every single staged author
+  # instead of once per push. Three distinct staged authors here, ONE
+  # fake-ssh process, asserting exactly one call.
+  It 'push: the server author list is fetched ONCE per push, not once per staged author'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit" \
+             "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice" \
+             "$RIP_STAGING_ROOT/audiobooks/N. K. Jemisin/The Fifth Season"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/N. K. Jemisin/The Fifth Season/The Fifth Season.m4b"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cd "$RIP_SANDBOX/server/audiobooks" || exit 2
+find . -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||'
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+    When run zsh -c "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
+    The status should equal 0
+    The result of function ssh_calls should equal "1"
+  End
+
+  # Regression guard (review finding): a failed mv/rename must never be
+  # followed by a log line claiming the rename succeeded — the job log is
+  # the operator's only record of the event. The canonical path is
+  # pre-created as a plain FILE (not a directory), so the single-rename
+  # branch's `mv` cannot rename the staged author dir onto it and fails
+  # deterministically and portably — no permission bits to twiddle or
+  # restore for cleanup.
+  It 'push: a failed author rename logs only the failure, never a false success line'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    printf 'not a dir\n' > "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Fellowship"
+    When run zsh -c "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
+    The status should equal 0
+    The stderr should include "could not rename"
+    The stderr should not include "renamed to"
   End
 
   It 'push: music is never canonicalized'
