@@ -1599,6 +1599,18 @@ EOF
       p=$(command -v "$c" 2>/dev/null || true)
       if [ -n "$p" ]; then ln -sf "$p" "$RIP_SANDBOX/remotebin/$c"; fi
     done
+    # The server's login shell runs the command string with a genuinely
+    # POSIX /bin/sh (dash on Debian) — macOS's own /bin/sh is bash 3.2,
+    # which (unlike dash) understands $'...' ANSI-C quoting, so it can't
+    # catch a ${(q)} vs ${(qq)} quoting regression in rip.zsh's write
+    # path. Fail loudly rather than silently falling back to /bin/sh,
+    # which would just re-blind this guard.
+    local dash_bin
+    dash_bin=$(command -v dash 2>/dev/null || true)
+    if [ -z "$dash_bin" ]; then
+      print -u2 -- "fake_server_ssh: no dash on PATH — refusing to fall back to /bin/sh (would blind the POSIX-quoting regression guard)"
+      return 1
+    fi
     cat > "$RIP_SANDBOX/ssh" <<EOF
 #!/bin/sh
 echo 1 >> "$RIP_SANDBOX/ssh.count"
@@ -1606,7 +1618,7 @@ cmd=""
 for a in "\$@"; do cmd="\$a"; done
 printf '%s\n' "\$cmd" >> "$RIP_SANDBOX/ssh.cmds"
 PATH="$RIP_SANDBOX/remotebin"; export PATH
-exec /bin/sh -c "\$cmd"
+exec "$dash_bin" -c "\$cmd"
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
@@ -1717,13 +1729,21 @@ EOF
     fake_provider_two
     mkbook "A" "B" X1 "" B
     fake_server_ssh
+    # Same POSIX-shell rationale as fake_server_ssh above: the login shell
+    # must be real dash, not macOS's bash-flavored /bin/sh.
+    local dash_bin
+    dash_bin=$(command -v dash 2>/dev/null || true)
+    if [ -z "$dash_bin" ]; then
+      print -u2 -- "no dash on PATH — refusing to fall back to /bin/sh"
+      return 1
+    fi
     cat > "$RIP_SANDBOX/ssh" <<EOF
 #!/bin/sh
 cmd=""
 for a in "\$@"; do cmd="\$a"; done
 case "\$cmd" in *base64*) exit 255 ;; esac
 PATH="$RIP_SANDBOX/remotebin"; export PATH
-exec /bin/sh -c "\$cmd"
+exec "$dash_bin" -c "\$cmd"
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"

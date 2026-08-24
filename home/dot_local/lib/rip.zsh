@@ -2615,7 +2615,10 @@ rip::ab_backfill_published() {
 #
 # The remote script needs only POSIX sh plus `base64` — both present on a
 # stock Debian server AND on macOS, which matters because the hermetic
-# tests run this same script through the plain-local-dir branch.
+# tests run this same script through the plain-local-dir branch. Because a
+# real POSIX /bin/sh (dash on Debian) must be able to parse it, the command
+# string that carries it over ssh must itself be POSIX-quoted — see the
+# ${(qq)script} note below.
 #
 # THE GUARDS ARE LOAD-BEARING and must not be weakened: the temp file is
 # written in the SAME directory and moved into place (never an in-place
@@ -2650,8 +2653,16 @@ done'
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
     local host="${base%%:*}" rpath="${base#*:}"
+    # ${(qq)script}, NOT ${(q)}: this is the module's only multi-line
+    # remote script, and ${(q)} renders an embedded newline as $'\n' —
+    # bash/zsh ANSI-C quoting, not POSIX. A real POSIX /bin/sh (dash on
+    # Debian) can't parse $'...' and aborts at parse time before the `cd`
+    # even runs (deterministic, payload-independent no-op — but a repeat
+    # of the "backfilled 0 of 245" bug this code exists to fix). ${(qq)}
+    # emits single-quote POSIX style instead; safe here because $script
+    # contains no single quote — reverify that if $script ever changes.
     print -rl -- "$@" | "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
-      "cd ${(q)rpath}/audiobooks && sh -c ${(q)script} sh" 2>/dev/null
+      "cd ${(q)rpath}/audiobooks && sh -c ${(qq)script} sh" 2>/dev/null
   else
     # No ':' — the hermetic tests' plain local dir.
     print -rl -- "$@" | ( cd "$base/audiobooks" 2>/dev/null && sh -c "$script" sh ) 2>/dev/null
