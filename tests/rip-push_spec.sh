@@ -306,6 +306,86 @@ EOF
     The contents of file "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should equal "staged copy"
   End
 
+  # --- the canonicalizing push must not orphan the book's identity --------
+  #
+  # THE MERGE BLOCKER (review finding 1, 2026-08-24). rip::_canonicalize_staged_authors
+  # renames the staged author directory, and the listfile is then rebuilt
+  # from the NEW path — so rip::_enrich_audiobooks asks rip::_book_meta_for
+  # for "<canonical author>/<title>", while the meta index rip::ab_worker
+  # wrote is keyed on the PLAN's path, which carries the PROVIDER's
+  # spelling. Both the index lookup and the provider-rows fallback missed
+  # and the book got the path-derived MINIMAL identity written over a rich
+  # row that was in the index the whole time.
+  #
+  # The loss is PERMANENT: staging is emptied after the verified push so
+  # nothing can re-merge later, and --backfill-published cannot repair a
+  # sidecar with `ids: {}` (it has no ASIN to match a provider row on). The
+  # book is then invisible to --editions forever and records false
+  # provenance. The ordering example above already drove this exact path and
+  # asserted NOTHING about the sidecar — which is why it shipped.
+  It 'push: a canonicalizing rename keeps the indexed identity — ids and published survive'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
+    # The index row is keyed on the PROVIDER's spelling, exactly as
+    # rip::ab_worker writes it from the plan.
+    mkdir -p "$RIP_STAGING_ROOT/.work"
+    printf '%s\n' '{"path":"J.R.R. Tolkien/The Hobbit","title":"The Hobbit","authors":["J.R.R. Tolkien"],"narrators":["Rob Inglis"],"duration_s":39000,"published":"1937-09-21T07:00:00","ids":{"audible.asin":"B0079POAT8"},"provider":"libation","format":"m4b"}' \
+      > "$RIP_STAGING_ROOT/.work/ab-meta.jsonl"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+    # The sidecar is written pretty-printed, so assert on the VALUES rather
+    # than on compact key:value bytes.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"audible.asin": "B0079POAT8"'
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"published": "1937-09-21T07:00:00"'
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"provider": "libation"'
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"Rob Inglis"'
+  End
+
+  # The same hazard on the path that has NO index at all — the watcher case
+  # (a title liberated through Libation's own GUI enqueues a plain
+  # `rip-push audiobooks`, no session, no RIP_AB_META_INDEX). There the
+  # identity comes from the at-most-once provider `list` fallback, whose
+  # rows are keyed on the provider's author spelling and can never match a
+  # canonicalized path. Covered by the in-memory rename map.
+  It 'push: a canonicalizing rename keeps the PROVIDER-fallback identity too (no index at all)'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"path":"J.R.R. Tolkien/The Hobbit","title":"The Hobbit","authors":["J.R.R. Tolkien"],"published":"1937-09-21T07:00:00","ids":{"audible.asin":"B0079POAT8"},"provider":"libation","format":"m4b"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"audible.asin": "B0079POAT8"'
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"published": "1937-09-21T07:00:00"'
+  End
+
+  # A book that did NOT actually move must not be re-keyed: pointing its
+  # identity row at a path nothing will ever look up would lose it just as
+  # thoroughly as the bug above. The canonical target already holds a book
+  # by the same title, so that one stays staged under the old spelling —
+  # and its index row must stay keyed there.
+  It 'push: a book left behind by the merge keeps its identity key unchanged'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien/The Hobbit"
+    printf 'canonical\n' > "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'staged\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Fellowship"
+    mkdir -p "$RIP_STAGING_ROOT/.work"
+    printf '%s\n' '{"path":"J.R.R. Tolkien/The Hobbit","title":"The Hobbit","ids":{"audible.asin":"B0079POAT8"}}' \
+      > "$RIP_STAGING_ROOT/.work/ab-meta.jsonl"
+    When run zsh -c "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
+    The status should equal 0
+    The stderr should include "already holds"
+    The contents of file "$RIP_STAGING_ROOT/.work/ab-meta.jsonl" should include '"path":"J.R.R. Tolkien/The Hobbit"'
+  End
+
   It 'push: music is never canonicalized'
     mkdir -p "$RIP_STAGING_ROOT/music/A.B. Artist/Album"
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/A.B. Artist/Album/01 T.flac"

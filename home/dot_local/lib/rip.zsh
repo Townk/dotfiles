@@ -400,6 +400,68 @@ typeset -g _RIP_AB_PROVIDER_ROWS
 typeset -g _RIP_AB_PROVIDER_FETCHED
 (( ${+_RIP_AB_PROVIDER_FETCHED} )) || { _RIP_AB_PROVIDER_ROWS=""; _RIP_AB_PROVIDER_FETCHED=0 }
 
+# Canonicalized-book rename map: NEW relpath -> the relpath the identity was
+# recorded under BEFORE rip::_canonicalize_staged_authors renamed the staged
+# author directory (review finding 1, 2026-08-24 — the merge blocker).
+#
+# The meta index is re-keyed on disk too (rip::_rekey_book_meta), which
+# covers every reader; this in-memory map covers the ONE reader that has no
+# index at all — the provider-`list` fallback below, whose rows are keyed on
+# the PROVIDER's author spelling and can never match a canonicalized path.
+# Without it a watcher-triggered push (no index, no session) that happens to
+# canonicalize an author writes the path-derived MINIMAL identity over a
+# perfectly good provider row: `ids: {}`, `published: null`, provider
+# "unknown". That is permanent — staging is emptied after the verified push,
+# and --backfill-published cannot repair a sidecar with no ASIN in it.
+#
+# Process-scoped and guarded exactly like the cache above: every real push is
+# its own fresh zsh process, and re-sourcing this file mid-run must not
+# clobber a map the run already built.
+# (`typeset -gA` on an already-existing associative array keeps its
+# contents, so this is idempotent on re-source with no explicit guard.)
+typeset -gA _RIP_AB_RENAMED_BOOKS
+
+# rip::_rekey_book_meta <old-author> <new-author> <title>... — follow a
+# canonicalizing rename through the identity plumbing.
+#
+# Called by rip::_canonicalize_staged_authors for each book that ACTUALLY
+# moved. Two effects, both required:
+#   * the on-disk meta index has its `path` rewritten from
+#     "<old-author>/<title>" to "<new-author>/<title>", so the very next
+#     rip::_book_meta_for lookup (which searches by the post-rename relpath)
+#     finds the rich row instead of missing and falling back;
+#   * the in-memory map above records new -> old for the provider fallback.
+#
+# Written to a temp file and moved into place: a truncated index would lose
+# every OTHER book's identity too, including a prior session's rows still
+# waiting on a failed-verify retry. Keys are NFC-normalized because
+# rip::_book_meta_for NFC-normalizes its lookup before matching `.path`
+# (same reasoning as rip::ab_worker's "landed as" re-key).
+rip::_rekey_book_meta() {
+  setopt localoptions noerrexit nopipefail
+  local old_author="$1" new_author="$2"
+  shift 2
+  local idx="${RIP_AB_META_INDEX:-$(rip::_ab_meta_index_default)}"
+  local title old_rel new_rel tmp
+  for title in "$@"; do
+    old_rel="$(rip::_nfc "$old_author/$title")"
+    new_rel="$(rip::_nfc "$new_author/$title")"
+    [[ "$old_rel" == "$new_rel" ]] && continue
+    _RIP_AB_RENAMED_BOOKS[$new_rel]="$old_rel"
+    [[ -n "$idx" && -f "$idx" ]] || continue
+    tmp="$idx.rekey.$$"
+    if jq -c --arg old "$old_rel" --arg new "$new_rel" \
+         'if .path == $old then .path = $new else . end' "$idx" > "$tmp" 2>/dev/null \
+       && mv -f -- "$tmp" "$idx"; then
+      :
+    else
+      rm -f -- "$tmp"
+      log_warn "rip: could not re-key the meta index for $old_rel — its sidecar may fall back to minimal identity"
+    fi
+  done
+  return 0
+}
+
 # rip::_book_meta_for <relpath> — one JSON object for the book at
 # <Author>/<Title>. The provider's rows, when a session wrote them, live in
 # the JSON-lines index at $RIP_AB_META_INDEX (default: the stable path
@@ -414,9 +476,18 @@ rip::_book_meta_for() {
   setopt localoptions noerrexit nopipefail
   local rel; rel="$(rip::_nfc "$1")"
   local idx="${RIP_AB_META_INDEX:-$(rip::_ab_meta_index_default)}"
+  # A book whose staged author was canonicalized on the way in (see
+  # rip::_canonicalize_staged_authors) is looked up under its NEW relpath,
+  # while the identity was recorded under the provider's spelling. The index
+  # is re-keyed on disk at rename time, so $rel alone finds it there; the
+  # provider-`list` fallback below has no such rewrite, so the pre-rename
+  # relpath is kept as a second key to try. Empty for every ordinary book.
+  local prev="${_RIP_AB_RENAMED_BOOKS[$rel]:-}"
   local row=""
   if [[ -n "$idx" && -f "$idx" ]]; then
     row="$(jq -c --arg p "$rel" 'select((.path // "") == $p)' "$idx" 2>/dev/null | head -1)"
+    [[ -z "$row" && -n "$prev" ]] \
+      && row="$(jq -c --arg p "$prev" 'select((.path // "") == $p)' "$idx" 2>/dev/null | head -1)"
   fi
   if [[ -z "$row" ]]; then
     # Best-effort, best-once: never let a missing/failing provider slow
@@ -430,6 +501,9 @@ rip::_book_meta_for() {
     fi
     [[ -n "$_RIP_AB_PROVIDER_ROWS" ]] && row="$(print -r -- "$_RIP_AB_PROVIDER_ROWS" \
       | jq -c --arg p "$rel" 'select((.path // "") == $p)' 2>/dev/null | head -1)"
+    [[ -z "$row" && -n "$prev" && -n "$_RIP_AB_PROVIDER_ROWS" ]] \
+      && row="$(print -r -- "$_RIP_AB_PROVIDER_ROWS" \
+        | jq -c --arg p "$prev" 'select((.path // "") == $p)' 2>/dev/null | head -1)"
   fi
   if [[ -n "$row" ]]; then
     print -r -- "$row"
@@ -2461,11 +2535,18 @@ rip::_canonicalize_staged_authors() {
   # command HERE, ahead of any fork, means every subsequent `$(...)` in
   # the loop inherits an already-populated cache and does no ssh at all.
   rip::_server_authors >/dev/null
-  local dir name canon book
+  local dir name canon book title
+  local -a staged_titles=() moved=()
   for dir in "${authors[@]}"; do
     name="${dir:t}"
     canon="$(rip::_canonical_author "$name")"
     [[ "$canon" == "$name" ]] && continue
+    # Snapshot the book names BEFORE the move so the re-key below can tell,
+    # per book, which ones actually ended up under $canon. Both branches
+    # below can leave a book behind (a merge target that already held it, a
+    # failed mv), and re-keying a book that did NOT move would point its
+    # identity row at a path nothing will ever look up.
+    staged_titles=("$dir"/*(N:t))
     if [[ -d "$src/$canon" ]]; then
       for book in "$dir"/*(N); do
         if [[ -e "$src/$canon/${book:t}" ]]; then
@@ -2491,6 +2572,29 @@ rip::_canonicalize_staged_authors() {
     # success and leaves it in place on failure, so the same check is
     # exactly right there too — nothing about that branch changed.
     [[ -e "$dir" ]] || log_error "rip: canonical author — staged \"$name\" renamed to \"$canon\" (the spelling cantina already uses)"
+
+    # FOLLOW THE RENAME THROUGH THE IDENTITY PLUMBING (review finding 1,
+    # 2026-08-24 — the merge blocker). The listfile is rebuilt from the NEW
+    # path, so rip::_enrich_audiobooks asks rip::_book_meta_for for
+    # "<canon>/<title>" — while the meta index rip::ab_worker wrote is keyed
+    # on the plan's path, which carries the PROVIDER's spelling of the
+    # author. Both the index lookup and the provider-rows fallback missed,
+    # and the book got the path-derived MINIMAL identity written over a rich
+    # row that was sitting in the index the whole time: `ids: {}`,
+    # `published: null`, `narrators: []`, provider "unknown".
+    #
+    # That loss is PERMANENT. Staging is emptied after the verified push, so
+    # nothing can re-merge later, and --backfill-published cannot repair it
+    # either — with no ASIN in the sidecar it has nothing to match a
+    # provider row on. The book is then invisible to --editions forever and
+    # records false provenance. rip::ab_worker already solves the identical
+    # hazard for its own "landed as" reconcile; this is the same treatment
+    # on the other rename path.
+    moved=()
+    for title in "${staged_titles[@]}"; do
+      [[ ! -e "$dir/$title" && -e "$src/$canon/$title" ]] && moved+=("$title")
+    done
+    (( ${#moved} )) && rip::_rekey_book_meta "$name" "$canon" "${moved[@]}"
   done
   return 0
 }
