@@ -2409,7 +2409,12 @@ rip::ab_backfill_published() {
   [[ -n "$map" ]] || map='{}'
 
   local base; base="$(rip::remote_base)"
-  local -a to_fill=()
+  # $to_fill holds "<rel>\t<date>" for the dry-run report and the tallies;
+  # $to_fill_json holds the SAME books' stored JSON, index for index, because
+  # the replacement sidecar is composed HERE (see rip::_sidecars_write_published
+  # — the server has no jq) and composing it needs the original object, not
+  # just the path.
+  local -a to_fill=() to_fill_json=()
   local -i seen=0
   # Candidates that were LOOKED AT, needed a date, and could not be given
   # one — the "no ASIN in the sidecar" and "no provider row" continues
@@ -2442,6 +2447,7 @@ rip::ab_backfill_published() {
       continue
     fi
     to_fill+=("$rel"$'\t'"$want")
+    to_fill_json+=("$line")
   done < <(rip::_server_sidecars)
 
   local -i undated=$(( no_asin + no_row ))
@@ -2519,42 +2525,136 @@ rip::ab_backfill_published() {
     return 0
   fi
 
-  local filled=0
-  for entry in "${to_fill[@]}"; do
-    rel="${entry%%$'\t'*}"; want="${entry#*$'\t'}"
-    rip::_sidecar_set_published "$base" "$rel" "$want" && filled=$(( filled + 1 ))
+  # COMPOSE LOCALLY, WRITE REMOTELY (live finding, 2026-08-24). The whole new
+  # sidecar is built here, where jq exists, and shipped as opaque base64 —
+  # see rip::_sidecars_write_published for why the server cannot be asked to
+  # do it. `del(._path)`: rip::_server_sidecars ANNOTATES every row it emits
+  # with the "<Author>/<Title>" it came from, and that key is NOT in the
+  # stored file — writing the annotated object back would permanently add a
+  # bogus `_path` field to every sidecar it touched.
+  local -a payloads=() sent_rels=() ok_flags=()
+  local -A idx_of=()
+  local -i i
+  local payload b64rel
+  for (( i = 1; i <= ${#to_fill[@]}; i++ )); do
+    rel="${to_fill[i]%%$'\t'*}"; want="${to_fill[i]#*$'\t'}"
+    payload="$(print -r -- "${to_fill_json[i]}" | jq -r --arg d "$want" \
+      '(._path|@base64) + "\t" + ((del(._path) | .published = $d) | tojson | @base64)' 2>/dev/null)"
+    if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
+      # Never ship a half-composed payload: the remote would write it.
+      log_warn "rip: could not backfill $rel"
+      continue
+    fi
+    payloads+=("$payload")
+    sent_rels+=("$rel")
+    ok_flags+=(0)
+    b64rel="${payload%%$'\t'*}"
+    idx_of[$b64rel]=${#payloads}
+  done
+
+  # ONE ssh for the whole sweep: 245 books is 245 round-trips otherwise.
+  local out=""
+  (( ${#payloads[@]} > 0 )) && out="$(rip::_sidecars_write_published "$base" "${payloads[@]}")"
+
+  # GATED ON THE REPORTED OUTCOME, never on the write having been attempted:
+  # a book counts as filled only when the remote loop said "ok" for it, so an
+  # ssh that dies halfway leaves the rest counted as failures and named.
+  local -i filled=0
+  local rline st key
+  while IFS= read -r rline; do
+    [[ -n "$rline" ]] || continue
+    st="${rline%%$'\t'*}"; key="${rline#*$'\t'}"
+    [[ "$st" == "ok" ]] || continue
+    i=${idx_of[$key]:-0}
+    (( i > 0 )) && ok_flags[i]=1
+  done <<< "$out"
+  for (( i = 1; i <= ${#sent_rels[@]}; i++ )); do
+    if (( ok_flags[i] )); then
+      (( filled++ ))
+    else
+      log_warn "rip: could not backfill ${sent_rels[i]}"
+    fi
   done
   print -r -- "rip: backfilled $filled of ${#to_fill[@]} sidecar(s)"
+  # THE EXIT CODE FOLLOWS WHAT LANDED, not whether the sweep ran. A run that
+  # wrote nothing at all used to print "backfilled 0 of 245" and exit 0 —
+  # exactly what the live jq-less failure looked like (2026-08-24) — so a
+  # wrapper or a `&&` chain read a total failure as success.
+  local -i unwritten=$(( ${#to_fill[@]} - filled ))
+  (( unwritten > 0 )) && print -r -- "rip: $unwritten sidecar(s) could not be written"
   # Same partial-sweep guard as the dry-run path above: "backfilled N of N"
   # only counts $to_fill, which already excluded every no-ASIN/no-row
   # candidate — without this, a run that filled everything IT COULD reads
   # as a complete sweep even when other books were left untouched.
-  if (( undated > 0 )); then
-    print -r -- "rip: $undated book(s) still undated ($undated_detail)"
-    return 1
-  fi
+  (( undated > 0 )) && print -r -- "rip: $undated book(s) still undated ($undated_detail)"
+  (( unwritten > 0 || undated > 0 )) && return 1
   return 0
 }
 
-# rip::_sidecar_set_published <base> <Author/Title> <iso-date> — set exactly
-# one field on one stored sidecar, atomically.
+# rip::_sidecars_write_published <base> <payload…> — write a batch of
+# already-composed sidecars, atomically, in ONE ssh.
 #
-# jq is run against the file and its output checked for emptiness BEFORE the
-# move: a jq that fails mid-parse prints nothing, and moving that empty file
-# over a good sidecar would erase the book's identity for good.
-rip::_sidecar_set_published() {
+# NO jq ON THE SERVER. This used to run `jq --arg d … "$f" > "$t"` REMOTELY,
+# one ssh per book. cantina (stock Debian) has no jq and media@ has no
+# passwordless sudo, so every one of the 245 candidate books failed with
+# "could not backfill" and the sweep reported "backfilled 0 of 245" (live
+# finding, 2026-08-24). The read path already had this right —
+# rip::_server_sidecars ships a pure-POSIX enumerator and parses the JSON
+# locally — and the write path now follows it: the caller composes the
+# complete new sidecar with the LOCAL jq and this ships it as bytes.
+#
+# Each <payload> is "<base64 of Author/Title><TAB><base64 of the new JSON>".
+# Base64 specifically: a title carrying quotes, spaces, `$`, a colon or
+# non-ASCII must not be able to break out of the remote command line or be
+# word-split by the remote `read`, and the alphabet contains no character
+# the default IFS splits on. Everything else interpolated is ${(q)}-quoted,
+# BatchMode/ConnectTimeout as everywhere else in this module.
+#
+# ONE ssh for the whole batch, fed on stdin: 245 books is 245 round-trips
+# otherwise, for a sweep that runs once.
+#
+# The remote script needs only POSIX sh plus `base64` — both present on a
+# stock Debian server AND on macOS, which matters because the hermetic
+# tests run this same script through the plain-local-dir branch.
+#
+# THE GUARDS ARE LOAD-BEARING and must not be weakened: the temp file is
+# written in the SAME directory and moved into place (never an in-place
+# redirect), `test -s` rejects an empty payload BEFORE the move, and a
+# failure removes the temp file and leaves the good sidecar untouched. The
+# server holds the only copy of every book and staging is emptied after each
+# verified push — a half-written sidecar destroys identity metadata that
+# cannot be recovered from the audio.
+#
+# Prints one "ok<TAB><base64 of Author/Title>" or "fail<TAB>…" line per
+# input line so the caller can count what ACTUALLY landed rather than infer
+# it from an exit status: a connection that dies mid-stream simply stops
+# reporting, and every unreported book is a failure.
+rip::_sidecars_write_published() {
   setopt localoptions noerrexit nopipefail
-  local base="$1" rel="$2" want="$3"
-  local script='f="$1"; d="$2"; t="$f.tmp.$$"; jq --arg d "$d" '"'"'.published = $d'"'"' "$f" > "$t" 2>/dev/null && test -s "$t" && mv -- "$t" "$f" || { rm -f -- "$t"; exit 1; }'
+  local base="$1"; shift
+  (( $# > 0 )) || return 0
+  # No IFS assignment needed: the default already splits on TAB, and base64
+  # never contains one.
+  local script='while read -r br bj; do
+  [ -n "$br" ] || continue
+  d=$(printf %s "$br" | base64 -d 2>/dev/null)
+  j=$(printf %s "$bj" | base64 -d 2>/dev/null)
+  if [ -z "$d" ] || [ -z "$j" ]; then printf "fail\t%s\n" "$br"; continue; fi
+  f="$d/.fleet-book.json"; t="$f.tmp.$$"
+  if printf "%s\n" "$j" 2>/dev/null > "$t" && test -s "$t" && mv -- "$t" "$f"; then
+    printf "ok\t%s\n" "$br"
+  else
+    rm -f -- "$t"; printf "fail\t%s\n" "$br"
+  fi
+done'
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
     local host="${base%%:*}" rpath="${base#*:}"
-    "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
-      "sh -c ${(q)script} sh ${(q)rpath}/audiobooks/${(q)rel}/.fleet-book.json ${(q)want}" 2>/dev/null \
-      || { log_warn "rip: could not backfill $rel"; return 1 }
+    print -rl -- "$@" | "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "cd ${(q)rpath}/audiobooks && sh -c ${(q)script} sh" 2>/dev/null
   else
-    sh -c "$script" sh "$base/audiobooks/$rel/.fleet-book.json" "$want" 2>/dev/null \
-      || { log_warn "rip: could not backfill $rel"; return 1 }
+    # No ':' — the hermetic tests' plain local dir.
+    print -rl -- "$@" | ( cd "$base/audiobooks" 2>/dev/null && sh -c "$script" sh ) 2>/dev/null
   fi
   return 0
 }

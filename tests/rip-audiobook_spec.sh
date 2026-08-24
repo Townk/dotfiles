@@ -1524,6 +1524,174 @@ EOF
     The stderr should include "no ASIN"
   End
 
+  # --- the WRITE path against a server that has no jq ------------------------
+  #
+  # LIVE FINDING, 2026-08-24. `--backfill-published --apply` failed for all
+  # 245 candidate books ("backfilled 0 of 245"): the write path shipped a
+  # remote script that ran `jq` ON THE SERVER, and cantina (stock Debian,
+  # media@ without passwordless sudo) has no jq. Every example above runs
+  # the plain-local-dir branch, where jq sits on the dev machine's PATH — so
+  # the suite could not see it. These run the ssh branch through a fake ssh
+  # whose PATH holds a HANDPICKED set of stock binaries and, deliberately,
+  # NO jq: a re-introduced remote-jq dependency fails here the same way it
+  # failed live.
+  #
+  # fake_server_ssh — an ssh that actually EXECUTES the command it is handed,
+  # against the sandbox server tree, under that restricted PATH. It also logs
+  # every remote command string so an example can assert what was asked of
+  # the server.
+  fake_server_ssh() {
+    mkdir -p "$RIP_SANDBOX/remotebin"
+    for c in sh find sed tr mv rm mkdir rmdir head cat ls printf test base64; do
+      p=$(command -v "$c" 2>/dev/null || true)
+      if [ -n "$p" ]; then ln -sf "$p" "$RIP_SANDBOX/remotebin/$c"; fi
+    done
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cmd=""
+for a in "\$@"; do cmd="\$a"; done
+printf '%s\n' "\$cmd" >> "$RIP_SANDBOX/ssh.cmds"
+PATH="$RIP_SANDBOX/remotebin"; export PATH
+exec /bin/sh -c "\$cmd"
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    export RIP_REMOTE_BASE="media@cantina:$RIP_SANDBOX/server"
+  }
+
+  fake_provider_two() {
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+if [ "$1" = list ]; then
+  printf '%s\n' '{"id":"X1","path":"A/B","title":"B","published":"2019-05-07T07:00:00"}'
+  printf '%s\n' '{"id":"X2","path":"C/D","title":"D","published":"2021-11-30T08:00:00"}'
+fi
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+  }
+
+  two_dates() {
+    printf '%s %s\n' \
+      "$(jq -r '.published' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json")" \
+      "$(jq -r '.published' "$RIP_SANDBOX/server/audiobooks/C/D/.fleet-book.json")"
+  }
+
+  It 'backfill: --apply writes through a server with NO jq, in ONE ssh for the whole batch'
+    fake_provider_two
+    mkbook "A" "B" X1 "" B
+    mkbook "C" "D" X2 "" D
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    The status should equal 0
+    The output should include "backfilled 2 of 2 sidecar(s)"
+    The result of function two_dates should equal "2019-05-07T07:00:00 2021-11-30T08:00:00"
+    # TWO ssh calls for two books, not three: one to enumerate the sidecars,
+    # ONE for the whole write batch. 245 books must not be 245 round-trips.
+    The result of function ssh_calls should equal "2"
+    # …and nothing the server was asked to run mentions jq. The restricted
+    # PATH above already makes a remote jq fail; this names the regression.
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+  End
+
+  # The trap this fix had to dodge: rip::_server_sidecars ANNOTATES each row
+  # it emits with a `_path` key that is NOT in the stored file. Composing the
+  # replacement from that annotated object — the obvious way to do it once
+  # the compose moved local — would permanently add a bogus `_path` field to
+  # every sidecar the sweep touches, on the only copy of every book's
+  # identity. Everything else must survive the round trip byte for byte,
+  # including a false-valued field, a null, nested objects, and a title full
+  # of characters that would wreck an unquoted remote command line.
+  RICH_JSON='{"schema":1,"kind":"audiobook","title":"Elantris: 10th $Ann - Omega","authors":["Sanderson, B. \"Bran\""],"ids":{"audible.asin":"X1","isbn":null},"series":{"name":"The Cosmere","order":"1"},"work":{"language":"english","abridged":false},"source":{"provider":"libation","fetched":"2026-08-22"}}'
+  RICH_AUTHOR='Sanderson, B. "Bran"'
+  RICH_TITLE='Elantris: 10th $Ann - Omega'
+  rich_file() { printf '%s' "$RIP_SANDBOX/server/audiobooks/$RICH_AUTHOR/$RICH_TITLE/.fleet-book.json"; }
+  rich_without_published() { jq -c 'del(.published)' "$(rich_file)"; }
+  rich_published() { jq -r '.published' "$(rich_file)"; }
+  rich_has_path() { jq -r 'has("_path")' "$(rich_file)"; }
+
+  It 'backfill: the written sidecar gains ONLY published — no _path, nothing else altered'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR" "$RIP_SANDBOX/server/audiobooks/$RICH_AUTHOR/$RICH_TITLE"
+    printf '%s' "$RICH_JSON" > "$(rich_file)"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"id":"X1","path":"x","title":"x","published":"2019-05-07T07:00:00"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    The status should equal 0
+    The output should include "backfilled 1 of 1 sidecar(s)"
+    The result of function rich_published should equal "2019-05-07T07:00:00"
+    The result of function rich_has_path should equal "false"
+    The result of function rich_without_published should equal "$RICH_JSON"
+  End
+
+  stray_tmp_files() {
+    find "$RIP_SANDBOX/server" -name '*.tmp.*' | wc -l | tr -d ' '
+  }
+
+  It 'backfill: a write that fails leaves the good sidecar untouched and reports the book failed'
+    # The book directory is made unwritable, so the remote script's temp
+    # file cannot be created at all. The pre-existing sidecar must survive
+    # exactly as it was, no temp file may be left behind, and the book must
+    # be counted as NOT filled — the server holds the only copy.
+    fake_provider_two
+    mkbook "A" "B" X1 "" B
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB
+      chmod 555 '$RIP_SANDBOX/server/audiobooks/A/B'
+      rip::ab_backfill_published --apply; rc=\$?
+      chmod 755 '$RIP_SANDBOX/server/audiobooks/A/B'
+      exit \$rc"
+    The status should equal 1
+    The output should include "backfilled 0 of 1 sidecar(s)"
+    The output should include "1 sidecar(s) could not be written"
+    The stderr should include "could not backfill A/B"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"published":null'
+    The result of function stray_tmp_files should equal "0"
+  End
+
+  It 'backfill: a write connection that never answers fills nothing and says so'
+    # The enumeration succeeds and the write ssh dies (255, an unreachable
+    # host). Nothing may be reported as filled on the strength of the call
+    # having been made — only on a per-book "ok" coming back.
+    fake_provider_two
+    mkbook "A" "B" X1 "" B
+    fake_server_ssh
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+cmd=""
+for a in "\$@"; do cmd="\$a"; done
+case "\$cmd" in *base64*) exit 255 ;; esac
+PATH="$RIP_SANDBOX/remotebin"; export PATH
+exec /bin/sh -c "\$cmd"
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    The status should equal 1
+    The output should include "backfilled 0 of 1 sidecar(s)"
+    The stderr should include "could not backfill A/B"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"published":null'
+  End
+
+  It 'backfill: a dry run against the ssh branch writes nothing and opens no write connection'
+    fake_provider_two
+    mkbook "A" "B" X1 "" B
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 0
+    The output should include "re-run with --apply"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"published":null'
+    # The enumeration ssh, and nothing else.
+    The result of function ssh_calls should equal "1"
+  End
+
   # --- retire + author canonicalization sweep (destructive operators) -------
   #
   # Both default to a DRY RUN. The server holds the only copy of every book
