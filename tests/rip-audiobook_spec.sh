@@ -736,6 +736,59 @@ EOF
     The result of function abs_get_calls should equal "2"
   End
 
+  # AN UNRECOGNIZED FLAG IS AN ERROR, NOT AN AUTHOR NAME (live finding,
+  # 2026-08-24). The dispatcher's `*)` arm was a bare `cmd_names "$@"`, so a
+  # typo'd flag became a lookup for an author of that name and entered the
+  # poll loop at its DEFAULTS — 12 tries x 5s, roughly a minute per argument
+  # with no output at all. That is what made the operator's first command
+  # look frozen. Note these examples deliberately do NOT throttle the poll
+  # seams: the whole point is that no polling may happen. If the guard is
+  # ever removed, they take ~60s and then fail.
+  It 'abs-authors: an unrecognized flag is refused immediately, never polled as an author name'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" --find-itme "A/B"
+    The status should equal 2
+    The stderr should include "unknown option: --find-itme"
+    # Not a single HTTP call: the refusal happens before any lookup.
+    The path "$RIP_SANDBOX/abscurl.log" should not be exist
+  End
+
+  It 'abs-authors: a flag typo in second position is refused too'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" "Brandon Sanderson" --dry-run
+    The status should equal 2
+    The stderr should include "unknown option: --dry-run"
+    The path "$RIP_SANDBOX/abscurl.log" should not be exist
+  End
+
+  # …and the refusal must not cost us author names that legitimately start
+  # with a dash: `--` ends the options, exactly as it does everywhere else.
+  It 'abs-authors: -- ends the options so a dash-leading author name is still reachable'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    fake_abs_curl '{"authors":[{"id":"auth-7","name":"-dash Author","asin":null,"description":null,"imagePath":null}]}'
+    When run zsh -f "$ABS_BIN" -- "-dash Author"
+    The status should equal 0
+    The output should include "matched -dash Author"
+    # The marker itself is CONSUMED, never looked up as a name of its own:
+    # the old dispatcher handed "--" straight to cmd_names, which polled for
+    # an author called "--" and gave up on it.
+    The output should not include "gave up waiting"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/authors/auth-7/match"
+  End
+
+  It 'abs-authors: -- with nothing after it is refused, not treated as a lookup'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" --
+    The status should equal 2
+    The stderr should include "at least one author name required"
+    The path "$RIP_SANDBOX/abscurl.log" should not be exist
+  End
+
   # --- ABS primitives for retire + author repair (Task 7) -------------------
   #
   # Five new verbs on the same bin, consumed by a later task to retire a

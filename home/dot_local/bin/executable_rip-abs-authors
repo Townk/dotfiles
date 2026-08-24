@@ -259,5 +259,33 @@ case "${1:-}" in
        or: rip-abs-authors --delete-author <authorId>'
     exit 2
     ;;
-  *) cmd_names "$@" ;;
+  # END-OF-OPTIONS: everything after `--` is an author name, even one that
+  # starts with a dash. The only way to reach cmd_names with such a name now
+  # that the arm below refuses them.
+  --)
+    shift
+    [[ $# -gt 0 ]] || { print -ru2 -- "rip-abs-authors: --: at least one author name required"; exit 2 }
+    cmd_names "$@"
+    ;;
+  # AN UNRECOGNIZED FLAG IS AN ERROR, NOT AN AUTHOR NAME (live finding,
+  # 2026-08-24). This arm used to be a bare `cmd_names "$@"`, so a typo
+  # ("--find-itme") became a lookup for an author by that name and entered
+  # the ABS match poll loop at its defaults — RIP_ABS_AUTHOR_POLL_TRIES=12 ×
+  # RIP_ABS_AUTHOR_POLL_INTERVAL_S=5, roughly a minute per argument, with no
+  # output at all. The operator reasonably read that as a frozen command.
+  # Fail fast and name the argument, exactly as rip-audiobook's own `*)`
+  # arm does. EVERY argument is checked, not just $1: a typo in second
+  # position hangs just as long as one in first.
+  *)
+    # An `if`, not `[[ … ]] && { … }`: under this file's `set -e` a loop
+    # whose body's last command is a false test exits the shell with the
+    # loop's own status 1.
+    for a in "$@"; do
+      if [[ "$a" == -* ]]; then
+        print -ru2 -- "rip-abs-authors: unknown option: $a"
+        exit 2
+      fi
+    done
+    cmd_names "$@"
+    ;;
 esac
