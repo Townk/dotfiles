@@ -2164,6 +2164,60 @@ rip::ab_have() {
   rip::_remote_has_file "audiobooks/$rel/${rel:t}.m4b"
 }
 
+# --- author identity --------------------------------------------------------
+#
+# Audible spells an author differently across purchases ("J. R. R. Tolkien" on
+# two books, "J.R.R. Tolkien" on a third), Libation composes the folder from
+# that per-purchase metadata, and the result is two author folders for one
+# person — two author pages in Audiobookshelf, and a library that says
+# something untrue. Measured 2026-08-23: exactly one such collision across 116
+# distinct first-authors, and punctuation-and-case normalization catches it.
+#
+# The key is for COMPARISON ONLY. Never name a directory with it.
+rip::_author_norm() {
+  local n="${(L)1}"
+  print -r -- "${n//[^a-z0-9]/}"
+}
+
+# rip::_server_authors — the distinct author spellings the server holds.
+# Derived from the ONE ssh rip::ab_server_library already makes, and cached for
+# the life of the process: a push canonicalizes every staged author and must
+# not open a connection per author.
+typeset -g _RIP_SERVER_AUTHORS_FETCHED
+typeset -g _RIP_SERVER_AUTHORS
+rip::_server_authors() {
+  setopt localoptions noerrexit nopipefail
+  if [[ -z "${_RIP_SERVER_AUTHORS_FETCHED:-}" ]]; then
+    _RIP_SERVER_AUTHORS_FETCHED=1
+    _RIP_SERVER_AUTHORS="$(rip::ab_server_library 2>/dev/null | sed 's|/.*||' | sort -u)"
+  fi
+  print -r -- "$_RIP_SERVER_AUTHORS"
+}
+
+# rip::_canonical_author <name> — the spelling the server already uses for this
+# author, when it holds one that normalizes equal but is written differently.
+# Otherwise the input, unchanged.
+#
+# The server wins on purpose: it is the library's truth, and adopting its
+# spelling makes repeated ingests converge instead of oscillating between two
+# forms. Never fails — an unreachable server simply yields the input, and the
+# book lands under its original spelling exactly as it does today.
+rip::_canonical_author() {
+  setopt localoptions noerrexit nopipefail
+  local name="$1"
+  [[ -n "$name" ]] || return 0
+  local want; want="$(rip::_author_norm "$name")"
+  local existing
+  while IFS= read -r existing; do
+    [[ -n "$existing" ]] || continue
+    if [[ "$existing" != "$name" && "$(rip::_author_norm "$existing")" == "$want" ]]; then
+      print -r -- "$existing"
+      return 0
+    fi
+  done < <(rip::_server_authors)
+  print -r -- "$name"
+}
+
 # rip::ab_import <src> <author> <title> — take a DRM-free file or folder the
 # operator already has and stage it exactly as an acquired book would land,
 # so it rides the same enrich → push → verify → clean path as everything else.

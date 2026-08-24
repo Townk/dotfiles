@@ -296,6 +296,54 @@ FAKESSH
     The status should equal 1
   End
 
+  # --- author identity ------------------------------------------------------
+
+  It 'author norm: punctuation and case collapse, distinct names stay distinct'
+    When run zsh -c "source $RIPLIB
+      print -r -- \$(rip::_author_norm 'J. R. R. Tolkien')
+      print -r -- \$(rip::_author_norm 'J.R.R. Tolkien')
+      print -r -- \$(rip::_author_norm 'John Ronald Reuel Tolkien')"
+    The status should equal 0
+    The line 1 should equal "jrrtolkien"
+    The line 2 should equal "jrrtolkien"
+    The line 3 should equal "johnronaldreueltolkien"
+  End
+
+  It 'canonical author: adopts the spelling the server already uses'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
+    When run zsh -c "source $RIPLIB && rip::_canonical_author 'J.R.R. Tolkien'"
+    The status should equal 0
+    The output should equal "J. R. R. Tolkien"
+  End
+
+  It 'canonical author: an author the server does not know is returned unchanged'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
+    When run zsh -c "source $RIPLIB && rip::_canonical_author 'Martha Wells'"
+    The status should equal 0
+    The output should equal "Martha Wells"
+  End
+
+  It 'canonical author: a name that does not normalize equal is NOT adopted'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit"
+    When run zsh -c "source $RIPLIB && rip::_canonical_author 'John Ronald Reuel Tolkien'"
+    The status should equal 0
+    The output should equal "John Ronald Reuel Tolkien"
+  End
+
+  It 'canonical author: an unreachable server yields the input, never an error'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::_canonical_author 'J.R.R. Tolkien'; echo rc=\$?"
+    The status should equal 0
+    The output should include "J.R.R. Tolkien"
+    The output should include "rc=0"
+  End
+
   # --- session plan validation + enqueue -----------------------------------
 
   queued_plans() {
