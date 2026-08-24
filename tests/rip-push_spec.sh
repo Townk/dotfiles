@@ -163,6 +163,52 @@ EOF
     The stdout should include "verified"
   End
 
+  # --- author canonicalization (Task 3) --------------------------------------
+  # ORDERING IS THE POINT: rip::push_worker must rename a staged author dir
+  # to the server's spelling BEFORE it builds the listfile from `find "$src"`
+  # — otherwise the listfile names paths that no longer exist once the
+  # rename happens, and rsync --files-from silently skips every one of them.
+
+  It 'push: a staged author is renamed to the server spelling BEFORE the file list is built'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien" should not be exist
+    The stderr should include "canonical author"
+  End
+
+  It 'push: canonicalization merges into an existing staged directory without clobbering'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien/The Two Towers"
+    printf 'keep\n' > "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien/The Two Towers/The Two Towers.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Fellowship"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers/The Two Towers.m4b" should equal "keep"
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+  End
+
+  It 'push: an unreachable server leaves staged authors untouched and still pushes'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+  End
+
+  It 'push: music is never canonicalized'
+    mkdir -p "$RIP_STAGING_ROOT/music/A.B. Artist/Album"
+    printf 'flac\n' > "$RIP_STAGING_ROOT/music/A.B. Artist/Album/01 T.flac"
+    mkdir -p "$RIP_SANDBOX/server/music/A. B. Artist/Other"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/music/A.B. Artist/Album/01 T.flac" should be exist
+  End
+
   It 'worker streams progress into the job sidecar'
     mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
     cat > "$RIP_SANDBOX/rsync" <<'EOF'

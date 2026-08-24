@@ -124,6 +124,8 @@ rip::push_worker() {
   rip::_check_type "$type" || return 2
   local src dest rsync_bin="${RIP_RSYNC_BIN:-rsync}"
   src="$(rip::staging_for "$type")"
+  # BEFORE the listfile is built — see rip::_canonicalize_staged_authors.
+  [[ "$type" == audiobooks ]] && rip::_canonicalize_staged_authors "$src"
   dest="$(rip::remote_base)/$type/"
   [ -d "$src" ] || { log_error "rip: no staging dir $src"; return 1 }
 
@@ -2221,6 +2223,47 @@ rip::_canonical_author() {
     fi
   done
   print -r -- "$name"
+}
+
+# rip::_canonicalize_staged_authors <src> — rename each staged author dir to
+# the spelling the server already uses.
+#
+# ORDERING IS LOAD-BEARING: this runs BEFORE rip::push_worker builds its
+# listfile from `find "$src"`, because that listfile's relative paths are fed
+# straight to `rsync --files-from`. Renaming after the list is built would
+# leave every path in it naming a directory that no longer exists.
+#
+# Merges rather than clobbers: when the canonical directory already exists,
+# each book moves into it individually and a book already present there is
+# left alone (the push is idempotent; overwriting a staged book to "fix" a
+# spelling would be a silent data change).
+rip::_canonicalize_staged_authors() {
+  setopt localoptions noerrexit nopipefail
+  local src="$1"
+  [[ -d "$src" ]] || return 0
+  local -a authors=("$src"/*(N/))
+  local dir name canon book
+  for dir in "${authors[@]}"; do
+    name="${dir:t}"
+    canon="$(rip::_canonical_author "$name")"
+    [[ "$canon" == "$name" ]] && continue
+    if [[ -d "$src/$canon" ]]; then
+      for book in "$dir"/*(N); do
+        if [[ -e "$src/$canon/${book:t}" ]]; then
+          log_warn "rip: canonical author target already holds ${book:t} — leaving it staged under $name"
+        else
+          mv -- "$book" "$src/$canon/" 2>/dev/null \
+            || log_warn "rip: could not move ${book:t} into $canon"
+        fi
+      done
+      rmdir -- "$dir" 2>/dev/null
+    else
+      mv -- "$dir" "$src/$canon" 2>/dev/null \
+        || log_warn "rip: could not rename $name to $canon"
+    fi
+    log_error "rip: canonical author — staged \"$name\" renamed to \"$canon\" (the spelling cantina already uses)"
+  done
+  return 0
 }
 
 # rip::ab_import <src> <author> <title> — take a DRM-free file or folder the
