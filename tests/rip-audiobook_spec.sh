@@ -1089,7 +1089,14 @@ EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
     When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply && jq -r '.published' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     The status should equal 0
-    The output should equal "2001-01-01T00:00:00"
+    # "nothing to backfill" is now unconditional (review finding 2026-08-24,
+    # Risk 1): an already-dated book is the to_fill==0 case in BOTH modes, so
+    # stdout is that message followed by the unchanged date, not the date
+    # alone. Asserting the message is itself a stub-defeating check: a
+    # `rip::ab_backfill_published() { return 0 }` stub prints nothing, so
+    # only the pre-existing mkbook date would appear and this line would fail.
+    The output should include "nothing to backfill"
+    The output should include "2001-01-01T00:00:00"
   End
 
   It 'backfill: a stored book the provider does not offer is reported unmatched, not touched'
@@ -1120,5 +1127,34 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 0
     The output should include "nothing to backfill"
+  End
+
+  It 'backfill: a malformed stored sidecar is warned about, not silently dropped'
+    # Regression for review finding 2026-08-24 (Risk 2): rip::_server_sidecars
+    # runs a per-line `jq -c ... 2>/dev/null`, which used to silently DROP any
+    # line that fails to parse — the book never entered the backfill loop, so
+    # it wasn't "skipped and warned", it was invisible. Same enumerator feeds
+    # rip::ab_editions, so a corrupt sidecar would vanish from every report
+    # the operator uses to reason about the library.
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" X1 "" B
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/C/D"
+    printf '%s' '{"schema":1, "title": "D", BROKEN' > "$RIP_SANDBOX/server/audiobooks/C/D/.fleet-book.json"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"id":"X1","path":"A/B","title":"B","published":"2019-05-07T07:00:00"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 0
+    # The healthy book is still processed correctly — a `return 0` stub
+    # would print none of this.
+    The output should include "A/B"
+    The output should include "2019-05-07"
+    # The malformed sidecar is warned about, not silently absent.
+    The stderr should include "malformed"
+    The stderr should include "C/D"
   End
 End

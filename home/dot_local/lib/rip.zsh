@@ -2188,11 +2188,23 @@ rip::_server_sidecars() {
   else
     raw="$(cd "$base/audiobooks" 2>/dev/null && eval "$script")"
   fi
-  local line rel json
+  # A line that fails to parse (a truncated/corrupt sidecar) must not just
+  # vanish: this enumerator also feeds rip::ab_editions, so a silently
+  # dropped book would disappear from every report an operator uses to
+  # reason about the library, with no sign anything was skipped (review
+  # finding 2026-08-24). The output CONTRACT is unchanged — still one JSON
+  # object per readable sidecar, `_path` attached — only a new stderr
+  # warning is added for the ones that don't parse.
+  local line rel json out
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     rel="${line%%$'\t'*}"; json="${line#*$'\t'}"
-    print -r -- "$json" | jq -c --arg p "$rel" '. + {_path:$p}' 2>/dev/null
+    out="$(print -r -- "$json" | jq -c --arg p "$rel" '. + {_path:$p}' 2>/dev/null)"
+    if [[ -n "$out" ]]; then
+      print -r -- "$out"
+    else
+      log_warn "rip: malformed sidecar for $rel — skipped"
+    fi
   done <<< "$raw"
 }
 
@@ -2287,11 +2299,15 @@ rip::ab_backfill_published() {
   done < <(rip::_server_sidecars)
 
   if (( ${#to_fill[@]} == 0 )); then
-    # Only reported in dry-run: under --apply, "nothing new to fill" (every
-    # candidate was already dated) is silent success, not a finding — the
-    # message exists to tell an operator running without --apply what a
-    # follow-up run would do, not to narrate a no-op apply.
-    (( apply )) || print -r -- "rip: nothing to backfill"
+    # Reported in BOTH modes. A silent `--apply` with nothing to fill is
+    # byte-identical on stdout/stderr/exit-code to `rip::_server_sidecars`'s
+    # ssh call failing (that call is wrapped in 2>/dev/null, so an
+    # unreachable server also yields an empty work list and rc 0) — the
+    # operator could not tell "ran fine, nothing needed" from "never reached
+    # the server" (review finding 2026-08-24). Always narrating the no-op
+    # closes that ambiguity and costs nothing: the caller already expects
+    # this function to print progress.
+    print -r -- "rip: nothing to backfill"
     return 0
   fi
 
