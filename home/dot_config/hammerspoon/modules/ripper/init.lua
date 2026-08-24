@@ -117,6 +117,12 @@ local audiobookLibraryTask = nil
 -- populating the panel additively, so one must never be able to clobber the
 -- other's in-flight task.
 local serverTask = nil
+-- The Audiobook Library panel's THIRD fetch: `rip-audiobook --server-editions`,
+-- the edition-mark set. Distinct anchor from audiobookLibraryTask and
+-- serverTask above — all three run concurrently and land in either order,
+-- each populating the panel additively, so none may clobber another's
+-- in-flight task.
+local editionsTask = nil
 local sessionVolume = nil -- the volume the open session panel is reviewing
 local sessionState = nil -- the open session's payload; also the staleness token
 local planSeq = 0 -- monotonic suffix for plan temp files
@@ -947,6 +953,49 @@ function M.library()
 	end, { "--server-library" })
 	serverTask = thisServerTask
 	thisServerTask:start()
+
+	-- Third concurrent fetch: `rip-audiobook --server-editions`, the
+	-- edition-mark set. Grows with the library exactly like --library does
+	-- (one row per stored book with a `published` date), so it hits the same
+	-- ~64 KB hs.task pipe-buffer deadlock at scale — STREAMING CALLBACK,
+	-- chunks accumulated and parsed once at completion, same shape as the
+	-- audiobookLibraryTask fetch above (live 2026-08-23 finding).
+	local editionsChunks = {}
+	if editionsTask then
+		editionsTask:terminate()
+		editionsTask = nil
+	end
+	local thisEditionsTask
+	thisEditionsTask = hs.task.new(RIP_AUDIOBOOK, function(rc, _, err)
+		if editionsTask == thisEditionsTask then
+			editionsTask = nil
+		end
+		if rc ~= 0 then
+			-- Same reasoning as --server-library's failure above: an
+			-- unreachable server means "we do not know", so the panel must
+			-- mark NOTHING rather than guess. setServerEditions is simply
+			-- never called, leaving SERVER_EDITIONS_KNOWN false.
+			log.ef("library: --server-editions failed rc=%d: %s", rc, err or "")
+			return
+		end
+		local list = {}
+		for line in (table.concat(editionsChunks)):gmatch("[^\n]+") do
+			local ok, row = pcall(hs.json.decode, line)
+			if ok and row then
+				list[#list + 1] = row
+			end
+		end
+		if library.isShown() then
+			library.setServerEditions(list)
+		end
+	end, function(_, so, _)
+		if so and so ~= "" then
+			editionsChunks[#editionsChunks + 1] = so
+		end
+		return true
+	end, { "--server-editions" })
+	editionsTask = thisEditionsTask
+	thisEditionsTask:start()
 end
 
 --------------------------------------------------------------------------------
@@ -1349,6 +1398,10 @@ function M.cleanup()
 	if serverTask then
 		serverTask:terminate()
 		serverTask = nil
+	end
+	if editionsTask then
+		editionsTask:terminate()
+		editionsTask = nil
 	end
 	sessionVolume = nil
 	sessionState = nil

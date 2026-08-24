@@ -25,6 +25,7 @@
 ---   library.show(data, callbacks)       -- open, or re-render in place if already open
 ---   library.setRows(rows)               -- additive repaint of an open panel
 ---   library.setServerLibrary(paths)     -- the hide-filter set, fed by `rip-audiobook --server-library`
+---   library.setServerEditions(list)     -- the edition-mark set, fed by `rip-audiobook --server-editions`
 ---   library.hide()                      -- dismiss (fires callbacks.onDismiss once)
 ---   library.isShown()                   -- true while the panel is up
 ---   library.cleanup()                   -- delete the webview (register with lifecycle)
@@ -409,6 +410,26 @@ function M.setServerLibrary(paths)
 	end
 	webview:evaluateJavaScript(
 		"window.__setServerLibrary && window.__setServerLibrary(" .. json_for_script(paths) .. ")"
+	)
+end
+
+--- Tell the panel which stored books carry a `published` date, so the client
+--- can mark a row when the server already holds the same work under a
+--- different edition. Same tri-state discipline as setServerLibrary: an
+--- absent or failed fetch simply never calls this, and the panel's
+--- SERVER_EDITIONS_KNOWN flag (rip-library.html) stays false rather than
+--- guessing.
+--- @param list table[] { author, title, published, path } rows, JSON-lines
+--- from `rip-audiobook --server-editions`
+function M.setServerEditions(list)
+	if not webview or not isShown then
+		return
+	end
+	if type(list) ~= "table" then
+		return
+	end
+	webview:evaluateJavaScript(
+		"window.__setServerEditions && window.__setServerEditions(" .. json_for_script(list) .. ")"
 	)
 end
 

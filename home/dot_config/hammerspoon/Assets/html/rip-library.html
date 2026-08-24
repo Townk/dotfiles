@@ -90,6 +90,12 @@
     // this only stops the panel from making a positive claim it can't
     // support.
     var SERVER_KNOWN = false;
+    var SERVER_EDITIONS = [];       // { author, title, published, path } rows cantina holds with a known published date
+    // Same tri-state discipline as SERVER_KNOWN above: false until
+    // __setServerEditions's fetch actually lands, so an absent or failed
+    // --server-editions run never asserts an edition claim the panel cannot
+    // support — it just renders nothing (otherEditionHtml below).
+    var SERVER_EDITIONS_KNOWN = false;
     var FOCUS_ID = null;      // keyboard-focused row id (see moveFocus)
     var SHOW_LIBRARY = false; // the "show library" chip
     var QUERY = "";           // debounced search text
@@ -118,6 +124,14 @@
     // never trusted bare. Applied both to the row list itself and to each
     // row's authors/narrators, which a provider row is free to leave empty.
     function arr(v) { return Array.isArray(v) ? v : []; }
+
+    // Mirrors rip::_author_norm (home/dot_local/lib/rip.zsh) exactly: lowercase,
+    // strip everything outside a-z0-9. Used to compare a row's author/title
+    // against SERVER_EDITIONS without either side's punctuation/casing noise
+    // producing a false miss.
+    function norm(s) {
+      return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
 
     // Normalize one provider row. This object is BOTH what the DOM renders
     // AND — verbatim, per row the operator marks Rip — what start() posts
@@ -187,6 +201,12 @@
     window.__setServerLibrary = function (paths) {
       SERVER = new Set(arr(paths));
       SERVER_KNOWN = true;
+      render();
+    };
+
+    window.__setServerEditions = function (list) {
+      SERVER_EDITIONS = arr(list);
+      SERVER_EDITIONS_KNOWN = true;
       render();
     };
 
@@ -266,6 +286,27 @@
         + '<span>liberated, never pushed</span></div></div>';
     }
 
+    // The server-holds-a-different-edition mark: same tri-state guard as
+    // neverPushedHtml above (SERVER_EDITIONS_KNOWN), and the same
+    // different-date requirement rip::ab_editions uses server-side — parts
+    // of one issue share a publication date and must never be read as
+    // alternative editions of each other.
+    function otherEditionHtml(r) {
+      if (!SERVER_EDITIONS_KNOWN) return '';
+      var ra = norm(r.authors && r.authors[0]), rt = norm(r.title);
+      var rp = (r.published || '').slice(0, 10);
+      for (var i = 0; i < SERVER_EDITIONS.length; i++) {
+        var e = SERVER_EDITIONS[i];
+        var ep = (e.published || '').slice(0, 10);
+        if (!ep || !rp || ep === rp) continue;
+        if (norm(e.author) === ra && norm(e.title) === rt) {
+          return '<div class="detail"><div class="other-edition">' + SVG_WARN_SM +
+                 '<span>you own the ' + esc(ep.slice(0, 4)) + ' edition</span></div></div>';
+        }
+      }
+      return '';
+    }
+
     function rowHtml(r) {
       var selected = SELECTED.has(r.id);
       var inLibrary = SERVER.has(r.path);
@@ -281,6 +322,7 @@
         + '<span class="toggle" data-toggle="' + esc(r.id) + '" data-on="' + selected + '">' + (selected ? 'Rip' : 'Skip') + '</span>'
         + '</div>'
         + neverPushedHtml(r, inLibrary)
+        + otherEditionHtml(r)
         + '</div>';
     }
 

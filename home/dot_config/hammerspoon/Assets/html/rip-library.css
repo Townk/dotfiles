@@ -163,6 +163,18 @@ body { background: transparent; overflow: hidden; }
 }
 .never-pushed span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* "you own the <year> edition" — same --peach token and .detail layout as
+ * .never-pushed above; a divergence to flag, not celebrate, same idiom. */
+.other-edition {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--peach);
+  font-size: var(--meta-size);
+  min-width: 0;
+}
+.other-edition span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .row .cover {
   position: relative;
   width: 48px;

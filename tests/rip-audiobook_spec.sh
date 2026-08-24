@@ -1137,6 +1137,23 @@ FAKECP
     The output should equal ""
   End
 
+  # --server-editions — the panel's edition-mark feed. Thin: one jq filter
+  # over rip::_server_sidecars (already covered above), shaped to
+  # {author, title, published, path}. Exercised through the CLI dispatcher,
+  # not the raw function, so this also proves the verb is actually wired in.
+  It 'CLI: --server-editions emits published rows as {author,title,published,path}'
+    mkbook "A" "B" X1 2020-01-01T00:00:00 T
+    mkbook "A" "C" X2 "" T2
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-editions
+    The status should equal 0
+    The output should include '"author":"A"'
+    The output should include '"title":"T"'
+    The output should include '"published":"2020-01-01T00:00:00"'
+    The output should include '"path":"A/B"'
+    The output should not include "X2"
+    The output should not include '"path":"A/C"'
+  End
+
   # rip::ab_backfill_published — sweep the 248 sidecars already on the server
   # (0 of which carry `published`, measured 2026-08-24) so edition detection
   # has something to group on. Each example redirects RIP_LIBEXEC_DIR into
