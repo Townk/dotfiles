@@ -2584,14 +2584,24 @@ rip::ab_worker() {
     [[ -n "$id$bpath" ]] && items+=("$id"$'\t'"$bpath")
   done < <(jq -r '(.items // [])[] | [(.id // ""), (.path // "")] | @tsv' "$plan" 2>/dev/null)
 
-  local total=${#items} n=0 rc=0 line pct
+  local total=${#items} n=0 rc=0 line pct refused=0
   local base span; span=$(( 70 / (total > 0 ? total : 1) ))
   for entry in "${items[@]}"; do
     id="${entry%%$'\t'*}"; bpath="${entry#*$'\t'}"
     base=$(( n * span )); n=$(( n + 1 ))
     rip::ab_have "$bpath"
     case $? in
-      0) print -r -- "rip: cantina already has $bpath — skipping"; continue ;;
+      0)
+        # The operator asked to be TOLD, not to have the batch aborted
+        # (2026-08-24): a book already on the server is a refusal worth
+        # logging, and the remaining books still acquire. This check stays at
+        # ACQUIRE time only — rip-push audiobooks is deliberately idempotent
+        # so a failed verify can be retried without re-downloading, and
+        # refusing an already-present path there would break that retry.
+        log_error "rip: already on cantina, refusing to re-acquire: $bpath"
+        refused=$(( refused + 1 ))
+        continue
+        ;;
       2) log_warn "rip: could not ask cantina about $bpath — acquiring anyway" ;;
     esac
     rip::_progress "$base" "downloading — ${bpath:t}"
@@ -2656,6 +2666,7 @@ rip::ab_worker() {
     fi
   done
   rm -f -- "$plan"
+  (( refused > 0 )) && log_error "rip: $refused already on cantina — skipped"
 
   # The push owns 70–100. The age gate is disabled for this inner push the
   # same way the disc pipeline disables it: these files are complete by

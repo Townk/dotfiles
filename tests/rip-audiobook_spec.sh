@@ -459,6 +459,32 @@ EOF
     The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
   End
 
+  # The operator asked to be TOLD, not to have the batch aborted (Task 4):
+  # a book already on the server is a refusal worth logging, and the
+  # remaining books still acquire. This check stays at ACQUIRE time only —
+  # see rip-push_spec.sh for the sibling guard pinning that push stays
+  # idempotent.
+  It 'session: a book already on the server logs a failure, is counted, and the batch continues'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Have"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Have/Have.m4b"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"HAVE","path":"A/Have","title":"Have"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The stderr should include "already on cantina"
+    The stderr should include "A/Have"
+    The contents of file "$RIP_SANDBOX/libation.log" should not include "--id HAVE"
+    The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+  End
+
+  It 'session: the refusal count is reported when the run finishes'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Have"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Have/Have.m4b"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"HAVE","path":"A/Have","title":"Have"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The stderr should include "1 already on cantina"
+  End
+
   # Regression guard (final-review finding, 2026-08-22): rip::staging_for
   # honors RIP_AB_STAGING, but rip::ab_worker used to hardcode
   # "$(rip::staging_root)/audiobooks" as its acquire destination and derive

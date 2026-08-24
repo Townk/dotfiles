@@ -169,6 +169,21 @@ EOF
     The stdout should include "verified"
   End
 
+  # rip::ab_worker refuses to re-acquire a book already on the server (Task
+  # 4), but push itself must stay idempotent: a push whose checksum
+  # verification failed has to be retriable with `rip-push audiobooks` and
+  # NO re-download, which means pushing a book whose path already exists on
+  # the server is REQUIRED behaviour, not a bug. This pins that the refusal
+  # never migrates to push time.
+  It 'push: a book whose path already exists on the server is still pushed (the retry path)'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B" "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'partial\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    printf 'complete\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should equal "complete"
+  End
+
   # --- author canonicalization (Task 3) --------------------------------------
   # ORDERING IS THE POINT: rip::push_worker must rename a staged author dir
   # to the server's spelling BEFORE it builds the listfile from `find "$src"`
