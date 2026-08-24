@@ -167,10 +167,96 @@ cmd_names() {
   return 0
 }
 
+# --- Task 7: ABS primitives for retire + author repair ---------------------
+# Five verbs consumed by a later task to retire a duplicate book and repoint
+# it to the correct author record. Same auth/base-URL seams as the
+# enrichment code above; the top-level API-key guard at the top of this file
+# already exit-3s before any of these run, so none of them re-checks the key.
+
+# cmd_find_item <Author>/<Title> — the id of the ABS item whose relPath
+# matches exactly, or rc 1 when none does (bad lookup, empty listing, or no
+# book library at all are all the same "not found" outcome to the caller).
+cmd_find_item() {
+  setopt localoptions noerrexit nopipefail
+  local rel="${1:?--find-item: \"<Author>/<Title>\" required}"
+  local lib_id items_json id
+  lib_id="$(_abs_book_library_id)"
+  [[ -n "$lib_id" ]] || { print -ru2 -- "rip-abs-authors: no book library found on $base"; return 1 }
+  items_json="$(_abs_get "/api/libraries/$lib_id/items")"
+  [[ -n "$items_json" ]] || return 1
+  id="$(jq -r --arg r "$rel" '(.results // [])[] | select(.relPath == $r) | .id' <<<"$items_json" 2>/dev/null | head -1)"
+  [[ -n "$id" ]] || return 1
+  print -r -- "$id"
+  return 0
+}
+
+# cmd_author_id <name> — the id of the author whose name matches exactly,
+# reusing _abs_authors_json + _abs_author_row (the same helpers cmd_all and
+# cmd_names already use) rather than re-fetching the authors endpoint.
+cmd_author_id() {
+  setopt localoptions noerrexit nopipefail
+  local name="${1:?--author-id: name required}"
+  local lib_id authors_json row id
+  lib_id="$(_abs_book_library_id)"
+  [[ -n "$lib_id" ]] || { print -ru2 -- "rip-abs-authors: no book library found on $base"; return 1 }
+  authors_json="$(_abs_authors_json "$lib_id")"
+  [[ -n "$authors_json" && "$authors_json" != "null" ]] || return 1
+  row="$(_abs_author_row "$authors_json" "$name")"
+  [[ -n "$row" ]] || return 1
+  id="$(jq -r '.id // empty' <<<"$row" 2>/dev/null)"
+  [[ -n "$id" ]] || return 1
+  print -r -- "$id"
+  return 0
+}
+
+# cmd_repoint_item <itemId> <authorId> <authorName> — PATCH the item's
+# metadata so its (sole) author becomes <authorId>/<authorName>.
+cmd_repoint_item() {
+  setopt localoptions noerrexit nopipefail
+  local item="${1:?--repoint-item: item id required}" aid="${2:?--repoint-item: author id required}" aname="${3:?--repoint-item: author name required}"
+  local body rc
+  body="$(jq -nc --arg i "$aid" --arg n "$aname" '{metadata:{authors:[{id:$i,name:$n}]}}')"
+  "$curl_bin" -sf --max-time 20 -X PATCH \
+    -H "$auth_header" -H 'Content-Type: application/json' \
+    -d "$body" "$base/api/items/$item/media" >/dev/null
+  rc=$?
+  return $rc
+}
+
+# cmd_delete_item <itemId> — DELETE the item.
+cmd_delete_item() {
+  setopt localoptions noerrexit nopipefail
+  local item="${1:?--delete-item: item id required}" rc
+  "$curl_bin" -sf --max-time 20 -X DELETE \
+    -H "$auth_header" "$base/api/items/$item" >/dev/null
+  rc=$?
+  return $rc
+}
+
+# cmd_delete_author <authorId> — DELETE the author.
+cmd_delete_author() {
+  setopt localoptions noerrexit nopipefail
+  local aid="${1:?--delete-author: author id required}" rc
+  "$curl_bin" -sf --max-time 20 -X DELETE \
+    -H "$auth_header" "$base/api/authors/$aid" >/dev/null
+  rc=$?
+  return $rc
+}
+
 case "${1:-}" in
+  --find-item) shift; cmd_find_item "$@" ;;
+  --author-id) shift; cmd_author_id "$@" ;;
+  --repoint-item) shift; cmd_repoint_item "$@" ;;
+  --delete-item) shift; cmd_delete_item "$@" ;;
+  --delete-author) shift; cmd_delete_author "$@" ;;
   --all) cmd_all ;;
   "" | --help)
-    print -ru2 -- 'usage: rip-abs-authors --all | "<Author Name>"...'
+    print -ru2 -- 'usage: rip-abs-authors --all | "<Author Name>"...
+       or: rip-abs-authors --find-item "<Author>/<Title>"
+       or: rip-abs-authors --author-id "<Author Name>"
+       or: rip-abs-authors --repoint-item <itemId> <authorId> <authorName>
+       or: rip-abs-authors --delete-item <itemId>
+       or: rip-abs-authors --delete-author <authorId>'
     exit 2
     ;;
   *) cmd_names "$@" ;;

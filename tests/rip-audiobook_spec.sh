@@ -613,15 +613,26 @@ EOF
 
   abs_get_calls() { grep -c '/api/libraries/lib-book/authors' "$RIP_SANDBOX/abscurl.log" 2>/dev/null || true; }
 
-  # fake_abs_curl <authors_json> — a fake ABS: /api/libraries answers with
-  # a DECOY podcast library FIRST and the book library second (so a test
-  # that hardcoded "the first library" instead of filtering on mediaType
-  # would pick the wrong one and fail), /api/libraries/lib-book/authors
-  # answers with <authors_json>, and /api/authors/<id>/match always
-  # succeeds and logs which id it was called for.
+  # fake_abs_curl <authors_json> [items_json] — a fake ABS: /api/libraries
+  # answers with a DECOY podcast library FIRST and the book library second
+  # (so a test that hardcoded "the first library" instead of filtering on
+  # mediaType would pick the wrong one and fail), /api/libraries/lib-book/authors
+  # answers with <authors_json>, /api/libraries/lib-book/items answers with
+  # <items_json> (default: one item, relPath "A/B", id "item-1" — the Task 7
+  # brief's canned fixture), /api/authors/<id>/match always succeeds and
+  # logs which id it was called for, and the item/author PATCH/DELETE
+  # endpoints used by the Task 7 verbs just echo {} and log the request.
   fake_abs_curl() {
     export RIP_ABS_URL="http://cantina:13378"
     printf '%s' "$1" > "$RIP_SANDBOX/abs-authors.json"
+    # The items fixture must NOT be written as a "${2:-<json>}" default: the
+    # shell scans for the closing brace of the expansion through the JSON's
+    # own braces and silently rewrites the literal (it emitted
+    # ...,"relPath":"A/B"]}} — invalid JSON that jq rejects, so --find-item
+    # found nothing). Pick the default with a plain test instead.
+    abs_items_json="${2:-}"
+    [ -n "$abs_items_json" ] || abs_items_json='{"results":[{"id":"item-1","relPath":"A/B"}]}'
+    printf '%s' "$abs_items_json" > "$RIP_SANDBOX/abs-items.json"
     cat > "$RIP_SANDBOX/abscurl" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/abscurl.log"
@@ -632,9 +643,17 @@ case "\$url" in
     echo '{"libraries":[{"id":"lib-pod","name":"Podcasts","mediaType":"podcast"},{"id":"lib-book","name":"Audiobooks","mediaType":"book"}]}' ;;
   */api/libraries/lib-book/authors)
     cat "$RIP_SANDBOX/abs-authors.json" ;;
+  */api/libraries/lib-book/items)
+    cat "$RIP_SANDBOX/abs-items.json" ;;
   */api/authors/*/match)
     id="\${url%/match}"; id="\${id##*/}"
     printf '{"updated":true,"author":{"id":"%s"}}' "\$id" ;;
+  */api/items/*/media)
+    echo '{}' ;;
+  */api/items/*)
+    echo '{}' ;;
+  */api/authors/*)
+    echo '{}' ;;
   *) echo '{}' ;;
 esac
 exit 0
@@ -715,6 +734,95 @@ EOF
     The status should equal 0
     The output should include "gave up waiting"
     The result of function abs_get_calls should equal "2"
+  End
+
+  # --- ABS primitives for retire + author repair (Task 7) -------------------
+  #
+  # Five new verbs on the same bin, consumed by a later task to retire a
+  # book and repair duplicate author records: --find-item, --author-id,
+  # --repoint-item, --delete-item, --delete-author. Same hermetic doctrine
+  # as the enrichment examples above.
+  #
+  # Every example also throttles the ABS_AUTHOR_POLL_* seams (TRIES=2,
+  # INTERVAL_S=0), exactly as the "gave up waiting" example above does. Not
+  # for these examples' own sake — the flags below never reach cmd_names —
+  # but as a regression guard: the dispatcher's `*)` arm falls through to
+  # cmd_names "$@" for anything it does not recognize, so if a future change
+  # ever un-wires one of these verbs from the case statement, the flag would
+  # silently be treated as an author name and the example would hang for up
+  # to a minute (12 tries * 5s) polling instead of failing fast.
+
+  It 'abs: --find-item resolves an item by its relative path'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" --find-item "A/B"
+    The status should equal 0
+    The output should equal "item-1"
+  End
+
+  It 'abs: --find-item exits 1 for a path the server does not hold'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" --find-item "No/Such"
+    The status should equal 1
+  End
+
+  It 'abs: --repoint-item PATCHes the item metadata with the given author'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" --repoint-item item-1 auth-9 "J. R. R. Tolkien"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "PATCH"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/items/item-1/media"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "auth-9"
+  End
+
+  It 'abs: --delete-item and --delete-author issue DELETEs'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -c "zsh -f $ABS_BIN --delete-item item-1 && zsh -f $ABS_BIN --delete-author auth-9"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/items/item-1"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/authors/auth-9"
+  End
+
+  It 'abs: --author-id resolves an author by exact name, reusing the authors listing'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    fake_abs_curl '{"authors":[{"id":"auth-9","name":"J. R. R. Tolkien","asin":null,"description":null,"imagePath":null}]}'
+    When run zsh -f "$ABS_BIN" --author-id "J. R. R. Tolkien"
+    The status should equal 0
+    The output should equal "auth-9"
+    The contents of file "$RIP_SANDBOX/abscurl.log" should not include "/match"
+  End
+
+  It 'abs: --author-id exits 1 for a name the server does not hold'
+    unset AUDIOBOOKSHELF_API_KEY; export AUDIOBOOKSHELF_API_KEY=test-key
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" --author-id "Nobody"
+    The status should equal 1
+  End
+
+  It 'abs: the new verbs exit 3 without an API key'
+    unset AUDIOBOOKSHELF_API_KEY
+    export RIP_ABS_AUTHOR_POLL_TRIES=2
+    export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
+    fake_abs_curl '{"authors":[]}'
+    When run zsh -f "$ABS_BIN" --find-item "A/B"
+    The status should equal 3
+    The stderr should include "AUDIOBOOKSHELF_API_KEY"
+    The path "$RIP_SANDBOX/abscurl.log" should not be exist
   End
 
   # --- rip::_abs_match_authors (the RIP_AB_REMOTE_HOPS entry itself) --------
