@@ -2278,9 +2278,11 @@ rip::ab_backfill_published() {
 
   local base; base="$(rip::remote_base)"
   local -a to_fill=()
+  local -i seen=0
   local line rel asin have want
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
+    (( seen++ ))
     rel="$(print -r -- "$line" | jq -r '._path // ""' 2>/dev/null)"
     [[ -n "$rel" ]] || continue
     have="$(print -r -- "$line" | jq -r '.published // ""' 2>/dev/null)"
@@ -2307,7 +2309,25 @@ rip::ab_backfill_published() {
     # the server" (review finding 2026-08-24). Always narrating the no-op
     # closes that ambiguity and costs nothing: the caller already expects
     # this function to print progress.
-    print -r -- "rip: nothing to backfill"
+    #
+    # BUT that alone still conflates two different situations that both
+    # yield an empty $to_fill: a genuinely satisfied library (every stored
+    # sidecar already dated) and an enumerator that produced ZERO lines
+    # because the ssh to the server failed. This is a one-shot sweep over
+    # the whole library — a false "nothing to backfill" here would read as
+    # "the sweep is done" and let a real gap stand undetected, then
+    # propagate silently into `--editions` finding no duplicates either
+    # (review finding 2026-08-24, round 2). $seen (incremented for every
+    # non-empty line rip::_server_sidecars actually produced, before any
+    # filtering) tells them apart without changing `_server_sidecars`'s
+    # output contract or asserting a reachability check we cannot make: an
+    # empty library legitimately produces zero lines too, so the wording
+    # below only names the possibility, it does not claim failure.
+    if (( seen == 0 )); then
+      print -r -- "rip: no sidecars found on the server — nothing to backfill (is cantina reachable?)"
+    else
+      print -r -- "rip: nothing to backfill"
+    fi
     return 0
   fi
 

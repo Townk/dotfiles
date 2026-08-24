@@ -1127,6 +1127,38 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 0
     The output should include "nothing to backfill"
+    # Distinguishes this branch (sidecars WERE seen, all already dated) from
+    # the "enumerator produced zero lines" branch below — review round 2,
+    # 2026-08-24: without this negative assertion a real bug that always
+    # emitted the "no sidecars found" wording, even when sidecars exist,
+    # would pass this example unnoticed.
+    The output should not include "cantina reachable"
+  End
+
+  It 'backfill: an enumerator that returns nothing is distinguished from a satisfied library'
+    # Review finding 2026-08-24, round 2: "rip: nothing to backfill" alone
+    # does not tell an operator whether every stored sidecar genuinely
+    # already has a date, or whether rip::_server_sidecars produced ZERO
+    # lines because the ssh to the server failed (that ssh runs under
+    # 2>/dev/null, so an unreachable server and a satisfied library both
+    # yield rc 0 and an empty work list). This is a one-shot sweep over 248
+    # books — a false "nothing to backfill" here reads as "the sweep is
+    # done" and a real gap propagates silently into --editions reporting no
+    # duplicates either. An empty library legitimately produces zero lines
+    # too (no mkbook call below — nothing staged in $RIP_SANDBOX/server at
+    # all), so the wording only names the possibility, it does not assert
+    # server-unreachability as fact.
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 0
+    The output should include "no sidecars found on the server"
+    The output should include "cantina reachable"
   End
 
   It 'backfill: a malformed stored sidecar is warned about, not silently dropped'
