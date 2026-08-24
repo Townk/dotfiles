@@ -965,20 +965,50 @@ FAKECP
     The output should include "newest"
   End
 
-  It 'editions: parts of one issue sharing a publication date do NOT group'
+  It 'editions: parts of one issue sharing a publication date do NOT group (control edition still reported)'
     mkbook "Scientific American" "Scientific American, January 2001: Part 1" B002VE9P9A 2001-01-01T00:00:00 "Scientific American, January 2001"
     mkbook "Scientific American" "Scientific American, January 2001: Part 2" B0037FF924 2001-01-01T00:00:00 "Scientific American, January 2001"
+    # Control book in the SAME fixture: a genuine two-date edition pair that
+    # must still be reported. Without this, an example asserting only "the
+    # output should not include X" would pass unchanged against a stub
+    # `rip::ab_editions() { return 0 }` — no proof the grouping logic ran at
+    # all (review finding 2026-08-24).
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
     When run zsh -c "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should not include "Scientific American"
+    The output should include "Edgedancer"
   End
 
-  It 'editions: a dramatized adaptation is a different title and does NOT group'
+  It 'editions: a cluster with any repeated date is suppressed ENTIRELY, not just the tied pair'
+    # Regression for the shipped-jq defect (review finding 2026-08-24,
+    # Critical): the old filter asked "does this cluster contain at least
+    # one date difference anywhere" instead of "are ALL members' dates
+    # distinct". Reproduced against the shipped program with exactly this
+    # shape — two rows dated 2001-01-01 plus a third dated 2005-06-01 — and
+    # all three printed side by side. A mixed cluster can never be safely
+    # presented as an edition list: some of its rows are parts of one issue,
+    # not alternative editions, and the report's downstream action is
+    # deleting a "stale" copy the server holds the only copy of.
+    mkbook "Scientific American" "Test Digest, Vol 3: Part 1" P1 2001-01-01T00:00:00 "Test Digest, Vol 3"
+    mkbook "Scientific American" "Test Digest, Vol 3: Part 2" P2 2001-01-01T00:00:00 "Test Digest, Vol 3"
+    mkbook "Scientific American" "Test Digest, Vol 3: Part 3" P3 2005-06-01T00:00:00 "Test Digest, Vol 3"
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should not include "Test Digest"
+  End
+
+  It 'editions: a dramatized adaptation is a different title and does NOT group (control edition still reported)'
     mkbook "Brandon Sanderson" "Tress of the Emerald Sea: A Cosmere Novel" B0B1 2023-01-10T00:00:00 "Tress of the Emerald Sea"
     mkbook "Brandon Sanderson" "Tress of the Emerald Sea (Dramatized Adaptation)" B0B2 2024-01-10T00:00:00 "Tress of the Emerald Sea (Dramatized Adaptation)"
+    # Control book in the SAME fixture — see rationale above.
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
     When run zsh -c "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should not include "Tress"
+    The output should include "Edgedancer"
   End
 
   It 'editions: a book with no published date is never grouped'

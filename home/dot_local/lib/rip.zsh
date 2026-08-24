@@ -2204,6 +2204,20 @@ rip::_server_sidecars() {
 # different-date requirement is what keeps two PARTS of one issue — which
 # share a publication date — from being read as a stale edition of each other,
 # a mistake whose remedy would be a deletion.
+#
+# The all-distinct check below is PER CLUSTER, not "does at least one pair
+# differ": a cluster is reported only when EVERY member's `published` is
+# distinct from every other member's (unique count == row count). A mixed
+# cluster — say two rows sharing a date plus a third with a different one —
+# cannot be safely presented as an edition list, because some of its rows
+# are parts of one issue rather than alternative editions, and the report's
+# only downstream action is deleting a "stale" copy. Reporting nothing costs
+# a manual look; reporting a misleading pair costs a deleted book that the
+# server holds the only copy of. So ANY repeated date anywhere in the
+# cluster suppresses the whole cluster, not just the tied rows (review
+# finding 2026-08-24, reproduced against the shipped jq with a 3-member
+# cluster: two rows dated 2001-01-01 plus one dated 2005-06-01 were all
+# printed side by side under the old "any pair differs" filter).
 rip::ab_editions() {
   setopt localoptions noerrexit nopipefail
   rip::_server_sidecars | jq -s -r '
@@ -2211,7 +2225,7 @@ rip::ab_editions() {
     | group_by([ (.authors[0] // "" | ascii_downcase | gsub("[^a-z0-9]";"")),
                  (.title // "" | ascii_downcase | gsub("[^a-z0-9]";"")) ])
     | map(select(length > 1))
-    | map(select([.[].published] | unique | length > 1))
+    | map(select(([.[].published] | unique | length) == length))
     | .[]
     | (max_by(.published)._path) as $newest
     | "\(.[0].title)",
