@@ -2253,14 +2253,26 @@ rip::_server_sidecars() {
   # only because `find` there resolves to brew's bfs; /usr/bin/find fails with
   # "-printf: unknown primary or operator". Strip the leading "./" instead.
   local script='find . -mindepth 3 -maxdepth 3 -name .fleet-book.json 2>/dev/null | while read -r f; do d=${f#./}; d=${d%/.fleet-book.json}; printf "%s\t" "$d"; tr -d "\n" < "$f"; printf "\n"; done'
-  local raw
+  # PROPAGATE THE FAILURE (review finding 4, 2026-08-24). Both branches used
+  # to discard their status, so an ssh that exited 255 produced an empty
+  # enumeration and rc 0 — byte-identical, to every caller, to a library
+  # with nothing in it. Measured with a stub ssh exiting 255: `--editions`
+  # returned rc 0 with no output, which reads as "your library has no
+  # duplicate editions" and is the report the operator consults before
+  # deciding what to DELETE. rip::ab_canonicalize_authors already refuses
+  # this way (rc 2 on an unreachable server); so does rip::ab_retire.
+  local raw rc=0
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
     local host="${base%%:*}" rpath="${base#*:}"
     raw="$("$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
-      "cd ${(q)rpath}/audiobooks 2>/dev/null && $script" 2>/dev/null)"
+      "cd ${(q)rpath}/audiobooks 2>/dev/null && $script" 2>/dev/null)" || rc=$?
   else
-    raw="$(cd "$base/audiobooks" 2>/dev/null && eval "$script")"
+    raw="$(cd "$base/audiobooks" 2>/dev/null && eval "$script")" || rc=$?
+  fi
+  if (( rc != 0 )); then
+    log_error "rip: could not read the stored sidecars from cantina (rc=$rc) — refusing to report on a library we could not reach"
+    return 2
   fi
   # A line that fails to parse (a truncated/corrupt sidecar) must not just
   # vanish: this enumerator also feeds rip::ab_editions, so a silently
@@ -2323,9 +2335,17 @@ rip::_server_sidecars() {
 # present: the group key is (first author, bare title), so two authorless
 # books sharing a bare title would otherwise cluster on ("", "sometitle")
 # and be offered up as editions of each other.
+#
+# An unreachable server RETURNS 2 and prints nothing rather than the empty
+# output that reads as "your library has no duplicate editions" — this is
+# the one report an operator consults before deciding what to delete
+# (review finding 4, 2026-08-24). rip::_server_sidecars is captured as a
+# VALUE, not piped: through a pipe its status is invisible here.
 rip::ab_editions() {
   setopt localoptions noerrexit nopipefail
-  rip::_server_sidecars | jq -s -r '
+  local rows
+  rows="$(rip::_server_sidecars)" || return 2
+  print -r -- "$rows" | jq -s -r '
     map(select((.published // "") != "" and ((.authors[0] // "") != "")))
     | group_by([ (.authors[0] // "" | ascii_downcase | gsub("[^a-z0-9]";"")),
                  (.title // "" | ascii_downcase | gsub("[^a-z0-9]";"")) ])

@@ -1179,6 +1179,46 @@ FAKECP
     The output should equal ""
   End
 
+  # THE REPORT AN OPERATOR READS BEFORE DECIDING WHAT TO DELETE (review
+  # finding 4, 2026-08-24). rip::_server_sidecars used to discard the ssh
+  # status on both branches, so an unreachable server produced rc 0 and
+  # empty output — byte-identical to "your library has no duplicate
+  # editions". --canonicalize-authors already returns 2 in the same
+  # situation and --backfill-published at least names the possibility.
+  It 'editions: an unreachable server returns 2 and says so, never a silent clean bill of health'
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 2
+    The output should equal ""
+    The stderr should include "could not read the stored sidecars"
+  End
+
+  # …and the failure must reach the panel's feed too: the Hammerspoon
+  # library panel keeps SERVER_EDITIONS_KNOWN false only when the task
+  # exits non-zero, which is what preserves its tri-state discipline
+  # (an empty list with KNOWN true would assert "no other editions exist").
+  It 'CLI: --server-editions propagates an unreachable server as a non-zero exit'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-editions
+    The status should not equal 0
+    The output should equal ""
+    The stderr should include "could not read the stored sidecars"
+  End
+
   # --server-editions — the panel's edition-mark feed. Thin: one jq filter
   # over rip::_server_sidecars (already covered above), shaped to
   # {author, title, published, path}. Exercised through the CLI dispatcher,
