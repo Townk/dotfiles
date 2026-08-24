@@ -1499,9 +1499,9 @@ EOF
   It 'sidecar: published is null when the row omits it'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"manual"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '.published' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[has(\"published\"),.published]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
-    The output should equal "null"
+    The output should equal '[true,null]'
   End
 
   It 'sidecar: an existing sidecar without published is upgraded, not clobbered'
