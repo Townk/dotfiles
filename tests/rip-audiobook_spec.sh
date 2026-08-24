@@ -1448,6 +1448,82 @@ EOF
     The stderr should include "C/D"
   End
 
+  # Final-fix review, 2026-08-24 (R1): a PARTIAL sweep — some sidecars filled,
+  # some left undated — used to report only "backfilled N of N sidecar(s)"
+  # with rc 0, which reads as a complete sweep even though other candidates
+  # were skipped. This is a one-shot run over 248 real books; a partial
+  # success masquerading as a clean bill of health is exactly the shape that
+  # let a real gap propagate silently into --editions finding no duplicates.
+  It 'backfill: a partial --apply sweep reports the still-undated remainder and fails'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" X1 "" B
+    mkbook "A" "C" X2 "" C
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"id":"X1","path":"A/B","title":"B","published":"2019-05-07T07:00:00"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    # A/B matches the provider row and gets filled; A/C has no matching row
+    # and stays undated — the summary must say so, not just the tally for
+    # the books it touched, and the exit code must tell a wrapper too.
+    The status should equal 1
+    The output should include "backfilled 1 of 1 sidecar(s)"
+    The output should include "1 book(s) still undated"
+    The stderr should include "no provider row for A/C"
+  End
+
+  # Same partial-sweep gap in dry-run mode: "would fill: A/B … (1 book(s);
+  # re-run with --apply)" read alone claims the WHOLE sweep is one book, when
+  # a second candidate (A/C) was seen and could not be matched.
+  It 'backfill: a partial dry run reports the still-undated remainder and fails'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" X1 "" B
+    mkbook "A" "C" X2 "" C
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"id":"X1","path":"A/B","title":"B","published":"2019-05-07T07:00:00"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 1
+    The output should include "would fill: A/B"
+    The output should include "re-run with --apply"
+    The output should include "1 book(s) still undated"
+    The stderr should include "no provider row for A/C"
+    # Nothing was written — dry run.
+    The result of function book_published should equal "null"
+  End
+
+  # Final-fix review, 2026-08-24 (R2): both "no ASIN" and "no provider row"
+  # increment the same counter, and the summary always blamed LibationCli
+  # ("no provider row matched; is LibationCli available?") even when the
+  # real cause is a sidecar with no ASIN at all — precisely the fingerprint
+  # of an orphaned-identity book the operator most needs to recognise during
+  # live validation. The summary must name the ASIN cause instead.
+  It 'backfill: a no-ASIN sidecar is named in the summary, not blamed on LibationCli'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf '%s' '{"schema":1,"title":"B","authors":["A"],"ids":{},"published":null}' \
+      > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 1
+    The output should include "1 book(s) still undated"
+    The output should include "no ASIN"
+    The output should not include "LibationCli"
+    The stderr should include "no ASIN"
+  End
+
   # --- retire + author canonicalization sweep (destructive operators) -------
   #
   # Both default to a DRY RUN. The server holds the only copy of every book

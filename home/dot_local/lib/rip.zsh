@@ -2413,9 +2413,14 @@ rip::ab_backfill_published() {
   local -i seen=0
   # Candidates that were LOOKED AT, needed a date, and could not be given
   # one — the "no ASIN in the sidecar" and "no provider row" continues
-  # below. Distinct from $seen, which counts every line the enumerator
-  # produced (dated ones included). See the empty-work-list branch.
-  local -i undated=0
+  # below, split by cause so the summary can name which one actually
+  # happened instead of always blaming the provider (review finding
+  # 2026-08-24, R2: a missing ASIN is the fingerprint of an
+  # orphaned-identity book, not a LibationCli problem). Distinct from
+  # $seen, which counts every line the enumerator produced (dated ones
+  # included). Consulted below AND after the apply/dry-run tallies (review
+  # finding 2026-08-24, R1) — a partial sweep must not read as complete.
+  local -i no_asin=0 no_row=0
   local line rel asin have want
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
@@ -2427,17 +2432,30 @@ rip::ab_backfill_published() {
     asin="$(print -r -- "$line" | jq -r '.ids["audible.asin"] // ""' 2>/dev/null)"
     if [[ -z "$asin" ]]; then
       log_warn "rip: no ASIN in the sidecar for $rel — cannot backfill"
-      (( undated++ ))
+      (( no_asin++ ))
       continue
     fi
     want="$(print -r -- "$map" | jq -r --arg a "$asin" '.[$a] // ""' 2>/dev/null)"
     if [[ -z "$want" ]]; then
       log_warn "rip: no provider row for $rel ($asin) — leaving it undated"
-      (( undated++ ))
+      (( no_row++ ))
       continue
     fi
     to_fill+=("$rel"$'\t'"$want")
   done < <(rip::_server_sidecars)
+
+  local -i undated=$(( no_asin + no_row ))
+  # Worded from whichever cause(s) actually fired, not a blanket blame on
+  # LibationCli — a no-ASIN sidecar and a provider that lacks the row are
+  # different conditions with different remedies.
+  local undated_detail=""
+  if (( no_row > 0 && no_asin > 0 )); then
+    undated_detail="$no_row with no provider row, $no_asin with no ASIN"
+  elif (( no_row > 0 )); then
+    undated_detail="$no_row with no provider row (is LibationCli available?)"
+  elif (( no_asin > 0 )); then
+    undated_detail="$no_asin with no ASIN"
+  fi
 
   if (( ${#to_fill[@]} == 0 )); then
     # Reported in BOTH modes. A silent `--apply` with nothing to fill is
@@ -2476,7 +2494,7 @@ rip::ab_backfill_published() {
     if (( seen == 0 )); then
       print -r -- "rip: no sidecars found on the server — nothing to backfill (is cantina reachable?)"
     elif (( undated > 0 )); then
-      print -r -- "rip: nothing filled — $undated book(s) still undated (no provider row matched; is LibationCli available?)"
+      print -r -- "rip: nothing filled — $undated book(s) still undated ($undated_detail)"
       return 1
     else
       print -r -- "rip: nothing to backfill"
@@ -2490,6 +2508,14 @@ rip::ab_backfill_published() {
       print -r -- "would fill: ${entry%%$'\t'*}  ->  ${entry#*$'\t'}"
     done
     print -r -- "(${#to_fill[@]} book(s); re-run with --apply)"
+    # R1: a PARTIAL sweep — some candidates matched, others didn't — must
+    # not read as a complete one. Reported even in dry-run mode: the
+    # operator deciding whether to --apply needs to know the run won't
+    # finish the job either way.
+    if (( undated > 0 )); then
+      print -r -- "rip: $undated book(s) still undated ($undated_detail)"
+      return 1
+    fi
     return 0
   fi
 
@@ -2499,6 +2525,14 @@ rip::ab_backfill_published() {
     rip::_sidecar_set_published "$base" "$rel" "$want" && filled=$(( filled + 1 ))
   done
   print -r -- "rip: backfilled $filled of ${#to_fill[@]} sidecar(s)"
+  # Same partial-sweep guard as the dry-run path above: "backfilled N of N"
+  # only counts $to_fill, which already excluded every no-ASIN/no-row
+  # candidate — without this, a run that filled everything IT COULD reads
+  # as a complete sweep even when other books were left untouched.
+  if (( undated > 0 )); then
+    print -r -- "rip: $undated book(s) still undated ($undated_detail)"
+    return 1
+  fi
   return 0
 }
 
