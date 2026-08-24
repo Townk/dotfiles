@@ -1111,6 +1111,48 @@ FAKECP
     The output should include "Edgedancer"
   End
 
+  It 'editions: two rows sharing a calendar date but not a time do NOT group (control edition still reported)'
+    # Review finding 2, 2026-08-24: the cluster filter compared the RAW
+    # `published` field while the line it prints one step later is
+    # \(.published[0:10]) — and the panel's own edition mark slices the same
+    # ten characters. `published` is Libation's DatePublished, a full
+    # timestamp, so two parts of one issue that share a calendar date but
+    # differ in the time component passed the all-distinct test and were
+    # printed as an edition set: two IDENTICAL printed dates with one marked
+    # `<- newest`, and a deletion as the only downstream action — while the
+    # panel showed no mark at all for the same pair, so the two operator
+    # surfaces disagreed. T07:00:00/T08:00:00 are midnight-Pacific
+    # renderings, so a plain-date record mixed with a converted one on the
+    # same day is the natural way this arrives.
+    mkbook "Scientific American" "Test Digest, Vol 4: Part 1" Q1 2001-01-01T00:00:00 "Test Digest, Vol 4"
+    mkbook "Scientific American" "Test Digest, Vol 4: Part 2" Q2 2001-01-01T07:00:00 "Test Digest, Vol 4"
+    # Control book in the SAME fixture — see rationale above.
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should not include "Test Digest"
+    The output should include "Edgedancer"
+  End
+
+  # The one-token hardening folded in with the date fix: the group key is
+  # (first author, bare title), so two books with NO author at all would
+  # cluster on ("", "<title>") and be offered up as editions of each other.
+  It 'editions: two authorless books sharing a bare title never group'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Unknown/One" "$RIP_SANDBOX/server/audiobooks/Unknown/Two"
+    printf '%s' '{"schema":1,"title":"Anthology","authors":[],"ids":{"audible.asin":"Z1"},"published":"2001-01-01T00:00:00"}' \
+      > "$RIP_SANDBOX/server/audiobooks/Unknown/One/.fleet-book.json"
+    printf '%s' '{"schema":1,"title":"Anthology","authors":[],"ids":{"audible.asin":"Z2"},"published":"2009-01-01T00:00:00"}' \
+      > "$RIP_SANDBOX/server/audiobooks/Unknown/Two/.fleet-book.json"
+    # Control book in the SAME fixture — see rationale above.
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should not include "Anthology"
+    The output should include "Edgedancer"
+  End
+
   It 'editions: a dramatized adaptation is a different title and does NOT group (control edition still reported)'
     mkbook "Brandon Sanderson" "Tress of the Emerald Sea: A Cosmere Novel" B0B1 2023-01-10T00:00:00 "Tress of the Emerald Sea"
     mkbook "Brandon Sanderson" "Tress of the Emerald Sea (Dramatized Adaptation)" B0B2 2024-01-10T00:00:00 "Tress of the Emerald Sea (Dramatized Adaptation)"

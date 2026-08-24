@@ -2304,14 +2304,33 @@ rip::_server_sidecars() {
 # finding 2026-08-24, reproduced against the shipped jq with a 3-member
 # cluster: two rows dated 2001-01-01 plus one dated 2005-06-01 were all
 # printed side by side under the old "any pair differs" filter).
+#
+# COMPARED ON THE DATE, NOT THE RAW FIELD (review finding 2, 2026-08-24).
+# `published` is Libation's DatePublished — a full timestamp
+# ("2013-09-24T07:00:00") — but the line this function PRINTS is
+# \(.published[0:10]) and the panel's own edition mark slices the same ten
+# characters (rip-library.html, otherEditionHtml). Filtering on the raw
+# field let two parts of one issue that share a calendar date but differ in
+# the time component through as an "edition set": two identical printed
+# dates, one of them marked `<- newest`, with a deletion as the only
+# downstream action — and the panel showing NO mark for the same pair, so
+# the two operator surfaces disagreed. Not hypothetical in form: T07:00:00
+# and T08:00:00 are midnight-Pacific renderings, so a plain-date record
+# (T00:00:00) mixed with a converted one on the same calendar day is the
+# natural way this arrives.
+#
+# A non-empty first author is required for the same reason the date must be
+# present: the group key is (first author, bare title), so two authorless
+# books sharing a bare title would otherwise cluster on ("", "sometitle")
+# and be offered up as editions of each other.
 rip::ab_editions() {
   setopt localoptions noerrexit nopipefail
   rip::_server_sidecars | jq -s -r '
-    map(select((.published // "") != ""))
+    map(select((.published // "") != "" and ((.authors[0] // "") != "")))
     | group_by([ (.authors[0] // "" | ascii_downcase | gsub("[^a-z0-9]";"")),
                  (.title // "" | ascii_downcase | gsub("[^a-z0-9]";"")) ])
     | map(select(length > 1))
-    | map(select(([.[].published] | unique | length) == length))
+    | map(select(([.[].published | .[0:10]] | unique | length) == length))
     | .[]
     | (max_by(.published)._path) as $newest
     | "\(.[0].title)",
