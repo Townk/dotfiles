@@ -386,6 +386,52 @@ EOF
     The contents of file "$RIP_STAGING_ROOT/.work/ab-meta.jsonl" should include '"path":"J.R.R. Tolkien/The Hobbit"'
   End
 
+  # --- canonicalization is serialized by the push lock ---------------------
+  #
+  # Review finding 5, 2026-08-24: the rename used to run BEFORE the blocking
+  # flock, where it could rename a staged author directory out from under a
+  # concurrent push already mid-rsync on it (the heavy group's inner push
+  # and a hand-run `rip-push <type>` DO run concurrently on the same type) —
+  # rsync exits 23/24 and the job fails, exactly the spurious same-type-race
+  # failure the flock was added to eliminate.
+  #
+  # The witness is the lock FILE: push_worker `touch`es it immediately
+  # before taking the flock, so whether it exists at the moment the
+  # server-author fetch runs says which side of the lock the rename is on.
+  # Before the fix the fake ssh below recorded "unheld"; after it, "held".
+  It 'push: the staged-author rename runs INSIDE the push lock, not before it'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+if [ -e "$RIP_STAGING_ROOT/.work/push-audiobooks.lock" ]; then
+  echo held > "$RIP_SANDBOX/lock-witness"
+else
+  echo unheld > "$RIP_SANDBOX/lock-witness"
+fi
+cd "$RIP_SANDBOX/server/audiobooks" || exit 2
+find . -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||'
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/rsync"
+    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The contents of file "$RIP_SANDBOX/lock-witness" should equal "held"
+    # …and STILL before the listfile is built: the rename happened, so the
+    # book is listed (and, with the fake rsync's clean verify, deleted from
+    # staging) under the canonical spelling.
+    The path "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien" should not be exist
+    The stderr should include "canonical author"
+  End
+
   It 'push: music is never canonicalized'
     mkdir -p "$RIP_STAGING_ROOT/music/A.B. Artist/Album"
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/A.B. Artist/Album/01 T.flac"

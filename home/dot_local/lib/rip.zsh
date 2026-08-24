@@ -124,8 +124,6 @@ rip::push_worker() {
   rip::_check_type "$type" || return 2
   local src dest rsync_bin="${RIP_RSYNC_BIN:-rsync}"
   src="$(rip::staging_for "$type")"
-  # BEFORE the listfile is built — see rip::_canonicalize_staged_authors.
-  [[ "$type" == audiobooks ]] && rip::_canonicalize_staged_authors "$src"
   dest="$(rip::remote_base)/$type/"
   [ -d "$src" ] || { log_error "rip: no staging dir $src"; return 1 }
 
@@ -151,6 +149,27 @@ rip::push_worker() {
   if zmodload -e zsh/system; then
     zsystem flock -f push_lock_fd "$push_lock" 2>/dev/null
   fi
+
+  # INSIDE the lock, and still BEFORE the listfile is built — both halves of
+  # that sentence are load-bearing.
+  #
+  # Before the listfile: renaming a staged author after `find` has already
+  # named its books leaves every entry in the list pointing at a directory
+  # that no longer exists, and rsync --files-from silently skips them (see
+  # rip::_canonicalize_staged_authors). Pinned by the ordering examples in
+  # tests/rip-push_spec.sh.
+  #
+  # Inside the lock: it used to run BEFORE the flock, where it could rename
+  # a staged author directory out from under a concurrent push that was
+  # already mid-rsync on it — push A holding the lock transferring
+  # "J.R.R. Tolkien/The Hobbit/…", push B (the heavy group's inner push and
+  # a hand-run `rip-push <type>` DO run concurrently on the same type)
+  # starting up and canonicalizing that very directory, A's rsync exiting
+  # 23/24 and failing the job below. No data is lost, but that is exactly
+  # the spurious same-type-race job failure the flock was added to
+  # eliminate — so the rename now waits for the lock like everything else
+  # (review finding 5, 2026-08-24).
+  [[ "$type" == audiobooks ]] && rip::_canonicalize_staged_authors "$src"
 
   # AGE GATE (spec UX-v2, live-bitten 2026-08-19): a half-written track that
   # holds still for the ~2s push+verify window can ship truncated and be
