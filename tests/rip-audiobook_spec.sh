@@ -1276,10 +1276,61 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply && jq -r '.published' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
-    The status should equal 0
-    The output should include "null"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    # rc 1 and a summary line naming the count, not a bare "nothing to
+    # backfill" with rc 0 (review finding 3B, 2026-08-24) — see the
+    # every-candidate-failed example below.
+    The status should equal 1
+    The output should include "still undated"
     The stderr should include "no provider row"
+    # …and the sidecar itself is untouched: still undated, nothing rewritten.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"published":null'
+  End
+
+  # Review finding 3B, 2026-08-24: the seen==0 branch tells "the enumerator
+  # produced nothing" apart from "the library is satisfied", but NOT from
+  # "every candidate was seen and every one failed to match a provider row".
+  # Reproduced with a provider whose export fails (exit 3 — LibationCli
+  # missing, unauthorized, or mid-update): the warnings scroll past, then
+  # `rip: nothing to backfill` lands on stdout with rc 0. The operator reads
+  # the last line, concludes the one-shot sweep is done, sees --editions
+  # report nothing, and concludes the library has no duplicates.
+  It 'backfill: every candidate failing to match is reported as such, not as "nothing to backfill"'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" X1 "" B
+    mkbook "A" "C" X2 "" C
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+echo "LibationCli not found" >&2
+exit 3
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 1
+    The output should include "2 book(s) still undated"
+    The output should not include "nothing to backfill"
+    The stderr should include "no provider row"
+  End
+
+  # The same distinction for the OTHER continue: a sidecar with no ASIN at
+  # all cannot be backfilled either, and must not be summarised as a clean
+  # sweep.
+  It 'backfill: a candidate with no ASIN is counted in the undated summary too'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf '%s' '{"schema":1,"title":"B","authors":["A"],"ids":{},"published":null}' \
+      > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 1
+    The output should include "1 book(s) still undated"
+    The stderr should include "no ASIN"
   End
 
   It 'backfill: nothing to fill reports so and succeeds'
@@ -1408,6 +1459,38 @@ EOF
     The output should include "retired A/B"
     The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
     The contents of file "$RIP_SANDBOX/absbin.log" should include "--delete-item item-1"
+  End
+
+  # CLAIM ONLY WHAT ACTUALLY HAPPENED (review finding 3A, 2026-08-24). The
+  # ABS delete's failure used to be warned about and then followed,
+  # unconditionally, by "rip: retired $rel" and rc 0 — files gone, item
+  # alive, stdout announcing a clean retire. That is exactly the
+  # half-retired state this function's header resolves the item early to
+  # avoid (Audiobookshelf keeps an item whose files vanished and marks it
+  # missing; a rescan does not drop it), reported as a success. This is the
+  # most destructive verb in the module.
+  It 'retire: a failed ABS item delete is reported as such, never as a completed retire'
+    cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
+case "\$1" in
+  --find-item) echo item-1 ;;
+  --delete-item) exit 1 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/B' --apply"
+    The status should equal 1
+    The output should not include "retired A/B"
+    The stderr should include "could NOT be deleted"
+    The stderr should include "item-1"
+    # The delete WAS attempted, and the files really are gone — the point is
+    # that the message and the rc tell the truth about what remains.
+    The contents of file "$RIP_SANDBOX/absbin.log" should include "--delete-item item-1"
+    The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
   End
 
   # A book the server does not hold is NOT a book whose files we may guess

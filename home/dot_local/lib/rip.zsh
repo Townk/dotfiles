@@ -2372,6 +2372,11 @@ rip::ab_backfill_published() {
   local base; base="$(rip::remote_base)"
   local -a to_fill=()
   local -i seen=0
+  # Candidates that were LOOKED AT, needed a date, and could not be given
+  # one — the "no ASIN in the sidecar" and "no provider row" continues
+  # below. Distinct from $seen, which counts every line the enumerator
+  # produced (dated ones included). See the empty-work-list branch.
+  local -i undated=0
   local line rel asin have want
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
@@ -2383,11 +2388,13 @@ rip::ab_backfill_published() {
     asin="$(print -r -- "$line" | jq -r '.ids["audible.asin"] // ""' 2>/dev/null)"
     if [[ -z "$asin" ]]; then
       log_warn "rip: no ASIN in the sidecar for $rel — cannot backfill"
+      (( undated++ ))
       continue
     fi
     want="$(print -r -- "$map" | jq -r --arg a "$asin" '.[$a] // ""' 2>/dev/null)"
     if [[ -z "$want" ]]; then
       log_warn "rip: no provider row for $rel ($asin) — leaving it undated"
+      (( undated++ ))
       continue
     fi
     to_fill+=("$rel"$'\t'"$want")
@@ -2416,8 +2423,22 @@ rip::ab_backfill_published() {
     # output contract or asserting a reachability check we cannot make: an
     # empty library legitimately produces zero lines too, so the wording
     # below only names the possibility, it does not claim failure.
+    #
+    # THIRD case (review finding 3B, 2026-08-24): every candidate was seen
+    # and every one FAILED to match — a provider whose export died (exit 3:
+    # LibationCli missing, unauthorized, or mid-update) yields an empty
+    # asin->published map, so all 248 books take a `continue` above. That
+    # scrolled 248 stderr warnings past and then printed "rip: nothing to
+    # backfill" on stdout with rc 0 — the operator reads the LAST line,
+    # concludes the sweep is done, sees --editions report nothing, and
+    # concludes the library has no duplicates. $undated counts exactly those
+    # skipped candidates, so the summary line can say what actually
+    # happened, and the rc says it to a wrapper too.
     if (( seen == 0 )); then
       print -r -- "rip: no sidecars found on the server — nothing to backfill (is cantina reachable?)"
+    elif (( undated > 0 )); then
+      print -r -- "rip: nothing filled — $undated book(s) still undated (no provider row matched; is LibationCli available?)"
+      return 1
     else
       print -r -- "rip: nothing to backfill"
     fi
@@ -2681,8 +2702,19 @@ rip::ab_retire() {
   else
     rm -rf -- "$base/audiobooks/$rel" || { log_error "rip: could not remove $rel"; return 1 }
   fi
-  "$RIP_BIN_DIR/rip-abs-authors" --delete-item "$item" >/dev/null 2>&1 \
-    || log_warn "rip: files removed but the ABS item delete failed for $rel — remove it in the UI"
+  # CLAIM ONLY WHAT ACTUALLY HAPPENED (review finding 3A, 2026-08-24). The
+  # delete used to be warned about and then followed, unconditionally, by
+  # "rip: retired $rel" and rc 0 — files gone, ABS item alive, stdout saying
+  # the book was retired. That is precisely the half-retired state this
+  # function's header resolves the item early to avoid (Audiobookshelf keeps
+  # an item whose files vanished and marks it missing; a rescan does not drop
+  # it), announced as a success. This is the most destructive verb in the
+  # module. rip::_canonicalize_one_author handles the identical situation
+  # correctly and this now follows it: say what is true, and fail.
+  if ! "$RIP_BIN_DIR/rip-abs-authors" --delete-item "$item" >/dev/null 2>&1; then
+    log_error "rip: removed the files for $rel but its Audiobookshelf item ($item) could NOT be deleted — the item remains and will show as missing; remove it in the Audiobookshelf UI"
+    return 1
+  fi
   print -r -- "rip: retired $rel"
   return 0
 }
