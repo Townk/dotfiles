@@ -344,6 +344,24 @@ EOF
     The output should include "rc=0"
   End
 
+  It 'canonical author: the server list is fetched ONCE per process, not once per call'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cd "$RIP_SANDBOX/server/audiobooks" || exit 2
+find . -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||'
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+    When run zsh -c "source $RIPLIB
+      rip::_canonical_author 'J.R.R. Tolkien' >/dev/null
+      rip::_canonical_author 'Martha Wells' >/dev/null"
+    The status should equal 0
+    The result of function ssh_calls should equal "1"
+  End
+
   # --- session plan validation + enqueue -----------------------------------
 
   queued_plans() {

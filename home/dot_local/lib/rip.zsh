@@ -2207,14 +2207,19 @@ rip::_canonical_author() {
   local name="$1"
   [[ -n "$name" ]] || return 0
   local want; want="$(rip::_author_norm "$name")"
+  # Call as a plain command, not inside `< <(...)` or `$(...)` — either forks
+  # a subshell, and the cache assignments rip::_server_authors makes would
+  # die with that subshell instead of surviving in THIS shell. Discard its
+  # printed copy of the list here; read the now-populated global instead.
+  rip::_server_authors >/dev/null
   local existing
-  while IFS= read -r existing; do
+  for existing in ${(f)_RIP_SERVER_AUTHORS}; do
     [[ -n "$existing" ]] || continue
     if [[ "$existing" != "$name" && "$(rip::_author_norm "$existing")" == "$want" ]]; then
       print -r -- "$existing"
       return 0
     fi
-  done < <(rip::_server_authors)
+  done
   print -r -- "$name"
 }
 
