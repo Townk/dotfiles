@@ -2495,6 +2495,193 @@ rip::_canonicalize_staged_authors() {
   return 0
 }
 
+# --- destructive operators ---------------------------------------------------
+#
+# rip::ab_retire <Author/Title> [--apply] — remove ONE stored book.
+#
+# Dry-run by default: this deletes the only copy. Staging is emptied after
+# every verified push, so there is no local original to fall back on, and the
+# store can only re-supply it by re-downloading.
+#
+# Files THEN the ABS item, and the item is resolved BEFORE anything is
+# deleted: Audiobookshelf keeps an item whose files vanish and marks it
+# missing (a rescan does not drop it), so a half-retired book — files gone,
+# item present — is worse than one left alone.
+rip::ab_retire() {
+  setopt localoptions noerrexit nopipefail
+  local rel="$1" apply=0
+  [[ "${2:-}" == "--apply" ]] && apply=1
+  [[ -n "$rel" ]] || { log_error "rip: retire needs \"<Author>/<Title>\""; return 2 }
+
+  local base; base="$(rip::remote_base)"
+  # Membership in the server's OWN listing, not a guessed filename.
+  # rip::_remote_has_file tests one file, and "<Title>/<Title>.m4b" is only
+  # Libation's convention — a manual import carries whatever filename it was
+  # given, and would read as "not stored" and be un-retirable.
+  # rip::ab_server_library is the canonical answer to "what does the server
+  # hold", is filename-agnostic, costs one ssh, and returns 2 with no output
+  # when the server is unreachable — which refuses rather than guessing.
+  #
+  # `< <(...)` forks a subshell for the PRODUCER only; the loop body still
+  # runs in this shell, so `stored` survives.
+  local stored=0 known
+  while IFS= read -r known; do
+    [[ "$known" == "$rel" ]] && { stored=1; break }
+  done < <(rip::ab_server_library)
+  if (( ! stored )); then
+    log_error "rip: not stored on cantina: $rel"
+    return 2
+  fi
+
+  local item
+  item="$("$RIP_BIN_DIR/rip-abs-authors" --find-item "$rel" 2>/dev/null)"
+  if [[ -z "$item" ]]; then
+    log_error "rip: could not resolve the Audiobookshelf item for $rel — refusing to delete files that would leave a missing entry behind"
+    return 2
+  fi
+
+  if (( ! apply )); then
+    print -r -- "would remove: $rel"
+    print -r -- "  files:       $base/audiobooks/$rel"
+    print -r -- "  ABS item:    $item"
+    print -r -- "(re-run with --apply)"
+    return 0
+  fi
+
+  # NEVER widen this beyond the single resolved book directory.
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "rm -rf -- ${(q)rpath}/audiobooks/${(q)rel}" 2>/dev/null \
+      || { log_error "rip: could not remove the files for $rel"; return 1 }
+  else
+    rm -rf -- "$base/audiobooks/$rel" || { log_error "rip: could not remove $rel"; return 1 }
+  fi
+  "$RIP_BIN_DIR/rip-abs-authors" --delete-item "$item" >/dev/null 2>&1 \
+    || log_warn "rip: files removed but the ABS item delete failed for $rel — remove it in the UI"
+  print -r -- "rip: retired $rel"
+  return 0
+}
+
+# rip::ab_canonicalize_authors [--apply] — collapse author folders that are
+# spelling variants of one another.
+#
+# Canonical spelling = most books; tie → the longer string, which favours the
+# more fully punctuated form ("J. R. R." over "J.R.R.") and is deterministic.
+#
+# Renaming the folder is NOT enough for Audiobookshelf: it matches the moved
+# item by inode and updates its path, but keeps the item's STORED author, so
+# the split survives in its database until the item is repointed (verified
+# live 2026-08-23). Hence move, then repoint, then delete the emptied author.
+rip::ab_canonicalize_authors() {
+  setopt localoptions noerrexit nopipefail
+  local apply=0
+  [[ "${1:-}" == "--apply" ]] && apply=1
+
+  local -A spelling_count=()
+  local rel author
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    author="${rel%%/*}"
+    spelling_count[$author]=$(( ${spelling_count[$author]:-0} + 1 ))
+  done < <(rip::ab_server_library)
+
+  # $nl, not a literal $'\n' inside the ${...:+...} replacement below: the
+  # replacement word of a :+ expansion is NOT re-scanned for ANSI-C quoting,
+  # so writing $'\n' there joins the variants with the four LITERAL
+  # characters $'\n' and the *$'\n'* collision test below never matches —
+  # every collision silently reports "nothing to do". Caught by the sweep
+  # examples 2026-08-24.
+  local nl=$'\n'
+  local -A groups=()
+  local key
+  for author in "${(@k)spelling_count}"; do
+    key="$(rip::_author_norm "$author")"
+    groups[$key]="${groups[$key]:-}${groups[$key]:+$nl}$author"
+  done
+
+  local base; base="$(rip::remote_base)"
+  local found=0 variants canon a
+  for key in "${(@k)groups}"; do
+    variants="${groups[$key]}"
+    [[ "$variants" == *"$nl"* ]] || continue
+    found=1
+    canon=""
+    while IFS= read -r a; do
+      if [[ -z "$canon" ]] \
+        || (( ${spelling_count[$a]:-0} > ${spelling_count[$canon]:-0} )) \
+        || { (( ${spelling_count[$a]:-0} == ${spelling_count[$canon]:-0} )) && (( ${#a} > ${#canon} )) }; then
+        canon="$a"
+      fi
+    done <<< "$variants"
+    print -r -- "author variants → \"$canon\""
+    while IFS= read -r a; do
+      [[ "$a" == "$canon" ]] && continue
+      print -r -- "    \"$a\" (${spelling_count[$a]:-0} book(s))"
+      (( apply )) || continue
+      rip::_canonicalize_one_author "$base" "$a" "$canon"
+    done <<< "$variants"
+  done
+  (( found )) || print -r -- "rip: nothing to do — no author spelling variants"
+  (( apply )) || { (( found )) && print -r -- "(re-run with --apply)" }
+  return 0
+}
+
+# rip::_canonicalize_one_author <base> <variant> <canonical> — move every book
+# out of <variant> into <canonical>, repoint each ABS item, then delete the
+# emptied author record.
+#
+# `mv -n` throughout: a title already present under the canonical spelling is
+# left where it is rather than overwritten — the only copy of an audiobook is
+# never clobbered to tidy a folder name. The variant directory is removed with
+# `rmdir`, which refuses unless it is genuinely empty.
+rip::_canonicalize_one_author() {
+  setopt localoptions noerrexit nopipefail
+  local base="$1" variant="$2" canon="$3"
+  local aid; aid="$("$RIP_BIN_DIR/rip-abs-authors" --author-id "$canon" 2>/dev/null)"
+  local stale; stale="$("$RIP_BIN_DIR/rip-abs-authors" --author-id "$variant" 2>/dev/null)"
+
+  local -a books=()
+  local rel
+  while IFS= read -r rel; do
+    [[ "$rel" == "$variant/"* ]] && books+=("${rel#*/}")
+  done < <(rip::ab_server_library)
+
+  local title item
+  for title in "${books[@]}"; do
+    if [[ "$base" == *:* ]]; then
+      local ssh_bin="${RIP_SSH_BIN:-ssh}"
+      local host="${base%%:*}" rpath="${base#*:}"
+      "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+        "mkdir -p ${(q)rpath}/audiobooks/${(q)canon} && mv -n -- ${(q)rpath}/audiobooks/${(q)variant}/${(q)title} ${(q)rpath}/audiobooks/${(q)canon}/" 2>/dev/null \
+        || { log_warn "rip: could not move $title"; continue }
+    else
+      mkdir -p "$base/audiobooks/$canon" 2>/dev/null
+      mv -n -- "$base/audiobooks/$variant/$title" "$base/audiobooks/$canon/" 2>/dev/null \
+        || { log_warn "rip: could not move $title"; continue }
+    fi
+    item="$("$RIP_BIN_DIR/rip-abs-authors" --find-item "$canon/$title" 2>/dev/null)"
+    if [[ -n "$item" && -n "$aid" ]]; then
+      "$RIP_BIN_DIR/rip-abs-authors" --repoint-item "$item" "$aid" "$canon" >/dev/null 2>&1 \
+        || log_warn "rip: moved $title but could not repoint its ABS item"
+    else
+      log_warn "rip: moved $title but could not resolve its ABS item or the canonical author"
+    fi
+  done
+
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin2="${RIP_SSH_BIN:-ssh}"
+    local host2="${base%%:*}" rpath2="${base#*:}"
+    "$ssh_bin2" -o BatchMode=yes -o ConnectTimeout=5 "$host2" \
+      "rmdir -- ${(q)rpath2}/audiobooks/${(q)variant}" 2>/dev/null
+  else
+    rmdir -- "$base/audiobooks/$variant" 2>/dev/null
+  fi
+  [[ -n "$stale" ]] && "$RIP_BIN_DIR/rip-abs-authors" --delete-author "$stale" >/dev/null 2>&1
+  return 0
+}
+
 # rip::ab_import <src> <author> <title> — take a DRM-free file or folder the
 # operator already has and stage it exactly as an acquired book would land,
 # so it rides the same enrich → push → verify → clean path as everything else.

@@ -8,6 +8,8 @@
 #   rip-audiobook --have "<Author>/<Title>" 0 have / 1 absent / 2 unknown
 #   rip-audiobook --import <path> <Author> <Title> stage a DRM-free file you already have
 #   rip-audiobook --session <plan.json>     enqueue a session
+#   rip-audiobook --retire "<Author>/<Title>" [--apply]  remove one stored book
+#   rip-audiobook --canonicalize-authors [--apply]      collapse author spelling variants
 #   rip-audiobook --session-worker <plan>   internal: the job body
 #
 # --provider <name> selects the provider (default: libation).
@@ -36,8 +38,10 @@ case "${1:-}" in
   --session-worker) shift; rip::ab_worker "${1:?plan file required}" ;;
   --editions) rip::ab_editions ;;
   --backfill-published) shift; rip::ab_backfill_published "${1:-}" ;;
+  --retire) shift; rip::ab_retire "${1:?--retire: \"<Author>/<Title>\" required}" "${2:-}" ;;
+  --canonicalize-authors) shift; rip::ab_canonicalize_authors "${1:-}" ;;
   "" | --help)
-    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply]'
+    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply]'
     exit 2
     ;;
   *) print -ru2 -- "rip-audiobook: unknown option: $1"; exit 2 ;;

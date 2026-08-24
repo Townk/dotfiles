@@ -1297,4 +1297,154 @@ EOF
     The stderr should include "malformed"
     The stderr should include "C/D"
   End
+
+  # --- retire + author canonicalization sweep (destructive operators) -------
+  #
+  # Both default to a DRY RUN. The server holds the only copy of every book
+  # (staging is emptied after each verified push, and the audio cannot be
+  # re-derived), so --apply is required before anything is deleted or moved.
+  #
+  # fake_abs_ops_bin — stands in for the Task 7 verbs on
+  # $RIP_BIN_DIR/rip-abs-authors and logs its full argv, so an example can
+  # assert exactly which ABS calls were made AND, just as importantly, that
+  # none were made when the operator was refused.
+  fake_abs_ops_bin() {
+    cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
+case "\$1" in
+  --find-item)
+    case "\$2" in
+      "A/B") echo item-1 ;;
+      *"/The Hobbit") echo item-1 ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  --author-id) echo auth-9 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+  }
+
+  It 'retire: dry-run prints the plan and changes nothing'
+    fake_abs_ops_bin
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/B'"
+    The status should equal 0
+    The output should include "would remove"
+    The output should include "A/B"
+    The path "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should be exist
+    # A dry run may LOOK the book up, but must never ask ABS to delete it.
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-item"
+  End
+
+  It 'retire: --apply removes the files and deletes the ABS item'
+    fake_abs_ops_bin
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/B' --apply"
+    The status should equal 0
+    The output should include "retired A/B"
+    The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
+    The contents of file "$RIP_SANDBOX/absbin.log" should include "--delete-item item-1"
+  End
+
+  # A book the server does not hold is NOT a book whose files we may guess
+  # at. Membership is tested against rip::ab_server_library — the server's
+  # own listing — not against a guessed "<Title>/<Title>.m4b", which is only
+  # Libation's naming convention: a manually imported book carries whatever
+  # filename it was given and would otherwise read as "not stored" forever.
+  It 'retire: refuses a path the server does not hold'
+    fake_abs_ops_bin
+    When run zsh -c "source $RIPLIB && rip::ab_retire 'No/Such' --apply"
+    The status should equal 2
+    The stderr should include "not stored"
+    # Refused before ABS was touched at all.
+    The path "$RIP_SANDBOX/absbin.log" should not be exist
+  End
+
+  # An unreachable server must refuse, never guess: rip::ab_server_library
+  # returns 2 and prints nothing, so membership cannot be established and
+  # nothing is deleted.
+  It 'retire: an unreachable server refuses rather than guessing'
+    fake_abs_ops_bin
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/B' --apply"
+    The status should equal 2
+    The stderr should include "not stored"
+    The path "$RIP_SANDBOX/absbin.log" should not be exist
+  End
+
+  # THE ordering invariant. Audiobookshelf keeps an item whose files have
+  # vanished and marks it "missing" — a rescan does not drop it — so a
+  # half-retired book (files gone, item present) is worse than one left
+  # alone. The item is resolved BEFORE anything is deleted, and an
+  # unresolvable item refuses and touches nothing.
+  It 'retire: refuses when the ABS item cannot be resolved, leaving files intact'
+    fake_abs_ops_bin
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Orphan"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Orphan/Orphan.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/Orphan' --apply"
+    The status should equal 2
+    The stderr should include "could not resolve"
+    The path "$RIP_SANDBOX/server/audiobooks/A/Orphan/Orphan.m4b" should be exist
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-item"
+  End
+
+  It 'sweep: dry-run reports the collision and changes nothing'
+    fake_abs_ops_bin
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    The status should equal 0
+    The output should include "J.R.R. Tolkien"
+    The output should include "J. R. R. Tolkien"
+    The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit" should be exist
+    The path "$RIP_SANDBOX/absbin.log" should not be exist
+  End
+
+  # Renaming the folder is NOT enough for Audiobookshelf: it matches the
+  # moved item by inode and updates its path, but keeps the item's STORED
+  # author, so the split survives in its database until the item is
+  # repointed (verified live 2026-08-23). Move, then repoint, then delete
+  # the emptied author record.
+  It 'sweep: --apply moves the book, repoints the ABS item and deletes the emptied author'
+    fake_abs_ops_bin
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 0
+    The output should include "author variants"
+    The output should include "J.R.R. Tolkien"
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien" should not be exist
+    The contents of file "$RIP_SANDBOX/absbin.log" should include "--repoint-item"
+    The contents of file "$RIP_SANDBOX/absbin.log" should include "--delete-author"
+  End
+
+  It 'sweep: a library with no collisions reports nothing to do'
+    fake_abs_ops_bin
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    The status should equal 0
+    The output should include "nothing to do"
+  End
+
+  It 'CLI: --retire and --canonicalize-authors are wired and dry-run by default'
+    fake_abs_ops_bin
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --retire "A/B"
+    The status should equal 0
+    The output should include "would remove"
+    The path "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should be exist
+  End
 End
