@@ -70,6 +70,7 @@ cmd_list() {
                          else (.SeriesOrder | split(":")[0] | gsub("^\\s+|\\s+$"; "")) end),
        language: (.Language // null),
        abridged: (.IsAbridged // false),
+       published: (.DatePublished // null),
        has_pdf: (.HasPdf // false),
        cover: (if $pic == "" then null
                elif ($cached | index($pic)) then "file://\($images)/\($pic)_80x80.jpg"

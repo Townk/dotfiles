@@ -1488,6 +1488,31 @@ EOF
     The output should equal '["The Reckoners, Book 1","OL15168631W","x1","B00ECDZ08I"]'
   End
 
+  It 'sidecar: records published from the meta row'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"published":"2022-10-04T07:00:00","provider":"libation","format":"m4b"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '.published' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal "2022-10-04T07:00:00"
+  End
+
+  It 'sidecar: published is null when the row omits it'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"manual"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '.published' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal "null"
+  End
+
+  It 'sidecar: an existing sidecar without published is upgraded, not clobbered'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","ids":{"audible.asin":"X1"},"work":{"openlibrary":"OL9W"}}' | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"published":"2015-10-06T07:00:00","provider":"libation"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.published,.work.openlibrary,.ids[\"audible.asin\"]]' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal '["2015-10-06T07:00:00","OL9W","X1"]'
+  End
+
   # --- sidecar: the watcher/GUI seam (final-review finding 3, 2026-08-22) --
   #
   # rip::_book_meta_for used to read store identity ONLY from

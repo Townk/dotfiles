@@ -468,6 +468,7 @@ rip::_book_sidecar() {
        duration_s: ($r.duration_s // null),
        language: ($r.language // null),
        abridged: (if ($r|has("abridged")) then $r.abridged else null end),
+       published: ($r.published // null),
        ids: ($r.ids // {}),
        work: null,
        source: {provider: ($r.provider // "unknown"),

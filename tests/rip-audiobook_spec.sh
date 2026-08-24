@@ -52,12 +52,13 @@ if [ "$1" = "export" ]; then
  {"AudibleProductId":"B00ECDZ08I","Title":"Steelheart","Subtitle":"The Reckoners, Book 1",
   "AuthorNames":"Brandon Sanderson","NarratorNames":"MacLeod Andrews","LengthInMinutes":762,
   "SeriesNames":"Reckoners","SeriesOrder":"1 : Reckoners","Language":"english","IsAbridged":false,
-  "HasPdf":false,"PictureId":"51kzMpLGP7L","BookStatus":"NotLiberated","LastDownloaded":null},
+  "HasPdf":false,"PictureId":"51kzMpLGP7L","BookStatus":"NotLiberated","LastDownloaded":null,
+  "DatePublished":"2013-09-24T07:00:00"},
  {"AudibleProductId":"B0DGKKZ123","Title":"Wind and Truth","Subtitle":"",
   "AuthorNames":"Brandon Sanderson","NarratorNames":"Michael Kramer","LengthInMinutes":3360,
   "SeriesNames":"The Stormlight Archive","SeriesOrder":"5 : The Stormlight Archive","Language":"english",
   "IsAbridged":false,"HasPdf":true,"PictureId":"81abcDEF","BookStatus":"Liberated",
-  "LastDownloaded":"2026-08-22 08:18:03.838369"}
+  "LastDownloaded":"2026-08-22 08:18:03.838369","DatePublished":null}
 ]
 JSON
   echo "Library exported to: $out"
@@ -133,6 +134,13 @@ EOF
     The line 1 should include '"audible.asin":"B00ECDZ08I"'
     The line 2 should include '"acquired":true'
     The line 2 should include '"has_pdf":true'
+  End
+
+  It 'provider: rows carry the published date, null when the export omits it'
+    When run zsh "$PROVIDER" list
+    The status should equal 0
+    The line 1 should include '"published":"2013-09-24T07:00:00"'
+    The line 2 should include '"published":null'
   End
 
   It 'provider: path carries Title: Subtitle, the folder Libation actually writes'
