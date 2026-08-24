@@ -34,8 +34,9 @@ case "${1:-}" in
   --import) shift; rip::ab_import "${1:?source path required}" "${2:?author required}" "${3:?title required}" ;;
   --session) shift; rip::ab_enqueue "${1:?plan file required}" ;;
   --session-worker) shift; rip::ab_worker "${1:?plan file required}" ;;
+  --editions) rip::ab_editions ;;
   "" | --help)
-    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json>'
+    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions'
     exit 2
     ;;
   *) print -ru2 -- "rip-audiobook: unknown option: $1"; exit 2 ;;

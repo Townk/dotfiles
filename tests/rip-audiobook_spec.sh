@@ -943,4 +943,55 @@ FAKECP
     # No temp directory survives anywhere, nested or not.
     The result of function find_temp_dirs_anywhere should equal "0"
   End
+
+  # rip::ab_editions — works stored in more than one edition. --editions
+  # reads what is STORED, not what a provider offers, so these stage
+  # sidecars directly in the sandbox "server" tree.
+  mkbook() { # <author> <dir-title> <asin> <published> <bare-title>
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1/$2"
+    jq -nc --arg t "$3" --arg p "$4" --arg ti "$5" --arg a "$1" \
+      '{schema:1,kind:"audiobook",title:$ti,authors:[$a],ids:{"audible.asin":$t},published:(if $p=="" then null else $p end)}' \
+      > "$RIP_SANDBOX/server/audiobooks/$1/$2/.fleet-book.json"
+  }
+
+  It 'editions: two editions of one work group, newest marked'
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should include "Edgedancer"
+    The output should include "B07626B9D2"
+    The output should include "B0B5M28HZK"
+    The output should include "newest"
+  End
+
+  It 'editions: parts of one issue sharing a publication date do NOT group'
+    mkbook "Scientific American" "Scientific American, January 2001: Part 1" B002VE9P9A 2001-01-01T00:00:00 "Scientific American, January 2001"
+    mkbook "Scientific American" "Scientific American, January 2001: Part 2" B0037FF924 2001-01-01T00:00:00 "Scientific American, January 2001"
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should not include "Scientific American"
+  End
+
+  It 'editions: a dramatized adaptation is a different title and does NOT group'
+    mkbook "Brandon Sanderson" "Tress of the Emerald Sea: A Cosmere Novel" B0B1 2023-01-10T00:00:00 "Tress of the Emerald Sea"
+    mkbook "Brandon Sanderson" "Tress of the Emerald Sea (Dramatized Adaptation)" B0B2 2024-01-10T00:00:00 "Tress of the Emerald Sea (Dramatized Adaptation)"
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should not include "Tress"
+  End
+
+  It 'editions: a book with no published date is never grouped'
+    mkbook "A" "T one" X1 "" T
+    mkbook "A" "T two" X2 2020-01-01T00:00:00 T
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should not include "X1"
+  End
+
+  It 'editions: an empty library reports nothing and succeeds'
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should equal ""
+  End
 End

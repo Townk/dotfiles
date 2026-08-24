@@ -2166,6 +2166,59 @@ rip::ab_have() {
   rip::_remote_has_file "audiobooks/$rel/${rel:t}.m4b"
 }
 
+# rip::_server_sidecars — every stored sidecar as JSON lines, each carrying
+# the "<Author>/<Title>" it came from as `_path`. ONE ssh: 248 books is ~124 KB
+# of JSON, and a call per book would be 248 round-trips.
+rip::_server_sidecars() {
+  setopt localoptions noerrexit nopipefail
+  local base; base="$(rip::remote_base)"
+  # NO `find -printf` here: it is a GNU extension that stock BSD/macOS find
+  # rejects outright, and this same script runs BOTH remotely (Linux) and
+  # locally (the hermetic tests' plain-directory remote base, on macOS).
+  # Verified 2026-08-24: it appears to work interactively on the dev machine
+  # only because `find` there resolves to brew's bfs; /usr/bin/find fails with
+  # "-printf: unknown primary or operator". Strip the leading "./" instead.
+  local script='find . -mindepth 3 -maxdepth 3 -name .fleet-book.json 2>/dev/null | while read -r f; do d=${f#./}; d=${d%/.fleet-book.json}; printf "%s\t" "$d"; tr -d "\n" < "$f"; printf "\n"; done'
+  local raw
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    raw="$("$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "cd ${(q)rpath}/audiobooks 2>/dev/null && $script" 2>/dev/null)"
+  else
+    raw="$(cd "$base/audiobooks" 2>/dev/null && eval "$script")"
+  fi
+  local line rel json
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    rel="${line%%$'\t'*}"; json="${line#*$'\t'}"
+    print -r -- "$json" | jq -c --arg p "$rel" '. + {_path:$p}' 2>/dev/null
+  done <<< "$raw"
+}
+
+# rip::ab_editions — works stored in more than one edition.
+#
+# The rule (spec 2026-08-24): same normalized first author, same normalized
+# bare title, and BOTH published dates present and DIFFERENT. Measured against
+# the real library that is 2 true positives and 0 false positives. The
+# different-date requirement is what keeps two PARTS of one issue — which
+# share a publication date — from being read as a stale edition of each other,
+# a mistake whose remedy would be a deletion.
+rip::ab_editions() {
+  setopt localoptions noerrexit nopipefail
+  rip::_server_sidecars | jq -s -r '
+    map(select((.published // "") != ""))
+    | group_by([ (.authors[0] // "" | ascii_downcase | gsub("[^a-z0-9]";"")),
+                 (.title // "" | ascii_downcase | gsub("[^a-z0-9]";"")) ])
+    | map(select(length > 1))
+    | map(select([.[].published] | unique | length > 1))
+    | .[]
+    | (max_by(.published)._path) as $newest
+    | "\(.[0].title)",
+      (sort_by(.published)[] | "    \(.published[0:10])  \(.ids["audible.asin"] // "?")  \(._path)\(if ._path == $newest then "   <- newest" else "" end)")
+  ' 2>/dev/null
+}
+
 # --- author identity --------------------------------------------------------
 #
 # Audible spells an author differently across purchases ("J. R. R. Tolkien" on
