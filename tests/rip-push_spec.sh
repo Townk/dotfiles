@@ -270,6 +270,27 @@ EOF
     The stderr should not include "renamed to"
   End
 
+  # Regression guard (review finding, second pass): "mv never attempted"
+  # is the same false-log defect as "mv attempted and failed" — the
+  # canonical target already holds the ONLY book the staged author has,
+  # so the merge branch's loop takes the "already holds" warn path for
+  # every book, never calls mv at all, and the source dir is left
+  # non-empty (rmdir fails). The rename claim must not fire: nothing
+  # about the staged tree actually changed.
+  It 'push: canonical target already holds every staged book — warns, but never claims a rename'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien/The Hobbit"
+    printf 'canonical copy\n' > "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'staged copy\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Fellowship"
+    When run zsh -c "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
+    The status should equal 0
+    The stderr should include "already holds"
+    The stderr should not include "renamed to"
+    The path "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+    The contents of file "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should equal "staged copy"
+  End
+
   It 'push: music is never canonicalized'
     mkdir -p "$RIP_STAGING_ROOT/music/A.B. Artist/Album"
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/A.B. Artist/Album/01 T.flac"

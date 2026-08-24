@@ -2255,30 +2255,36 @@ rip::_canonicalize_staged_authors() {
   # command HERE, ahead of any fork, means every subsequent `$(...)` in
   # the loop inherits an already-populated cache and does no ssh at all.
   rip::_server_authors >/dev/null
-  local dir name canon book ok
+  local dir name canon book
   for dir in "${authors[@]}"; do
     name="${dir:t}"
     canon="$(rip::_canonical_author "$name")"
     [[ "$canon" == "$name" ]] && continue
-    ok=1
     if [[ -d "$src/$canon" ]]; then
       for book in "$dir"/*(N); do
         if [[ -e "$src/$canon/${book:t}" ]]; then
           log_warn "rip: canonical author target already holds ${book:t} — leaving it staged under $name"
         else
           mv -- "$book" "$src/$canon/" 2>/dev/null \
-            || { log_warn "rip: could not move ${book:t} into $canon"; ok=0 }
+            || log_warn "rip: could not move ${book:t} into $canon"
         fi
       done
       rmdir -- "$dir" 2>/dev/null
     else
       mv -- "$dir" "$src/$canon" 2>/dev/null \
-        || { log_warn "rip: could not rename $name to $canon"; ok=0 }
+        || log_warn "rip: could not rename $name to $canon"
     fi
-    # Only claim the rename happened when it actually did — the job log is
-    # the operator's one record of this event, and a failed mv/rename must
-    # never be followed by a line asserting it succeeded.
-    (( ok )) && log_error "rip: canonical author — staged \"$name\" renamed to \"$canon\" (the spelling cantina already uses)"
+    # Only claim the rename happened when the staged entry under the old
+    # spelling is actually GONE afterwards — that is the literal fact this
+    # line asserts, and checking it directly (rather than tracking "did an
+    # mv run") covers every way the merge branch can end up not fully
+    # renamed: a book left behind because the target already held it, a
+    # failed mv, or a leftover dotfile (e.g. .DS_Store — the (N) glob is
+    # dot-blind) that makes rmdir fail even after every real book moved.
+    # In the single-rename branch `mv` itself is what makes $dir vanish on
+    # success and leaves it in place on failure, so the same check is
+    # exactly right there too — nothing about that branch changed.
+    [[ -e "$dir" ]] || log_error "rip: canonical author — staged \"$name\" renamed to \"$canon\" (the spelling cantina already uses)"
   done
   return 0
 }
