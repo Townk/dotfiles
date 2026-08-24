@@ -1622,4 +1622,93 @@ EOF
     # The leftover is left alone, not deleted blind.
     The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/.DS_Store" should be exist
   End
+
+  # FINDING (round 3). The state-11 branch announced a deletion that may
+  # never have occurred: $stale can be empty (the id never resolved), and
+  # --delete-author's own exit status was discarded. Both are PERMANENT
+  # here — by this point the variant has left rip::ab_server_library's
+  # listing, so no future sweep will ever see this author again — which is
+  # precisely the artifact the state-11 branch exists to prevent, and
+  # claiming success would hide it.
+
+  It 'sweep (ssh): an unresolvable variant author id is reported, never claimed as removed'
+    fake_ssh_server
+    cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
+case "\$1" in
+  --find-item) echo item-x ;;
+  --author-id) case "\$2" in "J.R.R. Tolkien") exit 1 ;; *) echo auth-canon ;; esac ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/.DS_Store"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 1
+    The output should include "author variants"
+    # The book still moved and was repointed — only the record is unaccounted for.
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" should be exist
+    The stderr should include "could not resolve its Audiobookshelf author record"
+    The stderr should include "no future sweep will see"
+    # …and NOT the claim that it was removed.
+    The stderr should not include "removed its Audiobookshelf author record"
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
+  End
+
+  It 'sweep (ssh): a --delete-author that fails is reported, never claimed as removed'
+    fake_ssh_server
+    cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
+case "\$1" in
+  --find-item) echo item-x ;;
+  --author-id) echo auth-x ;;
+  --delete-author) exit 4 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/.DS_Store"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 1
+    The output should include "author variants"
+    The stderr should include "could not remove its Audiobookshelf author record"
+    The stderr should include "remove it in the Audiobookshelf UI"
+    The stderr should not include "removed its Audiobookshelf author record"
+    # It WAS attempted — this is a real failure, not a skipped call.
+    The contents of file "$RIP_SANDBOX/absbin.log" should include "--delete-author"
+  End
+
+  # The same exposure on the state-0 path: the variant directory is gone
+  # entirely, so a record that failed to delete is just as unreachable. A
+  # silent rc 0 there would be the same false success.
+  It 'sweep (ssh): a fully-swept variant whose record will not delete still reports it'
+    fake_ssh_server
+    cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
+case "\$1" in
+  --find-item) echo item-x ;;
+  --author-id) echo auth-x ;;
+  --delete-author) exit 4 ;;
+esac
+exit 0
+EOF
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 1
+    The output should include "author variants"
+    # The sweep itself worked: the book moved and the variant folder is gone.
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien" should not be exist
+    The stderr should include "could not remove its Audiobookshelf author record"
+    The stderr should include "no future sweep will see"
+  End
 End

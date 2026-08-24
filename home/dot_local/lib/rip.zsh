@@ -2761,12 +2761,37 @@ rip::_canonicalize_one_author() {
   # author in the Audiobookshelf UI forever. The leftover DIRECTORY is left
   # alone (it is not ours to delete blind) and named, so the operator knows
   # exactly what remains rather than being told a falsehood.
-  [[ -n "$stale" ]] && "$RIP_BIN_DIR/rip-abs-authors" --delete-author "$stale" >/dev/null 2>&1
+  #
+  # CLAIM ONLY WHAT ACTUALLY HAPPENED. The delete can fail to happen two ways —
+  # $stale never resolved (a transient API miss, or the record was already
+  # gone), or --delete-author itself was rejected — and BOTH are permanent
+  # here: by this point the variant has left rip::ab_server_library's listing,
+  # in state 0 because the directory is gone and in state 11 because it holds
+  # nothing at depth 2, so no future sweep will ever see this author again.
+  # Announcing a removal that did not occur would hide exactly the artifact
+  # this branch exists to prevent, behind a false success. Capture the status
+  # and say what is true. (Review finding, 2026-08-24, round 3.)
+  local -i dropped=0
+  local drop_warn=""
+  if [[ -z "$stale" ]]; then
+    drop_warn="could not resolve its Audiobookshelf author record — no future sweep will see \"$variant\" again, so check for a leftover author in the Audiobookshelf UI"
+  elif "$RIP_BIN_DIR/rip-abs-authors" --delete-author "$stale" >/dev/null 2>&1; then
+    dropped=1
+  else
+    drop_warn="could not remove its Audiobookshelf author record — no future sweep will see \"$variant\" again, so remove it in the Audiobookshelf UI"
+  fi
+
   if (( state == 11 )); then
-    log_warn "rip: \"$variant\" holds no books but is not empty (non-book files remain) — removed its Audiobookshelf author record and left the directory for you to clean up"
+    if (( dropped )); then
+      log_warn "rip: \"$variant\" holds no books but is not empty (non-book files remain) — removed its Audiobookshelf author record and left the directory for you to clean up"
+    else
+      log_warn "rip: \"$variant\" holds no books but is not empty (non-book files remain, left for you to clean up) — $drop_warn"
+    fi
     return 1
   fi
-  return 0
+  (( dropped )) && return 0
+  log_warn "rip: swept \"$variant\" but $drop_warn"
+  return 1
 }
 
 # rip::ab_import <src> <author> <title> — take a DRM-free file or folder the
