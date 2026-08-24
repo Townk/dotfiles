@@ -2673,9 +2673,9 @@ rip::ab_canonicalize_authors() {
 # then leaves the library asserting something false: the book is still there,
 # its ABS item still stores the variant spelling, and the record that spelling
 # pointed at is gone. `rmdir`'s exit status is the one honest signal that the
-# variant is actually empty — capture it rather than discarding it, and keep
-# the record when any book failed to move or failed to be repointed.
-# (Review finding 2, 2026-08-24.)
+# variant is genuinely bookless — ask for it rather than inferring it from
+# `rmdir`, and keep the record when any book failed to move or failed to be
+# repointed. (Review findings 2 and 4, 2026-08-24.)
 rip::_canonicalize_one_author() {
   setopt localoptions noerrexit nopipefail
   local base="$1" variant="$2" canon="$3"
@@ -2716,25 +2716,56 @@ rip::_canonicalize_one_author() {
     fi
   done
 
-  local -i emptied=0
+  # "rmdir failed" is NOT the same fact as "books remain", and conflating them
+  # made the warning below assert something untrue. rip::ab_server_library
+  # lists only `-mindepth 2 -maxdepth 2 -type d`, so ANY non-book entry sitting
+  # directly under the author folder — a .DS_Store from a Finder mount of the
+  # share is the obvious one — makes rmdir fail after every book has already
+  # moved. Worse, the variant then stops appearing in the listing at all
+  # (nothing at depth 2 any more), so a kept author record becomes permanently
+  # unreachable by any future sweep. Ask the server the real question instead,
+  # in the SAME round-trip, and answer 0 gone / 10 books remain / 11 no books
+  # but not empty. (Review finding, 2026-08-24.)
+  local rmscript='d="$1"; if [ -n "$(find "$d" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n 1)" ]; then exit 10; fi; rmdir -- "$d" 2>/dev/null && exit 0; exit 11'
+  local -i state
   if [[ "$base" == *:* ]]; then
     local ssh_bin2="${RIP_SSH_BIN:-ssh}"
     local host2="${base%%:*}" rpath2="${base#*:}"
     "$ssh_bin2" -o BatchMode=yes -o ConnectTimeout=5 "$host2" \
-      "rmdir -- ${(q)rpath2}/audiobooks/${(q)variant}" 2>/dev/null && emptied=1
+      "sh -c ${(q)rmscript} sh ${(q)rpath2}/audiobooks/${(q)variant}" 2>/dev/null
+    state=$?
   else
-    rmdir -- "$base/audiobooks/$variant" 2>/dev/null && emptied=1
+    sh -c "$rmscript" sh "$base/audiobooks/$variant" 2>/dev/null
+    state=$?
   fi
 
-  if (( ! emptied )); then
-    log_warn "rip: \"$variant\" still holds books after the sweep — leaving its Audiobookshelf author record in place"
-    return 1
-  fi
+  case $state in
+    0|11) ;;   # no books remain; 11 also has non-book leftovers, handled below
+    10)
+      log_warn "rip: \"$variant\" still holds books after the sweep — leaving its Audiobookshelf author record in place"
+      return 1 ;;
+    *)
+      # An ssh that never answered (255) lands here. Unknown is not empty:
+      # keep the record.
+      log_warn "rip: could not tell whether \"$variant\" still holds books — leaving its Audiobookshelf author record in place"
+      return 1 ;;
+  esac
   if (( unrepointed )); then
     log_warn "rip: $unrepointed book(s) from \"$variant\" could not be repointed — leaving its Audiobookshelf author record in place"
     return 1
   fi
+  # Every book is out and repointed, so the variant author record is genuinely
+  # empty and is removed — including in the 11 case. Keeping it there would
+  # strand it: the variant is no longer listed, so no later sweep would ever
+  # offer to clean it up, and the operator would be left with a zero-book
+  # author in the Audiobookshelf UI forever. The leftover DIRECTORY is left
+  # alone (it is not ours to delete blind) and named, so the operator knows
+  # exactly what remains rather than being told a falsehood.
   [[ -n "$stale" ]] && "$RIP_BIN_DIR/rip-abs-authors" --delete-author "$stale" >/dev/null 2>&1
+  if (( state == 11 )); then
+    log_warn "rip: \"$variant\" holds no books but is not empty (non-book files remain) — removed its Audiobookshelf author record and left the directory for you to clean up"
+    return 1
+  fi
   return 0
 }
 

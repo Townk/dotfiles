@@ -1588,4 +1588,38 @@ EOF
     The stderr should include "could not list the audiobook library"
     The path "$RIP_SANDBOX/absbin.log" should not be exist
   End
+
+  # FINDING (round 2). `rmdir` failing is NOT the same fact as "books remain".
+  # rip::ab_server_library lists only depth-2 DIRECTORIES, so a stray
+  # .DS_Store — reachable through any Finder mount of the share — sits
+  # directly under the author folder, defeats `rmdir` after every book has
+  # already moved, and made the sweep warn something untrue. It also drops
+  # the variant out of the listing for good (nothing at depth 2 any more),
+  # so a kept author record would be unreachable by every future sweep.
+  # The record is therefore removed once no books remain, and the leftover
+  # directory is named rather than misdescribed.
+  It 'sweep (ssh): a stray .DS_Store is reported accurately, not as "still holds books"'
+    fake_abs_ops_bin_any
+    fake_ssh_server
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
+             "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
+    printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/.DS_Store"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    # Not a clean sweep: a directory is left behind for the operator.
+    The status should equal 1
+    The output should include "author variants"
+    # The book really did move.
+    The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit" should not be exist
+    # The message states what is actually true…
+    The stderr should include "holds no books but is not empty"
+    The stderr should include "left the directory for you to clean up"
+    # …and never the falsehood.
+    The stderr should not include "still holds books"
+    # The bookless author record is removed — the variant will never appear in
+    # the server listing again, so this is the last chance to reach it.
+    The contents of file "$RIP_SANDBOX/absbin.log" should include "--delete-author"
+    # The leftover is left alone, not deleted blind.
+    The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/.DS_Store" should be exist
+  End
 End
