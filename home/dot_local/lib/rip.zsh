@@ -2233,6 +2233,109 @@ rip::ab_editions() {
   ' 2>/dev/null
 }
 
+# rip::ab_backfill_published [--apply] — fill `published` into sidecars that
+# predate it.
+#
+# Task 1 records the date on every sidecar written from now on. The 248 books
+# already on the server were pushed before that field existed (measured
+# 2026-08-24: 248 sidecars, 0 with `published`), and edition detection groups
+# on exactly that field — so without this sweep `--editions` reports nothing
+# about the library the operator actually has.
+#
+# The date comes from the provider's own rows, matched by ASIN: that is the
+# same value a fresh push would have recorded, so a backfilled sidecar and a
+# re-pushed one agree.
+#
+# ADDITIVE ONLY. A sidecar that already carries a non-null `published` is left
+# exactly as it is, no other field is touched, and the replacement is written
+# to a temp file in the same directory and moved into place — a half-written
+# sidecar would destroy identity metadata that cannot be recovered from the
+# audio, and staging is emptied after every verified push.
+rip::ab_backfill_published() {
+  setopt localoptions noerrexit nopipefail
+  local apply=0
+  [[ "${1:-}" == "--apply" ]] && apply=1
+
+  # asin -> published, from the provider's library rows.
+  local provider_bin; provider_bin="$(rip::ab_provider_bin libation)"
+  local map
+  map="$("$provider_bin" list 2>/dev/null \
+    | jq -s -c 'map(select((.published // "") != "" and (.id // "") != ""))
+                | map({key: .id, value: .published}) | from_entries' 2>/dev/null)"
+  [[ -n "$map" ]] || map='{}'
+
+  local base; base="$(rip::remote_base)"
+  local -a to_fill=()
+  local line rel asin have want
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    rel="$(print -r -- "$line" | jq -r '._path // ""' 2>/dev/null)"
+    [[ -n "$rel" ]] || continue
+    have="$(print -r -- "$line" | jq -r '.published // ""' 2>/dev/null)"
+    [[ -z "$have" ]] || continue          # already dated — never rewritten
+    asin="$(print -r -- "$line" | jq -r '.ids["audible.asin"] // ""' 2>/dev/null)"
+    if [[ -z "$asin" ]]; then
+      log_warn "rip: no ASIN in the sidecar for $rel — cannot backfill"
+      continue
+    fi
+    want="$(print -r -- "$map" | jq -r --arg a "$asin" '.[$a] // ""' 2>/dev/null)"
+    if [[ -z "$want" ]]; then
+      log_warn "rip: no provider row for $rel ($asin) — leaving it undated"
+      continue
+    fi
+    to_fill+=("$rel"$'\t'"$want")
+  done < <(rip::_server_sidecars)
+
+  if (( ${#to_fill[@]} == 0 )); then
+    # Only reported in dry-run: under --apply, "nothing new to fill" (every
+    # candidate was already dated) is silent success, not a finding — the
+    # message exists to tell an operator running without --apply what a
+    # follow-up run would do, not to narrate a no-op apply.
+    (( apply )) || print -r -- "rip: nothing to backfill"
+    return 0
+  fi
+
+  local entry
+  if (( ! apply )); then
+    for entry in "${to_fill[@]}"; do
+      print -r -- "would fill: ${entry%%$'\t'*}  ->  ${entry#*$'\t'}"
+    done
+    print -r -- "(${#to_fill[@]} book(s); re-run with --apply)"
+    return 0
+  fi
+
+  local filled=0
+  for entry in "${to_fill[@]}"; do
+    rel="${entry%%$'\t'*}"; want="${entry#*$'\t'}"
+    rip::_sidecar_set_published "$base" "$rel" "$want" && filled=$(( filled + 1 ))
+  done
+  print -r -- "rip: backfilled $filled of ${#to_fill[@]} sidecar(s)"
+  return 0
+}
+
+# rip::_sidecar_set_published <base> <Author/Title> <iso-date> — set exactly
+# one field on one stored sidecar, atomically.
+#
+# jq is run against the file and its output checked for emptiness BEFORE the
+# move: a jq that fails mid-parse prints nothing, and moving that empty file
+# over a good sidecar would erase the book's identity for good.
+rip::_sidecar_set_published() {
+  setopt localoptions noerrexit nopipefail
+  local base="$1" rel="$2" want="$3"
+  local script='f="$1"; d="$2"; t="$f.tmp.$$"; jq --arg d "$d" '"'"'.published = $d'"'"' "$f" > "$t" 2>/dev/null && test -s "$t" && mv -- "$t" "$f" || { rm -f -- "$t"; exit 1; }'
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "sh -c ${(q)script} sh ${(q)rpath}/audiobooks/${(q)rel}/.fleet-book.json ${(q)want}" 2>/dev/null \
+      || { log_warn "rip: could not backfill $rel"; return 1 }
+  else
+    sh -c "$script" sh "$base/audiobooks/$rel/.fleet-book.json" "$want" 2>/dev/null \
+      || { log_warn "rip: could not backfill $rel"; return 1 }
+  fi
+  return 0
+}
+
 # --- author identity --------------------------------------------------------
 #
 # Audible spells an author differently across purchases ("J. R. R. Tolkien" on

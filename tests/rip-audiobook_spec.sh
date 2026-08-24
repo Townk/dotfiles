@@ -1028,4 +1028,97 @@ FAKECP
     The status should equal 0
     The output should equal ""
   End
+
+  # rip::ab_backfill_published — sweep the 248 sidecars already on the server
+  # (0 of which carry `published`, measured 2026-08-24) so edition detection
+  # has something to group on. Each example redirects RIP_LIBEXEC_DIR into
+  # the sandbox FIRST: setup() points it at the real tracked libexec dir, and
+  # writing a fake provider without redirecting would overwrite the repo's
+  # own source file.
+  #
+  # book_published() — the stored sidecar's `published` field for the fixed
+  # A/B fixture every example below writes via mkbook. shellspec's "result"
+  # modifier only accepts a defined shell function as its subject (see
+  # dest_entry_count/find_temp_dirs above), not an arbitrary command string.
+  book_published() {
+    jq -r '.published' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+  }
+
+  It 'backfill: dry-run names the books it would fill and writes nothing'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" X1 "" B
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"id":"X1","path":"A/B","title":"B","published":"2019-05-07T07:00:00"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 0
+    The output should include "A/B"
+    The output should include "2019-05-07"
+    The output should include "re-run with --apply"
+    The result of function book_published should equal "null"
+  End
+
+  It 'backfill: --apply fills the missing date and leaves every other field alone'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" X1 "" B
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"id":"X1","path":"A/B","title":"B","published":"2019-05-07T07:00:00"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply && jq -c '[.published,.title,.authors[0],.ids[\"audible.asin\"],.kind]' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    The status should equal 0
+    The output should include '["2019-05-07T07:00:00","B","A","X1","audiobook"]'
+  End
+
+  It 'backfill: a sidecar that already has a date is never rewritten'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" X1 2001-01-01T00:00:00 B
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"id":"X1","path":"A/B","title":"B","published":"2019-05-07T07:00:00"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply && jq -r '.published' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    The status should equal 0
+    The output should equal "2001-01-01T00:00:00"
+  End
+
+  It 'backfill: a stored book the provider does not offer is reported unmatched, not touched'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" XORPHAN "" B
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf '%s\n' '{"id":"X1","path":"A/B","title":"B","published":"2019-05-07T07:00:00"}'
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply && jq -r '.published' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    The status should equal 0
+    The output should include "null"
+    The stderr should include "no provider row"
+  End
+
+  It 'backfill: nothing to fill reports so and succeeds'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    mkbook "A" "B" X1 2001-01-01T00:00:00 B
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    The status should equal 0
+    The output should include "nothing to backfill"
+  End
 End
