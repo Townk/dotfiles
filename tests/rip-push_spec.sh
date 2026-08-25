@@ -1432,9 +1432,14 @@ EOF
     cat > "$RIP_SANDBOX/ssh" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/ssh.log"
-shift 4   # -o BatchMode=yes -o ConnectTimeout=5
-shift     # <host>
-cmd="\$1"
+# The remote command is the LAST argument, whatever precedes it. NOT a
+# positional \`shift\` past a hardcoded option count: this fake used to
+# \`shift 4\` past -o BatchMode=yes -o ConnectTimeout=5 and once more past the
+# host, so adding rip::_remote_has_file's -n (2026-08-24) silently made \$1 the
+# HOSTNAME and round-tripped that through sh instead of the command under
+# test. The option list is not this harness's business; the command is.
+cmd=""
+for a in "\$@"; do cmd="\$a"; done
 sh -c "\$cmd"
 rc=\$?
 printf 'RC=%s\n' "\$rc" >> "$RIP_SANDBOX/ssh.log"

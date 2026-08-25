@@ -940,7 +940,18 @@ rip::_remote_has_file() {
     # must never hang the push worker — "never block" applies to the
     # check itself, not just its result.
     local rfile="$rpath/$relpath"
-    "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 \
+    # -n IS LOAD-BEARING, NEVER REMOVE IT (review finding, 2026-08-24).
+    # Without -n, ssh(1) reads THIS SHELL's stdin eagerly and forwards it to
+    # the remote, whether or not the remote command consumes it — and `test
+    # -f` never does. Callers run this helper inside `while read` loops fed by
+    # a here-string or a pipe (the --repair-sidecars sweep is one: `done <<<
+    # "$lib"`), so a single probe swallowed the entire remaining library and
+    # the loop ended after ONE book — silently, with rc 0 and a report that
+    # looked complete. Third appearance of this fd-0 family in this subsystem
+    # (the author sweep's variants list, LibationCli under pueue), so the
+    # guard lives HERE, at the source, where it protects every present and
+    # future caller instead of one call site.
+    "$ssh_bin" -n -o BatchMode=yes -o ConnectTimeout=5 \
       "$host" "test -f ${(q)rfile}" 2>/dev/null
     local rc=$?
     (( rc == 0 )) && return 0
@@ -2908,13 +2919,25 @@ rip::ab_repair_sidecars() {
   # skipped — the bug rip::_remote_has_file was already bitten by. The RAW
   # server spelling is what gets written to; the normalized one is only ever a
   # lookup key.
-  local -A sc_state=() sc_prov=() sc_uid=() sc_json=()
+  #
+  # asin_owner is the reverse index: an ASIN a STORED sidecar already carries
+  # -> the book that carries it. The whole point of a sidecar is that one
+  # edition identity names one book, so a proposal for an ASIN that is already
+  # spoken for is not a repair, it is a collision (review finding 2,
+  # 2026-08-24). Built here because the pass is already running; it costs
+  # nothing and no extra round-trip.
+  local -A sc_state=() sc_prov=() sc_uid=() sc_json=() asin_owner=()
   local irel istate iprov iasin iuid ijson
   while IFS=$'\t' read -r irel istate iprov iasin iuid ijson; do
     [[ -n "$irel" ]] || continue
     irel="$(rip::_nfc "$irel")"
     sc_state[$irel]="$istate"; sc_prov[$irel]="$iprov"
     sc_uid[$irel]="$iuid";     sc_json[$irel]="$ijson"
+    # "-" is _sidecar_index's NEVER-EMPTY filler, not an identifier: it must
+    # never become a key that two unrelated books share.
+    if [[ -n "$iasin" && "$iasin" != "-" && -z "${asin_owner[$iasin]:-}" ]]; then
+      asin_owner[$iasin]="$irel"
+    fi
   done < <(print -r -- "$rows" | rip::_sidecar_index)
 
   # prow_of: NFC composed path -> "<id>\t<row>", first row wins.
@@ -3062,18 +3085,74 @@ rip::ab_repair_sidecars() {
   # folders carrying one audible.asin: precisely the duplicated edition
   # identity the sidecar exists to prevent. A proposal that is not unique is
   # not a proposal — it is an ambiguity, and it is reported as one.
+  #
+  # CASE A COUNTS TOO (review finding 2, 2026-08-24). This pre-pass used to
+  # count proposals across b_report ONLY — and a Case A candidate never enters
+  # b_report. So ONE provider row could stamp its ASIN on a bare folder
+  # automatically AND be proposed for a second folder in the same report, one
+  # presented as a high-confidence adopt and the other as an automatic write;
+  # an operator following the printed instructions in the printed order ended
+  # up with two folders carrying one edition identity, rc 0, no warning.
+  # --adopt-asin's guard 5 only catches the reverse order (adopt first, sweep
+  # second), and Case A is the one AUTOMATIC write this verb makes, which is
+  # exactly why it is the one that most needs counting.
+  #
+  # "-" IS NOT AN ASIN (review finding 4, 2026-08-24). rip::_provider_index
+  # emits "-" as its never-empty filler when a row carries neither `.id` nor
+  # `.ids["audible.asin"]` (rip-provider-libation composes
+  # `id: (.AudibleProductId // "")`, empty for a book the account no longer
+  # lists), so counting it collapses every id-less row onto one key and
+  # reports two unrelated books as sharing an ASIN — with an unusable
+  # `--adopt-asin "<…>" -` remedy line to match. It is excluded from the
+  # counting pass AND from the `> 1` test.
   local entry cand cid
   local -A bid_count=()
-  for entry in "${b_report[@]}"; do
-    rest="${entry#*$'\t'}"; cid="${rest%%$'\t'*}"
+  local -i i
+  for (( i = 1; i <= ${#a_id[@]}; i++ )); do
+    cid="${a_id[i]}"
+    [[ -n "$cid" && "$cid" != "-" ]] || continue
     bid_count[$cid]=$(( ${bid_count[$cid]:-0} + 1 ))
   done
-  local -i need_n=0 amb_n=${#ambig[@]}
+  for entry in "${b_report[@]}"; do
+    rest="${entry#*$'\t'}"; cid="${rest%%$'\t'*}"
+    [[ -n "$cid" && "$cid" != "-" ]] || continue
+    bid_count[$cid]=$(( ${bid_count[$cid]:-0} + 1 ))
+  done
+
+  # A Case A candidate whose ASIN is not its alone is DROPPED from the write
+  # plan here, before `intended` is computed and before a single "would create
+  # sidecar" line is printed. It cannot wait for --adopt-asin's guards: this
+  # is the automatic write, and the operator is never asked.
+  local -a ka_rel=() ka_id=() ka_row=() dup_a=()
+  for (( i = 1; i <= ${#a_rel[@]}; i++ )); do
+    cid="${a_id[i]}"
+    if [[ -n "$cid" && "$cid" != "-" && -n "${asin_owner[$cid]:-}" ]]; then
+      dup_a+=("${a_rel[i]}"$'\t'"$cid"$'\t'"stored"$'\t'"${asin_owner[$cid]}")
+    elif [[ -n "$cid" && "$cid" != "-" ]] && (( ${bid_count[$cid]:-0} > 1 )); then
+      dup_a+=("${a_rel[i]}"$'\t'"$cid"$'\t'"proposed"$'\t'"$(( ${bid_count[$cid]} - 1 ))")
+    else
+      ka_rel+=("${a_rel[i]}"); ka_id+=("$cid"); ka_row+=("${a_row[i]}")
+    fi
+  done
+  a_rel=("${ka_rel[@]}"); a_id=("${ka_id[@]}"); a_row=("${ka_row[@]}")
+
+  local -i need_n=0 amb_n=$(( ${#ambig[@]} + ${#dup_a[@]} ))
+  for entry in "${dup_a[@]}"; do
+    rel="${entry%%$'\t'*}"; rest="${entry#*$'\t'}"
+    cid="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+    print -r -- "ambiguous (nothing written): $rel"
+    if [[ "${rest%%$'\t'*}" == "stored" ]]; then
+      print -r -- "  proposed ASIN : $cid  — already carried by ${rest#*$'\t'}; one ASIN cannot identify two books"
+    else
+      print -r -- "  proposed ASIN : $cid  — also proposed for ${rest#*$'\t'} other book(s); one ASIN cannot identify two books"
+    fi
+    print -r -- "  left alone    : no sidecar was created — one ASIN identifies one book; resolve the collision first"
+  done
   for entry in "${b_report[@]}"; do
     rel="${entry%%$'\t'*}"; rest="${entry#*$'\t'}"
     cid="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
     cpath="${rest%%$'\t'*}"; matched_on="${rest#*$'\t'}"
-    if (( ${bid_count[$cid]:-0} > 1 )); then
+    if [[ -n "$cid" && "$cid" != "-" ]] && (( ${bid_count[$cid]:-0} > 1 )); then
       (( amb_n++ ))
       print -r -- "ambiguous (nothing written): $rel"
       print -r -- "  proposed ASIN : $cid  — also proposed for $(( ${bid_count[$cid]} - 1 )) other book(s); one ASIN cannot identify two books"
@@ -3103,13 +3182,23 @@ rip::ab_repair_sidecars() {
     print -r -- "unidentifiable (empty identity, no provider row, provider \"${entry#*$'\t'}\"): $rel"
     print -r -- "  left alone    : only a \"manual\" book is given a locally minted identity"
   done
+  # TALLIED APART, not together (review finding 3, 2026-08-24). The two labels
+  # under this one headline rest on opposite evidence: "malformed" captured a
+  # `test -f` that said the file IS there, while "unverified" captured nothing
+  # at all — the probe never ran. Summing them let the closing line assert
+  # "have a sidecar that could not be read" about a book for which no sidecar
+  # was ever established, which is the same defect (a sentence stating an
+  # outcome nothing captured) this subsystem has now paid for eight times.
+  local -i unread_bad=0 unread_unk=0
   for entry in "${unread[@]}"; do
     rel="${entry%%$'\t'*}"
     print -r -- "unreadable sidecar (not repaired): $rel"
     if [[ "${entry#*$'\t'}" == "malformed" ]]; then
+      (( unread_bad++ ))
       print -r -- "  malformed     : the stored .fleet-book.json exists but does not parse"
       print -r -- "  left alone    : this verb only CREATES a missing sidecar — fix this one by hand"
     else
+      (( unread_unk++ ))
       print -r -- "  unverified    : could not confirm whether a sidecar is there"
       print -r -- "  left alone    : an absence that was not established is never written over"
     fi
@@ -3120,7 +3209,6 @@ rip::ab_repair_sidecars() {
 
   local -i intended=$(( ${#a_rel[@]} + ${#c_rel[@]} ))
   local -i outstanding=$(( need_n + amb_n + ${#unident[@]} + ${#norow[@]} + ${#unread[@]} ))
-  local -i i
 
   if (( ! apply )); then
     for (( i = 1; i <= ${#a_rel[@]}; i++ )); do
@@ -3133,7 +3221,7 @@ rip::ab_repair_sidecars() {
       print -r -- "($intended book(s); re-run with --apply)"
     fi
     rip::_repair_summary 0 "$checked" "$identified" 0 "$intended" \
-      "$need_n" "$amb_n" "${#unident[@]}" "${#norow[@]}" "${#unread[@]}"
+      "$need_n" "$amb_n" "${#unident[@]}" "${#norow[@]}" "$unread_bad" "$unread_unk"
     (( outstanding > 0 )) && return 1
     return 0
   fi
@@ -3231,14 +3319,14 @@ rip::ab_repair_sidecars() {
   done
   local -i unwritten=$(( intended - repaired ))
   rip::_repair_summary 1 "$checked" "$identified" "$repaired" "$intended" \
-    "$need_n" "$amb_n" "${#unident[@]}" "${#norow[@]}" "${#unread[@]}"
+    "$need_n" "$amb_n" "${#unident[@]}" "${#norow[@]}" "$unread_bad" "$unread_unk"
   (( unwritten > 0 || outstanding > 0 )) && return 1
   return 0
 }
 
 # rip::_repair_summary <apply> <checked> <identified> <repaired> <intended>
-# <needs confirmation> <ambiguous> <unidentifiable> <no row> <unreadable> —
-# the closing tally.
+# <needs confirmation> <ambiguous> <unidentifiable> <no row> <malformed>
+# <unverified> — the closing tally.
 #
 # Printed in BOTH modes and even when everything is already fine: a silent
 # --apply with nothing to do is otherwise byte-identical to a run that never
@@ -3255,10 +3343,17 @@ rip::ab_repair_sidecars() {
 # runs first. In dry-run mode the plan is already stated by the caller's
 # "($intended book(s); re-run with --apply)"; the write tally belongs only to a
 # run that actually wrote. --backfill-published's dry run never claimed this.
+#
+# THE LAST TWO COUNTS ARE SEPARATE ON PURPOSE (review finding 3, 2026-08-24).
+# <malformed> is a sidecar the server confirmed IS there and jq could not
+# parse; <unverified> is a book whose probe never ran, so nothing established
+# that a sidecar exists at all. One line covering both had to assert existence
+# for the second — the refusal was right, the sentence was not. Each line now
+# says only what its own count captured.
 rip::_repair_summary() {
   local -i apply=$1
   local -i checked=$2 identified=$3 repaired=$4 intended=$5
-  local -i need=$6 amb=$7 unid=$8 norow=$9 unread=${10}
+  local -i need=$6 amb=$7 unid=$8 norow=$9 unread=${10} unver=${11}
   if (( apply && intended > 0 )); then
     print -r -- "rip: repaired $repaired of $intended sidecar(s)"
     (( intended - repaired > 0 )) && print -r -- "rip: $(( intended - repaired )) sidecar(s) could not be written"
@@ -3267,8 +3362,9 @@ rip::_repair_summary() {
   (( amb > 0 ))    && print -r -- "rip: $amb book(s) are ambiguous and were left alone"
   (( unid > 0 ))   && print -r -- "rip: $unid book(s) are unidentifiable and were left alone"
   (( unread > 0 )) && print -r -- "rip: $unread book(s) have a sidecar that could not be read and were left alone"
+  (( unver > 0 ))  && print -r -- "rip: $unver book(s) were left alone: whether a sidecar is there could not be confirmed"
   (( norow > 0 ))  && print -r -- "rip: $norow book(s) have no sidecar and no provider row"
-  if (( intended == 0 && need == 0 && amb == 0 && unid == 0 && norow == 0 && unread == 0 )); then
+  if (( intended == 0 && need == 0 && amb == 0 && unid == 0 && norow == 0 && unread == 0 && unver == 0 )); then
     print -r -- "rip: nothing to repair ($checked book(s) checked, $identified already identified)"
   fi
   return 0

@@ -1629,6 +1629,73 @@ EOF
     export RIP_REMOTE_BASE="media@cantina:$RIP_SANDBOX/server"
   }
 
+  # fake_server_ssh_reads_stdin — fake_server_ssh, plus the ONE behaviour of
+  # ssh(1) the shared fake does not model: without -n, ssh reads the local
+  # stdin EAGERLY and forwards it to the remote, whether or not the remote
+  # command consumes it. `test -f` never consumes it, so a probe run inside a
+  # `while read` loop fed by a here-string swallowed the whole remaining
+  # library and the loop ended after ONE book (review finding, 2026-08-24) —
+  # invisible to a fake that never touches fd 0.
+  #
+  # A VARIANT, deliberately, not a change to the shared fake: every other
+  # example here feeds ssh a payload batch on stdin, and a slurping fake would
+  # be one more moving part in all of them.
+  #
+  # -n is HONOURED, exactly as ssh honours it — that is what makes the guard
+  # observable: with -n the fake reads nothing, without it the fake drains.
+  fake_server_ssh_reads_stdin() {
+    fake_server_ssh || return 1
+    local dash_bin
+    dash_bin=$(command -v dash 2>/dev/null || true)
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cmd=""
+noinput=0
+for a in "\$@"; do
+  [ "\$a" = "-n" ] && noinput=1
+  cmd="\$a"
+done
+printf '%s\n' "\$cmd" >> "$RIP_SANDBOX/ssh.cmds"
+PATH="$RIP_SANDBOX/remotebin"; export PATH
+if [ "\$noinput" = 1 ]; then
+  exec "$dash_bin" -c "\$cmd" < /dev/null
+fi
+slurp="$RIP_SANDBOX/ssh.stdin.\$\$"
+cat > "\$slurp"
+"$dash_bin" -c "\$cmd" < "\$slurp"
+rc=\$?
+rm -f "\$slurp"
+exit \$rc
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+  }
+
+  # fake_server_ssh_probe_fails — fake_server_ssh whose `test -f` probe exits
+  # 255, the rc a real ssh gives when the connection itself never happened.
+  # rip::_remote_has_file's tri-state turns that into 2 ("the check did not
+  # run"), which is the branch whose closing line must not claim a sidecar
+  # exists. Every other remote command still runs normally, so the sweep
+  # reaches that branch the way it would live.
+  fake_server_ssh_probe_fails() {
+    fake_server_ssh || return 1
+    local dash_bin
+    dash_bin=$(command -v dash 2>/dev/null || true)
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cmd=""
+for a in "\$@"; do cmd="\$a"; done
+printf '%s\n' "\$cmd" >> "$RIP_SANDBOX/ssh.cmds"
+case "\$cmd" in
+  "test -f"*) exit 255 ;;
+esac
+PATH="$RIP_SANDBOX/remotebin"; export PATH
+exec "$dash_bin" -c "\$cmd"
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+  }
+
   fake_provider_two() {
     export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
     mkdir -p "$RIP_LIBEXEC_DIR"
@@ -2722,6 +2789,142 @@ EOF
     The stderr should include "could not write the sidecar"
     The output should not include "adopted"
     The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  # --- review round 3, 2026-08-24 ------------------------------------------
+
+  # THREE bare books, so the order `find` happens to return them in cannot
+  # decide whether the bug shows: every one of them is a Case A candidate, so
+  # whichever comes first probes the server and — pre-fix — ate the rest of
+  # the here-string the classification loop reads from.
+  ROW_FD1='{"id":"B0FD000001","path":"Ann Leckie/Ancillary Justice","title":"Ancillary Justice","authors":["Ann Leckie"],"published":"2013-10-01T00:00:00","ids":{"audible.asin":"B0FD000001"},"provider":"libation","format":"m4b"}'
+  ROW_FD2='{"id":"B0FD000002","path":"Becky Chambers/A Closed and Common Orbit","title":"A Closed and Common Orbit","authors":["Becky Chambers"],"published":"2016-10-20T00:00:00","ids":{"audible.asin":"B0FD000002"},"provider":"libation","format":"m4b"}'
+  ROW_FD3='{"id":"B0FD000003","path":"Cixin Liu/The Three-Body Problem","title":"The Three-Body Problem","authors":["Cixin Liu"],"published":"2014-11-11T00:00:00","ids":{"audible.asin":"B0FD000003"},"provider":"libation","format":"m4b"}'
+
+  It 'repair: an ssh probe inside the classification loop does NOT eat the library — every book is classified'
+    # THE BLOCKER (review finding 1, 2026-08-24). rip::_remote_has_file ran
+    # `ssh … "test -f …"` with no -n and no stdin redirect, from inside the
+    # loop fed by `done <<< "$lib"`. ssh(1) without -n reads local stdin
+    # eagerly and forwards it; `test -f` never consumes it; the whole
+    # remaining library (~10 KB live, one read) vanished into the first probe
+    # and the loop ended after ONE book — rc 0, a report that looked complete,
+    # and every other book never examined. Third appearance of this fd-0
+    # family in this subsystem, so the fix is in the helper, not the call
+    # site, and this example is the guard: its fake ssh READS STDIN the way
+    # the real one does.
+    fake_provider_rows "$ROW_FD1"$'\n'"$ROW_FD2"$'\n'"$ROW_FD3"
+    mkbook_bare "Ann Leckie/Ancillary Justice"
+    mkbook_bare "Becky Chambers/A Closed and Common Orbit"
+    mkbook_bare "Cixin Liu/The Three-Body Problem"
+    fake_server_ssh_reads_stdin
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars < /dev/null"
+    The status should equal 0
+    The output should include "would create sidecar: Ann Leckie/Ancillary Justice"
+    The output should include "would create sidecar: Becky Chambers/A Closed and Common Orbit"
+    The output should include "would create sidecar: Cixin Liu/The Three-Body Problem"
+    # The count is the assertion that cannot be satisfied by a truncated
+    # sweep: pre-fix this said "(1 book(s); …)".
+    The output should include "(3 book(s); re-run with --apply)"
+    # library + sidecars + one absence probe per candidate. Pre-fix: 3.
+    The result of function ssh_calls should equal "5"
+  End
+
+  It 'repair: one provider row proposed for a Case A book AND a Case B book is ambiguous on both — nothing is written'
+    # Review finding 2, 2026-08-24. The dedupe pre-pass counted proposals
+    # across b_report ONLY, and a Case A candidate never enters b_report. One
+    # row, two folders: "J.R.R. Tolkien/The Hobbit" is bare (Case A, exact
+    # path, the AUTOMATIC write) and "J. R. R. Tolkien/The Hobbit" carries an
+    # empty-ids sidecar (Case B, title fallback). The dry run presented one as
+    # a high-confidence adopt and the other as a write, both B0DUP00001, and
+    # an operator following the printed instructions in the printed order got
+    # two folders with one edition identity, rc 0, no warning. Guard 5 only
+    # catches the reverse order.
+    fake_provider_rows "$ROW_HOB"
+    mkbook_bare "$HOB_A"
+    mkbook_empty "$HOB_B" unknown
+    snapshot "$HOB_B"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The output should include "ambiguous (nothing written): $HOB_A"
+    The output should include "ambiguous (nothing written): $HOB_B"
+    The output should include "also proposed for 1 other book(s)"
+    The output should include "2 book(s) are ambiguous"
+    # The Case A half never becomes a plan, a write, or a "repaired" line…
+    The output should not include "would create sidecar"
+    The output should not include "repaired"
+    # …and the Case B half is never dressed up as high confidence.
+    The output should not include "recoverable (needs confirmation)"
+    The output should not include "confirm with"
+    The path "$(sidecar_at "$HOB_A")" should not be exist
+    The result of function sidecar_unchanged should equal "byte-identical"
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "mv -- "
+  End
+
+  It 'repair: a Case A row whose ASIN another STORED sidecar already carries is refused, not written'
+    # The same collision one run later: the second folder is no longer a
+    # proposal, it is a stored fact. An ASIN identifies one book, so the bare
+    # folder gets nothing — the automatic write is the one nobody is asked
+    # about.
+    fake_provider_rows "$ROW_HOB"
+    mkbook_bare "$HOB_A"
+    mkbook "J. R. R. Tolkien" "The Hobbit" B0DUP00001 2012-01-01T00:00:00 "The Hobbit"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The output should include "ambiguous (nothing written): $HOB_A"
+    The output should include "already carried by $HOB_B"
+    The output should not include "would create sidecar"
+    The output should not include "repaired"
+    The path "$(sidecar_at "$HOB_A")" should not be exist
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "mv -- "
+  End
+
+  It 'repair: a probe that never ran is reported as an unconfirmed absence, never as a sidecar that exists'
+    # Review finding 3, 2026-08-24. The rc-2 branch is right to refuse — an
+    # absence that was not established is never written over — but the closing
+    # line said "N book(s) have a sidecar that could not be read", asserting
+    # the existence of a file nothing established. Eighth instance of this
+    # subsystem's recurring defect: a line stating an outcome nothing
+    # captured. The two causes now have two counts and two sentences.
+    fake_provider_rows "$ROW_WIND"
+    mkbook_bare "$WIND"
+    fake_server_ssh_probe_fails
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The output should include "unreadable sidecar (not repaired): $WIND"
+    The output should include "could not confirm whether a sidecar is there"
+    The output should include "1 book(s) were left alone: whether a sidecar is there could not be confirmed"
+    # The sentence the refusal could not support.
+    The output should not include "have a sidecar that could not be read"
+    The output should not include "does not parse"
+    The path "$(sidecar_at "$WIND")" should not be exist
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "mv -- "
+  End
+
+  # Two id-less rows: rip-provider-libation composes `id: (.AudibleProductId
+  # // "")`, empty for a book the account no longer lists, and
+  # rip::_provider_index turns that into its never-empty filler "-".
+  ROW_NIL1='{"path":"Nil One/Alpha","title":"Alpha","authors":["Nil One"],"published":"2001-01-01T00:00:00","provider":"libation","format":"m4b"}'
+  ROW_NIL2='{"path":"Nil Two/Beta","title":"Beta","authors":["Nil Two"],"published":"2002-02-02T00:00:00","provider":"libation","format":"m4b"}'
+
+  It 'repair: two books with their OWN id-less provider rows do not cross-match on the "-" filler'
+    # Review finding 4, 2026-08-24. "-" is a placeholder, not an identifier,
+    # and counting it collapsed every id-less row onto one key: two unrelated
+    # books were reported as sharing an ASIN, with an unusable
+    # `--adopt-asin "<the one book that is ->" -` remedy line to match.
+    fake_provider_rows "$ROW_NIL1"$'\n'"$ROW_NIL2"
+    mkbook_empty "Nil One/Alpha" unknown
+    mkbook_empty "Nil Two/Beta" unknown
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The output should include "recoverable (needs confirmation): Nil One/Alpha"
+    The output should include "recoverable (needs confirmation): Nil Two/Beta"
+    The output should include "2 book(s) need confirmation"
+    The output should not include "ambiguous"
+    The output should not include "also proposed for"
+    The output should not include "the one book that is -"
   End
 
   It 'cli: --adopt-asin refuses an ASIN the provider does not know'
