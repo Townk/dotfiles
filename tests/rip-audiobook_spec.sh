@@ -3690,6 +3690,238 @@ EOF
     The result of function sidecar_unchanged should equal "byte-identical"
   End
 
+  # --- companion repair: --repair-companions (Task 6) -----------------------
+  #
+  # The retroactive half of the companions feature. Measured on the live
+  # library 2026-08-24: 13 stored books carry a PDF and 246 carry a cover
+  # image, and the library describes NONE of them — they survive only because
+  # rsync moves whole directories. Task 5 records companions for every book
+  # written from now on; this sweep describes the ones already stored.
+  #
+  # Every example that writes runs the SSH branch through fake_server_ssh: the
+  # server has no jq, the JSON is assembled locally, and the remote side lists
+  # names, sizes and hashes with POSIX tools plus sha256sum.
+
+  rc_sha()   { shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1; }
+  rc_kinds() { jq -c '[.companions[].kind] | sort' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"; }
+  rc_view()  { jq -c '[(.companions|map(.kind)|sort),.ids["audible.asin"],.work.openlibrary]' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"; }
+  rc_type()  { jq -r '.companions | type' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"; }
+  rc_has_path() { jq -r 'has("_path")' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"; }
+  rc_without_companions() { jq -Sc 'del(.companions)' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"; }
+
+  # rc_mkbook — the stored book A/B: one audio file and one unrecorded PDF.
+  rc_mkbook() {
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    printf 'pdf\n'   > "$RIP_SANDBOX/server/audiobooks/A/B/B.pdf"
+  }
+  rc_plain_sidecar() {
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{}}' \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+  }
+
+  It 'repair-companions: dry run reports a book whose PDF is unrecorded and writes nothing'
+    rc_mkbook
+    rc_plain_sidecar
+    before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions"
+    The status should equal 0
+    The output should include "A/B"
+    The output should include "re-run with --apply"
+    The result of function rc_sha should equal "$before"
+  End
+
+  It 'repair-companions: --apply records the companion and touches nothing else'
+    rc_mkbook
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"audible.asin":"X1"},"work":{"openlibrary":"OL9W"}}' \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should equal 0
+    The output should include "recorded companions for 1 of 1"
+    The result of function rc_view should equal '[["pdf"],"X1","OL9W"]'
+  End
+
+  # The recorded row is the REAL size and the REAL hash of the stored file,
+  # computed on the server (which holds the only copy) — not a placeholder.
+  It 'repair-companions: the recorded row carries the real size and hash'
+    rc_mkbook
+    rc_plain_sidecar
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply && jq -c '.companions[0] | [.file,.kind,.bytes,.sha256]' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    The status should equal 0
+    The output should include "[\"B.pdf\",\"pdf\",4,\"$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/B.pdf" | cut -d' ' -f1)\"]"
+  End
+
+  It 'repair-companions: a book whose companions are already correct is left byte-identical'
+    rc_mkbook
+    jq -n --arg s "$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/B.pdf" | cut -d' ' -f1)" \
+      '{schema:1,kind:"audiobook",title:"B",authors:["A"],ids:{},companions:[{file:"B.pdf",kind:"pdf",bytes:4,sha256:$s}]}' \
+      > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should equal 0
+    The output should include "nothing to record"
+    The result of function rc_sha should equal "$before"
+  End
+
+  # THE LESSON THIS SUBSYSTEM ALREADY PAID FOR: rip::_server_sidecars silently
+  # DROPS a sidecar it cannot parse, so "unparseable" is indistinguishable from
+  # "absent" unless the sweep checks the directory itself. Overwriting one
+  # destroys identity a human could otherwise have recovered by hand.
+  It 'repair-companions: a malformed sidecar is reported, never overwritten'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    printf 'pdf\n'   > "$RIP_SANDBOX/server/audiobooks/A/B/B.pdf"
+    printf '%s' '{"schema":1, "title": "B", BROKEN' > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should not equal 0
+    The output should include "A/B"
+    The output should not include "recorded companions for 1"
+    The stderr should include "malformed sidecar"
+    The result of function rc_sha should equal "$before"
+  End
+
+  # A DRY RUN OPENS NO WRITE CONNECTION. Two ssh calls — enumerate the
+  # sidecars, list the files — and the write script (its `mv --` is the only
+  # thing that replaces a sidecar) is never handed to the server at all.
+  It 'repair-companions: a dry run opens no write connection'
+    rc_mkbook
+    rc_plain_sidecar
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions"
+    The status should equal 0
+    The output should include "re-run with --apply"
+    The result of function ssh_calls should equal "2"
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "mv --"
+  End
+
+  It 'repair-companions: --apply writes through a server with NO jq, in ONE ssh for the whole batch'
+    rc_mkbook
+    rc_plain_sidecar
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/C/D"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/C/D/D.m4b"
+    printf 'jpg\n'   > "$RIP_SANDBOX/server/audiobooks/C/D/cover.jpg"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"D","authors":["C"],"ids":{}}' \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/C/D/.fleet-book.json"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should equal 0
+    The output should include "recorded companions for 2 of 2"
+    # THREE ssh calls for two books: enumerate, list, and ONE write batch.
+    # 247 books must not be 247 round-trips.
+    The result of function ssh_calls should equal "3"
+    # …and nothing the server was asked to run mentions jq. fake_server_ssh's
+    # handpicked PATH holds none; this names the regression.
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function rc_kinds should equal '["pdf"]'
+  End
+
+  # rip::_server_sidecars ANNOTATES every row with a `_path` key that is NOT
+  # in the stored file; writing the annotated object back would permanently
+  # add a bogus field to the only copy of a book's identity. Everything else
+  # — a resolved `work`, existing `ids`, a null, a false, a title full of
+  # characters that would wreck an unquoted remote command line — must
+  # survive byte for byte.
+  RC_RICH='{"schema":1,"kind":"audiobook","title":"Elantris: 10th $Ann - Omega","authors":["Sanderson, B. \"Bran\""],"ids":{"audible.asin":"X1","isbn":null},"abridged":false,"work":{"openlibrary":"OL9W"},"source":{"provider":"libation","acquired_utc":"2026-08-22"}}'
+
+  It 'repair-companions: the written sidecar gains ONLY companions — no _path, nothing else altered'
+    rc_mkbook
+    printf '%s' "$RC_RICH" > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    expected=$(printf '%s' "$RC_RICH" | jq -Sc .)
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should equal 0
+    The output should include "recorded companions for 1 of 1"
+    The result of function rc_has_path should equal "false"
+    The result of function rc_without_companions should equal "$expected"
+  End
+
+  # ONE answer for what counts as audio. The module already answers it in
+  # rip::_dir_has_audio, rip::_sidecars_hash_primary's server-side scan and
+  # rip::_companions_json with the same 11 extensions; the remote listing this
+  # sweep ships must not be a fourth, narrower one. A retained Libation `.aax`
+  # and an uppercase `.MP3` chapter are both audio — recording either would
+  # also mean the server sha256s multi-gigabyte files it has no reason to read.
+  It 'repair-companions: audio is never recorded as a companion, whatever its case'
+    rc_mkbook
+    printf 'source-audio\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.aax"
+    printf 'chapter\n' > "$RIP_SANDBOX/server/audiobooks/A/B/01 - Chapter One.MP3"
+    rc_plain_sidecar
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should equal 0
+    The result of function rc_kinds should equal '["pdf"]'
+  End
+
+  # A book with NO companion files at all still gains the field: `[]` means
+  # "scanned, nothing there", an absent key means "never looked". jq's
+  # `length` returns 0 for `null` as well as `[]`, so `type` is what actually
+  # discriminates the two.
+  It 'repair-companions: a book with no companion files gains an empty array, not a missing key'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    rc_plain_sidecar
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should equal 0
+    The result of function rc_type should equal "array"
+    The result of function rc_kinds should equal "[]"
+  End
+
+  # A server that was never reached must not read as a library with nothing to
+  # record — the same refusal --backfill-published and --editions already make.
+  It 'repair-companions: an unreachable server records nothing and never says "nothing to record"'
+    rc_mkbook
+    rc_plain_sidecar
+    fake_server_ssh
+    printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"
+    chmod +x "$RIP_SANDBOX/ssh"
+    before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should equal 2
+    The output should not include "nothing to record"
+    The output should not include "recorded companions"
+    The stderr should include "refusing"
+    The result of function rc_sha should equal "$before"
+  End
+
+  # A write that cannot land leaves the good sidecar exactly as it was, leaves
+  # no temp file behind, and is COUNTED AS A FAILURE — never inferred from the
+  # call having been made.
+  rc_stray_tmp() { find "$RIP_SANDBOX/server" -name '*.tmp.*' | wc -l | tr -d ' '; }
+
+  It 'repair-companions: a write that fails leaves the good sidecar untouched and reports it'
+    rc_mkbook
+    rc_plain_sidecar
+    fake_server_ssh
+    before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
+    When run zsh -c "source $RIPLIB
+      chmod 555 '$RIP_SANDBOX/server/audiobooks/A/B'
+      rip::ab_repair_companions --apply; rc=\$?
+      chmod 755 '$RIP_SANDBOX/server/audiobooks/A/B'
+      exit \$rc"
+    The status should equal 1
+    The output should include "recorded companions for 0 of 1"
+    The output should include "1 sidecar(s) could not be written"
+    The result of function rc_sha should equal "$before"
+    The result of function rc_stray_tmp should equal "0"
+  End
+
+  It 'cli: --repair-companions is dispatched, and the usage names it'
+    rc_mkbook
+    rc_plain_sidecar
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --repair-companions
+    The status should equal 0
+    The output should include "re-run with --apply"
+  End
+
+  It 'cli: the usage line names --repair-companions'
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --help
+    The status should equal 2
+    The stderr should include "--repair-companions"
+  End
+
   # --- the library panel's Audible Plus marks (rip-library.html) ------------
   #
   # The panel's row rendering is JavaScript, so a mark that stops rendering is

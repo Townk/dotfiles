@@ -616,6 +616,29 @@ rip::_file_bytes() {
   [[ "$n" == <-> ]] && print -r -- "$n" || print -r -- 0
 }
 
+# _RIP_COMPANION_KIND_JQ — the companion `kind` mapping, as one jq expression,
+# in ONE place. Input `.` is the file basename; output is the kind string.
+#
+# Shared rather than copied because TWO scanners now classify a companion: the
+# push (rip::_companions_json, reading a staged directory) and the retroactive
+# sweep (rip::ab_repair_companions, reading a POSIX listing off the server,
+# where the classification cannot be done at all — cantina has no jq). A book
+# swept into the library and a book pushed into it must not end up with
+# different `kind` values for the same file.
+#
+# Case-insensitive, like the zsh `${(L)}` match it replaced: covers arrive from
+# Libation as `.jpg` and from a folder import as `.JPG` just as often.
+#
+# A plain constant, not a cache: re-sourcing this file mid-run reassigns the
+# same text, exactly as _RIP_SIDECAR_JQ does.
+typeset -g _RIP_COMPANION_KIND_JQ
+_RIP_COMPANION_KIND_JQ='(ascii_downcase) as $l
+   | if   ($l|endswith(".jpg")) or ($l|endswith(".jpeg")) or ($l|endswith(".png")) then "cover"
+     elif ($l|endswith(".pdf"))  then "pdf"
+     elif ($l|endswith(".epub")) then "epub"
+     elif ($l|endswith(".txt"))  then "txt"
+     else "other" end'
+
 # rip::_companions_json <bookdir> — the book's non-audio files as a JSON array
 # of {file, kind, bytes, sha256}. Always an array; `[]` when there are none.
 #
@@ -634,23 +657,20 @@ rip::_file_bytes() {
 # cost Step 3b exists to avoid.
 rip::_companions_json() {
   setopt localoptions noerrexit nopipefail
-  local d="$1" f base kind
+  local d="$1" f base
+  # The kind comes from the SHARED mapping, not a second copy of it — see
+  # _RIP_COMPANION_KIND_JQ above.
+  local prog='{file:$file, kind:($file|'"$_RIP_COMPANION_KIND_JQ"'), bytes:$bytes, sha256:(if $sha=="" then null else $sha end)}'
   local -a rows=()
   for f in "$d"/*(N.); do
     base="${f:t}"
     [[ "$base" == .fleet-book.json ]] && continue
     case "${(L)base}" in
       *.m4b|*.m4a|*.mp3|*.mp4|*.aac|*.flac|*.ogg|*.opus|*.wav|*.aax|*.aaxc) continue ;;
-      *.jpg|*.jpeg|*.png) kind=cover ;;
-      *.pdf)  kind=pdf ;;
-      *.epub) kind=epub ;;
-      *.txt)  kind=txt ;;
-      *) kind=other ;;
     esac
-    rows+=("$(jq -nc --arg file "$base" --arg kind "$kind" \
+    rows+=("$(jq -nc --arg file "$base" \
       --argjson bytes "$(rip::_file_bytes "$f")" \
-      --arg sha "$(rip::_sha256_of "$f")" \
-      '{file:$file, kind:$kind, bytes:$bytes, sha256:(if $sha=="" then null else $sha end)}')")
+      --arg sha "$(rip::_sha256_of "$f")" "$prog")")
   done
   if (( ${#rows} )); then
     print -rl -- "${rows[@]}" | jq -sc .
@@ -3742,6 +3762,316 @@ rip::_repair_summary() {
   if (( intended == 0 && need == 0 && amb == 0 && unid == 0 && norow == 0 && unread == 0 && unver == 0 )); then
     print -r -- "rip: nothing to repair ($checked book(s) checked, $identified already identified)"
   fi
+  return 0
+}
+
+# --- companion repair -------------------------------------------------------
+#
+# The retroactive half of the companions feature. Task 5 records companions
+# for every book written from now on; measured on the live library 2026-08-24,
+# 13 stored books carry a PDF and 246 carry a cover image and the library
+# describes NONE of them — they survive only because rsync moves whole
+# directories, and nothing in the catalogue knows they exist.
+
+# rip::_server_companion_files <base> — every stored book directory and the
+# NON-AUDIO files it holds, in ONE ssh. TAB-separated, POSIX tools only:
+#
+#   D<TAB><1|0><TAB><Author>/<Title>          1 = a .fleet-book.json is present
+#   F<TAB><Author>/<Title><TAB><bytes><TAB><sha256><TAB><basename>
+#
+# NO jq ON THE SERVER: cantina is stock Debian and shipping a remote jq is
+# what broke --backfill-published entirely across 245 books. The server lists
+# names, sizes and hashes; every byte of JSON is assembled locally, the same
+# division of labour rip::_server_sidecars and rip::_sidecars_write already
+# use.
+#
+# THE D LINE IS THE POINT. rip::_server_sidecars silently DROPS a sidecar it
+# cannot parse, so without an independent listing of the directories
+# themselves "unparseable" and "absent" are the same observation — and
+# overwriting an unparseable sidecar destroys identity a human could otherwise
+# have recovered by hand. This exact defect shipped once in this subsystem.
+#
+# AUDIO IS EXCLUDED ON THE SERVER, with the module's ONE audio-extension set
+# (rip::_dir_has_audio, rip::_sidecars_hash_primary's scan,
+# rip::_companions_json), matched case-insensitively the way
+# rip::_companions_json matches it — hence the bracket patterns, which cost no
+# fork where a `tr` would cost one per file. Not a taste question: hashing the
+# audio would mean sha256-ing every stored book, hundreds of gigabytes, to
+# learn something "the audio IS the book" says we do not want.
+#
+# ONE ssh for the whole library: 247 books must not be 247 round-trips. `-n`
+# so this can never eat a caller's stdin — three defects of that shape so far
+# in this module. And ${(qq)script}, NOT ${(q)}: the script is multi-line and
+# ${(q)} renders a newline as $'\n', bash/zsh ANSI-C quoting that a real POSIX
+# /bin/sh (dash, on Debian) cannot parse — a deterministic,
+# payload-independent no-op, and the exact shape of the "backfilled 0 of 245"
+# failure. No single quote appears in the script, which is what makes ${(qq)}
+# exact; reverify that if it ever changes.
+#
+# The closing `:` makes the exit status deterministic: without it the status
+# is whatever the last file of the last book happened to leave behind (a
+# `continue` from the audio filter, say), and this status is the only thing
+# that tells the sweep it reached the server at all.
+rip::_server_companion_files() {
+  setopt localoptions noerrexit nopipefail
+  local base="${1:-}"
+  local script='find . -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r d; do
+  d=${d#./}
+  s=0
+  if [ -f "$d/.fleet-book.json" ]; then s=1; fi
+  printf "D\t%s\t%s\n" "$s" "$d"
+  for f in "$d"/*; do
+    [ -f "$f" ] || continue
+    case "$f" in
+      *.[mM]4[bB]|*.[mM]4[aA]|*.[mM][pP]3|*.[mM][pP]4|*.[aA][aA][cC]|*.[fF][lL][aA][cC]|*.[oO][gG][gG]|*.[oO][pP][uU][sS]|*.[wW][aA][vV]|*.[aA][aA][xX]|*.[aA][aA][xX][cC]) continue ;;
+    esac
+    sz=$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null || echo 0)
+    h=$(sha256sum "$f" 2>/dev/null || shasum -a 256 "$f" 2>/dev/null)
+    h=${h%% *}
+    printf "F\t%s\t%s\t%s\t%s\n" "$d" "$sz" "$h" "${f##*/}"
+  done
+done
+:'
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    "$ssh_bin" -n -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "cd ${(q)rpath}/audiobooks && sh -c ${(qq)script} sh" 2>/dev/null
+  else
+    # No ':' — the hermetic tests' plain local dir.
+    ( cd "$base/audiobooks" 2>/dev/null && sh -c "$script" sh ) 2>/dev/null
+  fi
+}
+
+# rip::ab_repair_companions [--apply] — record each stored book's companion
+# files in its sidecar.
+#
+# Modelled on rip::ab_backfill_published, deliberately: enumerate, compute
+# LOCALLY, write in ONE batch. Dry run by default — every write here lands on
+# the only copy of a book's identity, and the sidecar cannot be reconstructed
+# from the audio.
+#
+# ADDITIVE ONLY. The stored object is amended (`.companions = …`) rather than
+# recomposed, so a resolved `work`, an existing `ids` and every other field are
+# carried through untouched — the same merge rule rip::_book_sidecar keeps.
+#
+# WHAT COUNTS AS "NEEDS RECORDING": the recorded array differs from what is on
+# disk, comparing sorted by file name. An ABSENT `companions` key is not the
+# same as `[]`: `[]` means "scanned, nothing there" and absent means "never
+# looked", so a book with no companion files still gains the empty array once.
+# (jq's `length` returns 0 for `null` as well as `[]` — only `type`
+# discriminates the two, which is why the comparison tests it.)
+#
+# AN UNPARSEABLE SIDECAR IS REPORTED AND NEVER WRITTEN OVER. See
+# rip::_server_companion_files for why that needs a second listing at all.
+#
+# EXIT CODE FOLLOWS WHAT LANDED, never whether the sweep ran: 0 only when
+# nothing is left outstanding, so a `&&` chain or a wrapper cannot read a
+# total failure as success.
+rip::ab_repair_companions() {
+  setopt localoptions noerrexit nopipefail
+  local apply=0
+  [[ "${1:-}" == "--apply" ]] && apply=1
+
+  local base; base="$(rip::remote_base)"
+
+  # THE ENUMERATION FIRST, and its failure is fatal. An unreachable server
+  # yields an empty list, which without this refusal reads as "every stored
+  # book is already described" — the ambiguity --backfill-published and
+  # --editions both had to close.
+  local rows rc=0
+  rows="$(rip::_server_sidecars)" || rc=$?
+  (( rc == 0 )) || return 2
+
+  local listing lrc=0
+  listing="$(rip::_server_companion_files "$base")" || lrc=$?
+  if (( lrc != 0 )); then
+    log_error "rip: could not list the stored book files on cantina (rc=$lrc) — refusing to record companions for a library we could not read"
+    return 2
+  fi
+
+  # ONE jq for the whole enumeration, not one per book: 247 books is seconds
+  # of pure fork otherwise, which is exactly why rip::_sidecar_index exists.
+  # It also strips the `_path` annotation once, here — that key is NOT in the
+  # stored file, and writing it back would permanently add a bogus field to
+  # the only copy of every book's identity.
+  local -A json_of=() has_sidecar=() computed=()
+  local -a dirs=()
+  local -i seen=0
+  local idx comp_lines line rel state prov asin uid json flag
+  if [[ -n "$rows" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      (( seen++ ))
+    done <<< "$rows"
+    idx="$(print -r -- "$rows" | rip::_sidecar_index)"
+    while IFS=$'\t' read -r rel state prov asin uid json; do
+      [[ -n "$rel" && -n "$json" ]] || continue
+      json_of[$rel]="$json"
+    done <<< "$idx"
+  fi
+
+  while IFS= read -r line; do
+    [[ "$line" == D$'\t'* ]] || continue
+    line="${line#D$'\t'}"
+    flag="${line%%$'\t'*}"
+    rel="${line#*$'\t'}"
+    [[ -n "$rel" ]] || continue
+    dirs+=("$rel")
+    has_sidecar[$rel]="$flag"
+  done <<< "$listing"
+
+  # The companion array for every book, in ONE jq pass over the whole listing.
+  # `.[4:] | join("\t")` rather than `.[4]`: the file name is the LAST field
+  # precisely so a name containing a tab cannot shift the columns before it.
+  local comp_prog='[ split("\n")[] | select(startswith("F\t")) | split("\t") ]
+    | group_by(.[1])[]
+    | .[0][1] + "\t" + ([ .[]
+        | (.[4:] | join("\t")) as $f
+        | {file: $f, kind: ($f | '"$_RIP_COMPANION_KIND_JQ"'),
+           bytes: ((.[2] // "0") | tonumber? // 0),
+           sha256: (if (.[3] // "") == "" then null else .[3] end)} ]
+       | sort_by(.file) | tojson)'
+  local crc=0
+  comp_lines="$(print -r -- "$listing" | jq -rRs "$comp_prog" 2>/dev/null)" || crc=$?
+  if (( crc != 0 )); then
+    log_error "rip: could not read the server file listing — nothing recorded"
+    return 2
+  fi
+  while IFS=$'\t' read -r rel json; do
+    [[ -n "$rel" ]] || continue
+    computed[$rel]="$json"
+  done <<< "$comp_lines"
+
+  # Emits "" when the recorded array already matches, otherwise
+  # "<count><TAB><the whole amended sidecar>". Comparing SORTED means a
+  # library whose sidecars were written in a different collation order is not
+  # rewritten for nothing.
+  local cmp_prog='($c | sort_by(.file)) as $want
+    | if ((.companions | type) == "array") and ((.companions | sort_by(.file)) == $want)
+      then "" else (($want | length | tostring) + "\t" + ((.companions = $want) | tojson)) end'
+
+  local -a to_rel=() to_n=() to_json=() malformed=() nosidecar=()
+  local -i failed=0 jrc=0
+  local d comp out
+  for d in "${dirs[@]}"; do
+    if [[ "${has_sidecar[$d]}" != 1 ]]; then
+      # No sidecar at all is --repair-sidecars' Case A, a different verb with
+      # a different decision to make. Named here, but it does not fail this
+      # sweep: on the live library it is a permanent one-book condition.
+      nosidecar+=("$d")
+      continue
+    fi
+    if [[ -z "${json_of[$d]}" ]]; then
+      # The directory HAS a sidecar and the enumerator could not parse it.
+      malformed+=("$d")
+      continue
+    fi
+    comp="${computed[$d]}"
+    [[ -n "$comp" ]] || comp='[]'
+    jrc=0
+    out="$(print -r -- "${json_of[$d]}" | jq -r --argjson c "$comp" "$cmp_prog" 2>/dev/null)" || jrc=$?
+    if (( jrc != 0 )); then
+      # NEVER write on a failure: an empty or half-composed payload would
+      # replace a good sidecar with nothing.
+      log_warn "rip: could not compose the companions of $d — nothing recorded for it"
+      (( failed++ ))
+      continue
+    fi
+    [[ -n "$out" ]] || continue          # already correct — never rewritten
+    to_rel+=("$d")
+    to_n+=("${out%%$'\t'*}")
+    to_json+=("${out#*$'\t'}")
+  done
+
+  local -i outstanding=$(( ${#malformed[@]} + failed ))
+  local f
+  if (( ${#malformed[@]} )); then
+    print -r -- "rip: ${#malformed[@]} stored book(s) carry a sidecar that does not parse — reported, NEVER overwritten:"
+    for f in "${(@o)malformed}"; do print -r -- "    $f"; done
+  fi
+  if (( ${#nosidecar[@]} )); then
+    print -r -- "rip: ${#nosidecar[@]} stored book(s) have no sidecar at all — run --repair-sidecars:"
+    for f in "${(@o)nosidecar}"; do print -r -- "    $f"; done
+  fi
+
+  if (( ${#to_rel[@]} == 0 )); then
+    # Narrated in BOTH modes, and split by cause. A silent --apply with
+    # nothing to record is otherwise byte-identical to a run that never
+    # reached the server, and a run where every candidate FAILED must not
+    # print the line an operator reads as "the sweep is done".
+    if (( ${#dirs[@]} == 0 && seen == 0 )); then
+      print -r -- "rip: no books found on the server — nothing to record (is cantina reachable?)"
+      return 0
+    fi
+    if (( outstanding > 0 )); then
+      print -r -- "rip: nothing recorded — $outstanding book(s) could not be read"
+      return 1
+    fi
+    print -r -- "rip: nothing to record"
+    return 0
+  fi
+
+  local -i i
+  if (( ! apply )); then
+    for (( i = 1; i <= ${#to_rel[@]}; i++ )); do
+      print -r -- "would record: ${to_rel[i]}  ->  ${to_n[i]} companion(s)"
+    done
+    print -r -- "(${#to_rel[@]} book(s); re-run with --apply)"
+    # A PARTIAL sweep must not read as a complete one, in dry run too: the
+    # operator deciding whether to --apply needs to know the run will not
+    # finish the job either way.
+    if (( outstanding > 0 )); then
+      print -r -- "rip: $outstanding book(s) could not be read"
+      return 1
+    fi
+    return 0
+  fi
+
+  # COMPOSE LOCALLY, WRITE REMOTELY, in ONE ssh for the whole sweep. The
+  # payload is the COMPLETE new sidecar, base64-framed; see
+  # rip::_sidecars_write for the atomic same-directory temp-file-then-mv
+  # guards that make a half-written sidecar impossible.
+  local -a payloads=() sent_rels=() ok_flags=()
+  local -A idx_of=()
+  local payload
+  for (( i = 1; i <= ${#to_rel[@]}; i++ )); do
+    payload="$(rip::_sidecar_payload "${to_rel[i]}" "${to_json[i]}")"
+    if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
+      log_warn "rip: could not frame the companions of ${to_rel[i]}"
+      continue
+    fi
+    payloads+=("$payload"); sent_rels+=("${to_rel[i]}"); ok_flags+=(0)
+    idx_of[${payload%%$'\t'*}]=${#payloads}
+  done
+
+  local written=""
+  (( ${#payloads[@]} > 0 )) && written="$(rip::_sidecars_write "$base" "${payloads[@]}")"
+
+  # GATED ON THE REPORTED OUTCOME, never on the write having been attempted:
+  # a book counts only when the remote loop said "ok" for it, so a connection
+  # that dies halfway leaves the rest counted as failures and named.
+  local -i recorded=0
+  local rline st key
+  while IFS= read -r rline; do
+    [[ -n "$rline" ]] || continue
+    st="${rline%%$'\t'*}"; key="${rline#*$'\t'}"
+    [[ "$st" == "ok" ]] || continue
+    i=${idx_of[$key]:-0}
+    (( i > 0 )) && ok_flags[i]=1
+  done <<< "$written"
+  for (( i = 1; i <= ${#sent_rels[@]}; i++ )); do
+    if (( ok_flags[i] )); then
+      (( recorded++ ))
+    else
+      log_warn "rip: could not record the companions of ${sent_rels[i]}"
+    fi
+  done
+  print -r -- "rip: recorded companions for $recorded of ${#to_rel[@]} sidecar(s)"
+  local -i unwritten=$(( ${#to_rel[@]} - recorded ))
+  (( unwritten > 0 )) && print -r -- "rip: $unwritten sidecar(s) could not be written"
+  (( outstanding > 0 )) && print -r -- "rip: $outstanding book(s) could not be read"
+  (( unwritten > 0 || outstanding > 0 )) && return 1
   return 0
 }
 
