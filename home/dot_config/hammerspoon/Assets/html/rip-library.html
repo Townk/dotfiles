@@ -337,17 +337,26 @@
     // Strict === true on both flags, the same discipline neverPushedHtml
     // applies to r.acquired: a row from a provider that does not emit these
     // keys must render nothing, never a claim invented from `undefined`.
-    // And the borrowed line's "not already stored" half is gated on
-    // SERVER_KNOWN for the same tri-state reason as neverPushedHtml — with
-    // the server answer still in flight, SERVER being empty is not evidence
-    // that cantina lacks this book.
+    // The borrowed line is NOT gated on SERVER_KNOWN, and that difference
+    // from neverPushedHtml is deliberate. neverPushedHtml asserts a
+    // divergence BETWEEN TWO SYSTEMS ("Libation has it, cantina does not")
+    // and genuinely needs the server's answer before it can claim anything.
+    // This line asserts only "this title is borrowed, act soon" — true from
+    // the row alone. Gating it on SERVER_KNOWN made the warning vanish
+    // exactly when it matters most: --server-library failing (server down,
+    // VPN off) leaves SERVER_KNOWN false for the panel's whole lifetime
+    // (library-dialog.lua returns without calling setServerLibrary), and
+    // every borrowed mark disappeared — the warning whose absence cost four
+    // Talon Saga books. The inLibrary half stays: it only suppresses a
+    // redundant nag about a book already on the server, and it is already
+    // false whenever SERVER_KNOWN is.
     function audiblePlusHtml(r, inLibrary) {
       if (r.plus !== true) return '';
       if (r.absent === true) {
         return '<div class="detail"><div class="plus-lapsed">' + SVG_LOCK_SM
           + '<span>Audible Plus &mdash; licence lapsed, can no longer be ripped</span></div></div>';
       }
-      if (!SERVER_KNOWN || inLibrary) return '';
+      if (inLibrary) return '';
       return '<div class="detail"><div class="plus-borrowed">' + SVG_LOCK_SM_WARN
         + '<span>Audible Plus &mdash; borrowed; rip before it lapses</span></div></div>';
     }

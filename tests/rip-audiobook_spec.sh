@@ -3360,4 +3360,94 @@ EOF
     The result of function sidecar_unchanged should equal "byte-identical"
   End
 
+  # --- the library panel's Audible Plus marks (rip-library.html) ------------
+  #
+  # The panel's row rendering is JavaScript, so a mark that stops rendering is
+  # invisible to every shell-level example above — and one of them did stop:
+  # the "borrowed; rip before it lapses" line was gated on SERVER_KNOWN, so a
+  # failed `--server-library` fetch (server down, VPN off) made the warning
+  # vanish for the panel's whole lifetime. That is the warning whose absence
+  # cost four Talon Saga books, and it must be at its loudest exactly when
+  # the server cannot be reached.
+  #
+  # node runs the panel's OWN IIFE unmodified against a small DOM stub (at
+  # boot it touches nothing but document.getElementById / addEventListener),
+  # so these examples assert the real function rather than a transcription.
+  PANEL_HTML="$SHELLSPEC_PROJECT_ROOT/home/dot_config/hammerspoon/Assets/html/rip-library.html"
+  no_node() { ! command -v node >/dev/null 2>&1; }
+
+  # panel_rows <rows-json> [server-paths-json] — the rendered #rows innerHTML.
+  # OMIT the second argument to leave the server listing UNKNOWN, which is
+  # exactly what a failed or absent --server-library fetch leaves behind
+  # (library-dialog.lua returns without calling setServerLibrary).
+  panel_rows() {
+    cat > "$RIP_SANDBOX/panel.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+// The second <script> block is the panel itself; the first is the onerror
+// shim. %%LIBRARY_JSON%% is library-dialog.lua's payload placeholder.
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', 'null');
+const els = {};
+function stub() {
+  return { innerHTML: '', textContent: '', value: '',
+           classList: { add() {}, remove() {}, toggle() {} },
+           addEventListener() {}, setAttribute() {},
+           getAttribute() { return null; }, setSelectionRange() {} };
+}
+global.document = {
+  getElementById(id) { return els[id] || (els[id] = stub()); },
+  addEventListener() {}
+};
+global.window = global;
+(0, eval)(src);
+window.__setRows(JSON.parse(process.argv[2]));
+if (process.argv[3] !== undefined) window.__setServerLibrary(JSON.parse(process.argv[3]));
+process.stdout.write(els.rows.innerHTML);
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel.js" "$@"
+  }
+
+  BORROWED='[{"id":"1","path":"Martha Wells/Fugitive Telemetry","title":"Fugitive Telemetry","authors":["Martha Wells"],"narrators":[],"plus":true,"absent":false,"acquired":false}]'
+
+  It 'panel: the borrowed mark renders even when the server listing is unknown'
+    Skip if 'node is unavailable' no_node
+    When call panel_rows "$BORROWED"
+    The status should equal 0
+    The output should include "rip before it lapses"
+  End
+
+  It 'panel: the borrowed mark still renders once the server listing lands without this book'
+    Skip if 'node is unavailable' no_node
+    When call panel_rows "$BORROWED" '["Brandon Sanderson/Wind and Truth"]'
+    The status should equal 0
+    The output should include "rip before it lapses"
+  End
+
+  # The lapsed mark comes off the row alone and never needed the server.
+  It 'panel: a lapsed Plus title is marked with the server listing unknown'
+    Skip if 'node is unavailable' no_node
+    When call panel_rows '[{"id":"1","path":"A/B","title":"B","authors":[],"narrators":[],"plus":true,"absent":true}]'
+    The status should equal 0
+    The output should include "licence lapsed"
+    The output should not include "rip before it lapses"
+  End
+
+  # WHAT MUST NOT REGRESS: neverPushedHtml asserts a divergence BETWEEN TWO
+  # SYSTEMS ("Libation has it, cantina does not"), so its tri-state gate is
+  # correct and stays — silent until the server actually answers.
+  It 'panel: "liberated, never pushed" stays silent until the server listing lands'
+    Skip if 'node is unavailable' no_node
+    When call panel_rows '[{"id":"1","path":"A/B","title":"B","authors":[],"narrators":[],"acquired":true}]'
+    The status should equal 0
+    The output should not include "never pushed"
+  End
+
+  It 'panel: "liberated, never pushed" appears once the server listing lands without the book'
+    Skip if 'node is unavailable' no_node
+    When call panel_rows '[{"id":"1","path":"A/B","title":"B","authors":[],"narrators":[],"acquired":true}]' '[]'
+    The status should equal 0
+    The output should include "never pushed"
+  End
+
 End
