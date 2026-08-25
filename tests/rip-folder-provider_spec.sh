@@ -47,6 +47,22 @@ Describe 'rip-provider-folder'
     find "$RIP_SANDBOX/staging" -name '0-bonus.pdf' 2>/dev/null | wc -l | tr -d ' '
   }
 
+  # bonus_seen_under_dest() — how many times "0-bonus.pdf" shows up in the
+  # cp-shim log: a `find "$RIP_SHIM_DEST"` snapshot taken immediately
+  # before EVERY cp call this run makes, including the one that copies the
+  # SECOND file (the .m4b). That snapshot is the discriminator "a partly-
+  # copied book is never left in place" cannot be, because it looks at
+  # state DURING the copy, not what survives cleanup afterward: a "build
+  # directly under the final name" implementation would already show
+  # 0-bonus.pdf sitting under $RIP_SHIM_DEST by the time the second file's
+  # cp runs (it landed there on the first cp); the temp-anchored
+  # implementation never does, because the temp lives outside $RIP_SHIM_DEST
+  # entirely and no snapshot of $RIP_SHIM_DEST ever sees it.
+  bonus_seen_under_dest() {
+    [ -f "$RIP_SANDBOX/cp-shim.log" ] || { printf '%s\n' 0; return; }
+    grep -c '0-bonus.pdf' "$RIP_SANDBOX/cp-shim.log" | tr -d ' '
+  }
+
   It 'capabilities: announces itself as an acquiring provider'
     When run zsh "$FOLDER_BIN" capabilities
     The status should equal 0
@@ -291,5 +307,38 @@ Describe 'rip-provider-folder'
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice" should not be exist
     The result of function bonus_pdf_anywhere should equal "0"
     chmod 644 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+  End
+
+  # Finding B (review, 2026-08-25): the ONLY thing pinning the temp anchor
+  # (Finding 1, Critical) was a push_worker-level example — it guarded the
+  # belt-and-braces half, never the provider itself. Reverting
+  # `local tmp="${dest:h}/.rip-folder.$$"` back to
+  # `local tmp="${staging:h}/.rip-folder.$$"` left the whole suite green.
+  #
+  # A `cp` shim on PATH snapshots the destination (`find "$RIP_SHIM_DEST"`)
+  # immediately before every real copy runs, then execs the genuine
+  # /bin/cp. Two source files ensure at least two snapshots: whatever the
+  # first cp call already placed is exactly what the SECOND snapshot can
+  # catch sitting under the destination while the run is still in
+  # progress — the discriminator Finding C names (bytes' location DURING
+  # the copy), which a post-hoc "does the final path exist" check cannot
+  # ever see, cleanup having already erased the evidence either way.
+  It 'acquire: nothing under the destination is visible while the copy is running — the temp anchor'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    printf 'bonus\n' > "$ROOT/Ann Leckie/Ancillary Justice/0-bonus.pdf"
+    mkdir -p "$RIP_SANDBOX/shim"
+    cat > "$RIP_SANDBOX/shim/cp" <<'EOF'
+#!/bin/sh
+find "$RIP_SHIM_DEST" >> "$RIP_SHIM_LOG" 2>/dev/null
+exec /bin/cp "$@"
+EOF
+    chmod +x "$RIP_SANDBOX/shim/cp"
+    export PATH="$RIP_SANDBOX/shim:$PATH"
+    export RIP_SHIM_DEST="$RIP_SANDBOX/staging"
+    export RIP_SHIM_LOG="$RIP_SANDBOX/cp-shim.log"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    The status should equal 0
+    The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
+    The result of function bonus_seen_under_dest should equal "0"
   End
 End

@@ -189,21 +189,25 @@ rip::push_worker() {
   # the rest of .work/.
   local listfile; listfile="$(rip::staging_root)/.work/push-$type.$$.list"
   mkdir -p "${listfile:h}"
-  # -not -path '*/.*/*': nothing inside a dot-DIRECTORY is ever a push
-  # candidate, at any depth — belt-and-suspenders alongside the acquire
-  # providers keeping their own scratch temps (.rip-folder.*, .rip-import.*)
-  # anchored outside $src entirely. `find` descends into dot-directories by
-  # default (only `-name .DS_Store` excluded a dot-FILE, never a
-  # dot-directory's contents), and a copied file's mtime is the SOURCE's,
-  # not the copy's, so the age gate above offers no protection either — a
-  # leftover or still-being-built temp sitting under $src would otherwise
-  # ship as a real book the moment `find` reached it (review finding,
-  # 2026-08-25: rip-provider-folder's own temp used to live at exactly such
-  # a path before that provider was fixed to anchor outside $src).
+  # NAME-ANCHORED, not a blanket dot-directory exclusion (review finding
+  # 2026-08-25, reverting an earlier `-not -path '*/.*/*'` on this same
+  # line): a bare "any dot-prefixed path component" pattern also matches a
+  # real, dot-prefixed TITLE — "...And Justice for All" is a real Metallica
+  # album, ".45" is a real 2006 film and rip::_check_title accepts it — and
+  # silently drops the whole album/movie from the listfile with rc 0 and no
+  # warning naming what was skipped. For rip::pipeline_worker specifically
+  # that is worse than the bug being guarded against: push_worker returns
+  # 0, the capsule reports done, and the caller then rm -f's the lossless
+  # MakeMKV intermediate — the file never reaches the server and the only
+  # local copy is gone. Excluding by NAME instead only ever matches this
+  # tool's own scratch temps (.rip-folder.*, .rip-import.*), never
+  # anything an operator could plausibly be storing.
   if (( age > 0 )); then
-    find "$src" -type f ! -name .DS_Store -not -path '*/.*/*' -mtime +"${age}s" 2>/dev/null
+    find "$src" -type f ! -name .DS_Store \
+      ! -path '*/.rip-folder.*/*' ! -path '*/.rip-import.*/*' -mtime +"${age}s" 2>/dev/null
   else
-    find "$src" -type f ! -name .DS_Store -not -path '*/.*/*' 2>/dev/null
+    find "$src" -type f ! -name .DS_Store \
+      ! -path '*/.rip-folder.*/*' ! -path '*/.rip-import.*/*' 2>/dev/null
   fi | sed "s|^$src/||" > "$listfile"
   if [[ ! -s "$listfile" ]]; then
     print -r -- "rip: nothing settled to push for $type (age gate ${age}s)"

@@ -1613,6 +1613,45 @@ EOF
     The stderr should include "could not read the stored sidecars"
   End
 
+  # Finding D (review, 2026-08-25): the example above pins only that a
+  # failure is reported — not the load-bearing OTHER half, that
+  # _RIP_STORED_SHA_FETCHED stays unset on that failure so a LATER call in
+  # the same process retries instead of being stuck with the poisoned
+  # empty cache forever. A future `_RIP_STORED_SHA_FETCHED=1` creeping back
+  # above the `return $rc` would break exactly this while the example above
+  # stayed green. A sentinel file makes the fake ssh unreachable for the
+  # FIRST call and reachable for the second, both within one process (one
+  # `zsh -c`, so the cache globals genuinely persist between the two calls).
+  It 'stored-sha index: an unreachable server does not poison the cache — a later call in the same process recovers'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"fleet.uid":"u1","local.sha256":"deadbeef"}}' \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    touch "$RIP_SANDBOX/ssh-sentinel"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+if [ -e "$RIP_SANDBOX/ssh-sentinel" ]; then
+  exit 255
+fi
+cd "$RIP_SANDBOX/server/audiobooks" || exit 2
+find . -mindepth 3 -maxdepth 3 -name .fleet-book.json 2>/dev/null | while read -r f; do
+  d=${f#./}; d=${d%/.fleet-book.json}
+  printf "%s\t" "$d"; tr -d "\n" < "$f"; printf "\n"
+done
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+    When run zsh -c "source $RIPLIB
+      rip::_stored_sha_index >/dev/null 2>/dev/null
+      first_rc=\$?
+      rm -f '$RIP_SANDBOX/ssh-sentinel'
+      rip::_stored_sha_index
+      print -ru2 -- \"first_rc=\$first_rc\""
+    The status should equal 0
+    The output should include "deadbeef	A/B"
+    The stderr should include "first_rc=2"
+  End
+
   # THE REPORT AN OPERATOR READS BEFORE DECIDING WHAT TO DELETE (review
   # finding 4, 2026-08-24). rip::_server_sidecars used to discard the ssh
   # status on both branches, so an unreachable server produced rc 0 and
