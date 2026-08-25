@@ -188,4 +188,62 @@ Describe 'rip-provider-folder'
     The result of function linecount should equal "2"
     The output should not include "one="
   End
+
+  It 'acquire: copies the book into <dest>/<Author>/<Title>/ and leaves the source alone'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
+    The status should equal 0
+    The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
+    The path "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
+    The output should include "progress -1 copying"
+  End
+
+  It 'acquire: carries companion files across, not just the audio'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    printf 'pdf\n' > "$ROOT/Ann Leckie/Ancillary Justice/bonus.pdf"
+    printf 'jpg\n' > "$ROOT/Ann Leckie/Ancillary Justice/cover.jpg"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
+    The status should equal 0
+    The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/bonus.pdf" should be exist
+    The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/cover.jpg" should be exist
+  End
+
+  It 'acquire: the caller-supplied relpath wins over any derivation'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Edited Author/Edited Title"
+    The status should equal 0
+    The path "$RIP_SANDBOX/staging/Edited Author/Edited Title/Ancillary Justice.m4b" should be exist
+    The path "$RIP_SANDBOX/staging/Ann Leckie" should not be exist
+  End
+
+  It 'acquire: a book sitting directly under the root derives no bogus author'
+    mkdir -p "$ROOT/LooseBook"
+    printf 'a\n' > "$ROOT/LooseBook/LooseBook.m4b"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/LooseBook" "$RIP_SANDBOX/staging"
+    The status should equal 0
+    The path "$RIP_SANDBOX/staging/LooseBook/LooseBook.m4b" should be exist
+  End
+
+  It 'acquire: refuses a source directory holding no m4b'
+    mkdir -p "$ROOT/Someone/Empty"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Someone/Empty" "$RIP_SANDBOX/staging"
+    The status should equal 2
+    The stderr should include "no m4b"
+    The path "$RIP_SANDBOX/staging/Someone/Empty" should not be exist
+  End
+
+  It 'acquire: refuses an id that is not a directory'
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/nope" "$RIP_SANDBOX/staging"
+    The status should equal 2
+    The stderr should include "no such directory"
+  End
+
+  It 'acquire: a partly-copied book is never left in place under the final name'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    chmod 000 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
+    The status should not equal 0
+    The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice" should not be exist
+    chmod 644 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+  End
 End

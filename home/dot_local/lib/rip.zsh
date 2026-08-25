@@ -2546,6 +2546,30 @@ rip::_server_sidecars() {
   done <<< "$raw"
 }
 
+# rip::_stored_sha_index — "<sha256>\t<Author>/<Title>" for every stored book
+# whose sidecar carries ids["local.sha256"].
+#
+# This is the dedupe key for locally-imported books. It is EXACT: it
+# identifies the same bytes regardless of how anyone spelled the author,
+# which path and title matching cannot do (Libation files a book under
+# "Shawn Speakman - editor" where the server has "Shawn Speakman", and
+# normalized author matching fails on that too).
+#
+# Derived from the ONE ssh rip::_server_sidecars already makes, and cached
+# for the life of the process: an acquire batch consults it per book and
+# must not open a connection per book.
+typeset -g _RIP_STORED_SHA_FETCHED
+typeset -g _RIP_STORED_SHA
+rip::_stored_sha_index() {
+  setopt localoptions noerrexit nopipefail
+  if [[ -z "${_RIP_STORED_SHA_FETCHED:-}" ]]; then
+    _RIP_STORED_SHA_FETCHED=1
+    _RIP_STORED_SHA="$(rip::_server_sidecars 2>/dev/null \
+      | jq -r 'select((.ids["local.sha256"] // "") != "") | "\(.ids["local.sha256"])\t\(._path)"' 2>/dev/null)"
+  fi
+  print -r -- "$_RIP_STORED_SHA"
+}
+
 # rip::ab_editions — works stored in more than one edition.
 #
 # The rule (spec 2026-08-24): same normalized first author, same normalized

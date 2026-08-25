@@ -133,6 +133,90 @@ cmd_list() {
   done
 }
 
+# cmd_acquire <bookdir> <destdir> [relpath] — COPY a local book into staging.
+#
+# COPY, never move. The push deletes the STAGED copy after a verified
+# transfer, never the source, so the operator keeps their original collection
+# and the extra disk is transient. A move would mean a failed verify leaves no
+# original anywhere — and this is the one flow where the local copy IS the
+# original. There is no --move here, deliberately.
+#
+# Built under a temporary name and renamed into place only on success: a
+# half-copied directory sitting under the final name would be pushed as a
+# truncated book, and the push cannot tell the difference (rip::ab_import
+# was bitten by exactly this).
+cmd_acquire() {
+  setopt localoptions noerrexit nopipefail
+  local src="$1" dest="$2"
+  [[ -d "$src" ]] || die "no such directory: $src"
+  local -a audio=("$src"/*.m4b(N))
+  (( ${#audio} )) || die "no m4b in $src — nothing to acquire"
+
+  # The caller OWNS the destination path. Do not re-derive it here when it is
+  # given: (a) a later panel lets the operator EDIT author/title inline
+  # before ripping, and re-deriving would silently discard that edit; (b) a
+  # root guessed as ${src:h:h} is wrong for a book sitting directly under the
+  # chosen root — for /root/Book that yields "/", promoting the root's own
+  # name into "author". `acquire <id> <destdir> [relpath]` is additive: a
+  # provider that names its own output (libation) ignores a third argument,
+  # exactly as `list [root]` is ignored by a provider that owns a catalogue.
+  local rel="${3:-}"
+  if [[ -z "$rel" ]]; then
+    local author="" title="" srcname=""
+    IFS=$'\x1f' read -r author title srcname <<< "$(_derive "$src" "${src:h:h}")"
+    # _derive's directory-structure branch reports the segment right before
+    # the title as "author", whichever root it is handed — correct for a
+    # proper Author/Title layout (the common, documented case), wrong for a
+    # book sitting directly under the operator's chosen root, where the
+    # guessed grandparent overshoots past the real root and its OWN name
+    # gets promoted into "author" (the exact failure the caller-relpath
+    # comment above names). Without the real root, acquire cannot always
+    # tell the two shapes apart from $src's path alone — but ONE guessed
+    # root is never plausible: one that coincides with the parent of this
+    # tool's own staging destination. The operator's book collection and
+    # this run's transient staging tree are different, unrelated trees; a
+    # guess that lands on the same directory as the latter has climbed too
+    # far and is discarded in favor of the safe default (title only).
+    if [[ -n "$author" && "${src:h:h:A}" == "${dest:A:h}" ]]; then
+      author=""
+    fi
+    rel="${author:+$author/}$title"
+  fi
+
+  mkdir -p "$dest" || die "cannot create $dest"
+  local staging="$dest/$rel"
+  local tmp="${staging:h}/.rip-folder.$$"
+  mkdir -p "${staging:h}" || die "cannot create ${staging:h}"
+  rm -rf -- "$tmp"
+  mkdir -p "$tmp" || die "cannot create the staging temp for $rel"
+
+  print -r -- "progress -1 copying"
+  local f copy_rc=0
+  for f in "$src"/*(N.); do
+    if ! cp -p -- "$f" "$tmp/"; then
+      copy_rc=1
+      break
+    fi
+  done
+  if (( copy_rc != 0 )); then
+    rm -rf -- "$tmp"
+    die "copy failed for ${f:t}"
+  fi
+
+  # The destination must not already exist: publishing over it would silently
+  # merge two books. rip::ab_worker refuses an already-staged book upstream,
+  # so reaching here means something raced us.
+  if [[ -e "$staging" ]]; then
+    rm -rf -- "$tmp"
+    die "already staged: $rel"
+  fi
+  if ! mv -- "$tmp" "$staging"; then
+    rm -rf -- "$tmp"
+    die "could not publish $rel into staging"
+  fi
+  return 0
+}
+
 case "${1:-}" in
   capabilities) cmd_capabilities ;;
   list) shift; cmd_list "${1:-}" ;;

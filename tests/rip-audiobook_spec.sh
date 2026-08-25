@@ -1523,6 +1523,28 @@ FAKECP
     The output should equal ""
   End
 
+  # rip::_stored_sha_index — the dedupe key acquire consults for a locally
+  # imported book: "<sha256>\t<Author>/<Title>" for every stored sidecar
+  # carrying ids["local.sha256"]. Derived from the same rip::_server_sidecars
+  # enumeration the editions report above already uses, not a second ssh.
+  It 'stored-sha index: maps a stored local.sha256 to its book path'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"fleet.uid":"u1","local.sha256":"deadbeef"}}' \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
+    The status should equal 0
+    The output should include "deadbeef	A/B"
+  End
+
+  It 'stored-sha index: a sidecar with no local.sha256 contributes nothing'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"audible.asin":"X1"}}' \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
+    The status should equal 0
+    The output should equal ""
+  End
+
   # THE REPORT AN OPERATOR READS BEFORE DECIDING WHAT TO DELETE (review
   # finding 4, 2026-08-24). rip::_server_sidecars used to discard the ssh
   # status on both branches, so an unreachable server produced rc 0 and
