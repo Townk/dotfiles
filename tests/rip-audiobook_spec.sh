@@ -638,6 +638,44 @@ EOF
     The stderr should include "1 already stored"
   End
 
+  # --- Task 5, Step 3b: identity assigned at import ----------------------
+  #
+  # ids["local.sha256"] used to be written ONLY by --repair-sidecars Case C,
+  # gated to provider "manual" — so a folder-acquired book never got it in
+  # its OWN sidecar, and Task 4's byte-level duplicate refusal above (which
+  # this file's fixtures always hand-author) could never fire against a
+  # re-import of a book THIS feature itself imported. These two examples
+  # prove the gap is closed: no hand-authored sidecar anywhere below — the
+  # first import's own sidecar is what the second import's refusal reads.
+
+  It 'session: a folder-provider acquire mints a fleet.uid and records the real hash of the primary file'
+    mkdir -p "$RIP_SANDBOX/incoming/Orig"
+    printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
+    want_sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/Orig/orig.m4b" | cut -d' ' -f1)
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null 2>&1 && jq -r '((.ids[\"fleet.uid\"]//\"\")|length>0)' $RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json && jq -r '.ids[\"local.sha256\"]' $RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json"
+    The status should equal 0
+    The lines of output should equal 2
+    The line 1 of output should equal "true"
+    The line 2 of output should equal "$want_sha"
+  End
+
+  It 'session: identity assigned at import closes the loop — a folder-provider re-import of the same bytes is refused'
+    mkdir -p "$RIP_SANDBOX/incoming/Orig"
+    printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
+    zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json" >/dev/null 2>&1
+
+    mkdir -p "$RIP_SANDBOX/incoming/Copy"
+    printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Copy/copy.m4b"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Copy\",\"path\":\"A/Copy\",\"title\":\"Copy\"}]}" > "$RIP_SANDBOX/plan2.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan2.json"
+    The status should equal 0
+    The stderr should include "already stored as"
+    The stderr should include "A/Orig"
+    The path "$RIP_SANDBOX/server/audiobooks/A/Copy" should not be exist
+  End
+
   # The index is a DEDUPE check (Task 3's own contract): an unreachable
   # server must never read as "not a duplicate" — that would silently
   # disable dedupe on an outage. Simulated with the sandbox's own plain-dir

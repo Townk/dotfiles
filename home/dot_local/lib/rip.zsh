@@ -557,12 +557,85 @@ rip::_book_meta_for() {
         | jq -c --arg p "$prev" 'select((.path // "") == $p)' 2>/dev/null | head -1)"
   fi
   if [[ -n "$row" ]]; then
+    # "Identity at import, not repaired later" (spec). ids["local.sha256"]
+    # used to be written ONLY by --repair-sidecars Case C, gated to provider
+    # "manual" — so a folder-acquired book never got identity of its own,
+    # and the byte-level duplicate refusal in rip::ab_worker could never
+    # recognize a re-import of a book THIS feature itself imported. This is
+    # the one place every row (index, provider-list fallback) converges
+    # before becoming a sidecar, so it is where that gap closes: a
+    # provider-"folder" row is stamped with a locally minted fleet.uid, the
+    # same durable join key Case C mints, PAIRED with local.sha256.
+    #
+    # local.sha256 is never (re)hashed here — rip::ab_worker already hashes
+    # the primary m4b once, for its own duplicate-bytes check, and threads
+    # that exact value into this row's ids["local.sha256"] (see the targeted
+    # index patch in rip::ab_worker's acquire loop) before this function
+    # ever runs. A row with nothing threaded gets nothing minted — the same
+    # refusal Case C makes for a book it cannot hash: half an identity pair
+    # is the very exposure this feature exists to close.
+    if [[ "$(print -r -- "$row" | jq -r '.provider // ""' 2>/dev/null)" == "folder" ]]; then
+      local sha256; sha256="$(print -r -- "$row" | jq -r '.ids["local.sha256"] // ""' 2>/dev/null)"
+      if [[ -n "$sha256" ]]; then
+        local uid; uid="$(uuidgen 2>/dev/null)"; uid="${(L)uid}"
+        if [[ -n "$uid" ]]; then
+          row="$(print -r -- "$row" | jq -c --arg u "$uid" --arg s "$sha256" \
+            '.ids = ((.ids // {}) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
+        else
+          log_warn "rip: uuidgen produced nothing — cannot assign a local identity to $rel"
+        fi
+      fi
+    fi
     print -r -- "$row"
     return 0
   fi
   jq -nc --arg author "${rel%%/*}" --arg title "${rel##*/}" \
     '{path: ($author + "/" + $title), title: $title, authors: [$author],
       ids: {}, provider: "unknown", format: "m4b"}'
+}
+
+# rip::_file_bytes <file> — size in bytes. macOS stat and GNU stat disagree on
+# flags, so try GNU first and fall back; print 0 rather than an empty string,
+# because the caller feeds this to jq --argjson.
+rip::_file_bytes() {
+  setopt localoptions noerrexit nopipefail
+  local n
+  n="$(stat -c %s -- "$1" 2>/dev/null)" || n="$(stat -f %z -- "$1" 2>/dev/null)"
+  [[ "$n" == <-> ]] && print -r -- "$n" || print -r -- 0
+}
+
+# rip::_companions_json <bookdir> — the book's non-audio files as a JSON array
+# of {file, kind, bytes, sha256}. Always an array; `[]` when there are none.
+#
+# The audio and the sidecar itself are excluded: the audio IS the book, and a
+# sidecar listing itself is a fixpoint nobody needs. Everything else that
+# shipped with the book is recorded, cover included — one uniform notion of
+# "the files belonging to this book" beats two, and consumers filter by kind.
+rip::_companions_json() {
+  setopt localoptions noerrexit nopipefail
+  local d="$1" f base kind
+  local -a rows=()
+  for f in "$d"/*(N.); do
+    base="${f:t}"
+    [[ "$base" == .fleet-book.json ]] && continue
+    case "${(L)base}" in
+      *.m4b) continue ;;
+      *.jpg|*.jpeg|*.png) kind=cover ;;
+      *.pdf)  kind=pdf ;;
+      *.epub) kind=epub ;;
+      *.txt)  kind=txt ;;
+      *) kind=other ;;
+    esac
+    rows+=("$(jq -nc --arg file "$base" --arg kind "$kind" \
+      --argjson bytes "$(rip::_file_bytes "$f")" \
+      --arg sha "$(rip::_sha256_of "$f")" \
+      '{file:$file, kind:$kind, bytes:$bytes, sha256:(if $sha=="" then null else $sha end)}')")
+  done
+  if (( ${#rows} )); then
+    print -rl -- "${rows[@]}" | jq -sc .
+  else
+    print -r -- "[]"
+  fi
 }
 
 # _RIP_SIDECAR_JQ — the sidecar SCHEMA, as one jq program, in ONE place.
@@ -591,6 +664,7 @@ _RIP_SIDECAR_JQ='{schema: 1, kind: "audiobook",
    published: ($r.published // null),
    ids: ($r.ids // {}),
    work: null,
+   companions: $companions,
    source: {provider: ($r.provider // "unknown"),
             provider_version: ($r.provider_version // null),
             acquired_utc: ($r.acquired_utc // null),
@@ -600,11 +674,17 @@ _RIP_SIDECAR_JQ='{schema: 1, kind: "audiobook",
 # provider row, on stdout. The pretty (non-compact) shape is deliberate: it
 # is what rip::_book_sidecar writes at every push, and a repaired sidecar
 # must not be distinguishable from one.
+#
+# companions is always [] here: this composer builds a sidecar from a
+# provider ROW alone, with no local directory to scan (--repair-sidecars
+# Case A composes for a book that exists only on the server). There is
+# nothing to merge against either — Case A only ever fires when no sidecar
+# exists yet — so [] is not a loss, just the honest "not scanned" answer.
 rip::_sidecar_compose() {
   setopt localoptions noerrexit nopipefail
   local row="${1:-}"
   [[ -n "$row" ]] || row='{}'
-  jq -n --argjson r "$row" "$_RIP_SIDECAR_JQ" 2>/dev/null
+  jq -n --argjson r "$row" --argjson companions '[]' "$_RIP_SIDECAR_JQ" 2>/dev/null
 }
 
 # rip::_book_sidecar <book_dir> <meta_json_file> — write or MERGE the
@@ -624,12 +704,19 @@ rip::_book_sidecar() {
   [[ -d "$dir" ]] || { log_error "rip: no such book dir: $dir"; return 1 }
   [[ -f "$meta" ]] || { log_error "rip: no such book meta: $meta"; return 1 }
 
-  local built
+  local built companions
+  # The book dir's current companion files, scanned FRESH on every call —
+  # unlike ids/work below, this is a live reflection of what's on disk right
+  # now, not operator-resolved metadata to protect across pushes, so it must
+  # never be frozen at whatever the first push happened to see.
+  companions="$(rip::_companions_json "$dir")"
+  [[ -n "$companions" ]] || companions='[]'
   # ONE composer for the whole module (see _RIP_SIDECAR_JQ above): a sidecar
   # repaired by rip::ab_repair_sidecars or adopted by rip::ab_adopt_asin must
   # come out byte-shaped like this freshly-pushed one, which a second copy of
   # the program would guarantee only until someone edited one of them.
-  built="$(jq -n --slurpfile m "$meta" '($m[0] // {}) as $r | '"$_RIP_SIDECAR_JQ" 2>/dev/null)" \
+  built="$(jq -n --slurpfile m "$meta" --argjson companions "$companions" \
+    '($m[0] // {}) as $r | '"$_RIP_SIDECAR_JQ" 2>/dev/null)" \
     || { log_error "rip: could not build a sidecar for $dir"; return 1 }
 
   local merged="$built"
@@ -644,8 +731,15 @@ rip::_book_sidecar() {
     # "already recorded" (see the merge-rule note above), so strip
     # null-valued keys from it before merging — a resolved `work` and a
     # foreign `ids` entry are non-null and still win untouched.
+    #
+    # `.companions` is ALSO stripped from the old side, deliberately unlike
+    # ids/work: those are protected across pushes on purpose, but companions
+    # is a fresh scan every time (see above) — jq's `*` does not merge two
+    # array values element-wise, it just lets one win outright, so leaving
+    # the old array in would freeze companions at whatever the FIRST push
+    # saw and a PDF added later would never appear.
     merged="$(jq -n --argjson new "$built" --slurpfile old "$sidecar" \
-      '$new * (($old[0] // {}) | with_entries(select(.value != null)))' 2>/dev/null)" \
+      '$new * (($old[0] // {}) | del(.companions) | with_entries(select(.value != null)))' 2>/dev/null)" \
       || { log_error "rip: could not merge the sidecar at $sidecar"; return 1 }
   fi
 
@@ -3726,8 +3820,14 @@ rip::ab_adopt_asin() {
   #   * `work` is never overwritten;
   #   * source.provider is taken from the ROW — the one field the old sidecar
   #     must not win, because "unknown" is exactly what is being corrected.
+  # companions is [] here for the same reason rip::_sidecar_compose passes
+  # it: this composer works from the stored sidecar and a provider row, with
+  # no local directory to rescan. $keep below does not special-case
+  # companions the way it does ids/work/source, so any real array already on
+  # the stored sidecar ($o) survives untouched via `$new * $keep` — only a
+  # book with no companions recorded yet is left at [].
   local merged
-  merged="$(jq -n --argjson row "$row" --argjson old "$oldjson" --arg pn "$pname" --arg a "$asin" '
+  merged="$(jq -n --argjson row "$row" --argjson old "$oldjson" --arg pn "$pname" --arg a "$asin" --argjson companions '[]' '
     ($row | if ((.provider // "") == "" or .provider == "unknown") then .provider = $pn else . end) as $r
     | ('"$_RIP_SIDECAR_JQ"') as $new
     | ($old // {}) as $o
@@ -4647,14 +4747,34 @@ rip::ab_worker() {
     # cantina" refusal above (keyed on PATH); this one is keyed on BYTES,
     # and both must keep firing independently. $id is still the folder
     # provider's SOURCE directory here, ahead of any copy into staging.
-    if [[ "$provider" == folder && $sha_idx_rc -eq 0 ]]; then
+    #
+    # The hash is computed regardless of $sha_idx_rc now (Task 5, Step 3b):
+    # only the DUPLICATE COMPARISON below needs the stored-sha index, but
+    # "identity assigned at import" (spec) must not depend on cantina being
+    # reachable — a folder book acquired while the dedupe index couldn't be
+    # fetched still needs its own hash threaded through, or it would carry
+    # no local.sha256 at all and re-enter exactly the gap this task closes.
+    if [[ "$provider" == folder ]]; then
       primary="$(print -rl -- "$id"/*.m4b(N) | head -1)"
       if [[ -n "$primary" ]]; then
         sha="$(rip::_sha256_of "$primary")"
-        if [[ -n "$sha" && -n "${stored_sha[$sha]:-}" ]]; then
+        if [[ $sha_idx_rc -eq 0 && -n "$sha" && -n "${stored_sha[$sha]:-}" ]]; then
           log_error "rip: $bpath is already stored as \"${stored_sha[$sha]}\" (identical bytes) — skipping"
           dup=$(( dup + 1 ))
           continue
+        fi
+        if [[ -n "$sha" ]]; then
+          # Thread the hash into THIS item's meta-index row now, while it is
+          # in hand — the same targeted by-path jq patch the re-key step
+          # below uses on this same file. rip::_book_meta_for (called later,
+          # from the enrichment stage after every item in this batch has
+          # been acquired) mints the rest of this book's local identity from
+          # it, rather than hashing the same multi-gigabyte file twice.
+          jq -c --arg p "$bpath" --arg s "$sha" \
+            'if .path == $p then .ids = ((.ids // {}) + {"local.sha256": $s}) else . end' \
+            "$index" > "$index.tmp" \
+            && mv -f -- "$index.tmp" "$index" \
+            || { rm -f -- "$index.tmp"; log_warn "rip: could not record the local hash for $bpath in the meta index — its identity will not be assigned this push" }
         fi
       fi
     fi

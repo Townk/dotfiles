@@ -1793,6 +1793,67 @@ EOF
     The output should equal '["The Reckoners, Book 1","OL15168631W","x1","B00ECDZ08I"]'
   End
 
+  # --- sidecar: companion files (Task 5) -------------------------------
+  #
+  # Measured on the live library 2026-08-24: 13 stored books already carry a
+  # PDF, plus 246 cover images, and the library records none of them. The
+  # cover is recorded too, deliberately — one uniform notion of "the files
+  # belonging to this book" beats two, and consumers filter by `kind`.
+
+  It 'sidecar: records companion files with kind, size and hash'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
+    printf 'pdf-bytes\n' > "$RIP_SANDBOX/bk/B.pdf"
+    printf 'jpg-bytes\n' > "$RIP_SANDBOX/bk/B.jpg"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.companions[] | {file,kind}] | sort_by(.file)' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal '[{"file":"B.jpg","kind":"cover"},{"file":"B.pdf","kind":"pdf"}]'
+  End
+
+  It 'sidecar: the audio file itself is NOT a companion'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '.companions' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal "[]"
+  End
+
+  It 'sidecar: the sidecar itself is never listed as a companion'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B"}' | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '[.companions[].file] | index(\".fleet-book.json\") // \"absent\"' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal "absent"
+  End
+
+  It 'sidecar: a companion hash is the real hash of the file'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
+    printf 'pdf-bytes\n' > "$RIP_SANDBOX/bk/B.pdf"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '.companions[0].sha256' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal "$(shasum -a 256 "$RIP_SANDBOX/bk/B.pdf" | cut -d' ' -f1)"
+  End
+
+  # NOTE: the length check alone does not discriminate — jq's `length`
+  # returns 0 for `null` too, so a sidecar with NO `.companions` key at all
+  # would still print 0 and pass. `type` is what actually proves the key is
+  # an array (`[]`), not merely absent.
+  It 'sidecar: an existing resolved work and ids survive the companions addition'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","ids":{"audible.asin":"X1"},"work":{"openlibrary":"OL9W"}}' | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.work.openlibrary,.ids[\"audible.asin\"],(.companions|type),(.companions|length)]' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal '["OL9W","X1","array",0]'
+  End
+
   It 'sidecar: records published from the meta row'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"published":"2022-10-04T07:00:00","provider":"libation","format":"m4b"}' > "$RIP_SANDBOX/m.json"
