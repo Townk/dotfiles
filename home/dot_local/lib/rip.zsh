@@ -533,6 +533,48 @@ rip::_book_meta_for() {
       ids: {}, provider: "unknown", format: "m4b"}'
 }
 
+# _RIP_SIDECAR_JQ — the sidecar SCHEMA, as one jq program, in ONE place.
+#
+# Reads the provider row from `$r` and emits the whole `.fleet-book.json`
+# object. Three call sites now compose a sidecar — the push
+# (rip::_book_sidecar), the repair sweep (rip::ab_repair_sidecars) and the
+# confirmation verb (rip::ab_adopt_asin) — and a repaired sidecar that did
+# not come out shaped like a freshly-pushed one would be a second, silently
+# diverging schema on the only copy of every book's identity. So the program
+# is shared rather than copied.
+#
+# A plain constant, not a cache: re-sourcing this file mid-run reassigns the
+# same text, so it needs none of the guards _RIP_AB_PROVIDER_ROWS carries.
+typeset -g _RIP_SIDECAR_JQ
+_RIP_SIDECAR_JQ='{schema: 1, kind: "audiobook",
+   title: ($r.title // ""),
+   subtitle: ($r.subtitle // null),
+   authors: ($r.authors // []),
+   narrators: ($r.narrators // []),
+   series: (if ($r.series // "") == "" then null
+            else {name: $r.series, position: ($r.series_position // null)} end),
+   duration_s: ($r.duration_s // null),
+   language: ($r.language // null),
+   abridged: (if ($r|has("abridged")) then $r.abridged else null end),
+   published: ($r.published // null),
+   ids: ($r.ids // {}),
+   work: null,
+   source: {provider: ($r.provider // "unknown"),
+            provider_version: ($r.provider_version // null),
+            acquired_utc: ($r.acquired_utc // null),
+            format: ($r.format // "m4b")}}'
+
+# rip::_sidecar_compose <provider-row-json> — the composed sidecar for one
+# provider row, on stdout. The pretty (non-compact) shape is deliberate: it
+# is what rip::_book_sidecar writes at every push, and a repaired sidecar
+# must not be distinguishable from one.
+rip::_sidecar_compose() {
+  setopt localoptions noerrexit nopipefail
+  local row="${1:-}"
+  [[ -n "$row" ]] || row='{}'
+  jq -n --argjson r "$row" "$_RIP_SIDECAR_JQ" 2>/dev/null
+}
+
 # rip::_book_sidecar <book_dir> <meta_json_file> — write or MERGE the
 # sidecar. Merge rule: the existing file wins at every depth (jq's `*` with
 # the old object on the right), which is what protects a resolved `work` and
@@ -551,25 +593,11 @@ rip::_book_sidecar() {
   [[ -f "$meta" ]] || { log_error "rip: no such book meta: $meta"; return 1 }
 
   local built
-  built="$(jq -n --slurpfile m "$meta" '
-    ($m[0] // {}) as $r
-    | {schema: 1, kind: "audiobook",
-       title: ($r.title // ""),
-       subtitle: ($r.subtitle // null),
-       authors: ($r.authors // []),
-       narrators: ($r.narrators // []),
-       series: (if ($r.series // "") == "" then null
-                else {name: $r.series, position: ($r.series_position // null)} end),
-       duration_s: ($r.duration_s // null),
-       language: ($r.language // null),
-       abridged: (if ($r|has("abridged")) then $r.abridged else null end),
-       published: ($r.published // null),
-       ids: ($r.ids // {}),
-       work: null,
-       source: {provider: ($r.provider // "unknown"),
-                provider_version: ($r.provider_version // null),
-                acquired_utc: ($r.acquired_utc // null),
-                format: ($r.format // "m4b")}}' 2>/dev/null)" \
+  # ONE composer for the whole module (see _RIP_SIDECAR_JQ above): a sidecar
+  # repaired by rip::ab_repair_sidecars or adopted by rip::ab_adopt_asin must
+  # come out byte-shaped like this freshly-pushed one, which a second copy of
+  # the program would guarantee only until someone edited one of them.
+  built="$(jq -n --slurpfile m "$meta" '($m[0] // {}) as $r | '"$_RIP_SIDECAR_JQ" 2>/dev/null)" \
     || { log_error "rip: could not build a sidecar for $dir"; return 1 }
 
   local merged="$built"
@@ -2411,7 +2439,7 @@ rip::ab_backfill_published() {
   local base; base="$(rip::remote_base)"
   # $to_fill holds "<rel>\t<date>" for the dry-run report and the tallies;
   # $to_fill_json holds the SAME books' stored JSON, index for index, because
-  # the replacement sidecar is composed HERE (see rip::_sidecars_write_published
+  # the replacement sidecar is composed HERE (see rip::_sidecars_write
   # — the server has no jq) and composing it needs the original object, not
   # just the path.
   local -a to_fill=() to_fill_json=()
@@ -2527,7 +2555,7 @@ rip::ab_backfill_published() {
 
   # COMPOSE LOCALLY, WRITE REMOTELY (live finding, 2026-08-24). The whole new
   # sidecar is built here, where jq exists, and shipped as opaque base64 —
-  # see rip::_sidecars_write_published for why the server cannot be asked to
+  # see rip::_sidecars_write for why the server cannot be asked to
   # do it. `del(._path)`: rip::_server_sidecars ANNOTATES every row it emits
   # with the "<Author>/<Title>" it came from, and that key is NOT in the
   # stored file — writing the annotated object back would permanently add a
@@ -2554,7 +2582,7 @@ rip::ab_backfill_published() {
 
   # ONE ssh for the whole sweep: 245 books is 245 round-trips otherwise.
   local out=""
-  (( ${#payloads[@]} > 0 )) && out="$(rip::_sidecars_write_published "$base" "${payloads[@]}")"
+  (( ${#payloads[@]} > 0 )) && out="$(rip::_sidecars_write "$base" "${payloads[@]}")"
 
   # GATED ON THE REPORTED OUTCOME, never on the write having been attempted:
   # a book counts as filled only when the remote loop said "ok" for it, so an
@@ -2591,8 +2619,15 @@ rip::ab_backfill_published() {
   return 0
 }
 
-# rip::_sidecars_write_published <base> <payload…> — write a batch of
+# rip::_sidecars_write <base> <payload…> — write a batch of
 # already-composed sidecars, atomically, in ONE ssh.
+#
+# Whole-sidecar, not published-only: the payload is the COMPLETE new file, so
+# the same transport carries a backfilled date (rip::ab_backfill_published), a
+# sidecar created from nothing (rip::ab_repair_sidecars, Case A), an assigned
+# local identity (Case C) and an adopted ASIN (rip::ab_adopt_asin). It was
+# named `_sidecars_write_published` while backfill was its only caller;
+# duplicating it per verb would have meant four copies of the guards below.
 #
 # NO jq ON THE SERVER. This used to run `jq --arg d … "$f" > "$t"` REMOTELY,
 # one ssh per book. cantina (stock Debian) has no jq and media@ has no
@@ -2632,7 +2667,7 @@ rip::ab_backfill_published() {
 # input line so the caller can count what ACTUALLY landed rather than infer
 # it from an exit status: a connection that dies mid-stream simply stops
 # reporting, and every unreported book is a failure.
-rip::_sidecars_write_published() {
+rip::_sidecars_write() {
   setopt localoptions noerrexit nopipefail
   local base="$1"; shift
   (( $# > 0 )) || return 0
@@ -2666,6 +2701,489 @@ done'
   else
     # No ':' — the hermetic tests' plain local dir.
     print -rl -- "$@" | ( cd "$base/audiobooks" 2>/dev/null && sh -c "$script" sh ) 2>/dev/null
+  fi
+  return 0
+}
+
+# --- sidecar repair ---------------------------------------------------------
+#
+# A book folder is the unit the server stores; .fleet-book.json is the only
+# copy of WHO that book is, and it cannot be recomputed from the audio.
+# Measured 2026-08-24: 247 book directories, 246 sidecars — and among the 246,
+# some carry `ids: {}` (the orphaned-identity fingerprint the canonicalization
+# bug produced, fixed in 2f649ae6). Nothing reported either gap.
+#
+# --repair-sidecars is the report AND the repair, and it discriminates on
+# EVIDENCE rather than on the `provider` field, because that field is exactly
+# what is untrustworthy in a book whose identity was lost:
+#
+#   Case A  no sidecar at all, and a provider row matches the composed path
+#           EXACTLY            -> compose and write. The only automatic write.
+#   Case B  sidecar present, `ids` empty, a provider row IS findable (by exact
+#           path, or by a title-component match that yields exactly ONE
+#           candidate)         -> REPORT ONLY, never written, not under
+#                                 --apply. Confirmed with --adopt-asin.
+#   Case C  sidecar present, `ids` empty, NO provider row, and the recorded
+#           provider is "manual" -> assign identity: a locally minted
+#                                 `fleet.uid` plus a server-computed
+#                                 `local.sha256` of the primary audio file.
+#   (4th)   sidecar present, `ids` empty, NO provider row, provider NOT
+#           "manual"           -> UNIDENTIFIABLE. Reported by name, nothing
+#                                 written, nothing minted.
+#
+# The fourth outcome is not a gap in the three — it is the refusal that keeps
+# the other three honest. A Libation book that was returned or removed from
+# the account lands there: stamping it with a `fleet.uid` would permanently
+# disconnect it from an ASIN it may still be entitled to, and `fleet.uid` is
+# durable precisely so that nothing later dislodges it. Refuse rather than
+# guess, the same doctrine the exact-path join follows.
+
+# rip::_sidecar_payload <relpath> <json-text> — one framed line for
+# rip::_sidecars_write: "<base64 relpath><TAB><base64 json>".
+#
+# jq does the base64, not the local `base64` binary: GNU base64 wraps at 76
+# columns by default and a wrapped payload would be word-split by the remote
+# `read`. The relpath sent is the SERVER's own spelling (what its `find`
+# printed), never a locally normalized one — NFC normalization exists to
+# match, not to rename.
+rip::_sidecar_payload() {
+  setopt localoptions noerrexit nopipefail
+  jq -rn --arg r "${1:-}" --arg b "${2:-}" '($r|@base64) + "\t" + ($b|@base64)' 2>/dev/null
+}
+
+# rip::_sidecar_index — stdin: rip::_server_sidecars rows. stdout: one
+# TAB-separated line per sidecar, so a sweep can classify 247 books without
+# spawning 247 jq processes (which is ~5s of pure fork on this laptop):
+#
+#   <_path> <ids state> <source.provider> <audible.asin> <fleet.uid> <json>
+#
+# EVERY column but the last is defaulted to "-" and is never empty: TAB is IFS
+# whitespace, so `read` collapses two adjacent tabs into ONE separator and a
+# single empty field would silently shift every field after it.
+#
+# NOT `@tsv`: it escapes backslashes, and the last column is `tojson` output
+# full of `\"` — `@tsv` would turn those into `\\"` and corrupt the JSON. The
+# other columns cannot contain a tab or a newline and `tojson` escapes both,
+# so plain concatenation is exact.
+#
+# `_path` is stripped from the JSON column HERE, once. It is an annotation
+# rip::_server_sidecars adds, not a schema field; writing it back would
+# permanently add a bogus key to the only copy of a book's identity.
+#
+# "ids state" is computed from the VALUES, not from `has`: a sidecar carrying
+# `{"audible.asin": ""}` has an ids object and no identity at all.
+rip::_sidecar_index() {
+  setopt localoptions noerrexit nopipefail
+  jq -r 'select((._path // "") != "")
+    | (if ([(.ids // {}) | to_entries[] | select((.value // "") != "")] | length) == 0
+       then "empty" else "set" end) as $state
+    | (._path) + "\t" + $state
+      + "\t" + ((.source.provider // "") | if . == "" then "-" else . end)
+      + "\t" + ((.ids["audible.asin"] // "") | if . == "" then "-" else . end)
+      + "\t" + ((.ids["fleet.uid"] // "") | if . == "" then "-" else . end)
+      + "\t" + (del(._path) | tojson)' 2>/dev/null
+}
+
+# rip::_provider_index — stdin: provider rows. stdout: "<path>\t<id>\t<row>".
+# Same TAB framing and same "never empty" rule as above.
+rip::_provider_index() {
+  setopt localoptions noerrexit nopipefail
+  jq -r 'select((.path // "") != "")
+    | (.path) + "\t" + (((.id // .ids["audible.asin"]) // "") | if . == "" then "-" else . end)
+      + "\t" + tojson' 2>/dev/null
+}
+
+# rip::_sidecars_hash_primary <base> <base64 relpath…> — sha256 of each book's
+# PRIMARY audio file, computed on the server, in ONE ssh.
+#
+# Server-side because the server holds the only copy: the local staging tree
+# is emptied after every verified push, so there is nothing here to hash. The
+# design's recovery story needs this hash to be re-derivable from an orphaned
+# file years later, which is exactly what `sha256sum` on the stored bytes
+# gives (the `shasum -a 256` fallback is for the hermetic tests' local
+# branch, which runs this same script on macOS).
+#
+# Primary audio file = the `.m4b` (Libation's own output, and one per book);
+# failing that, the LARGEST audio file in the directory — a multi-part book's
+# biggest part is at least stable, and `stat` avoids reading 1.7 GB to learn
+# a size the way `wc -c` would.
+#
+# Prints "ok<TAB><b64 relpath><TAB><sha256>" or "fail<TAB><b64 relpath>" per
+# input line, so the caller counts what it actually got rather than inferring
+# it from an exit status. A book with no hash is NOT minted an identity.
+#
+# POSIX sh + coreutils only, and no `jq`: cantina has none (the live
+# "backfilled 0 of 245" failure). No single quote appears in the script, so
+# ${(qq)} — which is what a real POSIX /bin/sh needs, unlike ${(q)}'s $'\n' —
+# wraps it exactly.
+rip::_sidecars_hash_primary() {
+  setopt localoptions noerrexit nopipefail
+  local base="$1"; shift
+  (( $# > 0 )) || return 0
+  local script='while read -r br; do
+  [ -n "$br" ] || continue
+  d=$(printf %s "$br" | base64 -d 2>/dev/null)
+  if [ -z "$d" ] || [ ! -d "$d" ]; then printf "fail\t%s\n" "$br"; continue; fi
+  f=""
+  for c in "$d"/*.m4b; do
+    if [ -f "$c" ]; then f="$c"; break; fi
+  done
+  if [ -z "$f" ]; then
+    best=""; bestsz=-1
+    for c in "$d"/*; do
+      [ -f "$c" ] || continue
+      case "$c" in
+        *.m4b|*.m4a|*.mp3|*.mp4|*.aac|*.flac|*.ogg|*.opus|*.wav|*.aax|*.aaxc) ;;
+        *) continue ;;
+      esac
+      sz=$(stat -c %s "$c" 2>/dev/null || stat -f %z "$c" 2>/dev/null || echo -1)
+      if [ "$sz" -gt "$bestsz" ]; then bestsz="$sz"; best="$c"; fi
+    done
+    f="$best"
+  fi
+  if [ -z "$f" ]; then printf "fail\t%s\n" "$br"; continue; fi
+  h=$(sha256sum "$f" 2>/dev/null || shasum -a 256 "$f" 2>/dev/null)
+  h=${h%% *}
+  if [ -n "$h" ]; then printf "ok\t%s\t%s\n" "$br" "$h"; else printf "fail\t%s\n" "$br"; fi
+done'
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    print -rl -- "$@" | "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "cd ${(q)rpath}/audiobooks && sh -c ${(qq)script} sh" 2>/dev/null
+  else
+    # No ':' — the hermetic tests' plain local dir.
+    print -rl -- "$@" | ( cd "$base/audiobooks" 2>/dev/null && sh -c "$script" sh ) 2>/dev/null
+  fi
+  return 0
+}
+
+# rip::ab_repair_sidecars [--apply] — the four-outcome sweep described above.
+#
+# Dry run by default, like --retire / --canonicalize-authors /
+# --backfill-published: every write here lands on the only copy of a book's
+# identity.
+#
+# EXIT CODE: 0 only when nothing is left outstanding. A book that still needs
+# an operator decision (Case B, ambiguous, unidentifiable, or a missing
+# sidecar with no provider row) or a sidecar that could not be written returns
+# 1 — the same rule rip::ab_backfill_published follows, so a `&&` chain or a
+# cron wrapper cannot read a partial sweep as a finished one.
+rip::ab_repair_sidecars() {
+  setopt localoptions noerrexit nopipefail
+  local apply=0
+  [[ "${1:-}" == "--apply" ]] && apply=1
+
+  local base; base="$(rip::remote_base)"
+
+  # (1) what the server HOLDS and (2) which of those carry a sidecar. Both are
+  # captured as VALUES so their failure propagates: read through `< <(...)` an
+  # unreachable server is byte-identical to an empty library, and reporting
+  # "nothing to repair" for a server we never reached is the exact failure
+  # this verb exists to catch.
+  local lib rows
+  lib="$(rip::ab_server_library)" || return 2
+  rows="$(rip::_server_sidecars)" || return 2
+
+  # (3) the provider's rows — the only place a recoverable identity can come
+  # from. An empty list cannot be told apart from "the provider did not
+  # answer", and that difference decides whether a book is stamped with a
+  # locally minted uid it can never lose. REFUSE rather than guess.
+  local pname="${RIP_AB_PROVIDER:-libation}"
+  local pbin prows=""
+  pbin="$(rip::ab_provider_bin "$pname")" || return 2
+  prows="$("$pbin" list 2>/dev/null)"
+  if [[ -z "$prows" ]]; then
+    log_error "rip: the $pname provider returned no rows — refusing to classify book identity against an empty library"
+    return 2
+  fi
+
+  # Both sides of every comparison go through rip::_nfc. The server is NFC
+  # (the push's rsync --iconv guarantees it) and macOS composes NFD, so an
+  # accented author would otherwise read as "no match" and be silently
+  # skipped — the bug rip::_remote_has_file was already bitten by. The RAW
+  # server spelling is what gets written to; the normalized one is only ever a
+  # lookup key.
+  local -A sc_state=() sc_prov=() sc_uid=() sc_json=()
+  local irel istate iprov iasin iuid ijson
+  while IFS=$'\t' read -r irel istate iprov iasin iuid ijson; do
+    [[ -n "$irel" ]] || continue
+    irel="$(rip::_nfc "$irel")"
+    sc_state[$irel]="$istate"; sc_prov[$irel]="$iprov"
+    sc_uid[$irel]="$iuid";     sc_json[$irel]="$ijson"
+  done < <(print -r -- "$rows" | rip::_sidecar_index)
+
+  # prow_of: NFC composed path -> "<id>\t<row>", first row wins.
+  # ptitle_rows: NFC TITLE component -> newline-joined "<path>\t<id>\t<row>",
+  # the Case B fallback. Libation files a book under "Shawn Speakman - editor"
+  # where the server has "Shawn Speakman", and normalized author matching
+  # fails too — what matches exactly is the composed title.
+  local -A prow_of=() ptitle_rows=()
+  local ppath pid prow ptitle
+  while IFS=$'\t' read -r ppath pid prow; do
+    [[ -n "$ppath" ]] || continue
+    ppath="$(rip::_nfc "$ppath")"
+    [[ -n "${prow_of[$ppath]:-}" ]] || prow_of[$ppath]="$pid"$'\t'"$prow"
+    ptitle="${ppath##*/}"
+    if [[ -n "${ptitle_rows[$ptitle]:-}" ]]; then
+      ptitle_rows[$ptitle]+=$'\n'"$ppath"$'\t'"$pid"$'\t'"$prow"
+    else
+      ptitle_rows[$ptitle]="$ppath"$'\t'"$pid"$'\t'"$prow"
+    fi
+  done < <(print -r -- "$prows" | rip::_provider_index)
+
+  local -a a_rel=() a_id=() a_row=()   # Case A — create from an exact-path row
+  local -a norow=()                    # no sidecar AND no provider row
+  local -a b_report=()                 # Case B — recoverable, REPORT ONLY
+  local -a ambig=()                    # Case B with more than one candidate
+  local -a unident=()                  # empty ids, no row, provider != manual
+  local -a c_rel=() c_json=()          # Case C — assign a local identity
+  local -i checked=0 identified=0
+  local rel nrel row cands matched_on cpath rest
+
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    (( checked++ ))
+    nrel="$(rip::_nfc "$rel")"
+
+    if [[ -z "${sc_state[$nrel]:-}" ]]; then
+      # CASE A — no sidecar at all. EXACT composed-path join only: no fuzzy
+      # matching, no closest title. A wrong identity is worse than a missing
+      # one, because it silently joins this book to another work's key.
+      row="${prow_of[$nrel]:-}"
+      if [[ -n "$row" ]]; then
+        a_rel+=("$rel"); a_id+=("${row%%$'\t'*}"); a_row+=("${row#*$'\t'}")
+      else
+        norow+=("$rel")
+      fi
+      continue
+    fi
+
+    if [[ "${sc_state[$nrel]:-}" != "empty" ]]; then
+      # Already identified — including a Case C book repaired by an earlier
+      # run, whose minted fleet.uid IS a non-empty ids entry. That is what
+      # makes `--repair-sidecars --apply` idempotent: a second uid is never
+      # minted because the book is never a candidate again.
+      (( identified++ ))
+      continue
+    fi
+
+    # ids EMPTY. Which of the three remaining outcomes applies is decided by
+    # EVIDENCE — is a provider row findable? — and only then by the recorded
+    # provider, which in a book whose identity was lost is the least
+    # trustworthy field on the sidecar.
+    row="${prow_of[$nrel]:-}"; matched_on="path (exact)"; cpath="$nrel"
+    if [[ -z "$row" ]]; then
+      cands="${ptitle_rows[${nrel##*/}]:-}"
+      if [[ -n "$cands" ]]; then
+        local -a carr=("${(f)cands}")
+        if (( ${#carr[@]} == 1 )); then
+          cpath="${carr[1]%%$'\t'*}"; row="${carr[1]#*$'\t'}"
+          matched_on="title (author differs)"
+        else
+          # Ambiguity is REPORTED, never resolved.
+          ambig+=("$rel"$'\t'"$cands")
+          continue
+        fi
+      fi
+    fi
+
+    if [[ -n "$row" ]]; then
+      # CASE B — recoverable, and never written by this verb, not even under
+      # --apply. The title fallback is looser than an exact path match and the
+      # cost of being wrong is a book permanently stamped with another book's
+      # ASIN, which then propagates into edition grouping and every future
+      # `work` join. The tool proposes; the operator disposes, by typing the
+      # ASIN into --adopt-asin.
+      b_report+=("$rel"$'\t'"${row%%$'\t'*}"$'\t'"$cpath"$'\t'"$matched_on")
+      continue
+    fi
+
+    if [[ "${sc_prov[$nrel]:-}" == "manual" ]]; then
+      # CASE C — genuinely not from the store. Belt and braces on top of the
+      # "empty" test above: never mint over an existing uid.
+      if [[ "${sc_uid[$nrel]:--}" != "-" ]]; then
+        (( identified++ ))
+        continue
+      fi
+      c_rel+=("$rel"); c_json+=("${sc_json[$nrel]:-}")
+    else
+      # THE FOURTH OUTCOME — unidentifiable. See the header: minting here
+      # would permanently disconnect a book from an ASIN it may still be
+      # entitled to.
+      unident+=("$rel"$'\t'"${sc_prov[$nrel]:--}")
+    fi
+  done <<< "$lib"
+
+  # --- report (both modes; these outcomes are never repaired) ---------------
+  local entry cand cid
+  for entry in "${b_report[@]}"; do
+    rel="${entry%%$'\t'*}"; rest="${entry#*$'\t'}"
+    cid="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+    cpath="${rest%%$'\t'*}"; matched_on="${rest#*$'\t'}"
+    print -r -- "recoverable (needs confirmation): $rel"
+    print -r -- "  proposed ASIN : $cid"
+    print -r -- "  matched row   : $cpath"
+    print -r -- "  matched on    : $matched_on"
+    print -r -- "  confirm with  : rip-audiobook --adopt-asin \"$rel\" $cid"
+  done
+  for entry in "${ambig[@]}"; do
+    rel="${entry%%$'\t'*}"; cands="${entry#*$'\t'}"
+    print -r -- "ambiguous (nothing written): $rel"
+    for cand in "${(f)cands}"; do
+      cpath="${cand%%$'\t'*}"; rest="${cand#*$'\t'}"; cid="${rest%%$'\t'*}"
+      print -r -- "  candidate     : $cid  $cpath"
+    done
+    print -r -- "  pick one with : rip-audiobook --adopt-asin \"$rel\" <ASIN>"
+  done
+  for entry in "${unident[@]}"; do
+    rel="${entry%%$'\t'*}"
+    print -r -- "unidentifiable (empty identity, no provider row, provider \"${entry#*$'\t'}\"): $rel"
+    print -r -- "  left alone    : only a \"manual\" book is given a locally minted identity"
+  done
+  for rel in "${norow[@]}"; do
+    print -r -- "unrepairable (no sidecar, no provider row): $rel"
+  done
+
+  local -i intended=$(( ${#a_rel[@]} + ${#c_rel[@]} ))
+  local -i outstanding=$(( ${#b_report[@]} + ${#ambig[@]} + ${#unident[@]} + ${#norow[@]} ))
+  local -i i
+
+  if (( ! apply )); then
+    for (( i = 1; i <= ${#a_rel[@]}; i++ )); do
+      print -r -- "would create sidecar: ${a_rel[i]}  ->  ${a_id[i]}"
+    done
+    for (( i = 1; i <= ${#c_rel[@]}; i++ )); do
+      print -r -- "would assign local identity: ${c_rel[i]}  (fleet.uid + local.sha256)"
+    done
+    if (( intended > 0 )); then
+      print -r -- "($intended book(s); re-run with --apply)"
+    fi
+    rip::_repair_summary "$checked" "$identified" 0 "$intended" \
+      "${#b_report[@]}" "${#ambig[@]}" "${#unident[@]}" "${#norow[@]}"
+    (( outstanding > 0 )) && return 1
+    return 0
+  fi
+
+  # --- apply ---------------------------------------------------------------
+  # COMPOSE LOCALLY, WRITE REMOTELY: the server has no jq (the live
+  # "backfilled 0 of 245" failure). Case A composes a whole sidecar through
+  # the module's ONE composer; Case C AMENDS the stored object, exactly the
+  # way --backfill-published does, because the stored sidecar is already in
+  # schema shape and re-composing it from a provider row it does not have
+  # would rewrite fields nobody asked to change.
+  local -a payloads=() sent_rels=() ok_flags=()
+  local -A idx_of=()
+  local composed payload uid sha
+
+  for (( i = 1; i <= ${#a_rel[@]}; i++ )); do
+    composed="$(rip::_sidecar_compose "${a_row[i]}")"
+    payload=""
+    [[ -n "$composed" ]] && payload="$(rip::_sidecar_payload "${a_rel[i]}" "$composed")"
+    if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
+      # Never ship a half-composed payload: the remote would write it.
+      log_warn "rip: could not compose a sidecar for ${a_rel[i]}"
+      continue
+    fi
+    payloads+=("$payload"); sent_rels+=("${a_rel[i]}"); ok_flags+=(0)
+    idx_of[${payload%%$'\t'*}]=${#payloads}
+  done
+
+  if (( ${#c_rel[@]} > 0 )); then
+    # ONE ssh for every Case C hash, before any write: an identity is minted
+    # only for a book whose primary file was actually hashed. The uid is the
+    # stable join key and the hash is the recovery anchor — half of that pair
+    # is the very exposure this repair exists to close, so a book with no hash
+    # gets nothing at all.
+    local -a c_b64=()
+    for (( i = 1; i <= ${#c_rel[@]}; i++ )); do
+      c_b64+=("$(jq -rn --arg r "${c_rel[i]}" '$r|@base64' 2>/dev/null)")
+    done
+    local hout=""
+    hout="$(rip::_sidecars_hash_primary "$base" "${c_b64[@]}")"
+    local -A sha_of=()
+    local hst hkey hval
+    while IFS=$'\t' read -r hst hkey hval; do
+      [[ "$hst" == "ok" && -n "$hkey" && -n "$hval" ]] || continue
+      sha_of[$hkey]="$hval"
+    done <<< "$hout"
+    for (( i = 1; i <= ${#c_rel[@]}; i++ )); do
+      sha="${sha_of[${c_b64[i]}]:-}"
+      if [[ -z "$sha" ]]; then
+        log_warn "rip: could not hash the primary audio file for ${c_rel[i]} — refusing to mint an identity that cannot be re-derived"
+        continue
+      fi
+      # uuidgen LOCALLY: the server has none. Lowercased so two runs of the
+      # same repair on different machines write the same shape.
+      uid="$(uuidgen 2>/dev/null)"; uid="${(L)uid}"
+      if [[ -z "$uid" ]]; then
+        log_warn "rip: uuidgen produced nothing — cannot assign an identity to ${c_rel[i]}"
+        continue
+      fi
+      composed="$(print -r -- "${c_json[i]}" | jq -c --arg u "$uid" --arg s "$sha" \
+        'del(._path) | .ids = ((.ids // {}) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
+      payload=""
+      [[ -n "$composed" ]] && payload="$(rip::_sidecar_payload "${c_rel[i]}" "$composed")"
+      if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
+        log_warn "rip: could not compose the local identity for ${c_rel[i]}"
+        continue
+      fi
+      payloads+=("$payload"); sent_rels+=("${c_rel[i]}"); ok_flags+=(0)
+      idx_of[${payload%%$'\t'*}]=${#payloads}
+    done
+  fi
+
+  local out=""
+  (( ${#payloads[@]} > 0 )) && out="$(rip::_sidecars_write "$base" "${payloads[@]}")"
+
+  # GATED ON THE REPORTED OUTCOME, never on the write having been attempted: a
+  # book counts as repaired only when the remote loop said "ok" for it, so an
+  # ssh that dies halfway leaves the rest counted as failures AND named.
+  local -i repaired=0
+  local rline st key
+  while IFS= read -r rline; do
+    [[ -n "$rline" ]] || continue
+    st="${rline%%$'\t'*}"; key="${rline#*$'\t'}"
+    [[ "$st" == "ok" ]] || continue
+    i=${idx_of[$key]:-0}
+    (( i > 0 )) && ok_flags[i]=1
+  done <<< "$out"
+  for (( i = 1; i <= ${#sent_rels[@]}; i++ )); do
+    if (( ok_flags[i] )); then
+      (( repaired++ ))
+      print -r -- "repaired: ${sent_rels[i]}"
+    else
+      log_warn "rip: could not write the sidecar for ${sent_rels[i]}"
+    fi
+  done
+  local -i unwritten=$(( intended - repaired ))
+  rip::_repair_summary "$checked" "$identified" "$repaired" "$intended" \
+    "${#b_report[@]}" "${#ambig[@]}" "${#unident[@]}" "${#norow[@]}"
+  (( unwritten > 0 || outstanding > 0 )) && return 1
+  return 0
+}
+
+# rip::_repair_summary <checked> <identified> <repaired> <intended> <needs
+# confirmation> <ambiguous> <unidentifiable> <no row> — the closing tally.
+#
+# Printed in BOTH modes and even when everything is already fine: a silent
+# --apply with nothing to do is otherwise byte-identical to a run that never
+# reached the server, which is the ambiguity --backfill-published had to close
+# too. The counts name every outcome, so a partial sweep can never read as a
+# finished one.
+rip::_repair_summary() {
+  local -i checked=$1 identified=$2 repaired=$3 intended=$4
+  local -i need=$5 amb=$6 unid=$7 norow=$8
+  if (( intended > 0 )); then
+    print -r -- "rip: repaired $repaired of $intended sidecar(s)"
+    (( intended - repaired > 0 )) && print -r -- "rip: $(( intended - repaired )) sidecar(s) could not be written"
+  fi
+  (( need > 0 ))  && print -r -- "rip: $need book(s) need confirmation — see the --adopt-asin line(s) above"
+  (( amb > 0 ))   && print -r -- "rip: $amb book(s) are ambiguous and were left alone"
+  (( unid > 0 ))  && print -r -- "rip: $unid book(s) are unidentifiable and were left alone"
+  (( norow > 0 )) && print -r -- "rip: $norow book(s) have no sidecar and no provider row"
+  if (( intended == 0 && need == 0 && amb == 0 && unid == 0 && norow == 0 )); then
+    print -r -- "rip: nothing to repair ($checked book(s) checked, $identified already identified)"
   fi
   return 0
 }

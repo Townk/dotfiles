@@ -1593,9 +1593,13 @@ EOF
   # against the sandbox server tree, under that restricted PATH. It also logs
   # every remote command string so an example can assert what was asked of
   # the server.
+  #
+  # `stat`, `sha256sum` and `shasum` joined the list for --repair-sidecars'
+  # Case C hash, which cantina computes with sha256sum. jq is STILL absent and
+  # must stay absent: that is the whole point of the handpicked list.
   fake_server_ssh() {
     mkdir -p "$RIP_SANDBOX/remotebin"
-    for c in sh find sed tr mv rm mkdir rmdir head cat ls printf test base64; do
+    for c in sh find sed tr mv rm mkdir rmdir head cat ls printf test base64 stat sha256sum shasum; do
       p=$(command -v "$c" 2>/dev/null || true)
       if [ -n "$p" ]; then ln -sf "$p" "$RIP_SANDBOX/remotebin/$c"; fi
     done
@@ -2210,4 +2214,310 @@ EOF
     The stderr should include "could not remove its Audiobookshelf author record"
     The stderr should include "no future sweep will see"
   End
+
+  # --- sidecar repair: --repair-sidecars / --adopt-asin ---------------------
+  #
+  # Four outcomes, discriminated on EVIDENCE (is a provider row findable?)
+  # rather than on the sidecar's own `provider` field, which is the least
+  # trustworthy thing about a book whose identity was lost:
+  #
+  #   A  no sidecar + exact-path row      -> written (the only automatic write)
+  #   B  empty ids + a findable row       -> REPORTED ONLY, never written
+  #   C  empty ids + no row + "manual"    -> fleet.uid + local.sha256 assigned
+  #   4  empty ids + no row + not manual  -> unidentifiable, nothing written
+  #
+  # Every example here runs the SSH branch through fake_server_ssh: the two
+  # defects live validation found on 2026-08-24 (a remote `jq`, and ${(q)}'s
+  # $'\n' reaching a real POSIX sh) were both invisible to the plain-local-dir
+  # branch, and both of these verbs write to the only copy of a book's
+  # identity.
+
+  # fake_provider_rows <json-lines> — a provider whose `list` prints exactly
+  # the given rows. RIP_LIBEXEC_DIR is redirected into the sandbox first:
+  # setup() points it at the REAL tracked libexec, and a fake written there
+  # would be a write into the repo.
+  fake_provider_rows() {
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    {
+      printf '#!/bin/sh\n[ "$1" = list ] || exit 0\ncat <<%s\n' "'ROWS'"
+      printf '%s\n' "$1"
+      printf 'ROWS\n'
+    } > "$RIP_LIBEXEC_DIR/rip-provider-libation"
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
+  }
+
+  # A full provider row for the book that started this: 1.7 GB on cantina with
+  # no sidecar at all, and a `path` composed exactly the way the server stores
+  # it (verified live 2026-08-24).
+  WIND='Brandon Sanderson/Wind and Truth: Book Five of the Stormlight Archive'
+  ROW_WIND='{"id":"B0CQ3759C3","path":"Brandon Sanderson/Wind and Truth: Book Five of the Stormlight Archive","title":"Wind and Truth","subtitle":"Book Five of the Stormlight Archive","authors":["Brandon Sanderson"],"narrators":["Michael Kramer","Kate Reading"],"duration_s":220320,"series":"The Stormlight Archive","series_position":"5","language":"english","abridged":false,"published":"2024-12-06T08:00:00","ids":{"audible.asin":"B0CQ3759C3"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}'
+
+  # Case B, from real data: Libation files the pair under "Shawn Speakman -
+  # editor" while the server has "Shawn Speakman", so the exact-path join
+  # misses and normalized author matching fails too. What matches exactly is
+  # the composed TITLE.
+  UNF='Shawn Speakman/Unfettered III: New Tales by Masters of Fantasy'
+  ROW_UNF='{"id":"B07PX3DC46","path":"Shawn Speakman - editor/Unfettered III: New Tales by Masters of Fantasy","title":"Unfettered III","subtitle":"New Tales by Masters of Fantasy","authors":["Shawn Speakman"],"narrators":["Nick Podehl","Kate Rudd"],"duration_s":93600,"series":"Unfettered","series_position":"3","language":"english","abridged":false,"published":"2019-05-07T07:00:00","ids":{"audible.asin":"B07PX3DC46"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}'
+  ROW_UNF_TWIN='{"id":"B0AMBIG999","path":"Someone Else/Unfettered III: New Tales by Masters of Fantasy","title":"Unfettered III","authors":["Someone Else"],"published":"2011-01-01T07:00:00","ids":{"audible.asin":"B0AMBIG999"},"provider":"libation","format":"m4b"}'
+
+  RPO='Ernest Cline/Ready Player One'
+
+  # mkbook_bare <Author/Title> — a stored book with audio and NO sidecar.
+  mkbook_bare() {
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+    printf 'audio-bytes-%s\n' "$1" > "$RIP_SANDBOX/server/audiobooks/$1/${1##*/}.m4b"
+  }
+
+  # mkbook_empty <Author/Title> <provider> — a stored book whose sidecar is in
+  # schema shape but carries NO identity: `ids: {}`. That is the fingerprint
+  # the canonicalization bug left behind (fixed 2f649ae6) and the shape all
+  # three of Case B, Case C and the unidentifiable refusal start from.
+  mkbook_empty() {
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+    printf 'audio-bytes-%s\n' "$1" > "$RIP_SANDBOX/server/audiobooks/$1/${1##*/}.m4b"
+    jq -n --arg t "${1##*/}" --arg a "${1%%/*}" --arg p "$2" \
+      '{schema:1,kind:"audiobook",title:$t,subtitle:null,authors:[$a],narrators:[],
+        series:null,duration_s:null,language:null,abridged:null,published:null,
+        ids:{},work:null,
+        source:{provider:$p,provider_version:null,acquired_utc:null,format:"m4b"}}' \
+      > "$RIP_SANDBOX/server/audiobooks/$1/.fleet-book.json"
+  }
+
+  sidecar_at() { printf '%s' "$RIP_SANDBOX/server/audiobooks/$1/.fleet-book.json"; }
+
+  # snapshot / sidecar_unchanged — the report-only guard. "Never written, not
+  # even under --apply" is only proved by comparing the BYTES before and
+  # after; an assertion that merely re-reads a field would pass against a
+  # rewrite that happened to preserve it.
+  snapshot() { SNAP_REL="$1"; cp "$(sidecar_at "$1")" "$RIP_SANDBOX/snapshot.json"; }
+  sidecar_unchanged() {
+    if cmp -s "$RIP_SANDBOX/snapshot.json" "$(sidecar_at "$SNAP_REL")"; then
+      echo "byte-identical"
+    else
+      echo "CHANGED"
+    fi
+  }
+
+  wind_identity() {
+    jq -c '[.ids["audible.asin"],.published,.narrators[0],.duration_s,.series.name,
+            .language,.abridged,.source.provider,.work,has("_path")]' "$(sidecar_at "$WIND")"
+  }
+
+  It 'repair: a book with NO sidecar and an exact-path provider row is created, through a server with no jq'
+    fake_provider_rows "$ROW_WIND"
+    mkbook_bare "$WIND"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 0
+    The output should include "repaired: $WIND"
+    The output should include "repaired 1 of 1 sidecar(s)"
+    # The WHOLE row lands, not just the ASIN, and `_path` — the annotation
+    # rip::_server_sidecars adds — never reaches the file.
+    The result of function wind_identity should equal '["B0CQ3759C3","2024-12-06T08:00:00","Michael Kramer",220320,"The Stormlight Archive","english",false,"libation",null,false]'
+    # THREE ssh calls for one book: enumerate the library, enumerate the
+    # sidecars, ONE write batch. 247 books must never be 247 round-trips.
+    The result of function ssh_calls should equal "3"
+    # …and nothing the server was asked to run mentions jq. cantina has none.
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+  End
+
+  It 'repair: a dry run writes nothing and opens no write connection'
+    fake_provider_rows "$ROW_WIND"
+    mkbook_bare "$WIND"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars"
+    The status should equal 0
+    The output should include "would create sidecar: $WIND"
+    The output should include "re-run with --apply"
+    The path "$(sidecar_at "$WIND")" should not be exist
+    # The two enumerations, and nothing else.
+    The result of function ssh_calls should equal "2"
+  End
+
+  It 'repair: a book with no sidecar and NO provider row is named, skipped, and the run exits non-zero'
+    # The provider answers (a non-empty library), it simply has no row for
+    # this book. Refuse rather than guess: a wrong identity is worse than a
+    # missing one.
+    fake_provider_rows "$ROW_WIND"
+    mkbook_bare "Nobody At All/Orphan Book"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The output should include "unrepairable (no sidecar, no provider row): Nobody At All/Orphan Book"
+    The output should include "1 book(s) have no sidecar and no provider row"
+    The path "$(sidecar_at "Nobody At All/Orphan Book")" should not be exist
+  End
+
+  It 'repair: an already-identified sidecar is left byte-identical and the run reports the count'
+    fake_provider_rows "$ROW_WIND"
+    mkbook "Brandon Sanderson" "Steelheart" B00ECDZ08I 2013-09-24T07:00:00 Steelheart
+    snapshot "Brandon Sanderson/Steelheart"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 0
+    The output should include "nothing to repair (1 book(s) checked, 1 already identified)"
+    The result of function sidecar_unchanged should equal "byte-identical"
+    # No write connection was opened at all.
+    The result of function ssh_calls should equal "2"
+  End
+
+  # NFC vs NFD. The server is NFC (the push's rsync --iconv guarantees it) and
+  # macOS composes NFD, so a provider row for an accented author must still
+  # join the server's folder. Without rip::_nfc on BOTH sides this book reads
+  # as "no provider row" and is silently skipped — the exact bug
+  # rip::_remote_has_file was bitten by.
+  NFC_AUTHOR=$(printf '\303\211mile Zola')
+  NFD_AUTHOR=$(printf 'E\314\201mile Zola')
+  nfd_row() {
+    jq -nc --arg p "$NFD_AUTHOR/Germinal" \
+      '{id:"B0NFD00001",path:$p,title:"Germinal",authors:["Emile Zola"],
+        published:"2020-01-01T00:00:00",ids:{"audible.asin":"B0NFD00001"},
+        provider:"libation",format:"m4b"}'
+  }
+  nfd_asin() { jq -r '.ids["audible.asin"] // "MISSING"' "$(sidecar_at "$NFC_AUTHOR/Germinal")"; }
+
+  It 'repair: an NFD provider row still matches the NFC folder the server holds'
+    fake_provider_rows "$(nfd_row)"
+    mkbook_bare "$NFC_AUTHOR/Germinal"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 0
+    The output should include "repaired 1 of 1 sidecar(s)"
+    The result of function nfd_asin should equal "B0NFD00001"
+  End
+
+  It 'repair: --apply leaves a Case B book BYTE-IDENTICAL while still reporting it'
+    # The load-bearing assertion of the whole verb. Case B is REPORT-ONLY, and
+    # "report-only" quietly becoming "writes anyway" in a future refactor is
+    # exactly what this catches: the title fallback is looser than an exact
+    # path match, and the cost of being wrong is a book permanently stamped
+    # with another book's ASIN.
+    fake_provider_rows "$ROW_UNF"
+    mkbook_empty "$UNF" unknown
+    snapshot "$UNF"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The result of function sidecar_unchanged should equal "byte-identical"
+    The output should include "recoverable (needs confirmation): $UNF"
+    The output should include "proposed ASIN : B07PX3DC46"
+    The output should include "matched row   : Shawn Speakman - editor/Unfettered III: New Tales by Masters of Fantasy"
+    The output should include "matched on    : title (author differs)"
+    The output should include "confirm with  : rip-audiobook --adopt-asin \"$UNF\" B07PX3DC46"
+    The output should include "1 book(s) need confirmation"
+    # No write batch was ever opened: the two enumerations only.
+    The result of function ssh_calls should equal "2"
+  End
+
+  It 'repair: two provider rows sharing one title are reported as ambiguous and nothing is written'
+    fake_provider_rows "$(printf '%s\n%s' "$ROW_UNF" "$ROW_UNF_TWIN")"
+    mkbook_empty "$UNF" unknown
+    snapshot "$UNF"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The output should include "ambiguous (nothing written): $UNF"
+    The output should include "B07PX3DC46"
+    The output should include "B0AMBIG999"
+    The output should include "pick one with : rip-audiobook --adopt-asin"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  rpo_uid_ok() {
+    jq -r '.ids["fleet.uid"] // ""' "$(sidecar_at "$RPO")" \
+      | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' \
+      && echo "uuidv4" || echo "NOT A UUIDV4"
+  }
+  rpo_sha_ok() {
+    want=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/$RPO/Ready Player One.m4b" | cut -d' ' -f1)
+    got=$(jq -r '.ids["local.sha256"] // ""' "$(sidecar_at "$RPO")")
+    if [ -n "$got" ] && [ "$want" = "$got" ]; then echo "hash matches the audio"; else echo "MISMATCH want=$want got=$got"; fi
+  }
+  rpo_untouched_fields() { jq -c '[.title,.source.provider,.published,.work]' "$(sidecar_at "$RPO")"; }
+
+  It 'repair: a manual book with no provider row is assigned fleet.uid + a server-computed local.sha256'
+    # Case C. Both keys deliberately: a minted uid alone repeats the exposure
+    # that started this work (lose the sidecar, lose the id forever), and a
+    # hash alone dies at the next re-encode. The uid is the join key; the hash
+    # is the recovery anchor, and it is computed where the bytes are.
+    fake_provider_rows "$ROW_WIND"
+    mkbook_empty "$RPO" manual
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 0
+    The output should include "repaired: $RPO"
+    The output should include "repaired 1 of 1 sidecar(s)"
+    The result of function rpo_uid_ok should equal "uuidv4"
+    The result of function rpo_sha_ok should equal "hash matches the audio"
+    # Additive: nothing else on the sidecar is rewritten.
+    The result of function rpo_untouched_fields should equal '["Ready Player One","manual",null,null]'
+    # library + sidecars + hash + write.
+    The result of function ssh_calls should equal "4"
+    # The hash is sha256sum's job, not jq's — the server has no jq.
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+  End
+
+  It 'repair: re-running --apply on a repaired Case C book mints no second uid'
+    fake_provider_rows "$ROW_WIND"
+    mkbook_empty "$RPO" manual
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB
+      rip::ab_repair_sidecars --apply >/dev/null 2>&1
+      u1=\$(jq -r '.ids[\"fleet.uid\"] // \"\"' '$RIP_SANDBOX/server/audiobooks/$RPO/.fleet-book.json')
+      rip::ab_repair_sidecars --apply
+      u2=\$(jq -r '.ids[\"fleet.uid\"] // \"\"' '$RIP_SANDBOX/server/audiobooks/$RPO/.fleet-book.json')
+      [ -n \"\$u1\" ] && [ \"\$u1\" = \"\$u2\" ] && print -r -- 'uid stable' || print -r -- 'UID CHANGED'"
+    The status should equal 0
+    The output should include "uid stable"
+    The output should include "nothing to repair"
+  End
+
+  ghost_ids() { jq -c '.ids' "$(sidecar_at "Ghost Author/Returned Book")"; }
+
+  It 'repair: an empty-identity book with no provider row and a non-manual provider is unidentifiable, never minted'
+    # THE FOURTH OUTCOME. A Libation book that was returned or removed from
+    # the account lands here. Minting a fleet.uid would permanently disconnect
+    # it from an ASIN it may still be entitled to, so it is named and left
+    # exactly as it is.
+    fake_provider_rows "$ROW_WIND"
+    mkbook_empty "Ghost Author/Returned Book" unknown
+    snapshot "Ghost Author/Returned Book"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The output should include "unidentifiable (empty identity, no provider row, provider \"unknown\"): Ghost Author/Returned Book"
+    The output should include "1 book(s) are unidentifiable"
+    The result of function sidecar_unchanged should equal "byte-identical"
+    The result of function ghost_ids should equal "{}"
+  End
+
+  It 'repair: a provider that answers with nothing refuses the whole sweep rather than guessing'
+    # An empty provider list cannot be told apart from "Libation did not
+    # answer", and that difference decides whether a book is stamped with a
+    # locally minted uid it can never lose.
+    fake_provider_rows ""
+    mkbook_empty "$RPO" manual
+    snapshot "$RPO"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 2
+    The stderr should include "returned no rows"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  # The verbs through the REAL CLI, not just the functions. The executable
+  # runs under `set -eu -o pipefail`, which the sourced-function examples
+  # above do not: an unset array or associative-array read that is harmless in
+  # a plain zsh -c aborts the whole command here.
+  It 'cli: --repair-sidecars --apply reaches the function and repairs under set -eu'
+    fake_provider_rows "$ROW_WIND"
+    mkbook_bare "$WIND"
+    fake_server_ssh
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --repair-sidecars --apply
+    The status should equal 0
+    The output should include "repaired 1 of 1 sidecar(s)"
+    The result of function wind_identity should equal '["B0CQ3759C3","2024-12-06T08:00:00","Michael Kramer",220320,"The Stormlight Archive","english",false,"libation",null,false]'
+  End
+
 End

@@ -10,6 +10,7 @@
 #   rip-audiobook --session <plan.json>     enqueue a session
 #   rip-audiobook --retire "<Author>/<Title>" [--apply]  remove one stored book
 #   rip-audiobook --canonicalize-authors [--apply]      collapse author spelling variants
+#   rip-audiobook --repair-sidecars [--apply]           report + repair missing/empty book identity
 #   rip-audiobook --server-editions         stored books with a published date, JSON lines
 #   rip-audiobook --session-worker <plan>   internal: the job body
 #
@@ -41,9 +42,10 @@ case "${1:-}" in
   --backfill-published) shift; rip::ab_backfill_published "${1:-}" ;;
   --retire) shift; rip::ab_retire "${1:?--retire: \"<Author>/<Title>\" required}" "${2:-}" ;;
   --canonicalize-authors) shift; rip::ab_canonicalize_authors "${1:-}" ;;
+  --repair-sidecars) shift; rip::ab_repair_sidecars "${1:-}" ;;
   --server-editions) rip::_server_sidecars | jq -c 'select((.published // "") != "") | {author:(.authors[0] // ""), title:(.title // ""), published, path:._path}' ;;
   "" | --help)
-    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply] | --server-editions'
+    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply] | --repair-sidecars [--apply] | --server-editions'
     exit 2
     ;;
   *) print -ru2 -- "rip-audiobook: unknown option: $1"; exit 2 ;;
