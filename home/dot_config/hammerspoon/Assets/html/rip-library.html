@@ -12,7 +12,14 @@
       <input class="search-input" id="search" type="text" autocomplete="off" spellcheck="false"
         placeholder="Search title, author, narrator, series…">
       <span class="chip" id="chipShowLibrary" data-active="false">Show library</span>
+      <span class="chip" id="chipBrowse">Browse&hellip;</span>
     </div>
+    <!-- The source bar. Always present, never conditional markup: which
+         library the operator is looking at is the one fact that must not be
+         inferable only from the rows themselves — a mis-picked folder that
+         surfaces 400 books has to be readable BEFORE any of them is
+         selected. renderSource() fills it. -->
+    <div class="source" id="source" data-kind="library"></div>
     <div class="rows" id="rows"></div>
     <div class="import">
       <div class="import-toggle" id="importToggle" data-open="false">
@@ -113,6 +120,57 @@
     var LOADING = false;
     var PROVIDER = (PAYLOAD && PAYLOAD.provider) || "libation";
 
+    // Which library is on screen. `library` = Libation's Audible catalogue
+    // (the panel's original and only source); `folder` = a local tree the
+    // operator browsed to, listed by rip-provider-folder through
+    // `rip-audiobook --browse <root>`.
+    //
+    // This is a MODE, not a filter: a folder row's identity is DERIVED
+    // (from tags, the directory structure, or the filename), so files mode
+    // renders it as two editable fields plus a provenance marker, and it
+    // suppresses the Audible-only marks that would otherwise misfire on it
+    // (see neverPushedHtml).
+    var SOURCE = { kind: "library", root: "" };
+
+    // What __setSource displaced, so a FAILED browse can put it back.
+    // Switching source clears the rows (showing one library's books under
+    // another's name would be a lie), but a fetch that never lands must not
+    // cost the operator the library they were already looking at — the
+    // failure path calls __browseFailed, which restores this wholesale.
+    var PREV_SOURCE = null;
+
+    function isFiles() { return SOURCE.kind === "folder"; }
+
+    // Shape whatever crossed the bridge into exactly the two keys the
+    // renderer reads. Anything that is not the literal "folder" is the
+    // Audible library — an unrecognised kind must not put the panel into a
+    // mode with editable identities and no root to name.
+    function sourceOf(s) {
+      s = s || {};
+      return {
+        kind: s.kind === "folder" ? "folder" : "library",
+        root: String(s.root == null ? "" : s.root)
+      };
+    }
+
+    // The plan's `provider` follows the SOURCE, not the payload: it is what
+    // rip::ab_worker dispatches acquire on, and a browsed book has to be
+    // acquired by rip-provider-folder no matter which provider opened the
+    // panel. Derived at post time rather than stored, so nothing has to
+    // remember to put PROVIDER back when the operator switches source back.
+    function providerName() { return isFiles() ? "folder" : PROVIDER; }
+
+    // How the folder provider's `derived_from` reads on screen. Not a
+    // decoration: the operator has to be able to scan for the WEAK guesses
+    // and leave the strong ones alone, so each source is named plainly
+    // rather than collapsed into one "derived" badge. An unknown value
+    // (a future provider) falls through and prints itself.
+    var DERIVED_LABEL = {
+      tags: "from the audio tags",
+      path: "from the folder names",
+      filename: "from the filename"
+    };
+
     // Posts the raw object, NOT JSON.stringify'd — WebKit bridges a plain JS
     // object/array/string/number straight to a Lua table/string/number, and
     // library-dialog.lua's handle_message(msg.body) reads it as a table
@@ -171,6 +229,15 @@
     // of which also ended up in the sidecar for no reason). Every display
     // call site below already guards optional fields with `||`/truthiness
     // (bylineHtml, metaHtml, hms), so this is safe for rendering too.
+    //
+    // The copy loop is why the folder provider's `derived_from` needs no
+    // line of its own here, and it must STAY that way: a per-key copy
+    // written as `if (r.derived_from) out.derived_from = ...` would carry
+    // "tags"/"path"/"filename" and silently drop the empty string — a row
+    // whose provenance is genuinely unknown would then be indistinguishable
+    // from one whose provenance was never reported. Copy every own key,
+    // falsy values included, and override only the two shapes the DOM
+    // requires.
     function normalizeRow(r) {
       r = r || {};
       var out = {};
@@ -221,6 +288,44 @@
       render();
     };
 
+    // Lua -> JS: switch which library the panel is showing, and enter the
+    // loading state for the fetch that is about to land (library-dialog.lua's
+    // M.setSource, called by ripper/init.lua's M.browse and by the "Audible
+    // library" way back).
+    //
+    // Rows/selection are CLEARED, not carried over: they belong to the
+    // source being left, and a folder row and an Audible row are not
+    // interchangeable (different ids, different provider, a derived
+    // identity vs a catalogued one). They are stashed in PREV_SOURCE first
+    // so __browseFailed can undo the whole switch — a browse that fails is
+    // not a reason to lose the library already on screen.
+    window.__setSource = function (src) {
+      src = src || {};
+      PREV_SOURCE = { source: SOURCE, rows: ROWS, selected: SELECTED };
+      SOURCE = sourceOf(src);
+      ROWS = [];
+      SELECTED = new Set();
+      FOCUS_ID = null;
+      LOADING = true;
+      render();
+    };
+
+    // Lua -> JS: the browse fetch failed. Put back exactly what __setSource
+    // displaced and end the loading state — WITHOUT this the panel would
+    // either sit on "loading…" forever (LOADING is only ever cleared by a
+    // row delivery) or, if it cleared the state alone, read "nothing to
+    // show" over a library that is still perfectly good.
+    window.__browseFailed = function () {
+      if (PREV_SOURCE) {
+        SOURCE = PREV_SOURCE.source;
+        ROWS = PREV_SOURCE.rows;
+        SELECTED = PREV_SOURCE.selected;
+        PREV_SOURCE = null;
+      }
+      LOADING = false;
+      render();
+    };
+
     // Lua -> JS: replace the WHOLE payload in place (library-dialog.lua's
     // M.show re-render branch, fired when the panel is already open).
     // Deliberately distinct from __setRows: a fresh `data` from the caller
@@ -231,6 +336,8 @@
       if (!data) return;
       LOADING = !!data.loading;
       PROVIDER = data.provider || PROVIDER;
+      SOURCE = sourceOf(data.source);
+      PREV_SOURCE = null;
       ROWS = normalizeRows(data.rows);
       purgeStaleSelection();
       render();
@@ -292,6 +399,15 @@
       // actually landed (SERVER_KNOWN — see its declaration above). While
       // it hasn't, SERVER being empty says nothing about whether cantina
       // lacks this book, so render nothing rather than a false positive.
+      //
+      // Never in files mode. "Liberated" is Libation's word for a title
+      // decrypted out of Audible, and this line reports a divergence
+      // between Audible and cantina — a browsed row has no Audible side to
+      // diverge from. It also carries acquired:true unconditionally (the
+      // bytes are on this disk), so without this gate the warning would
+      // fire on EVERY browsed book cantina does not already hold, which is
+      // most of them: pure noise on exactly the rows being selected.
+      if (isFiles()) return '';
       if (!SERVER_KNOWN || r.acquired !== true || inLibrary) return '';
       return '<div class="detail"><div class="never-pushed">' + SVG_WARN_SM
         + '<span>liberated, never pushed</span></div></div>';
@@ -361,6 +477,56 @@
         + '<span>Audible Plus &mdash; borrowed; rip before it lapses</span></div></div>';
     }
 
+    // Files mode's identity editor: the row's author and title as two live
+    // fields, seeded with whatever rip-provider-folder derived, plus a
+    // marker naming WHERE it derived them from.
+    //
+    // This is the whole reason the folder source exists. Importing a book
+    // you already own used to mean typing a path, an author and a title
+    // into three fields — twelve times for a twelve-book series. Here the
+    // guess is already in the field and the operator only corrects the two
+    // rows that got it wrong.
+    //
+    // Everything is escaped through esc(): these strings come out of
+    // filenames and embedded audio tags, both of which are attacker-
+    // adjacent (a downloaded book carries whatever tags its packager put
+    // there), and they land in an attribute value here.
+    function editHtml(r) {
+      var from = r.derived_from;
+      var mark = '';
+      if (typeof from === 'string' && from !== '') {
+        // hasOwnProperty, not a bare lookup: "constructor"/"toString" are
+        // inherited members of every object literal, and a bare lookup
+        // would render one of those as the label instead of the value the
+        // provider actually reported.
+        var label = Object.prototype.hasOwnProperty.call(DERIVED_LABEL, from)
+          ? DERIVED_LABEL[from] : from;
+        mark = '<span class="derived" data-from="' + esc(from) + '">' + esc(label) + '</span>';
+      }
+      // These fields REPLACE the static name/byline in files mode rather
+      // than sitting under them. Two views of one identity, one of them
+      // stale between renders (applyEdit deliberately does not re-render —
+      // it would destroy the field being typed in and its caret), is the
+      // shape that lets an operator read a corrected title while the row
+      // still ships the guess.
+      //
+      // data-edit-row, NOT data-row: the enclosing .row div already carries
+      // data-row, and closestAttr() walks outward from the event target —
+      // reusing the name would make every field resolve to its own row div.
+      var field = function (name, value, placeholder, cls) {
+        return '<input class="edit-input ' + cls + '" data-edit-row="' + esc(r.id) + '"'
+          + ' data-field="' + name + '" type="text" autocomplete="off" spellcheck="false"'
+          + ' placeholder="' + placeholder + '" value="' + esc(value) + '">';
+      };
+      return '<div class="edit">'
+        + field('title', r.title || '', 'Title', 'edit-title')
+        + '<div class="edit-by">'
+        + field('author', r.authors[0] || '', 'Author', 'edit-author')
+        + mark
+        + '</div>'
+        + '</div>';
+    }
+
     function rowHtml(r) {
       var selected = SELECTED.has(r.id);
       var inLibrary = SERVER.has(r.path);
@@ -371,7 +537,9 @@
       return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '" data-focused="' + (r.id === FOCUS_ID) + '">'
         + '<div class="rowline">'
         + cover
-        + '<div class="text"><div class="name">' + name + '</div><div class="byline">' + bylineHtml(r) + '</div></div>'
+        + (isFiles()
+            ? '<div class="text">' + editHtml(r) + '</div>'
+            : '<div class="text"><div class="name">' + name + '</div><div class="byline">' + bylineHtml(r) + '</div></div>')
         + '<div class="meta">' + metaHtml(r) + '</div>'
         + '<span class="toggle" data-toggle="' + esc(r.id) + '" data-on="' + selected + '">' + (selected ? 'Rip' : 'Skip') + '</span>'
         + '</div>'
@@ -381,10 +549,39 @@
         + '</div>';
     }
 
+    // The source bar: WHICH library these rows came from, and how many
+    // candidates it produced. The root is rendered in full and prominently
+    // rather than as a trailing crumb — picking the wrong folder is the
+    // easy mistake here, and it announces itself as "hundreds of rows",
+    // which looks exactly like a successful browse until you read the path.
+    function renderSource() {
+      var el = document.getElementById('source');
+      var n = ROWS.length;
+      var count = LOADING
+        ? '<span class="source-count">scanning&hellip;</span>'
+        : '<span class="source-count">' + n + ' candidate' + (n === 1 ? '' : 's') + '</span>';
+      el.setAttribute('data-kind', SOURCE.kind);
+      if (!isFiles()) {
+        el.innerHTML = '<span class="source-label">Source</span>'
+          + '<span class="source-name">Audible library</span>'
+          + count;
+        return;
+      }
+      // data-source-action is what the delegated listener below reads —
+      // this element is rebuilt on every render, so nothing here can hold
+      // a listener of its own.
+      el.innerHTML = '<span class="source-label">Files</span>'
+        + '<span class="source-root" title="' + esc(SOURCE.root) + '">' + esc(SOURCE.root) + '</span>'
+        + count
+        + '<span class="source-back" data-source-action="library">Audible library</span>';
+    }
+
     function render() {
       var el = document.getElementById('rows');
+      renderSource();
       if (LOADING && ROWS.length === 0) {
-        el.innerHTML = '<div class="empty">loading library…</div>';
+        el.innerHTML = '<div class="empty">'
+          + (isFiles() ? 'scanning ' + esc(SOURCE.root) + '…' : 'loading library…') + '</div>';
         renderFooter();
         return;
       }
@@ -426,6 +623,42 @@
       render();
     }
 
+    function rowById(id) {
+      for (var i = 0; i < ROWS.length; i++) if (ROWS[i].id === id) return ROWS[i];
+      return null;
+    }
+
+    // Apply one inline identity edit to the row IN PLACE.
+    //
+    // In place, on the ROWS entry itself, because start() posts those exact
+    // objects: an edit applied to a rendering copy would show on screen and
+    // then ship the original guess anyway.
+    //
+    // `path` is recomposed HERE rather than left to the worker. It is the
+    // third argument rip-provider-folder's acquire receives, and the
+    // <Author>/<Title> the book stages and then pushes under — so it has to
+    // equal what these two fields say the moment they say it, not what the
+    // provider derived when it listed the tree.
+    //
+    // An emptied author collapses to the title alone, matching the folder
+    // provider's own rule (rip-provider-folder's cmd_list): "" + "/" + title
+    // is a LEADING slash, an absolute path where a two-component relative
+    // one belongs.
+    //
+    // No render() call: re-rendering would replace the very input being
+    // typed into and drop the caret. The row's displayed identity IS these
+    // fields in files mode (see editHtml), so nothing on screen goes stale.
+    function applyEdit(id, field, value) {
+      var r = rowById(id);
+      if (!r) return;
+      if (field === 'author') r.authors = value === '' ? [] : [value];
+      else if (field === 'title') r.title = value;
+      else return;
+      var a = r.authors[0] || '';
+      var t = String(r.title == null ? '' : r.title);
+      r.path = a === '' ? t : a + '/' + t;
+    }
+
     // Keyboard row navigation, ported from the disc panel's moveFocus idiom
     // (rip-session.html). FOCUS_ID is an id rather than an index because the
     // visible list changes under the operator as they type in the search box
@@ -460,10 +693,20 @@
     function start() {
       if (SELECTED.size === 0) return;
       var items = ROWS.filter(function (r) { return SELECTED.has(r.id); });
-      post({ action: 'start', provider: PROVIDER, items: items });
+      post({ action: 'start', provider: providerName(), items: items });
     }
 
     function dismiss() { post({ action: 'dismiss' }); }
+
+    // Ask Lua to open the folder picker (ripper/init.lua's M.browse). The
+    // panel posts and then does nothing: the operator may cancel the
+    // picker, and a panel that had already switched itself into "scanning"
+    // would have to be talked back out of it. Lua drives the switch, via
+    // __setSource, only once it actually has a root.
+    function browse() { post({ action: 'browse' }); }
+
+    // The way back to the Audible library without reopening the panel.
+    function toLibrary() { if (isFiles()) post({ action: 'library' }); }
 
     //----------------------------------------------------------------------
     // Import a file you already have — the rare path, collapsed by default
@@ -540,6 +783,30 @@
         toggleRow(toggle.getAttribute('data-toggle'));
       });
 
+      // Files mode's inline identity fields. `input` bubbles, so one
+      // delegated listener covers every row's two fields — the row list is
+      // rebuilt wholesale on each render, so a per-field listener would be
+      // thrown away with it.
+      //
+      // Slashes are stripped as they are typed, exactly as the import
+      // fields do it: both halves become a path component under
+      // <Author>/<Title>, and rip::_check_title rejects a name containing
+      // one outright.
+      rowsEl.addEventListener('input', function (e) {
+        var t = e.target;
+        var host = closestAttr(t, 'data-edit-row');
+        if (!host) return;
+        var cleaned = String(t.value).replace(/\//g, '');
+        if (cleaned !== t.value) {
+          var caret = Math.max(0, (t.selectionStart || 1) - 1);
+          t.value = cleaned;
+          t.setSelectionRange(caret, caret);
+        }
+        var field = host.getAttribute('data-field');
+        t.classList.toggle('invalid', field === 'title' && !titleValid(t.value));
+        applyEdit(host.getAttribute('data-edit-row'), field, t.value.trim());
+      });
+
       var searchTimer = null;
       document.getElementById('search').addEventListener('input', function (e) {
         var val = e.target.value;
@@ -556,6 +823,20 @@
         SHOW_LIBRARY = !SHOW_LIBRARY;
         this.setAttribute('data-active', String(SHOW_LIBRARY));
         render();
+      });
+
+      document.getElementById('chipBrowse').addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        browse();
+      });
+
+      // Delegated: #source's contents are rebuilt on every render, so the
+      // "Audible library" way back cannot own a listener of its own.
+      document.getElementById('source').addEventListener('mousedown', function (e) {
+        var el = closestAttr(e.target, 'data-source-action');
+        if (!el) return;
+        e.preventDefault();
+        if (el.getAttribute('data-source-action') === 'library') toLibrary();
       });
 
       document.getElementById('btnStart').addEventListener('mousedown', function (e) { e.preventDefault(); start(); });
@@ -612,6 +893,7 @@
     // Boot
     //----------------------------------------------------------------------
     LOADING = !!(PAYLOAD && PAYLOAD.loading);
+    SOURCE = sourceOf(PAYLOAD && PAYLOAD.source);
     ROWS = normalizeRows(PAYLOAD && PAYLOAD.rows);
     bindEvents();
     render();

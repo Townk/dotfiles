@@ -101,6 +101,58 @@ body { background: transparent; overflow: hidden; }
   border-color: rgba(203, 166, 247, 0.4);
 }
 
+/* --- source bar --------------------------------------------------------- */
+/* Which library the rows below came from. Its own strip under the toolbar
+ * rather than another chip inside it: a browsed root is a full filesystem
+ * path, and picking the WRONG folder is the easy mistake — it announces
+ * itself as "lots of rows", which looks exactly like a successful browse
+ * until you read the path. So the path gets the width of the panel and the
+ * bright text, and the count sits next to it as the sanity check. */
+.source {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 15px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: var(--meta-size);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.source-label {
+  color: var(--meta-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+.source-name { color: rgba(224, 224, 224, 1); flex: 0 0 auto; }
+.source-root {
+  font-family: var(--mono-font);
+  color: var(--bright-white);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  /* Plain LTR ellipsis, deliberately not the `direction: rtl` head-
+   * truncation trick: that reorders a path's leading "/" to the far end on
+   * WebKit and turns an already-alarming mis-pick into an unreadable one.
+   * The full path rides in the element's title attribute instead. */
+  text-overflow: ellipsis;
+}
+.source-count { color: var(--meta-label); flex: 0 0 auto; white-space: nowrap; }
+/* The way back to the Audible library, shown only in files mode. */
+.source-back {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(224, 224, 224, 1);
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+}
+.source[data-kind="folder"] { background: rgba(203, 166, 247, 0.08); }
+
 /* --- row list ----------------------------------------------------------- */
 /* flex: 1 1 auto + overflow-y: auto sized so roughly eight rows are
  * visible (see library-dialog.lua's PANEL_H) — a 460-row fixture scrolls
@@ -236,6 +288,66 @@ body { background: transparent; overflow: hidden; }
   opacity: var(--dim);
   white-space: nowrap;
   flex: 0 0 auto;
+}
+
+/* --- files mode: the inline identity editor ------------------------------ */
+/* Replaces .name/.byline for a browsed row: same two-line rhythm, same
+ * sizes, but both lines are live fields. Seeded from what rip-provider-
+ * folder derived — a guess the operator corrects in place instead of
+ * retyping a path, an author and a title into the import form once per
+ * book. Borderless until focused so a page of these still reads as a list
+ * of books rather than a form. */
+.edit { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.edit-by { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.edit-input {
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 1px 4px;
+  margin-left: -4px; /* the padding, cancelled: the text still aligns with .meta */
+  color: rgba(224, 224, 224, 1);
+  font-family: var(--ui-font);
+  outline: none;
+}
+.edit-input:hover { background: rgba(255, 255, 255, 0.05); }
+.edit-input:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(203, 166, 247, 0.5);
+}
+/* Same rule rip::_check_title enforces server-side, same literal color as
+ * .import-input.invalid — an empty or "."/".." title cannot become a path
+ * component. */
+.edit-input.invalid { border-color: rgba(243, 139, 168, 0.7); }
+.edit-title {
+  font-size: var(--base-size);
+  color: var(--bright-white);
+  flex: 1 1 auto;
+}
+.edit-author {
+  font-size: var(--meta-size);
+  color: rgba(224, 224, 224, 1);
+  opacity: var(--dim);
+  flex: 0 1 auto;
+}
+.edit-author:hover, .edit-author:focus { opacity: 1; }
+.edit-input::placeholder { color: rgba(150, 150, 150, 0.7); }
+
+/* Where this identity came from. Peach for the two real guesses (the
+ * directory names, the filename) and green for tags read out of the file
+ * itself — the operator scans the peach ones and leaves the rest alone. */
+.derived {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+  color: var(--peach);
+  background: rgba(250, 179, 135, 0.14);
+}
+.derived[data-from="tags"] {
+  color: var(--green);
+  background: rgba(166, 227, 161, 0.14);
 }
 
 /* --- per-row Rip/Skip toggle -------------------------------------------- */

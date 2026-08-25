@@ -123,6 +123,12 @@ local serverTask = nil
 -- each populating the panel additively, so none may clobber another's
 -- in-flight task.
 local editionsTask = nil
+-- The Audiobook Library panel's FOURTH fetch: `rip-audiobook --browse <root>`,
+-- the folder source's rows (M.browse). Its own anchor for the same reason
+-- the three above have theirs — it is a DIFFERENT question with a different
+-- lifetime, and it can be in flight alongside the two server fetches when a
+-- browse opens the panel from cold.
+local browseTask = nil
 local sessionVolume = nil -- the volume the open session panel is reviewing
 local sessionState = nil -- the open session's payload; also the staleness token
 local planSeq = 0 -- monotonic suffix for plan temp files
@@ -805,6 +811,15 @@ local function enqueueImport(spec)
 	)
 end
 
+-- Forward declarations. The panel's fetches below are extracted out of
+-- M.library so the panel's OWN controls can re-run them without reopening
+-- it (M.library early-returns while the panel is shown — it is the entry
+-- point, not a refresh). libraryCallbacks is built before them and closes
+-- over these names, so they must already be in lexical scope here: a plain
+-- `local function` further down would be a DIFFERENT variable, and the
+-- callback would resolve a nil global instead.
+local fetchAudiobookRows, fetchServerSets
+
 -- Real wiring: Start writes the session plan and enqueues the acquire->push
 -- worker; Import stages a DRM-free file the operator already owns. Both go
 -- through enqueueVisible, NOT the plain `enqueue` the movie/music watchers
@@ -822,17 +837,31 @@ end
 local libraryCallbacks = {
 	onStart = enqueueLibrarySession,
 	onImport = enqueueImport,
+	-- The panel's "Browse…" chip. It only ASKS: the folder picker and the
+	-- fetch live in M.browse, and the panel is left untouched until a root
+	-- actually comes back from it (the operator may cancel).
+	onBrowse = function()
+		M.browse()
+	end,
+	-- The source bar's way back to the Audible library, without dismissing
+	-- and reopening the panel. setSource clears the browsed rows and enters
+	-- the loading state; the two fetches then repopulate it exactly as
+	-- M.library's first open does.
+	onLibrary = function()
+		if not library.isShown() then
+			return
+		end
+		library.setSource("library", nil)
+		fetchAudiobookRows()
+		fetchServerSets()
+	end,
 	onDismiss = function()
 		log.f("library: dismissed")
 	end,
 }
 
---- Open the Audiobook Library panel and populate it from the real provider.
-function M.library()
-	if library.isShown() then
-		return
-	end
-	library.show({ loading = true }, libraryCallbacks)
+-- The Audiobook Library panel's provider rows (`rip-audiobook --library`).
+fetchAudiobookRows = function()
 	if audiobookLibraryTask then
 		audiobookLibraryTask:terminate()
 		audiobookLibraryTask = nil
@@ -921,8 +950,14 @@ function M.library()
 	end, { "--library" })
 	audiobookLibraryTask = thisTask
 	thisTask:start()
+end
 
-	-- Concurrent with the fetch above, not sequential: the hide-set and the
+-- The panel's two SERVER-side sets: the hide filter and the edition marks.
+-- Both describe what cantina holds, so both are true whichever source the
+-- panel is showing — a browsed folder full of books already on the server
+-- is exactly the case the hide filter exists for.
+fetchServerSets = function()
+	-- Concurrent with the rows fetch, not sequential: the hide-set and the
 	-- rows are independent answers that land in either order and each
 	-- populate the panel additively (library.setRows / library.setServerLibrary),
 	-- exactly as the DVD session panel's scan and library fetch do.
@@ -996,6 +1031,141 @@ function M.library()
 	end, { "--server-editions" })
 	editionsTask = thisEditionsTask
 	thisEditionsTask:start()
+end
+
+--- Open the Audiobook Library panel and populate it from the real provider.
+function M.library()
+	if library.isShown() then
+		return
+	end
+	library.show({ loading = true }, libraryCallbacks)
+	fetchAudiobookRows()
+	fetchServerSets()
+end
+
+--- Browse a local folder as an alternative library.
+---
+--- A folder is a SOURCE, exactly like Audible is: `rip-audiobook --browse
+--- <root>` runs rip-provider-folder over the tree and emits the SAME
+--- JSON-lines rows `--library` does, so the panel, the session worker and
+--- the push all keep working without knowing which side a book came from.
+--- What the panel adds for these rows is inline author/title editing —
+--- their identity is DERIVED (from tags, the folder names, or the filename)
+--- and the operator has to be able to correct a guess before ripping.
+---
+--- @param root string|nil a folder to browse. Omit it and the operator
+--- picks one; pass it and the picker is skipped entirely, which is how the
+--- Finder Quick Action calls in.
+function M.browse(root)
+	if type(root) ~= "string" or root == "" then
+		-- chooseFileOrFolder(message, defaultPath, canChooseFiles,
+		-- canChooseDirectories, allowsMultipleSelection) — the optional
+		-- arguments are POSITIONAL, so canChooseDirectories cannot be
+		-- given without canChooseFiles ahead of it. Returns a table of the
+		-- selections, or nil when the operator cancels.
+		--
+		-- CANCEL DOES NOTHING AT ALL: no panel opens, nothing already open
+		-- changes, no error is logged or toasted. Backing out of a picker
+		-- is not a failure, and a panel that reacted to it would punish
+		-- the operator for changing their mind.
+		local picked = hs.dialog.chooseFileOrFolder("Choose a folder of audiobooks", os.getenv("HOME") or "/", false, true, false)
+		if type(picked) ~= "table" then
+			return
+		end
+		-- hs.dialog keys that table with the STRING "1", not the number 1
+		-- (its own doc example shows `{ ["1"] = "..." }`). Both are read
+		-- here because the difference is invisible until it is live, and
+		-- the cost of guessing wrong is a Browse button that silently
+		-- does nothing.
+		root = picked["1"] or picked[1]
+		if type(root) ~= "string" or root == "" then
+			return
+		end
+	end
+
+	-- Opening fresh vs. switching an open panel are different jobs: a fresh
+	-- open carries the source in its FIRST paint (no flash of "Audible
+	-- library" over a folder scan), while an open panel is switched in
+	-- place so the operator keeps their search text and scroll position.
+	-- The server sets are only fetched on a fresh open — an already-open
+	-- panel has them (or has already learned it cannot get them).
+	if library.isShown() then
+		library.setSource("folder", root)
+	else
+		library.show({ loading = true, provider = "folder", source = { kind = "folder", root = root } }, libraryCallbacks)
+		fetchServerSets()
+	end
+	log.f("browse: %s", root)
+
+	if browseTask then
+		browseTask:terminate()
+		browseTask = nil
+	end
+	-- STREAMING CALLBACK, chunks accumulated and parsed once at completion
+	-- — the same shape as fetchAudiobookRows above and for the same reason.
+	-- hs.task's completion callback only receives what the pipe managed to
+	-- hold: `--library` at 461 titles writes ~280 KB, fills the ~64 KB pipe
+	-- buffer, and the child blocks on write forever with the completion
+	-- callback never called at all (live 2026-08-23 — the panel sat on
+	-- "loading library…" with a live `jq` stuck mid-write). A browse of a
+	-- large collection emits rows of comparable size in comparable numbers,
+	-- so it is the same hazard, not a smaller one.
+	--
+	-- A chunk boundary can fall MID-LINE, so the chunks are concatenated
+	-- first and split afterwards; parsing per chunk would corrupt whichever
+	-- row straddled the seam.
+	local chunks = {}
+	local thisBrowseTask
+	thisBrowseTask = hs.task.new(RIP_AUDIOBOOK, function(rc, _, err)
+		-- Captured BEFORE the nil-out, and reused by the failure branch:
+		-- terminate() only sends SIGTERM, so a superseded run (a second
+		-- browse while the first was still walking the tree) still lands
+		-- here later, almost always with a non-zero rc. Without this gate
+		-- that late reply would undo the source switch of the run that
+		-- replaced it. Same discipline as fetchAudiobookRows.
+		local stale = browseTask ~= thisBrowseTask
+		if not stale then
+			browseTask = nil
+		end
+		if rc ~= 0 then
+			log.ef("browse: rip-audiobook --browse failed rc=%d: %s", rc, err or "")
+			if stale then
+				return
+			end
+			-- browseFailed, NOT setRows({}): a browse that produced nothing
+			-- is not "the library is empty". It puts back the rows and the
+			-- source the switch displaced and ends the loading state, so a
+			-- mistyped or unreadable root costs the operator nothing but
+			-- the toast.
+			if library.isShown() then
+				library.browseFailed()
+			end
+			osd.notify("glyph:nf-md-alert", "Couldn't browse " .. root, "Basso")
+			return
+		end
+		local rows = {}
+		for line in (table.concat(chunks)):gmatch("[^\n]+") do
+			-- A malformed line (partial write, stray log noise) must not
+			-- abort the whole browse — skip it and keep the rest.
+			local ok, row = pcall(hs.json.decode, line)
+			if ok and row then
+				rows[#rows + 1] = row
+			end
+		end
+		log.f("browse: %d row(s) from %d chunk(s)", #rows, #chunks)
+		if library.isShown() then
+			library.setRows(rows)
+		end
+	end, function(_, so, _)
+		-- Drain as it arrives. Returning true keeps the stream open; the
+		-- accumulated text is parsed once, above, when the task completes.
+		if so and so ~= "" then
+			chunks[#chunks + 1] = so
+		end
+		return true
+	end, { "--browse", root })
+	browseTask = thisBrowseTask
+	thisBrowseTask:start()
 end
 
 --------------------------------------------------------------------------------
@@ -1402,6 +1572,10 @@ function M.cleanup()
 	if editionsTask then
 		editionsTask:terminate()
 		editionsTask = nil
+	end
+	if browseTask then
+		browseTask:terminate()
+		browseTask = nil
 	end
 	sessionVolume = nil
 	sessionState = nil

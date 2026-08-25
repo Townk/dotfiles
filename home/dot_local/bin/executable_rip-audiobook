@@ -4,6 +4,7 @@
 # rip.zsh (the rip-disc pattern).
 #
 #   rip-audiobook --library                 provider rows, JSON lines
+#   rip-audiobook --browse <root>           the same rows for a local folder
 #   rip-audiobook --server-library          <Author>/<Title> cantina holds
 #   rip-audiobook --have "<Author>/<Title>" 0 have / 1 absent / 2 unknown
 #   rip-audiobook --import <path> <Author> <Title> stage a DRM-free file you already have
@@ -36,6 +37,12 @@ fi
 
 case "${1:-}" in
   --library) rip::ab_library "$provider" ;;
+  # --browse is --library pointed at a local tree: the SAME JSON-lines shape
+  # out, so the panel, the session worker and the push never learn which
+  # side a book came from. The provider is pinned to `folder` rather than
+  # taking $provider — "browse this directory" has exactly one meaning, and
+  # a --provider libation --browse would otherwise silently ignore the root.
+  --browse) shift; rip::ab_library folder "${1:?--browse: root required}" ;;
   --server-library) rip::ab_server_library ;;
   --have) shift; rip::ab_have "${1:?book path required}" ;;
   --import) shift; rip::ab_import "${1:?source path required}" "${2:?author required}" "${3:?title required}" ;;
@@ -51,7 +58,7 @@ case "${1:-}" in
   --at-risk) rip::ab_at_risk ;;
   --server-editions) rip::_server_sidecars | jq -c 'select((.published // "") != "") | {author:(.authors[0] // ""), title:(.title // ""), published, path:._path}' ;;
   "" | --help)
-    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply] | --repair-sidecars [--apply] | --repair-companions [--apply] | --adopt-asin "<Author>/<Title>" <ASIN> [--apply] | --at-risk | --server-editions'
+    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --browse <root> | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply] | --repair-sidecars [--apply] | --repair-companions [--apply] | --adopt-asin "<Author>/<Title>" <ASIN> [--apply] | --at-risk | --server-editions'
     exit 2
     ;;
   *) print -ru2 -- "rip-audiobook: unknown option: $1"; exit 2 ;;

@@ -4020,6 +4020,40 @@ EOF
     The stderr should include "--repair-companions"
   End
 
+  # --- --browse <root>: the folder provider as an alternative library ------
+  #
+  # `--browse` is `--library` pointed at a local tree instead of Libation's
+  # catalogue: the SAME JSON-lines shape out, so the panel, the session
+  # worker and the push all keep working without knowing which side it came
+  # from. These assert the pass-through, not the provider (that is
+  # tests/rip-folder-provider_spec.sh's whole file).
+  browse_a_tree() {
+    mkdir -p "$RIP_SANDBOX/incoming/Martha Wells/Network Effect"
+    printf 'audio\n' > "$RIP_SANDBOX/incoming/Martha Wells/Network Effect/Network Effect.m4b"
+    zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" \
+      --browse "$RIP_SANDBOX/incoming"
+  }
+
+  It 'cli: --browse emits the folder provider rows for a root'
+    When call browse_a_tree
+    The status should equal 0
+    The output should include '"provider":"folder"'
+    The output should include '"path":"Martha Wells/Network Effect"'
+    The output should include '"derived_from":"path"'
+  End
+
+  It 'cli: --browse without a root refuses rather than scanning something'
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --browse
+    The status should not equal 0
+    The stderr should include "root required"
+  End
+
+  It 'cli: the usage line names --browse'
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --help
+    The status should equal 2
+    The stderr should include "--browse"
+  End
+
   # --- the library panel's Audible Plus marks (rip-library.html) ------------
   #
   # The panel's row rendering is JavaScript, so a mark that stops rendering is
@@ -4108,6 +4142,212 @@ JS
     When call panel_rows '[{"id":"1","path":"A/B","title":"B","authors":[],"narrators":[],"acquired":true}]' '[]'
     The status should equal 0
     The output should include "never pushed"
+  End
+
+  # --- Files mode: the browsed source, and inline identity editing ---------
+  #
+  # The whole point of the folder source is that the operator FIXES a bad
+  # guess in the panel instead of retyping three fields per book, and the
+  # thing that must actually change is the row's `path` — that is what
+  # rip::ab_worker passes to `rip-provider-folder acquire` as its third
+  # argument and what the book stages (and pushes) under. So these examples
+  # drive the panel's own handlers and assert on the PLAN IT POSTS, not on
+  # the rendered markup: a row whose display looks right but whose posted
+  # `path` still carries the guess would ship the book to the wrong shelf.
+  #
+  # This also pins the trap normalizeRow has already sprung once (it dropped
+  # keys, and the sidecar recorded a false identity permanently): a NEW
+  # provider key, `derived_from`, has to survive the round trip — including
+  # when its value is falsy, which a truthiness-based copy would silently
+  # drop while a non-empty value sailed through.
+  #
+  # panel_files <rows-json> [edits-json] [server-paths-json] [root]
+  #   edits-json: [[<row id>, "author"|"title", "<new value>"], ...], each
+  #   replayed through the panel's real delegated `input` handler.
+  # Prints {"posted": [...], "rows": "<#rows innerHTML>", "source": "..."}.
+  panel_files() {
+    cat > "$RIP_SANDBOX/panel-files.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', 'null');
+const els = {};
+function stub(id) {
+  const listeners = {};
+  const el = {
+    id: id, innerHTML: '', textContent: '', value: '', hidden: false,
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    setAttribute() {}, getAttribute() { return null; }, setSelectionRange() {},
+    fire(type, ev) { (listeners[type] || []).forEach((f) => f.call(el, ev)); }
+  };
+  return el;
+}
+global.document = {
+  getElementById(id) { return els[id] || (els[id] = stub(id)); },
+  addEventListener() {},
+  querySelector() { return null; }
+};
+const POSTED = [];
+global.window = global;
+global.webkit = { messageHandlers: { ripLibrary: { postMessage(m) { POSTED.push(m); } } } };
+(0, eval)(src);
+
+// Fake event targets: closestAttr() only ever calls getAttribute/parentNode,
+// so these stand in for the real nodes without needing a DOM.
+const ev = () => ({ preventDefault() {} });
+function toggleTarget(id) {
+  return { getAttribute: (a) => (a === 'data-toggle' ? id : null), parentNode: null };
+}
+function editTarget(id, field, value) {
+  return {
+    value: value, selectionStart: value.length, setSelectionRange() {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    getAttribute: (a) => (a === 'data-edit-row' ? id : a === 'data-field' ? field : null),
+    parentNode: null
+  };
+}
+
+const rows = JSON.parse(process.argv[2]);
+const edits = JSON.parse(process.argv[3] || '[]');
+window.__setSource({ kind: 'folder', root: process.argv[5] || '/Volumes/Media/Incoming' });
+window.__setRows(rows);
+if (process.argv[4] !== undefined && process.argv[4] !== '') {
+  window.__setServerLibrary(JSON.parse(process.argv[4]));
+}
+for (const [id, field, value] of edits) {
+  els.rows.fire('input', Object.assign(ev(), { target: editTarget(String(id), field, value) }));
+}
+for (const r of rows) {
+  els.rows.fire('mousedown', Object.assign(ev(), { target: toggleTarget(String(r.id)) }));
+}
+els.btnStart.fire('mousedown', ev());
+process.stdout.write(JSON.stringify({
+  posted: POSTED, rows: els.rows.innerHTML, source: els.source.innerHTML
+}));
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-files.js" "$@"
+  }
+
+  FOLDER_ROW='[{"id":"/inc/Anncillary/Ancilary Justice","path":"Anncillary/Ancilary Justice","title":"Ancilary Justice","subtitle":null,"authors":["Anncillary"],"narrators":[],"derived_from":"path","provider":"folder","provider_version":"1","format":"m4b","acquired":true,"duration_s":0}]'
+
+  It 'panel: a browsed row carries derived_from through to the posted plan'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW"
+    The status should equal 0
+    The output should include '"derived_from":"path"'
+    The output should include '"provider":"folder"'
+  End
+
+  # The falsy case specifically: a copy written as `if (r.derived_from)` keeps
+  # "path" above and silently drops "" here.
+  It 'panel: an EMPTY derived_from still survives into the posted plan'
+    Skip if 'node is unavailable' no_node
+    When call panel_files '[{"id":"1","path":"A/B","title":"B","authors":["A"],"narrators":[],"derived_from":""}]'
+    The status should equal 0
+    The output should include '"derived_from":""'
+  End
+
+  It 'panel: editing the author rewrites the row path the worker stages under'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","author","Ann Leckie"]]'
+    The status should equal 0
+    The output should include '"path":"Ann Leckie/Ancilary Justice"'
+  End
+
+  It 'panel: editing the title rewrites the row path the worker stages under'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","title","Ancillary Justice"]]'
+    The status should equal 0
+    The output should include '"path":"Anncillary/Ancillary Justice"'
+  End
+
+  # An emptied author must not leave a leading "/" in the path — that would
+  # be an absolute path on the server side, not "<Author>/<Title>".
+  It 'panel: clearing the author leaves the title alone as the path'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","author",""]]'
+    The status should equal 0
+    The output should include '"path":"Ancilary Justice"'
+  End
+
+  # A derived identity is a GUESS, and the panel has to say which kind: the
+  # operator scans for the weak ones rather than re-reading every row.
+  It 'panel: each files-mode row shows where its identity was guessed from'
+    Skip if 'node is unavailable' no_node
+    When call panel_files '[{"id":"1","path":"B","title":"B","authors":[],"narrators":[],"derived_from":"filename"}]'
+    The status should equal 0
+    The output should include "from the filename"
+  End
+
+  # A mis-picked folder surfacing hundreds of rows must be obvious BEFORE the
+  # operator starts selecting, so the root itself is on screen, not just a
+  # "Files" label.
+  It 'panel: the source chip names the browsed root and the candidate count'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[]' '' '/Volumes/Media/Wrong Folder'
+    The status should equal 0
+    The output should include "/Volumes/Media/Wrong Folder"
+    The output should include "1 candidate"
+  End
+
+  # "liberated, never pushed" is Libation vocabulary about a divergence
+  # between Audible and cantina. Every folder row carries acquired:true (the
+  # bytes are on this disk), so without a mode gate the line would fire on
+  # EVERY browsed row the server does not hold — noise on exactly the rows
+  # the operator is about to select.
+  # A browse that never lands must cost the operator NOTHING. The switch to
+  # the folder source clears the rows (they belong to the library being
+  # left), so a failure that merely ended the loading state would leave
+  # "nothing to show" where a perfectly good library used to be — and the
+  # panel offers no way to re-fetch it short of dismissing and reopening.
+  # library.browseFailed() puts the whole switch back.
+  panel_browse_failed() {
+    cat > "$RIP_SANDBOX/panel-failed.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', 'null');
+const els = {};
+function stub(id) {
+  return { id: id, innerHTML: '', textContent: '', value: '',
+           classList: { add() {}, remove() {}, toggle() {} },
+           addEventListener() {}, setAttribute() {},
+           getAttribute() { return null; }, setSelectionRange() {} };
+}
+global.document = {
+  getElementById(id) { return els[id] || (els[id] = stub(id)); },
+  addEventListener() {}, querySelector() { return null; }
+};
+global.window = global;
+(0, eval)(src);
+window.__setRows(JSON.parse(process.argv[2]));
+window.__setSource({ kind: 'folder', root: '/nope' });
+window.__browseFailed();
+process.stdout.write(els.rows.innerHTML + '' + els.source.innerHTML);
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-failed.js" "$@"
+  }
+
+  It 'panel: a failed browse restores the library that was already on screen'
+    Skip if 'node is unavailable' no_node
+    When call panel_browse_failed '[{"id":"1","path":"Martha Wells/Network Effect","title":"Network Effect","authors":["Martha Wells"],"narrators":[]}]'
+    The status should equal 0
+    The output should include "Network Effect"
+    # .source-name only renders for the Audible source; files mode renders
+    # .source-root instead — so this pins the SOURCE going back too, not
+    # just the rows. (The literal words "Audible library" would not: the
+    # way-back control in files mode carries them as its own label.)
+    The output should include 'class="source-name"'
+    The output should not include "/nope"
+    The output should not include "nothing to show"
+  End
+
+  It 'panel: a files-mode row is never marked "liberated, never pushed"'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[]' '[]'
+    The status should equal 0
+    The output should not include "never pushed"
   End
 
 End

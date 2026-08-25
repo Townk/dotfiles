@@ -26,12 +26,22 @@
 ---   library.setRows(rows)               -- additive repaint of an open panel
 ---   library.setServerLibrary(paths)     -- the hide-filter set, fed by `rip-audiobook --server-library`
 ---   library.setServerEditions(list)     -- the edition-mark set, fed by `rip-audiobook --server-editions`
+---   library.setSource(kind, root)       -- switch source ("library" | "folder"), enter loading
+---   library.browseFailed()              -- a browse fetch failed: undo setSource, keep the old rows
 ---   library.hide()                      -- dismiss (fires callbacks.onDismiss once)
 ---   library.isShown()                   -- true while the panel is up
 ---   library.cleanup()                   -- delete the webview (register with lifecycle)
 ---
 --- `data`:
----   { rows = { <row>, ... }, loading = false, provider = "libation" }
+---   { rows = { <row>, ... }, loading = false, provider = "libation",
+---     source = { kind = "library" | "folder", root = "<path>" } }
+---
+--- `source` names WHICH library the rows came from. "library" is Libation's
+--- Audible catalogue (the default, and the only source this panel had);
+--- "folder" is a local tree the operator browsed to, listed by
+--- rip-provider-folder. Files mode renders each row's author/title as
+--- editable fields, because a folder row's identity is DERIVED rather than
+--- catalogued — see rip-library.html's editHtml.
 ---
 --- Row shape: the FULL provider row rides through unmodified end to end —
 --- `ids` (e.g. `audible.asin`), `provider`, `provider_version`, `format`,
@@ -45,12 +55,18 @@
 ---   { id, title, subtitle, authors, narrators, duration_s, series,
 ---     series_position, cover, acquired, path }
 ---
---- `callbacks`: { onStart = fun(plan), onImport = fun(spec), onDismiss = fun() }
----   plan: { provider = "libation", items = { <row>, ... } } -- the full rows
----         for every id the operator marked Rip.
+--- `callbacks`: { onStart = fun(plan), onImport = fun(spec), onBrowse = fun(),
+---                onLibrary = fun(), onDismiss = fun() }
+---   plan: { provider = "libation" | "folder", items = { <row>, ... } } --
+---         the full rows for every id the operator marked Rip. `provider`
+---         follows the SOURCE, not the payload: it is what rip::ab_worker
+---         dispatches acquire on, so a browsed book always names `folder`.
 ---   spec: { src = "...", author = "...", title = "..." } -- a manual/DRM-free
 ---         import (rip-library.html's collapsed "Import a file you already
 ---         have" disclosure is that UI; this module only relays the spec).
+---   onBrowse:  the "Browse…" chip. The caller owns the folder picker and
+---         the fetch; this module never opens a dialog of its own.
+---   onLibrary: the source bar's "Audible library" way back.
 
 local M = {}
 
@@ -163,6 +179,18 @@ local closed = true -- guards onDismiss against firing twice
 -- Anything that is not a readable file:// URL is passed through untouched:
 -- the provider's own https fallback still works, and a missing cache file
 -- just keeps the glyph it would have had anyway.
+--
+-- The folder provider (rip-provider-folder) emits `file://` covers too, and
+-- for the same reason: a sibling image next to the .m4b. Those are the SAME
+-- path through this function, deliberately — WebKit cannot load a local file
+-- for either provider, and the fix is not per-provider.
+--
+-- The one thing a browsed cover adds is that it may be a PNG (the provider
+-- globs jpg|jpeg|png), so the data URI's media type is chosen from the
+-- extension rather than always claiming JPEG. This is not a change to the
+-- inlining mechanism — the bytes still travel with the page — only an
+-- honest label on them; JPEG stays the fallback, which is what every
+-- Libation thumbnail already is.
 local function inline_cover(url)
 	if type(url) ~= "string" or url:sub(1, 7) ~= "file://" then
 		return url
@@ -179,7 +207,8 @@ local function inline_cover(url)
 	if not bytes or bytes == "" then
 		return url
 	end
-	return "data:image/jpeg;base64," .. hs.base64.encode(bytes)
+	local mime = path:lower():match("%.png$") and "image/png" or "image/jpeg"
+	return "data:" .. mime .. ";base64," .. hs.base64.encode(bytes)
 end
 
 -- Copy each row with its cover inlined. Copies rather than mutates: the
@@ -205,12 +234,24 @@ local function with_inline_covers(rows)
 	return out
 end
 
+-- Shape a source descriptor with no nils, whatever the caller passed. An
+-- absent/unknown kind is the Audible library: that is the panel's default
+-- and the only mode with nothing to edit, so an unrecognised value must
+-- never be the one that turns identity editing on.
+local function source_payload(src)
+	src = type(src) == "table" and src or {}
+	local kind = src.kind == "folder" and "folder" or "library"
+	local root = src.root
+	return { kind = kind, root = type(root) == "string" and root or "" }
+end
+
 local function library_payload(data)
 	data = data or {}
 	return {
 		rows = with_inline_covers(data.rows or {}),
 		loading = data.loading and true or false,
 		provider = data.provider or "libation",
+		source = source_payload(data.source),
 	}
 end
 
@@ -273,6 +314,18 @@ local function handle_message(body)
 		local spec = { src = body.src, author = body.author, title = body.title }
 		if callbacks.onImport then
 			callbacks.onImport(spec)
+		end
+	elseif action == "browse" then
+		-- The panel stays OPEN and unchanged here. The caller owns the
+		-- folder picker, and the operator may cancel it — a panel that had
+		-- already flipped itself into "scanning" would then have to be
+		-- talked back out of a source it never got.
+		if callbacks.onBrowse then
+			callbacks.onBrowse()
+		end
+	elseif action == "library" then
+		if callbacks.onLibrary then
+			callbacks.onLibrary()
 		end
 	elseif action == "dismiss" then
 		close_panel(true)
@@ -431,6 +484,39 @@ function M.setServerEditions(list)
 	webview:evaluateJavaScript(
 		"window.__setServerEditions && window.__setServerEditions(" .. json_for_script(list) .. ")"
 	)
+end
+
+--- Switch the panel to a different source and put it into the loading state
+--- for the fetch that is about to land.
+---
+--- The client CLEARS its rows and selection here (they belong to the source
+--- being left) but stashes them, so browseFailed() below can put the whole
+--- switch back. Not folded into setRows: the source has to be on screen
+--- while the scan runs, which is exactly when there are no rows to carry it.
+--- @param kind string "library" (Libation's Audible catalogue) or "folder"
+--- @param root string|nil the browsed root, for kind == "folder"
+function M.setSource(kind, root)
+	if not webview or not isShown then
+		return
+	end
+	webview:evaluateJavaScript(
+		"window.__setSource && window.__setSource(" .. json_for_script(source_payload({ kind = kind, root = root })) .. ")"
+	)
+end
+
+--- Undo the last setSource because its fetch failed.
+---
+--- Deliberately NOT setRows({}): the browse produced nothing, which is not
+--- the same as "the library is empty". Replacing a good list of rows with
+--- "nothing to show" would cost the operator the library they were already
+--- working through, on top of the browse they did not get. This restores
+--- what setSource displaced and ends the loading state — which nothing else
+--- would, since only a row delivery ever clears it.
+function M.browseFailed()
+	if not webview or not isShown then
+		return
+	end
+	webview:evaluateJavaScript("window.__browseFailed && window.__browseFailed()")
 end
 
 --- Dismiss the panel. Fires callbacks.onDismiss exactly once per open.
