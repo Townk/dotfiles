@@ -1,0 +1,115 @@
+#!/usr/bin/env zsh
+# rip-provider-folder — books the operator already has, on a local disk.
+#
+# A folder is a SOURCE, exactly like a store is. This implements the same
+# capabilities/list/acquire contract as rip-provider-libation, so the panel,
+# the session worker, the push, the checksum verify and the staging cleanup
+# all work on local books without knowing anything changed.
+#
+# m4b only, deliberately: the operator stores audiobooks in no other format.
+
+set -eu -o pipefail
+
+VERSION="1"
+die() { print -ru2 -- "rip-provider-folder: $*"; exit 2 }
+
+cmd_capabilities() {
+  jq -nc --arg v "$VERSION" \
+    '{name: "folder", version: $v, can_acquire: true, needs_gui: false}'
+}
+
+# _derive <bookdir> <root> — print TAB-separated: author, title, source.
+#
+# Order: embedded tags, then directory structure, then the filename. Whichever
+# wins is REPORTED as `derived_from`, because the operator has to be able to
+# see what was guessed before ripping 40 books on trust.
+_derive() {
+  setopt localoptions noerrexit nopipefail
+  local d="$1" root="$2" f author title
+  f="$(print -rl -- "$d"/*.m4b(N) | head -1)"
+
+  if [[ -n "$f" ]] && command -v ffprobe >/dev/null 2>&1; then
+    local tags
+    tags="$(ffprobe -v error -show_entries format_tags=album_artist,artist,album,title \
+              -of default=noprint_wrappers=1:nokey=0 -- "$f" 2>/dev/null)"
+    author="$(print -r -- "$tags" | sed -n 's/^TAG:album_artist=//p' | head -1)"
+    [[ -n "$author" ]] || author="$(print -r -- "$tags" | sed -n 's/^TAG:artist=//p' | head -1)"
+    title="$(print -r -- "$tags" | sed -n 's/^TAG:album=//p' | head -1)"
+    if [[ -n "$author" && -n "$title" ]]; then
+      print -r -- "$author	$title	tags"
+      return 0
+    fi
+  fi
+
+  # Directory structure: <Author>/<Title>/ relative to the root. This is free
+  # and already correct for a collection organised the way cantina stores books.
+  local rel="${d#$root/}"
+  if [[ "$rel" == */* ]]; then
+    print -r -- "${rel:h:t}	${rel:t}	path"
+    return 0
+  fi
+
+  # Last resort. Marked plainly so the panel can flag it as a guess.
+  print -r -- "	${d:t}	filename"
+}
+
+cmd_list() {
+  setopt localoptions noerrexit nopipefail
+  local root="${1:?list: root required}"
+  [[ -d "$root" ]] || die "no such directory: $root"
+  root="${root:A}"
+
+  # fd, no depth limit (the operator asked for none). -0 so a newline in a
+  # path cannot split a record. Directories are deduped by the assoc array.
+  local -A seen=()
+  local f d
+  while IFS= read -r -d '' f; do
+    d="${f:h}"
+    seen[$d]=1
+  done < <(fd --absolute-path --type f --extension m4b --print0 . "$root" 2>/dev/null)
+
+  local author title src cover dur
+  for d in "${(@ko)seen}"; do
+    IFS=$'\t' read -r author title src <<< "$(_derive "$d" "$root")"
+    cover="$(print -rl -- "$d"/*.(jpg|jpeg|png)(N) | head -1)"
+    dur=0
+    if command -v ffprobe >/dev/null 2>&1; then
+      local one n
+      for one in "$d"/*.m4b(N); do
+        n="$(ffprobe -v error -show_entries format=duration -of csv=p=0 -- "$one" 2>/dev/null)"
+        [[ "$n" == <->* ]] && dur=$(( dur + ${n%%.*} ))
+      done
+    fi
+    jq -nc \
+      --arg id "$d" --arg title "$title" --arg author "$author" \
+      --arg src "$src" --arg cover "$cover" --argjson dur "$dur" '
+      {id: $id,
+       title: $title,
+       subtitle: null,
+       authors: (if $author == "" then [] else [$author] end),
+       narrators: [],
+       duration_s: $dur,
+       series: null,
+       language: null,
+       abridged: false,
+       published: null,
+       cover: (if $cover == "" then null else "file://" + $cover end),
+       acquired: true,
+       plus: false,
+       absent: false,
+       derived_from: $src,
+       path: (if $author == "" then $title else $author + "/" + $title end),
+       format: "m4b"}'
+  done
+}
+
+case "${1:-}" in
+  capabilities) cmd_capabilities ;;
+  list) shift; cmd_list "${1:-}" ;;
+  acquire) shift; cmd_acquire "${1:?acquire: id required}" "${2:?acquire: destdir required}" "${3:-}" ;;
+  "" | --help)
+    print -ru2 -- 'usage: rip-provider-folder capabilities | list <root> | acquire <id> <destdir> [relpath]'
+    exit 2
+    ;;
+  *) die "unknown verb: $1" ;;
+esac
