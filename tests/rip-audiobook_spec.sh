@@ -4164,7 +4164,9 @@ JS
   # panel_files <rows-json> [edits-json] [server-paths-json] [root]
   #   edits-json: [[<row id>, "author"|"title", "<new value>"], ...], each
   #   replayed through the panel's real delegated `input` handler.
-  # Prints {"posted": [...], "rows": "<#rows innerHTML>", "source": "..."}.
+  #   A 5th arg sets the browsed root; a 6th sets the source kind
+  #   ("folder", the default, or "library").
+  # Prints the posted plan as JSON, then #rows, #source and #summary raw.
   panel_files() {
     cat > "$RIP_SANDBOX/panel-files.js" <<'JS'
 const fs = require('fs');
@@ -4210,7 +4212,7 @@ function editTarget(id, field, value) {
 
 const rows = JSON.parse(process.argv[2]);
 const edits = JSON.parse(process.argv[3] || '[]');
-window.__setSource({ kind: 'folder', root: process.argv[5] || '/Volumes/Media/Incoming' });
+window.__setSource({ kind: process.argv[6] || 'folder', root: process.argv[5] || '/Volumes/Media/Incoming' });
 window.__setRows(rows);
 if (process.argv[4] !== undefined && process.argv[4] !== '') {
   window.__setServerLibrary(JSON.parse(process.argv[4]));
@@ -4227,7 +4229,7 @@ els.btnStart.fire('mousedown', ev());
 // a `data-blocked="true"` assertion could never match what the panel
 // actually emitted.
 process.stdout.write(JSON.stringify(POSTED) + '\n'
-  + els.rows.innerHTML + '\n' + els.source.innerHTML);
+  + els.rows.innerHTML + '\n' + els.source.innerHTML + '\n' + els.summary.innerHTML);
 JS
     PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-files.js" "$@"
   }
@@ -4349,6 +4351,145 @@ JS
     The output should include 'class="source-name"'
     The output should not include "/nope"
     The output should not include "nothing to show"
+  End
+
+  # --- library-dialog.lua under a stubbed hs (review round 3) --------------
+  #
+  # WHY THIS EXISTS. 344 green examples could not see a one-line Lua type
+  # error, because nothing in this suite executed library-dialog.lua at all —
+  # the node examples above run the PANEL's JavaScript, and the shell
+  # examples run the CLI, but the module that bridges them was untested by
+  # construction. The bug that got through: M.setRows tagged its delivery
+  # with json_for_script(kind) on a BARE STRING. hs.json.encode requires a
+  # table (LS_TTABLE) and raises on anything else, so the call aborted the
+  # hs.task completion callback before evaluateJavaScript ever ran — and
+  # since only a row delivery clears LOADING, the panel sat on
+  # "loading library…" forever. Exactly the regression 1845a71b fixed,
+  # through a different door.
+  #
+  # So the stub's encode() REFUSES a non-table, mirroring LS_TTABLE. That
+  # refusal is the whole point: soften it and this harness goes blind to the
+  # only class of bug it exists to catch.
+  no_lua() { ! command -v lua >/dev/null 2>&1; }
+
+  # panel_lua <verb> [arg] — drive one library-dialog setter and print every
+  # string it handed to webview:evaluateJavaScript.
+  panel_lua() {
+    cat > "$RIP_SANDBOX/dialog.lua" <<'LUA'
+local HS_DIR = os.getenv("HS_DIR")
+
+local function encode(v)
+  -- hs.json.encode requires LS_TTABLE. Mirrored exactly.
+  if type(v) ~= "table" then
+    error("ERROR: incorrect type '" .. type(v) .. "' for argument (expected table)", 2)
+  end
+  local isArray, n = true, 0
+  for k in pairs(v) do
+    n = n + 1
+    if type(k) ~= "number" then isArray = false end
+  end
+  if n == 0 then return "{}" end
+  local parts = {}
+  if isArray then
+    for _, item in ipairs(v) do parts[#parts + 1] = encode(item) end
+    return "[" .. table.concat(parts, ",") .. "]"
+  end
+  local keys = {}
+  for k in pairs(v) do keys[#keys + 1] = tostring(k) end
+  table.sort(keys)
+  for _, k in ipairs(keys) do
+    local val, enc = v[k], nil
+    if type(val) == "table" then enc = encode(val)
+    elseif type(val) == "string" then enc = '"' .. val .. '"'
+    else enc = tostring(val) end
+    parts[#parts + 1] = '"' .. k .. '":' .. enc
+  end
+  return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local JS = {}
+local webviewStub = setmetatable({}, { __index = function(_, key)
+  return function(_, a)
+    if key == "evaluateJavaScript" then JS[#JS + 1] = a end
+    return nil
+  end
+end })
+
+hs = {
+  configdir = HS_DIR,
+  json = { encode = encode },
+  base64 = { encode = function() return "BASE64" end },
+  printf = function() end,
+  drawing = { windowLevels = { modalPanel = 1 } },
+  window = { focusedWindow = function() return nil end },
+  screen = { mainScreen = function()
+    return { fullFrame = function() return { x = 0, y = 0, w = 1440, h = 900 } end }
+  end },
+  webview = {
+    usercontent = { new = function() return { setCallback = function() end } end },
+    new = function() return webviewStub end,
+  },
+}
+
+package.preload["system.dismiss-on-blur"] = function()
+  return { dismissOthers = function() end, dismissingViaSwitcher = false }
+end
+
+local M = dofile(HS_DIR .. "/modules/ripper/library-dialog.lua")
+
+-- Every setter is a no-op until the panel is actually open.
+M.show({ rows = {}, loading = true })
+local verb, a = arg[1], arg[2]
+if verb == "setRows" then
+  M.setRows({}, a)
+elseif verb == "setSource" then
+  M.setSource(a, a == "folder" and "/Volumes/Media/Incoming" or nil)
+elseif verb == "sourceFailed" then
+  M.sourceFailed()
+end
+for _, js in ipairs(JS) do print(js) end
+LUA
+    HS_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_config/hammerspoon" lua "$RIP_SANDBOX/dialog.lua" "$@"
+  }
+
+  It 'dialog: setRows tags the delivery without tripping hs.json.encode'
+    Skip if 'lua is unavailable' no_lua
+    When call panel_lua setRows library
+    The status should equal 0
+    The output should include 'window.__setRows({}, "library")'
+  End
+
+  It 'dialog: the folder tag survives the same path'
+    Skip if 'lua is unavailable' no_lua
+    When call panel_lua setRows folder
+    The status should equal 0
+    The output should include 'window.__setRows({}, "folder")'
+  End
+
+  # An untagged delivery is the preview harness, which has no source opinion.
+  # It must emit ONE argument, not a bogus tag and not an error.
+  It 'dialog: an untagged setRows emits no second argument'
+    Skip if 'lua is unavailable' no_lua
+    When call panel_lua setRows
+    The status should equal 0
+    The output should include 'window.__setRows({})'
+  End
+
+  # The other two evaluateJavaScript emitters this round added, equally
+  # invisible to the node examples.
+  It 'dialog: setSource crosses the bridge with kind and root'
+    Skip if 'lua is unavailable' no_lua
+    When call panel_lua setSource folder
+    The status should equal 0
+    The output should include '"kind":"folder"'
+    The output should include '/Volumes/Media/Incoming'
+  End
+
+  It 'dialog: sourceFailed calls the restore entry point'
+    Skip if 'lua is unavailable' no_lua
+    When call panel_lua sourceFailed
+    The status should equal 0
+    The output should include 'window.__sourceFailed()'
   End
 
   # --- review round 2: the four findings ----------------------------------
@@ -4566,6 +4707,57 @@ JS
     The output should include "/inc"
     The output should include "1 book"
     The output should not include "nothing to show"
+  End
+
+  # FINDING 2 (round 3). pathValid is PER-PATH; rip::_validate_ab_plan also
+  # refuses the WHOLE plan when two items compose the same <Author>/<Title>.
+  # Reachable with no editing at all: rip-provider-folder keys a row by
+  # DIRECTORY but composes `path` from the embedded tags first, so a
+  # re-download under another folder, a second format, or a backup copy
+  # yields two rows with distinct ids and one identical path. Both look
+  # perfectly valid on their own — and the plan they compose kills every
+  # other selected book with them, after the panel has closed.
+  DUPES='[{"id":"/inc/2023/Network Effect","path":"Martha Wells/Network Effect","title":"Network Effect","authors":["Martha Wells"],"narrators":[],"derived_from":"tags"},{"id":"/inc/2024/Network Effect","path":"Martha Wells/Network Effect","title":"Network Effect","authors":["Martha Wells"],"narrators":[],"derived_from":"tags"},{"id":"/inc/Fugitive","path":"Martha Wells/Fugitive Telemetry","title":"Fugitive Telemetry","authors":["Martha Wells"],"narrators":[],"derived_from":"tags"}]'
+
+  It 'panel: two rows composing one path are never both posted'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$DUPES"
+    The status should equal 0
+    # jq -c over the posted plan: exactly one item may carry that path.
+    The output should include '"id":"/inc/2023/Network Effect"'
+    The output should not include '"id":"/inc/2024/Network Effect"'
+  End
+
+  # The whole point of a per-row block: the distinct third book still ships,
+  # and the footer counts what is actually going rather than what is ticked.
+  It 'panel: a duplicate pair does not take the rest of the selection with it'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$DUPES"
+    The status should equal 0
+    The output should include '"path":"Martha Wells/Fugitive Telemetry"'
+    The output should include '2 books'
+    The output should include '1 duplicate of a book already selected'
+  End
+
+  # Silently dropping one copy would be its own defect — the operator has to
+  # see WHICH copy was excluded, and on what grounds.
+  It 'panel: the excluded duplicate says which book it collides with'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$DUPES"
+    The status should equal 0
+    The output should include "already stages as"
+    The output should include 'data-blocked="true"'
+  End
+
+  # Provider-agnostic: two Audible rows can compose one path too (a
+  # re-release under the same author and title), and the server rule does
+  # not care which provider produced them.
+  It 'panel: the duplicate rule applies to library-mode rows as well'
+    Skip if 'node is unavailable' no_node
+    When call panel_files '[{"id":"A1","path":"Brandon Sanderson/Steelheart","title":"Steelheart","authors":["Brandon Sanderson"],"narrators":[]},{"id":"A2","path":"Brandon Sanderson/Steelheart","title":"Steelheart","authors":["Brandon Sanderson"],"narrators":[]}]' '[]' '' '' library
+    The status should equal 0
+    The output should include '"id":"A1"'
+    The output should not include '"id":"A2"'
   End
 
   It 'panel: a files-mode row is never marked "liberated, never pushed"'

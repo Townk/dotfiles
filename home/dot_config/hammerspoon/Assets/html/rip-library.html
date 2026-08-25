@@ -583,6 +583,17 @@
         + '</div>';
     }
 
+    // The duplicate mark. rip::_validate_ab_plan refuses the WHOLE plan on
+    // two items composing one <Author>/<Title>, so this row is excluded to
+    // save the rest of the selection — and it says so, naming the path they
+    // collide on, because two rows can look completely different (different
+    // folders, different formats) and still stage as the same book.
+    function duplicateHtml(r) {
+      if (!isDuplicate(r)) return '';
+      return '<div class="detail"><div class="dup-blocked">' + SVG_WARN_SM
+        + '<span>another selected row already stages as ' + esc(r.path) + '</span></div></div>';
+    }
+
     function rowHtml(r) {
       var selected = SELECTED.has(r.id);
       var inLibrary = SERVER.has(r.path);
@@ -590,7 +601,7 @@
       var cover = r.cover
         ? '<div class="cover">' + SVG_BOOK + '<img src="' + esc(r.cover) + '" onerror="this.remove()"></div>'
         : '<div class="cover">' + SVG_BOOK + '</div>';
-      return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '" data-focused="' + (r.id === FOCUS_ID) + '" data-blocked="' + !pathValid(r) + '">'
+      return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '" data-focused="' + (r.id === FOCUS_ID) + '" data-blocked="' + (!pathValid(r) || isDuplicate(r)) + '">'
         + '<div class="rowline">'
         + cover
         + (isFiles()
@@ -599,6 +610,7 @@
         + '<div class="meta">' + metaHtml(r) + '</div>'
         + '<span class="toggle" data-toggle="' + esc(r.id) + '" data-on="' + selected + '">' + (selected ? 'Rip' : 'Skip') + '</span>'
         + '</div>'
+        + duplicateHtml(r)
         + audiblePlusHtml(r, inLibrary)
         + neverPushedHtml(r, inLibrary)
         + otherEditionHtml(r)
@@ -634,6 +646,9 @@
 
     function render() {
       var el = document.getElementById('rows');
+      // Before ANY row is painted: rowHtml reads RIPPABLE_IDS to decide
+      // whether a row lost the dedupe.
+      refreshRippable();
       renderSource();
       if (LOADING && ROWS.length === 0) {
         el.innerHTML = '<div class="empty">'
@@ -654,14 +669,26 @@
     }
 
     function renderFooter() {
+      refreshRippable();
       var sel = ROWS.filter(function (r) { return SELECTED.has(r.id); });
-      var ok = sel.filter(pathValid);
+      var ok = RIPPABLE;
       var blocked = sel.length - ok.length;
+      // Named separately: "needs an author" and "is a second copy of a book
+      // already selected" call for completely different actions, and a
+      // single "N blocked" would leave the operator hunting for which.
+      var needId = sel.filter(function (r) { return !pathValid(r); }).length;
+      var dupes = blocked - needId;
       var sumEl = document.getElementById('summary');
       var btn = document.getElementById('btnStart');
-      var blockedHtml = blocked
-        ? '<span class="sum-blocked">' + blocked + ' need'
-          + (blocked === 1 ? 's' : '') + ' an author and a title</span>'
+      var msgs = [];
+      if (needId) {
+        msgs.push(needId + ' need' + (needId === 1 ? 's' : '') + ' an author and a title');
+      }
+      if (dupes) {
+        msgs.push(dupes + ' duplicate' + (dupes === 1 ? '' : 's') + ' of a book already selected');
+      }
+      var blockedHtml = msgs.length
+        ? '<span class="sum-blocked">' + msgs.join(' &middot; ') + '</span>'
         : '';
       if (ok.length === 0) {
         sumEl.innerHTML = blockedHtml;
@@ -758,7 +785,8 @@
       // Start when NOTHING selected is rippable, and named the blocked
       // count when only some are — so this never silently drops a row the
       // operator was not told about.
-      var items = ROWS.filter(function (r) { return SELECTED.has(r.id) && pathValid(r); });
+      refreshRippable();
+      var items = RIPPABLE;
       if (items.length === 0) return;
       post({ action: 'start', provider: providerName(), items: items });
     }
@@ -791,12 +819,20 @@
       return n !== '' && n !== '.' && n !== '..' && n.indexOf('/') === -1;
     }
 
-    // Mirrors rip::_validate_ab_plan (home/dot_local/lib/rip.zsh) exactly:
-    // split on the FIRST slash for the author and the LAST for the title,
-    // run rip::_check_title\'s rule over both, then require the roundtrip
-    // `author + "/" + title === path` — which is what actually enforces
-    // "exactly two segments" and closes the "A/../../etc/passwd" traversal
-    // the server-side check was hardened against.
+    // Mirrors the PER-PATH half of rip::_validate_ab_plan
+    // (home/dot_local/lib/rip.zsh): split on the FIRST slash for the author
+    // and the LAST for the title, run rip::_check_title\'s rule over both,
+    // then require the roundtrip `author + "/" + title === path` — which is
+    // what actually enforces "exactly two segments" and closes the
+    // "A/../../etc/passwd" traversal the server-side check was hardened
+    // against.
+    //
+    // NOT the whole validator, and the difference matters: _validate_ab_plan
+    // ALSO refuses the whole plan when two items compose the same
+    // <Author>/<Title>. That rule is plan-level and cannot be decided from
+    // one row — see rippable() below, which is where it lives. An earlier
+    // comment here claimed to mirror the validator "exactly", and that claim
+    // is what made the duplicate hole invisible for a round.
     //
     // This has to run on EVERY selected row, not just edited ones. The
     // folder provider emits a single-segment path for every
@@ -813,6 +849,52 @@
       var author = p.slice(0, i), title = p.slice(p.lastIndexOf("/") + 1);
       if (!titleValid(author) || !titleValid(title)) return false;
       return author + "/" + title === p;
+    }
+
+    // The selected rows that would actually survive rip::_validate_ab_plan,
+    // in render order. TWO rules, not one: the per-path shape above, and the
+    // plan-level "no two items compose the same <Author>/<Title>" — which
+    // refuses the WHOLE plan server-side, so one duplicate pair would take
+    // every other selected book down with it, after the panel has closed.
+    //
+    // Reachable without any editing at all: rip-provider-folder keys a row
+    // by DIRECTORY (id: $d) but composes `path` from the embedded tags
+    // first, so a re-download under a different folder, a second format, or
+    // a backup copy yields two rows with distinct ids and one identical
+    // path. Nothing about either row looks wrong on its own.
+    //
+    // First in render order wins; the losers are marked blocked and say why
+    // (duplicateHtml), so the operator sees WHICH copy is excluded rather
+    // than having one silently dropped.
+    //
+    // Provider-agnostic on purpose: two Audible rows can compose one path
+    // too (a re-release under the same author and title), and the server
+    // rule does not care which provider produced them.
+    function rippable() {
+      var seen = {}, out = [];
+      for (var i = 0; i < ROWS.length; i++) {
+        var r = ROWS[i];
+        if (!SELECTED.has(r.id) || !pathValid(r)) continue;
+        if (Object.prototype.hasOwnProperty.call(seen, r.path)) continue;
+        seen[r.path] = true;
+        out.push(r);
+      }
+      return out;
+    }
+
+    // Recomputed at the top of every render pass and reused by rowHtml,
+    // renderFooter and start(), so the three can never disagree about which
+    // rows are shipping.
+    var RIPPABLE = [];
+    var RIPPABLE_IDS = new Set();
+    function refreshRippable() {
+      RIPPABLE = rippable();
+      RIPPABLE_IDS = new Set(RIPPABLE.map(function (r) { return r.id; }));
+    }
+
+    // A selected row that is valid on its own but lost the dedupe.
+    function isDuplicate(r) {
+      return SELECTED.has(r.id) && pathValid(r) && !RIPPABLE_IDS.has(r.id);
     }
 
     function importValid() {

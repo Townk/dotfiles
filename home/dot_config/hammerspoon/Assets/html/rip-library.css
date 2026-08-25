@@ -228,6 +228,21 @@ body { background: transparent; overflow: hidden; }
 }
 .other-edition span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* "another selected row already stages as X" — same --peach token and
+ * .detail layout as the two above. rip::_validate_ab_plan refuses the WHOLE
+ * plan on two items composing one <Author>/<Title>, so this row is excluded
+ * to save the rest of the selection; nothing is wrong with the book itself,
+ * which is why this is --peach and not --red. */
+.dup-blocked {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--peach);
+  font-size: var(--meta-size);
+  min-width: 0;
+}
+.dup-blocked span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* The Audible Plus marks, same .detail layout as the two above.
  * .plus-lapsed is --red, not --peach: a lapsed licence is not a divergence
  * to reconcile, it is a book that can never be ripped again, and it must not

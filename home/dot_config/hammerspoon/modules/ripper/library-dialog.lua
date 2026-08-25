@@ -454,12 +454,20 @@ function M.setRows(rows, kind)
 	end
 	-- Same cover inlining as library_payload: this is the path the real
 	-- provider fetch lands on, so it is the one that matters most.
-	-- The tag is appended as a SECOND argument only when there is one:
-	-- hs.json.encode wants a table or a value, never a bare nil, and an
+	-- The tag is appended as a SECOND argument only when there is one; an
 	-- omitted argument is exactly what the client reads as "untagged".
+	--
+	-- Written as a LITERAL, never through json_for_script: hs.json.encode
+	-- requires a table (LS_TTABLE) and RAISES on a bare string, which would
+	-- abort this task callback before evaluateJavaScript ever ran — the
+	-- panel would then sit on "loading library…" forever, since only a row
+	-- delivery clears LOADING. That is exactly the regression 1845a71b was
+	-- landed to fix, and every other json_for_script call site in this repo
+	-- passes a table. The whitelist below is what makes the literal safe:
+	-- nothing but these two words can ever reach the page.
 	local tag = ""
-	if type(kind) == "string" then
-		tag = ", " .. json_for_script(kind)
+	if kind == "library" or kind == "folder" then
+		tag = ', "' .. kind .. '"'
 	end
 	webview:evaluateJavaScript(
 		"window.__setRows && window.__setRows(" .. json_for_script(with_inline_covers(rows)) .. tag .. ")"
