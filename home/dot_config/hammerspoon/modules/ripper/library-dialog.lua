@@ -23,11 +23,11 @@
 --- API:
 ---   local library = require("ripper.library-dialog")
 ---   library.show(data, callbacks)       -- open, or re-render in place if already open
----   library.setRows(rows)               -- additive repaint of an open panel
+---   library.setRows(rows, kind)         -- additive repaint; `kind` tags the source
 ---   library.setServerLibrary(paths)     -- the hide-filter set, fed by `rip-audiobook --server-library`
 ---   library.setServerEditions(list)     -- the edition-mark set, fed by `rip-audiobook --server-editions`
 ---   library.setSource(kind, root)       -- switch source ("library" | "folder"), enter loading
----   library.browseFailed()              -- a browse fetch failed: undo setSource, keep the old rows
+---   library.sourceFailed()              -- a switched-to source failed to load: undo setSource
 ---   library.hide()                      -- dismiss (fires callbacks.onDismiss once)
 ---   library.isShown()                   -- true while the panel is up
 ---   library.cleanup()                   -- delete the webview (register with lifecycle)
@@ -435,8 +435,17 @@ end
 --- selection set). This is the ONLY way a "still loading" panel is ever
 --- populated — see rip-library.html's window.__setRows, which also ends the
 --- loading state the moment rows arrive.
+--- `kind` TAGS the delivery with the source that asked for it ("library" or
+--- "folder"), and the client drops a payload whose kind is not the one on
+--- screen. The two row fetches are separately anchored, so each one\'s own
+--- identity guard only defends it against its OWN successor — nothing
+--- otherwise stops a browse that was still walking a tree from landing its
+--- rows in library mode after the operator switched back (and being posted
+--- under the wrong provider). Omit it only from a caller with no source
+--- opinion; an untagged delivery is always accepted.
 --- @param rows table[]
-function M.setRows(rows)
+--- @param kind string|nil "library" | "folder"
+function M.setRows(rows, kind)
 	if not webview or not isShown then
 		return
 	end
@@ -445,8 +454,16 @@ function M.setRows(rows)
 	end
 	-- Same cover inlining as library_payload: this is the path the real
 	-- provider fetch lands on, so it is the one that matters most.
+	-- The tag is appended as a SECOND argument only when there is one:
+	-- hs.json.encode wants a table or a value, never a bare nil, and an
+	-- omitted argument is exactly what the client reads as "untagged".
+	local tag = ""
+	if type(kind) == "string" then
+		tag = ", " .. json_for_script(kind)
+	end
 	webview:evaluateJavaScript(
-		"window.__setRows && window.__setRows(" .. json_for_script(with_inline_covers(rows)) .. ")")
+		"window.__setRows && window.__setRows(" .. json_for_script(with_inline_covers(rows)) .. tag .. ")"
+	)
 end
 
 --- Tell the panel which titles the server already holds, so the client can
@@ -490,7 +507,7 @@ end
 --- for the fetch that is about to land.
 ---
 --- The client CLEARS its rows and selection here (they belong to the source
---- being left) but stashes them, so browseFailed() below can put the whole
+--- being left) but stashes them, so sourceFailed() below can put the whole
 --- switch back. Not folded into setRows: the source has to be on screen
 --- while the scan runs, which is exactly when there are no rows to carry it.
 --- @param kind string "library" (Libation's Audible catalogue) or "folder"
@@ -504,19 +521,25 @@ function M.setSource(kind, root)
 	)
 end
 
---- Undo the last setSource because its fetch failed.
+--- Undo the last setSource because the fetch it was waiting on failed.
 ---
---- Deliberately NOT setRows({}): the browse produced nothing, which is not
+--- Deliberately NOT setRows({}): the fetch produced nothing, which is not
 --- the same as "the library is empty". Replacing a good list of rows with
 --- "nothing to show" would cost the operator the library they were already
---- working through, on top of the browse they did not get. This restores
---- what setSource displaced and ends the loading state — which nothing else
---- would, since only a row delivery ever clears it.
-function M.browseFailed()
+--- working through, on top of the load they did not get. This restores what
+--- setSource displaced — rows, selection and source — and ends the loading
+--- state, which nothing else would, since only a row delivery ever clears it.
+---
+--- Symmetric on purpose: the way BACK to the Audible library loses just as
+--- much as a browse does (400 browsed books and 40 marks, against one
+--- mid-update LibationCli). With no switch pending it degrades to exactly
+--- what setRows({}) did, so it is also the right failure call for a cold
+--- open.
+function M.sourceFailed()
 	if not webview or not isShown then
 		return
 	end
-	webview:evaluateJavaScript("window.__browseFailed && window.__browseFailed()")
+	webview:evaluateJavaScript("window.__sourceFailed && window.__sourceFailed()")
 end
 
 --- Dismiss the panel. Fires callbacks.onDismiss exactly once per open.

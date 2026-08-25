@@ -118,7 +118,16 @@
     var SHOW_LIBRARY = false; // the "show library" chip
     var QUERY = "";           // debounced search text
     var LOADING = false;
-    var PROVIDER = (PAYLOAD && PAYLOAD.provider) || "libation";
+    // The CATALOGUE provider — the thing that owns an Audible-side row.
+    // Normalised through catalogueProvider() because "folder" is a SOURCE,
+    // never a catalogue: M.browse opening the panel cold used to seed
+    // PROVIDER = "folder" from its payload, and since only __setLibrary ever
+    // rewrites PROVIDER, the way back to the Audible library then posted
+    // real ASINs under provider "folder" — rip::ab_worker would hand them to
+    // rip-provider-folder as source DIRECTORIES. Latent while `ripper.library`
+    // was the only entry point; the Finder Quick Action browsing cold is what
+    // arms it.
+    var PROVIDER = catalogueProvider(PAYLOAD && PAYLOAD.provider);
 
     // Which library is on screen. `library` = Libation's Audible catalogue
     // (the panel's original and only source); `folder` = a local tree the
@@ -136,7 +145,7 @@
     // Switching source clears the rows (showing one library's books under
     // another's name would be a lie), but a fetch that never lands must not
     // cost the operator the library they were already looking at — the
-    // failure path calls __browseFailed, which restores this wholesale.
+    // failure path calls __sourceFailed, which restores this wholesale.
     var PREV_SOURCE = null;
 
     function isFiles() { return SOURCE.kind === "folder"; }
@@ -159,6 +168,13 @@
     // panel. Derived at post time rather than stored, so nothing has to
     // remember to put PROVIDER back when the operator switches source back.
     function providerName() { return isFiles() ? "folder" : PROVIDER; }
+
+    // "folder" is a source, not a catalogue. Anything else non-empty is
+    // taken at its word (a future second store); an absent or folder-ish
+    // value falls back to the only catalogue that exists today.
+    function catalogueProvider(p) {
+      return (typeof p === "string" && p !== "" && p !== "folder") ? p : "libation";
+    }
 
     // How the folder provider's `derived_from` reads on screen. Not a
     // decoration: the operator has to be able to scan for the WEAK guesses
@@ -269,7 +285,29 @@
     // loading state (library-dialog.lua's preview "loading" fixture relies
     // on exactly this — open with loading:true and no rows, then 2.5s later
     // deliver the real rows through this same entry point).
-    window.__setRows = function (rows) {
+    window.__setRows = function (rows, sourceKind) {
+      // A delivery belongs to the source that ASKED for it. Switching source
+      // does not un-ask a fetch already walking a large tree, and the two
+      // row-producing fetches are separately anchored, so each one\'s own
+      // identity guard (`stale`) only ever defends it against its OWN
+      // successor — never against the other source\'s answer landing after
+      // the switch. Without this tag: browse a big folder, click "Audible
+      // library" while it is still scanning, and the browse completes rc=0
+      // into a panel that is now in library mode — 400 folder rows with no
+      // edit fields, no derived_from marker, posted under the libation
+      // provider. The mirror is worse: Audible rows in files mode post real
+      // ASINs as provider "folder", and rip::ab_worker hands them to
+      // rip-provider-folder as source directories.
+      //
+      // ripper/init.lua also terminates the other row fetch on every switch;
+      // this is the half that cannot race. terminate() is only SIGTERM, so a
+      // fetch that already finished writing still delivers rc = 0 — the very
+      // case the "a terminated task essentially never lands here with rc==0"
+      // note upstream admits it cannot rule out.
+      //
+      // An UNTAGGED delivery is accepted: that is a caller with no source
+      // opinion (the preview harness), not a stale one.
+      if (typeof sourceKind === "string" && sourceKind !== SOURCE.kind) return;
       ROWS = normalizeRows(rows);
       LOADING = false;
       purgeStaleSelection();
@@ -297,7 +335,7 @@
     // source being left, and a folder row and an Audible row are not
     // interchangeable (different ids, different provider, a derived
     // identity vs a catalogued one). They are stashed in PREV_SOURCE first
-    // so __browseFailed can undo the whole switch — a browse that fails is
+    // so __sourceFailed can undo the whole switch — a fetch that fails is
     // not a reason to lose the library already on screen.
     window.__setSource = function (src) {
       src = src || {};
@@ -310,12 +348,24 @@
       render();
     };
 
-    // Lua -> JS: the browse fetch failed. Put back exactly what __setSource
-    // displaced and end the loading state — WITHOUT this the panel would
-    // either sit on "loading…" forever (LOADING is only ever cleared by a
-    // row delivery) or, if it cleared the state alone, read "nothing to
-    // show" over a library that is still perfectly good.
-    window.__browseFailed = function () {
+    // Lua -> JS: the fetch a source switch was waiting on failed. Put back
+    // exactly what __setSource displaced and end the loading state —
+    // WITHOUT this the panel would either sit on "loading…" forever
+    // (LOADING is only ever cleared by a row delivery) or, if it cleared
+    // the state alone, read "nothing to show" over a library that is still
+    // perfectly good.
+    //
+    // NOT browse-specific, which is why it is not called __browseFailed:
+    // the way BACK loses just as much. Browse 400 books, mark 40, click
+    // "Audible library", and have LibationCli be mid-update — the browsed
+    // list and all 40 marks are sitting in PREV_SOURCE, and the old
+    // setRows({}) failure path would have painted "nothing to show" over
+    // them with no way back short of dismissing.
+    //
+    // With no switch pending (PREV_SOURCE null — a cold `ripper.library`
+    // whose first fetch failed) this degrades to exactly what setRows({})
+    // did: clear loading, fall through to "nothing to show".
+    window.__sourceFailed = function () {
       if (PREV_SOURCE) {
         SOURCE = PREV_SOURCE.source;
         ROWS = PREV_SOURCE.rows;
@@ -335,7 +385,7 @@
     window.__setLibrary = function (data) {
       if (!data) return;
       LOADING = !!data.loading;
-      PROVIDER = data.provider || PROVIDER;
+      if (data.provider) PROVIDER = catalogueProvider(data.provider);
       SOURCE = sourceOf(data.source);
       PREV_SOURCE = null;
       ROWS = normalizeRows(data.rows);
@@ -513,8 +563,14 @@
       // data-edit-row, NOT data-row: the enclosing .row div already carries
       // data-row, and closestAttr() walks outward from the event target —
       // reusing the name would make every field resolve to its own row div.
+      // The invalid mark is seeded AT RENDER, not only on input: the
+      // folder provider hands us an empty author for every
+      // derived_from:"filename" row, so the field that needs attention is
+      // already wrong the moment it appears and must say so without being
+      // touched first.
       var field = function (name, value, placeholder, cls) {
-        return '<input class="edit-input ' + cls + '" data-edit-row="' + esc(r.id) + '"'
+        return '<input class="edit-input ' + cls + (titleValid(value) ? '' : ' invalid') + '"'
+          + ' data-edit-row="' + esc(r.id) + '"'
           + ' data-field="' + name + '" type="text" autocomplete="off" spellcheck="false"'
           + ' placeholder="' + placeholder + '" value="' + esc(value) + '">';
       };
@@ -534,7 +590,7 @@
       var cover = r.cover
         ? '<div class="cover">' + SVG_BOOK + '<img src="' + esc(r.cover) + '" onerror="this.remove()"></div>'
         : '<div class="cover">' + SVG_BOOK + '</div>';
-      return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '" data-focused="' + (r.id === FOCUS_ID) + '">'
+      return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '" data-focused="' + (r.id === FOCUS_ID) + '" data-blocked="' + !pathValid(r) + '">'
         + '<div class="rowline">'
         + cover
         + (isFiles()
@@ -598,19 +654,26 @@
     }
 
     function renderFooter() {
-      var n = SELECTED.size;
+      var sel = ROWS.filter(function (r) { return SELECTED.has(r.id); });
+      var ok = sel.filter(pathValid);
+      var blocked = sel.length - ok.length;
       var sumEl = document.getElementById('summary');
       var btn = document.getElementById('btnStart');
-      if (n === 0) {
-        sumEl.textContent = '';
+      var blockedHtml = blocked
+        ? '<span class="sum-blocked">' + blocked + ' need'
+          + (blocked === 1 ? 's' : '') + ' an author and a title</span>'
+        : '';
+      if (ok.length === 0) {
+        sumEl.innerHTML = blockedHtml;
         btn.classList.add('disabled');
         return;
       }
       btn.classList.remove('disabled');
-      var secs = ROWS.filter(function (r) { return SELECTED.has(r.id); })
-                     .reduce(function (a, r) { return a + (r.duration_s || 0); }, 0);
+      var n = ok.length;
+      var secs = ok.reduce(function (a, r) { return a + (r.duration_s || 0); }, 0);
       sumEl.innerHTML = '<span class="sum-strong">' + n + ' book' + (n === 1 ? '' : 's')
-        + '</span> <span class="meta-text">· ' + esc(hms(secs)) + ' &rarr; rip &amp; push</span>';
+        + '</span> <span class="meta-text">· ' + esc(hms(secs)) + ' &rarr; rip &amp; push</span>'
+        + (blocked ? ' <span class="meta-text">·</span> ' + blockedHtml : '');
     }
 
     //----------------------------------------------------------------------
@@ -691,8 +754,12 @@
     }
 
     function start() {
-      if (SELECTED.size === 0) return;
-      var items = ROWS.filter(function (r) { return SELECTED.has(r.id); });
+      // Filtered, not merely refused: renderFooter has already disabled
+      // Start when NOTHING selected is rippable, and named the blocked
+      // count when only some are — so this never silently drops a row the
+      // operator was not told about.
+      var items = ROWS.filter(function (r) { return SELECTED.has(r.id) && pathValid(r); });
+      if (items.length === 0) return;
       post({ action: 'start', provider: providerName(), items: items });
     }
 
@@ -722,6 +789,30 @@
     function titleValid(n) {
       n = String(n || '').trim();
       return n !== '' && n !== '.' && n !== '..' && n.indexOf('/') === -1;
+    }
+
+    // Mirrors rip::_validate_ab_plan (home/dot_local/lib/rip.zsh) exactly:
+    // split on the FIRST slash for the author and the LAST for the title,
+    // run rip::_check_title\'s rule over both, then require the roundtrip
+    // `author + "/" + title === path` — which is what actually enforces
+    // "exactly two segments" and closes the "A/../../etc/passwd" traversal
+    // the server-side check was hardened against.
+    //
+    // This has to run on EVERY selected row, not just edited ones. The
+    // folder provider emits a single-segment path for every
+    // derived_from:"filename" book — a flat tree of loose .m4b files, which
+    // is precisely the collection browse mode exists to import — and
+    // _validate_ab_plan aborts the WHOLE plan on the first offender. One
+    // blank author would kill 39 correctly-named books, and the panel has
+    // already closed by the time that happens, so the selection is gone
+    // with it. Blocking the one row is the whole difference.
+    function pathValid(r) {
+      var p = String(r && r.path == null ? "" : r.path);
+      var i = p.indexOf("/");
+      if (i === -1) return false;
+      var author = p.slice(0, i), title = p.slice(p.lastIndexOf("/") + 1);
+      if (!titleValid(author) || !titleValid(title)) return false;
+      return author + "/" + title === p;
     }
 
     function importValid() {
@@ -802,9 +893,17 @@
           t.value = cleaned;
           t.setSelectionRange(caret, caret);
         }
+        // BOTH fields, not just the title. An empty author composes a
+        // single-segment path, which rip::_validate_ab_plan refuses for the
+        // WHOLE plan — the import form has always required an author
+        // (importValid), and the inline editor has to hold the same line.
         var field = host.getAttribute('data-field');
-        t.classList.toggle('invalid', field === 'title' && !titleValid(t.value));
+        t.classList.toggle('invalid', !titleValid(t.value));
         applyEdit(host.getAttribute('data-edit-row'), field, t.value.trim());
+        // The footer counts only rippable rows, so an edit that blocks or
+        // unblocks one has to repaint it. The ROW is deliberately not
+        // re-rendered (it would destroy the field being typed in).
+        renderFooter();
       });
 
       var searchTimer = null;

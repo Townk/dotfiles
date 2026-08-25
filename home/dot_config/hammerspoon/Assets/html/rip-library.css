@@ -365,6 +365,15 @@ body { background: transparent; overflow: hidden; }
 }
 .toggle[data-on="true"] { background: rgba(203, 166, 247, 0.22); color: var(--mauve); }
 
+/* --- a row the server would refuse --------------------------------------- */
+/* rip::_validate_ab_plan aborts the WHOLE plan on the first item whose path
+ * is not <Author>/<Title>, so a single blank author would take 39 good books
+ * down with it. The panel blocks the one row instead — and has to make it
+ * findable in a list of hundreds, which is what the peach accent is for:
+ * selected-but-blocked must not read as ordinary selected mauve. */
+.row[data-blocked="true"][data-selected="true"] { border-left-color: var(--peach); }
+.sum-blocked { color: var(--peach); font-size: var(--meta-size); }
+
 /* --- zero-results state --------------------------------------------------*/
 .empty {
   padding: 18px 15px;

@@ -851,6 +851,20 @@ local libraryCallbacks = {
 		if not library.isShown() then
 			return
 		end
+		-- Cancel the browse we are switching AWAY from. The two
+		-- row-producing fetches are mutually exclusive: only one source is
+		-- ever on screen, so only one of them may be in flight. Without
+		-- this, a browse still walking a large tree (the folder provider
+		-- runs ffprobe twice per book) keeps running, keeps a fourth
+		-- concurrent task alive past the stated ceiling of three, and
+		-- lands its rows into library mode — its own `stale` guard only
+		-- defends it against a second BROWSE, never against this switch.
+		-- The delivery tag on setRows is the half that survives the
+		-- SIGTERM race; this half is what stops the doomed scan.
+		if browseTask then
+			browseTask:terminate()
+			browseTask = nil
+		end
 		library.setSource("library", nil)
 		fetchAudiobookRows()
 		fetchServerSets()
@@ -918,11 +932,19 @@ fetchAudiobookRows = function()
 			-- (rip-library.html), so without this the panel would sit on
 			-- "loading library…" forever, and M.library() early-returns while
 			-- isShown() so the operator would have to dismiss before even
-			-- retrying (2026-08-23 review finding). setRows({}) both ends the
-			-- loading state (the panel falls through to "nothing to show")
-			-- and is a genuine no-op if the panel was already dismissed.
+			-- retrying (2026-08-23 review finding).
+			--
+			-- sourceFailed rather than setRows({}), because this fetch has
+			-- TWO callers now. From a cold M.library() there is no switch
+			-- pending and it degrades to precisely what setRows({}) did:
+			-- clear loading, fall through to "nothing to show". From the
+			-- panel\'s "Audible library" way back there IS one, and blanking
+			-- would throw away the browsed rows and every mark on them —
+			-- the same loss the browse path is already protected against,
+			-- on the symmetric path. Either way it is a genuine no-op if
+			-- the panel was already dismissed.
 			if library.isShown() then
-				library.setRows({})
+				library.sourceFailed()
 			end
 			osd.notify("glyph:nf-md-alert", "Couldn't load your audiobook library", "Basso")
 			return
@@ -938,7 +960,7 @@ fetchAudiobookRows = function()
 		end
 		log.f("library: %d row(s) from %d chunk(s)", #rows, #chunks)
 		if library.isShown() then
-			library.setRows(rows)
+			library.setRows(rows, "library")
 		end
 	end, function(_, so, _)
 		-- Drain as it arrives. Returning true keeps the stream open; the
@@ -1092,14 +1114,33 @@ function M.browse(root)
 	if library.isShown() then
 		library.setSource("folder", root)
 	else
-		library.show({ loading = true, provider = "folder", source = { kind = "folder", root = root } }, libraryCallbacks)
+		-- No `provider = "folder"` here: that key names the CATALOGUE
+		-- provider, and seeding it "folder" left the panel posting Audible
+		-- rows under provider "folder" after the way back (only
+		-- __setLibrary ever rewrites it). The SOURCE below is what puts
+		-- the panel in files mode; providerName() derives the rest.
+		library.show({ loading = true, source = { kind = "folder", root = root } }, libraryCallbacks)
 		fetchServerSets()
 	end
 	log.f("browse: %s", root)
 
+	-- Cancel BOTH row fetches: our own predecessor (a second browse), and
+	-- the Audible rows fetch we are switching away from. Only one source is
+	-- ever on screen, so only one row-producing fetch may be in flight —
+	-- otherwise a `--library` run still in progress lands 461 Audible rows
+	-- into files mode, where they render as editable identities and post
+	-- real ASINs under provider "folder" (rip::ab_worker would then hand
+	-- them to rip-provider-folder as source DIRECTORIES). Its own `stale`
+	-- guard cannot see this: it only ever compares against a successor of
+	-- the same fetch. The delivery tag on setRows covers the SIGTERM race
+	-- this cannot; together they are exhaustive.
 	if browseTask then
 		browseTask:terminate()
 		browseTask = nil
+	end
+	if audiobookLibraryTask then
+		audiobookLibraryTask:terminate()
+		audiobookLibraryTask = nil
 	end
 	-- STREAMING CALLBACK, chunks accumulated and parsed once at completion
 	-- — the same shape as fetchAudiobookRows above and for the same reason.
@@ -1132,13 +1173,13 @@ function M.browse(root)
 			if stale then
 				return
 			end
-			-- browseFailed, NOT setRows({}): a browse that produced nothing
+			-- sourceFailed, NOT setRows({}): a browse that produced nothing
 			-- is not "the library is empty". It puts back the rows and the
 			-- source the switch displaced and ends the loading state, so a
 			-- mistyped or unreadable root costs the operator nothing but
 			-- the toast.
 			if library.isShown() then
-				library.browseFailed()
+				library.sourceFailed()
 			end
 			osd.notify("glyph:nf-md-alert", "Couldn't browse " .. root, "Basso")
 			return
@@ -1154,7 +1195,7 @@ function M.browse(root)
 		end
 		log.f("browse: %d row(s) from %d chunk(s)", #rows, #chunks)
 		if library.isShown() then
-			library.setRows(rows)
+			library.setRows(rows, "folder")
 		end
 	end, function(_, so, _)
 		-- Drain as it arrives. Returning true keeps the stream open; the

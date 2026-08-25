@@ -4222,9 +4222,12 @@ for (const r of rows) {
   els.rows.fire('mousedown', Object.assign(ev(), { target: toggleTarget(String(r.id)) }));
 }
 els.btnStart.fire('mousedown', ev());
-process.stdout.write(JSON.stringify({
-  posted: POSTED, rows: els.rows.innerHTML, source: els.source.innerHTML
-}));
+// The posted plan as JSON, then the rendered markup RAW. One combined
+// JSON.stringify would escape every quote inside the innerHTML strings, so
+// a `data-blocked="true"` assertion could never match what the panel
+// actually emitted.
+process.stdout.write(JSON.stringify(POSTED) + '\n'
+  + els.rows.innerHTML + '\n' + els.source.innerHTML);
 JS
     PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-files.js" "$@"
   }
@@ -4262,13 +4265,18 @@ JS
     The output should include '"path":"Anncillary/Ancillary Justice"'
   End
 
-  # An emptied author must not leave a leading "/" in the path — that would
-  # be an absolute path on the server side, not "<Author>/<Title>".
-  It 'panel: clearing the author leaves the title alone as the path'
+  # An emptied author must not leave a leading "/" in the path (that would be
+  # an absolute path on the server side) — AND the row must not ship at all.
+  # rip::_validate_ab_plan refuses a single-segment path for the WHOLE plan,
+  # so a blank author here would abort a 40-book session after the panel has
+  # already closed. Blocking the one row is the difference.
+  It 'panel: clearing the author blocks that row instead of shipping a bare title'
     Skip if 'node is unavailable' no_node
     When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","author",""]]'
     The status should equal 0
-    The output should include '"path":"Ancilary Justice"'
+    The output should not include '"path":"/Ancilary Justice"'
+    The output should not include '"action":"start"'
+    The output should include 'data-blocked="true"'
   End
 
   # A derived identity is a GUESS, and the panel has to say which kind: the
@@ -4323,7 +4331,7 @@ global.window = global;
 (0, eval)(src);
 window.__setRows(JSON.parse(process.argv[2]));
 window.__setSource({ kind: 'folder', root: '/nope' });
-window.__browseFailed();
+window.__sourceFailed();
 process.stdout.write(els.rows.innerHTML + '' + els.source.innerHTML);
 JS
     PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-failed.js" "$@"
@@ -4340,6 +4348,223 @@ JS
     # way-back control in files mode carries them as its own label.)
     The output should include 'class="source-name"'
     The output should not include "/nope"
+    The output should not include "nothing to show"
+  End
+
+  # --- review round 2: the four findings ----------------------------------
+
+  # FINDING 1. Switching source does not un-ask a fetch already walking a
+  # large tree. The two row-producing fetches are separately anchored, and an
+  # anchor's identity guard only ever defends it against its OWN successor —
+  # never against the other source's answer arriving after the switch. Lua
+  # now terminates the outgoing fetch, but terminate() is only SIGTERM: a
+  # fetch that already finished writing still delivers rc = 0. The delivery
+  # TAG is the half that cannot race, and it is the half testable here.
+  #
+  # panel_late_delivery <switch1-json> <switch2-json> <rows-json> [tag]
+  #   Switches source twice, then delivers rows tagged for the FIRST source —
+  #   exactly the late reply. Prints #rows + #source innerHTML.
+  panel_late_delivery() {
+    cat > "$RIP_SANDBOX/panel-late.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', 'null');
+const els = {};
+function stub(id) {
+  return { id: id, innerHTML: '', textContent: '', value: '',
+           classList: { add() {}, remove() {}, toggle() {} },
+           addEventListener() {}, setAttribute() {},
+           getAttribute() { return null; }, setSelectionRange() {} };
+}
+global.document = {
+  getElementById(id) { return els[id] || (els[id] = stub(id)); },
+  addEventListener() {}, querySelector() { return null; }
+};
+global.window = global;
+(0, eval)(src);
+window.__setSource(JSON.parse(process.argv[2]));
+window.__setSource(JSON.parse(process.argv[3]));
+window.__setRows(JSON.parse(process.argv[4]), process.argv[5]);
+process.stdout.write(els.rows.innerHTML + '' + els.source.innerHTML);
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-late.js" "$@"
+  }
+
+  AUDIBLE_ROW='[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","authors":["Brandon Sanderson"],"narrators":[],"ids":{"audible.asin":"B00ECDZ08I"}}]'
+
+  It 'panel: a late browse delivery is dropped after the switch back to the library'
+    Skip if 'node is unavailable' no_node
+    When call panel_late_delivery '{"kind":"folder","root":"/inc"}' '{"kind":"library"}' "$FOLDER_ROW" folder
+    The status should equal 0
+    The output should not include "Ancilary Justice"
+  End
+
+  # The mirror, and the worse one: Audible rows landing in files mode would
+  # render real ASINs as editable identities and post them under provider
+  # "folder", which rip::ab_worker hands to rip-provider-folder as a source
+  # DIRECTORY.
+  It 'panel: a late library delivery is dropped after the switch to a folder'
+    Skip if 'node is unavailable' no_node
+    When call panel_late_delivery '{"kind":"library"}' '{"kind":"folder","root":"/inc"}' "$AUDIBLE_ROW" library
+    The status should equal 0
+    The output should not include "Steelheart"
+  End
+
+  # Positive control: the tag must not be swallowing everything. A delivery
+  # for the source ACTUALLY on screen still renders.
+  It 'panel: a delivery tagged for the current source still lands'
+    Skip if 'node is unavailable' no_node
+    When call panel_late_delivery '{"kind":"library"}' '{"kind":"folder","root":"/inc"}' "$FOLDER_ROW" folder
+    The status should equal 0
+    The output should include "Ancilary Justice"
+  End
+
+  # FINDING 2, the un-edited case. The folder provider emits a single-segment
+  # path for EVERY derived_from:"filename" row — a flat tree of loose .m4b
+  # files, which is exactly what browse mode exists to import — and
+  # rip::_validate_ab_plan aborts the whole plan on the first one.
+  FLAT_ROW='[{"id":"/inc/Network Effect","path":"Network Effect","title":"Network Effect","authors":[],"narrators":[],"derived_from":"filename"}]'
+
+  It 'panel: an author-less row is never posted, even with no edit at all'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FLAT_ROW"
+    The status should equal 0
+    The output should not include '"action":"start"'
+  End
+
+  It 'panel: an author-less row says so before it is selected'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FLAT_ROW"
+    The status should equal 0
+    The output should include 'data-blocked="true"'
+    The output should include 'edit-author invalid'
+  End
+
+  It 'panel: supplying the missing author unblocks the row'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FLAT_ROW" '[["/inc/Network Effect","author","Martha Wells"]]'
+    The status should equal 0
+    The output should include '"path":"Martha Wells/Network Effect"'
+    # The block has to LIFT, not just the post go through: an edited row that
+    # still rendered as blocked would leave the operator staring at a warning
+    # they had already answered.
+    The output should include 'data-blocked="false"'
+  End
+
+  # A blocked row must not take its healthy neighbours down with it — that is
+  # the entire difference between a per-row block and _validate_ab_plan's
+  # whole-session refusal.
+  It 'panel: a blocked row does not stop its valid neighbour from shipping'
+    Skip if 'node is unavailable' no_node
+    When call panel_files '[{"id":"1","path":"Network Effect","title":"Network Effect","authors":[],"narrators":[],"derived_from":"filename"},{"id":"2","path":"Martha Wells/Fugitive Telemetry","title":"Fugitive Telemetry","authors":["Martha Wells"],"narrators":[],"derived_from":"tags"}]'
+    The status should equal 0
+    The output should include '"path":"Martha Wells/Fugitive Telemetry"'
+    The output should not include '"path":"Network Effect"'
+  End
+
+  # FINDING 3. PROVIDER is read from the payload and only __setLibrary ever
+  # rewrites it, so a COLD browse seeding provider:"folder" left the way back
+  # posting Audible rows under the folder provider. Task 8's Quick Action is
+  # the cold-browse entry point that arms this.
+  panel_cold_browse_back() {
+    cat > "$RIP_SANDBOX/panel-cold.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', process.argv[2]);
+const els = {};
+function stub(id) {
+  const listeners = {};
+  const el = {
+    id: id, innerHTML: '', textContent: '', value: '',
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    setAttribute() {}, getAttribute() { return null; }, setSelectionRange() {},
+    fire(type, ev) { (listeners[type] || []).forEach((f) => f.call(el, ev)); }
+  };
+  return el;
+}
+global.document = {
+  getElementById(id) { return els[id] || (els[id] = stub(id)); },
+  addEventListener() {}, querySelector() { return null; }
+};
+const POSTED = [];
+global.window = global;
+global.webkit = { messageHandlers: { ripLibrary: { postMessage(m) { POSTED.push(m); } } } };
+(0, eval)(src);
+const ev = () => ({ preventDefault() {} });
+const rows = JSON.parse(process.argv[3]);
+window.__setSource({ kind: 'library' });
+window.__setRows(rows, 'library');
+for (const r of rows) {
+  els.rows.fire('mousedown', Object.assign(ev(), {
+    target: { getAttribute: (a) => (a === 'data-toggle' ? String(r.id) : null), parentNode: null }
+  }));
+}
+els.btnStart.fire('mousedown', ev());
+process.stdout.write(JSON.stringify(POSTED));
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-cold.js" "$@"
+  }
+
+  It 'panel: a cold browse then back to the library posts the catalogue provider'
+    Skip if 'node is unavailable' no_node
+    When call panel_cold_browse_back '{"loading":true,"rows":[],"provider":"folder","source":{"kind":"folder","root":"/inc"}}' "$AUDIBLE_ROW"
+    The status should equal 0
+    The output should include '"provider":"libation"'
+    The output should not include '"provider":"folder"'
+  End
+
+  # FINDING 4. The way back loses just as much as a browse does: 400 browsed
+  # books and 40 marks against one mid-update LibationCli. PREV_SOURCE holds
+  # them; the failure path has to call the restore.
+  panel_way_back_failed() {
+    cat > "$RIP_SANDBOX/panel-wayback.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', 'null');
+const els = {};
+function stub(id) {
+  const listeners = {};
+  const el = {
+    id: id, innerHTML: '', textContent: '', value: '',
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    setAttribute() {}, getAttribute() { return null; }, setSelectionRange() {},
+    fire(type, ev) { (listeners[type] || []).forEach((f) => f.call(el, ev)); }
+  };
+  return el;
+}
+global.document = {
+  getElementById(id) { return els[id] || (els[id] = stub(id)); },
+  addEventListener() {}, querySelector() { return null; }
+};
+global.window = global;
+(0, eval)(src);
+const rows = JSON.parse(process.argv[2]);
+window.__setSource({ kind: 'folder', root: '/inc' });
+window.__setRows(rows, 'folder');
+// Mark one, then take the way back and have its fetch fail.
+els.rows.fire('mousedown', {
+  preventDefault() {},
+  target: { getAttribute: (a) => (a === 'data-toggle' ? String(rows[0].id) : null), parentNode: null }
+});
+window.__setSource({ kind: 'library' });
+window.__sourceFailed();
+process.stdout.write(els.rows.innerHTML + '' + els.source.innerHTML + '' + els.summary.innerHTML);
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-wayback.js" "$@"
+  }
+
+  It 'panel: a failed way-back restores the browsed rows AND the marks on them'
+    Skip if 'node is unavailable' no_node
+    When call panel_way_back_failed "$FOLDER_ROW"
+    The status should equal 0
+    The output should include "Ancilary Justice"
+    The output should include "/inc"
+    The output should include "1 book"
     The output should not include "nothing to show"
   End
 
