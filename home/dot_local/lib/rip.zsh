@@ -2315,6 +2315,71 @@ rip::ab_have() {
   rip::_remote_has_file "audiobooks/$rel/${rel:t}.m4b"
 }
 
+# rip::ab_at_risk — the irreplaceable set: books cantina holds that are
+# Audible Plus AND absent from Audible's last scan.
+#
+# WHY THIS VERB EXISTS. The runbook's backup doctrine used to be "audiobooks
+# are not backed up; if the volume is lost, re-export from Libation — Audible
+# is the permanent copy". That is true for a title you BOUGHT and false for a
+# title you BORROWED: an Audible Plus book is licensed only while it sits in
+# the catalog, and when it leaves, Libation can never liberate it again. Four
+# Talon Saga books were lost that way with no warning. For a Plus title
+# already ripped, the server copy is then the ONLY copy in existence — this
+# verb is how the operator learns which those are.
+#
+# READ-ONLY by construction: no --apply, no writes, no ssh beyond the ONE
+# listing rip::ab_server_library already makes.
+#
+# Both sides of the join go through rip::_nfc: the server is NFC and macOS
+# composes NFD, so an accented author would otherwise read as "no match" and
+# an irreplaceable book would be quietly left off the list.
+rip::ab_at_risk() {
+  setopt localoptions noerrexit nopipefail
+
+  # Captured as VALUES so their failure PROPAGATES. Read through `< <(...)`
+  # an unreachable server is byte-identical to an empty library, and this
+  # verb printing "nothing at risk" for a server it never reached is the
+  # exact false reassurance it exists to prevent.
+  local lib; lib="$(rip::ab_server_library)" || return 2
+
+  local pname="${RIP_AB_PROVIDER:-libation}"
+  local pbin; pbin="$(rip::ab_provider_bin "$pname")" || return 2
+  local prows; prows="$(zsh "$pbin" list 2>/dev/null)"
+  if [[ -z "$prows" ]]; then
+    log_error "rip: the $pname library returned no rows — refusing to report an at-risk set derived from an empty library"
+    return 2
+  fi
+
+  local -A at_risk=()
+  local ppath
+  while IFS= read -r ppath; do
+    [[ -n "$ppath" ]] || continue
+    at_risk[$(rip::_nfc "$ppath")]=1
+  done < <(print -r -- "$prows" \
+    | jq -r 'select(((.plus // false) == true) and ((.absent // false) == true))
+             | (.path // "") | select(. != "")' 2>/dev/null)
+
+  local -a found=()
+  local rel
+  for rel in "${(@f)lib}"; do
+    [[ -n "$rel" ]] || continue
+    [[ -n "${at_risk[$(rip::_nfc "$rel")]:-}" ]] && found+=("$rel")
+  done
+
+  if (( ${#found} == 0 )); then
+    print -r -- "rip: nothing at risk — every book on cantina is either owned outright or still in the Audible Plus catalog."
+    return 0
+  fi
+
+  print -r -- "rip: ${#found} stored book(s) can NEVER be re-acquired."
+  print -r -- "rip: each is an Audible Plus title — licensed while it sits in the catalog, not owned — and Audible's last scan no longer returns it, so its licence has lapsed and Libation cannot liberate it again. The copy on cantina is the only copy that exists."
+  local f
+  for f in "${(@o)found}"; do
+    print -r -- "    $f"
+  done
+  return 0
+}
+
 # rip::_server_sidecars — every stored sidecar as JSON lines, each carrying
 # the "<Author>/<Title>" it came from as `_path`. ONE ssh: 248 books is ~124 KB
 # of JSON, and a call per book would be 248 round-trips.

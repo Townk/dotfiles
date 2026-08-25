@@ -1455,6 +1455,124 @@ EOF
     The output should not include '"path":"A/C"'
   End
 
+  # --- --at-risk: which of my stored books can I never get again? -----------
+  #
+  # The runbook's backup doctrine — "audiobooks are not backed up; Audible is
+  # the permanent copy" — is true for a book you BOUGHT and false for one you
+  # BORROWED. A stored Audible Plus title whose licence has already lapsed
+  # cannot be liberated again by anyone, so cantina's copy is the only copy in
+  # existence. This verb is the durable answer to "which ones are those".
+
+  # at_risk_library <json> — point the fake LibationCli's export at a
+  # hand-written library so an example can state exactly which titles are
+  # Plus and which have lapsed.
+  at_risk_library() {
+    cat > "$RIP_SANDBOX/atrisk-library.json"
+    cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -p|--path) out="$2" ;; esac
+  shift
+done
+cp "$RIP_SANDBOX/atrisk-library.json" "$out"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+  }
+
+  It 'CLI: --at-risk lists the stored books whose Audible Plus licence has lapsed'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/Network Effect"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/All Systems Red"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Wind and Truth"
+    at_risk_library <<'JSON'
+[
+ {"AudibleProductId":"B08X1","Title":"Network Effect","Subtitle":"","AuthorNames":"Martha Wells",
+  "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":true},
+ {"AudibleProductId":"B08X2","Title":"All Systems Red","Subtitle":"","AuthorNames":"Martha Wells",
+  "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":true},
+ {"AudibleProductId":"B08X3","Title":"Wind and Truth","Subtitle":"","AuthorNames":"Brandon Sanderson",
+  "BookStatus":"Liberated","IsAudiblePlus":false,"AbsentFromLastScan":false},
+ {"AudibleProductId":"B08X4","Title":"Never Ripped","Subtitle":"","AuthorNames":"Martha Wells",
+  "BookStatus":"NotLiberated","IsAudiblePlus":true,"AbsentFromLastScan":true}
+]
+JSON
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --at-risk
+    The status should equal 0
+    The output should include "Martha Wells/Network Effect"
+    The output should include "Martha Wells/All Systems Red"
+    # owned outright — not at risk
+    The output should not include "Wind and Truth"
+    # lapsed but never ripped: already gone, and NOT a stored book, so it has
+    # no place on a list of what the server alone is keeping alive
+    The output should not include "Never Ripped"
+    # the header has to say what the list MEANS, not just print paths
+    The output should include "2 stored book(s) can NEVER be re-acquired"
+    The output should include "the only copy that exists"
+  End
+
+  It 'CLI: --at-risk says so plainly when nothing is at risk'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Wind and Truth"
+    at_risk_library <<'JSON'
+[
+ {"AudibleProductId":"B08X3","Title":"Wind and Truth","Subtitle":"","AuthorNames":"Brandon Sanderson",
+  "BookStatus":"Liberated","IsAudiblePlus":false,"AbsentFromLastScan":false}
+]
+JSON
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --at-risk
+    The status should equal 0
+    The output should include "nothing at risk"
+  End
+
+  # A borrowed title still IN the catalog is not at risk yet — it is the one
+  # the panel nags about ripping. It must not be listed here, or the verb's
+  # answer stops meaning "irreplaceable".
+  It 'at-risk: a Plus title still in the catalog is not listed'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/Fugitive Telemetry"
+    at_risk_library <<'JSON'
+[
+ {"AudibleProductId":"B08X2","Title":"Fugitive Telemetry","Subtitle":"","AuthorNames":"Martha Wells",
+  "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":false}
+]
+JSON
+    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    The status should equal 0
+    The output should include "nothing at risk"
+    The output should not include "Fugitive Telemetry"
+  End
+
+  # FALSE REASSURANCE IS THE FAILURE THIS VERB MUST NEVER PRODUCE. Read
+  # through `< <(...)` an unreachable server is byte-identical to an empty
+  # library, and "nothing at risk" for a server we never reached is exactly
+  # the wrong answer.
+  It 'at-risk: an unreachable server is an error, never "nothing at risk"'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    The status should equal 2
+    The output should not include "nothing at risk"
+    The stderr should include "could not list the audiobook library"
+  End
+
+  # …and the same for a provider that answers with nothing: an empty library
+  # cannot be told apart from "Libation did not answer".
+  It 'at-risk: an empty provider library is an error, never "nothing at risk"'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/Network Effect"
+    at_risk_library <<'JSON'
+[]
+JSON
+    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    The status should equal 2
+    The output should not include "nothing at risk"
+    The stderr should include "refusing to report an at-risk set"
+  End
+
   # rip::ab_backfill_published — sweep the 248 sidecars already on the server
   # (0 of which carry `published`, measured 2026-08-24) so edition detection
   # has something to group on. Each example redirects RIP_LIBEXEC_DIR into
