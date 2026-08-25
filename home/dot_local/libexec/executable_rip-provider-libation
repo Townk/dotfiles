@@ -77,6 +77,23 @@ cmd_list() {
                else "https://m.media-amazon.com/images/I/\($pic).jpg" end),
        acquired: ((.BookStatus // "") == "Liberated"),
        acquired_utc: (.LastDownloaded // null),
+       # THE TWO FIELDS THAT SAY "you do not own this". An Audible Plus
+       # title is LICENSED while it sits in your library, not bought: when
+       # it leaves the catalog the licence goes with it and LibationCli can
+       # never liberate it again — silently, exiting 0 having produced
+       # nothing (the acquire verification in rip::ab_worker). `absent` is
+       # the answer from the last Audible scan, and it is the lapse signal:
+       # measured across the whole live library 2026-08-24 it was true for
+       # 7 of the 10 Plus titles and for ZERO non-Plus ones, so it is a
+       # clean flag rather than a noisy one. Surfaced so the panel can mark
+       # a borrowed title BEFORE its window closes (four Talon Saga books
+       # were lost that way with no warning at all).
+       #
+       # NOTE: this jq program is a SINGLE-QUOTED zsh string — an apostrophe
+       # anywhere in these comments ends it and the whole file stops parsing
+       # (caught 2026-08-24, one write after this comment was added).
+       plus: (.IsAudiblePlus // false),
+       absent: (.AbsentFromLastScan // false),
        ids: {"audible.asin": (.AudibleProductId // "")},
        path: "\($author)/\($folder)",
        provider: "libation",

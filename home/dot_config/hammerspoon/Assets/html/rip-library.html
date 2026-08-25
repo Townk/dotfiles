@@ -67,6 +67,17 @@
     // divergence to flag, not a state to celebrate).
     var SVG_WARN_SM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgb(250,179,135)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
 
+    // "Audible Plus" detail lines. A padlock rather than the warning
+    // triangle: this is not a divergence between two systems (what
+    // SVG_WARN_SM marks) but a statement about what you are allowed to
+    // keep. Red for a lapsed licence — the book is already unreachable —
+    // and the same 12x12 sizing as SVG_WARN_SM so the detail lines align.
+    var SVG_LOCK_SM = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgb(243,139,168)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
+
+    // The same padlock in --peach: still borrowed, still rippable, and the
+    // line that goes with it is a call to action rather than an epitaph.
+    var SVG_LOCK_SM_WARN = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="rgb(250,179,135)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
+
     //----------------------------------------------------------------------
     // State — every row, plus the derived sets/flags the UI needs.
     //----------------------------------------------------------------------
@@ -307,6 +318,40 @@
       return '';
     }
 
+    // The Audible Plus marks. An Audible Plus title is LICENSED while it sits
+    // in the catalog, not owned: when it leaves, the licence goes with it,
+    // LibationCli can no longer liberate it (it exits 0 having produced
+    // nothing — see rip::ab_worker's acquire verification), and a title that
+    // was never ripped is gone for good. Four Talon Saga books were lost that
+    // way with no warning at all, which is what these two lines exist to
+    // prevent.
+    //
+    //   plus && absent          the licence has ALREADY lapsed. This is the
+    //                           honest version of a row that looks rippable
+    //                           and silently is not. Independent of the
+    //                           server fetch — both facts come off the row.
+    //   plus && !absent && !stored
+    //                           still borrowed, still available: the warning
+    //                           that would have saved the Talon Saga.
+    //
+    // Strict === true on both flags, the same discipline neverPushedHtml
+    // applies to r.acquired: a row from a provider that does not emit these
+    // keys must render nothing, never a claim invented from `undefined`.
+    // And the borrowed line's "not already stored" half is gated on
+    // SERVER_KNOWN for the same tri-state reason as neverPushedHtml — with
+    // the server answer still in flight, SERVER being empty is not evidence
+    // that cantina lacks this book.
+    function audiblePlusHtml(r, inLibrary) {
+      if (r.plus !== true) return '';
+      if (r.absent === true) {
+        return '<div class="detail"><div class="plus-lapsed">' + SVG_LOCK_SM
+          + '<span>Audible Plus &mdash; licence lapsed, can no longer be ripped</span></div></div>';
+      }
+      if (!SERVER_KNOWN || inLibrary) return '';
+      return '<div class="detail"><div class="plus-borrowed">' + SVG_LOCK_SM_WARN
+        + '<span>Audible Plus &mdash; borrowed; rip before it lapses</span></div></div>';
+    }
+
     function rowHtml(r) {
       var selected = SELECTED.has(r.id);
       var inLibrary = SERVER.has(r.path);
@@ -321,6 +366,7 @@
         + '<div class="meta">' + metaHtml(r) + '</div>'
         + '<span class="toggle" data-toggle="' + esc(r.id) + '" data-on="' + selected + '">' + (selected ? 'Rip' : 'Skip') + '</span>'
         + '</div>'
+        + audiblePlusHtml(r, inLibrary)
         + neverPushedHtml(r, inLibrary)
         + otherEditionHtml(r)
         + '</div>';

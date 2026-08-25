@@ -37,6 +37,7 @@ body { background: transparent; overflow: hidden; }
   --mauve: rgb(203, 166, 247);
   --green: rgb(166, 227, 161);
   --peach: rgb(250, 179, 135); /* "liberated, never pushed" — a divergence to flag, not celebrate */
+  --red: rgb(243, 139, 168);   /* an Audible Plus licence that has already lapsed — the book is gone */
 
   --dim: 0.45; /* the house "dimmed" level — already-on-server rows, disabled Start */
 }
@@ -174,6 +175,24 @@ body { background: transparent; overflow: hidden; }
   min-width: 0;
 }
 .other-edition span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The Audible Plus marks, same .detail layout as the two above.
+ * .plus-lapsed is --red, not --peach: a lapsed licence is not a divergence
+ * to reconcile, it is a book that can never be ripped again, and it must not
+ * read as the same severity as "liberated, never pushed".
+ * .plus-borrowed keeps --peach — still available, act before it isn't. */
+.plus-lapsed,
+.plus-borrowed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--meta-size);
+  min-width: 0;
+}
+.plus-lapsed { color: var(--red); }
+.plus-borrowed { color: var(--peach); }
+.plus-lapsed span,
+.plus-borrowed span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .row .cover {
   position: relative;

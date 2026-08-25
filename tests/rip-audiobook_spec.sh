@@ -151,6 +151,57 @@ EOF
     The line 2 should include '"path":"Brandon Sanderson/Wind and Truth"'
   End
 
+  # An Audible Plus title is LICENSED while it sits in the catalog, not
+  # owned: when it leaves, the licence goes with it and Libation can never
+  # liberate it again. Both facts are already in `export -j` output —
+  # IsAudiblePlus and AbsentFromLastScan — and neither was surfaced, which is
+  # how four Talon Saga books were lost with no warning at all. The default
+  # fixture carries neither key, which pins the // false fallback: a row that
+  # predates them must read as "owned, present", never as undefined.
+  It 'provider: rows carry the Audible Plus and absent-from-last-scan flags'
+    cat > "$RIP_SANDBOX/plus-library.json" <<'JSON'
+[
+ {"AudibleProductId":"B08X1","Title":"Network Effect","Subtitle":"",
+  "AuthorNames":"Martha Wells","NarratorNames":"Kevin R. Free","LengthInMinutes":480,
+  "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":true},
+ {"AudibleProductId":"B08X2","Title":"Fugitive Telemetry","Subtitle":"",
+  "AuthorNames":"Martha Wells","NarratorNames":"Kevin R. Free","LengthInMinutes":300,
+  "BookStatus":"NotLiberated","IsAudiblePlus":true,"AbsentFromLastScan":false},
+ {"AudibleProductId":"B08X3","Title":"Owned Outright","Subtitle":"",
+  "AuthorNames":"Somebody Else","NarratorNames":"N","LengthInMinutes":100,
+  "BookStatus":"Liberated"}
+]
+JSON
+    cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -p|--path) out="$2" ;; esac
+  shift
+done
+cp "$RIP_SANDBOX/plus-library.json" "$out"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+    When run zsh "$PROVIDER" list
+    The status should equal 0
+    The line 1 should include '"plus":true'
+    The line 1 should include '"absent":true'
+    The line 2 should include '"plus":true'
+    The line 2 should include '"absent":false'
+    # the export omits both keys entirely for this one
+    The line 3 should include '"plus":false'
+    The line 3 should include '"absent":false'
+  End
+
+  It 'provider: rows the export says nothing about read as owned and present'
+    When run zsh "$PROVIDER" list
+    The status should equal 0
+    The line 1 should include '"plus":false'
+    The line 1 should include '"absent":false'
+  End
+
   It 'provider: cover prefers the local cache, falls back to the CDN'
     touch "$RIP_LIBATION_IMAGES/51kzMpLGP7L_80x80.jpg"
     When run zsh "$PROVIDER" list
