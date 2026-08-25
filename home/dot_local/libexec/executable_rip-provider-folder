@@ -68,7 +68,7 @@ cmd_list() {
     seen[$d]=1
   done < <(fd --absolute-path --type f --extension m4b --print0 . "$root" 2>/dev/null)
 
-  local author title src cover dur
+  local author title src cover dur has_pdf
   for d in "${(@ko)seen}"; do
     IFS=$'\t' read -r author title src <<< "$(_derive "$d" "$root")"
     cover="$(print -rl -- "$d"/*.(jpg|jpeg|png)(N) | head -1)"
@@ -80,9 +80,15 @@ cmd_list() {
         [[ "$n" == <->* ]] && dur=$(( dur + ${n%%.*} ))
       done
     fi
+    # A sibling PDF is a real, local, checkable signal — unlike everything
+    # else Audible-shaped in this row, this one costs nothing to establish
+    # honestly, so it is not left null/false by default.
+    has_pdf=false
+    [[ -n "$(print -rl -- "$d"/*.pdf(N) | head -1)" ]] && has_pdf=true
     jq -nc \
       --arg id "$d" --arg title "$title" --arg author "$author" \
-      --arg src "$src" --arg cover "$cover" --argjson dur "$dur" '
+      --arg src "$src" --arg cover "$cover" --argjson dur "$dur" \
+      --argjson has_pdf "$has_pdf" --arg v "$VERSION" '
       {id: $id,
        title: $title,
        subtitle: null,
@@ -90,15 +96,21 @@ cmd_list() {
        narrators: [],
        duration_s: $dur,
        series: null,
+       series_position: null,
        language: null,
        abridged: false,
        published: null,
+       has_pdf: $has_pdf,
        cover: (if $cover == "" then null else "file://" + $cover end),
        acquired: true,
+       acquired_utc: null,
        plus: false,
        absent: false,
+       ids: {},
        derived_from: $src,
        path: (if $author == "" then $title else $author + "/" + $title end),
+       provider: "folder",
+       provider_version: $v,
        format: "m4b"}'
   done
 }

@@ -29,6 +29,8 @@ Describe 'rip-provider-folder'
   jq_title() { jq -r .title; }
   jq_cover_is_sibling() { jq -r '.cover | endswith("cover.jpg")'; }
   jq_id() { jq -r .id; }
+  jq_provider() { jq -r .provider; }
+  jq_ids() { jq -c .ids; }
 
   It 'capabilities: announces itself as an acquiring provider'
     When run zsh "$FOLDER_BIN" capabilities
@@ -114,5 +116,34 @@ Describe 'rip-provider-folder'
     The output should include '"plus":false'
     The output should include '"absent":false'
     The output should include '"acquired":true'
+  End
+
+  It 'list: reports its own provider identity, never "unknown"'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The result of function jq_provider should equal "folder"
+  End
+
+  It 'list: a local file carries no external identity — ids is empty'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The result of function jq_ids should equal "{}"
+  End
+
+  It 'list: a sibling pdf is a real local signal — has_pdf true'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    printf 'pdf\n' > "$ROOT/Ann Leckie/Ancillary Justice/companion.pdf"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The output should include '"has_pdf":true'
+  End
+
+  It 'list: no sibling pdf — has_pdf false, never guessed'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The output should include '"has_pdf":false'
   End
 End
