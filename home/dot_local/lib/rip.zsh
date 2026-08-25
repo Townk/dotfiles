@@ -3812,10 +3812,27 @@ rip::_repair_summary() {
 # is whatever the last file of the last book happened to leave behind (a
 # `continue` from the audio filter, say), and this status is the only thing
 # that tells the sweep it reached the server at all.
+#
+# THE `E<TAB><rc>` LINE IS `find`'S OWN STATUS, AND IT IS NOT OPTIONAL (review
+# finding 2, 2026-08-25 — the eleventh defect of this class here). This used to
+# be `find … | while read`, and a POSIX pipeline reports only the LAST command,
+# so a `find` that exited non-zero because it could not descend into a
+# directory was silently discarded: with one author directory unreadable the
+# sweep printed "recorded companions for 2 of 2" and exited 0 for a library
+# whose third book it never saw. rip::_server_sidecars under-enumerates
+# identically, so the denominator agrees with the short listing and nothing
+# downstream can notice. `find` now runs in a command substitution, whose
+# status IS its own, and the caller treats a non-zero one as an outstanding
+# condition. (The same pipeline shape survives in rip::_server_sidecars:
+# fixing it there is a separate change with its own callers to re-verify.)
 rip::_server_companion_files() {
   setopt localoptions noerrexit nopipefail
   local base="${1:-}"
-  local script='find . -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r d; do
+  local script='l=$(find . -mindepth 2 -maxdepth 2 -type d 2>/dev/null)
+frc=$?
+printf "E\t%s\n" "$frc"
+printf "%s\n" "$l" | while read -r d; do
+  [ -n "$d" ] || continue
   d=${d#./}
   s=0
   if [ -f "$d/.fleet-book.json" ]; then s=1; fi
@@ -3911,7 +3928,17 @@ rip::ab_repair_companions() {
     done <<< "$idx"
   fi
 
+  # `enum_seen` is deliberately separate from `enum_rc`: a listing carrying NO
+  # `E` line at all is not a healthy enumeration either — it means the remote
+  # script is not the one this function shipped — and defaulting a missing
+  # health report to "fine" is the very inference this fix exists to remove.
+  local -i enum_rc=0 enum_seen=0
   while IFS= read -r line; do
+    if [[ "$line" == E$'\t'* ]]; then
+      enum_seen=1
+      enum_rc="${line#E$'\t'}"
+      continue
+    fi
     [[ "$line" == D$'\t'* ]] || continue
     line="${line#D$'\t'}"
     flag="${line%%$'\t'*}"
@@ -3920,6 +3947,8 @@ rip::ab_repair_companions() {
     dirs+=("$rel")
     has_sidecar[$rel]="$flag"
   done <<< "$listing"
+  local -i enum_bad=0
+  (( enum_seen && enum_rc == 0 )) || enum_bad=1
 
   # The companion array for every book, in ONE jq pass over the whole listing.
   # `.[4:] | join("\t")` rather than `.[4]`: the file name is the LAST field
@@ -3947,8 +3976,21 @@ rip::ab_repair_companions() {
   # "<count><TAB><the whole amended sidecar>". Comparing SORTED means a
   # library whose sidecars were written in a different collation order is not
   # rewritten for nothing.
+  # `(type != "object") or (length == 0)` -> "!", the malformed marker (review
+  # finding 1, 2026-08-25). The guard below tests whether the enumerator
+  # produced a row at all, which is NOT a test of shape: a sidecar whose entire
+  # content is the JSON literal `null` survives the read path, because jq
+  # accepts a null left operand for `+` — `null + {_path:$p}` is
+  # `{"_path":"A/B"}`, which passes the `_path` filter and comes back out of
+  # rip::_sidecar_index as `{}`. Non-empty, so the guard did not fire, and the
+  # book was rewritten as `{"companions":[…]}`: laundered out of the malformed
+  # report and left looking like a swept, identity-less book. A stored `{}` is
+  # indistinguishable from it by this point and gets the same refusal, which is
+  # correct — writing companions into an object with no identity manufactures a
+  # book that looks scanned and identifies nothing.
   local cmp_prog='($c | sort_by(.file)) as $want
-    | if ((.companions | type) == "array") and ((.companions | sort_by(.file)) == $want)
+    | if (type != "object") or (length == 0) then "!"
+      elif ((.companions | type) == "array") and ((.companions | sort_by(.file)) == $want)
       then "" else (($want | length | tostring) + "\t" + ((.companions = $want) | tojson)) end'
 
   local -a to_rel=() to_n=() to_json=() malformed=() nosidecar=()
@@ -3978,6 +4020,11 @@ rip::ab_repair_companions() {
       (( failed++ ))
       continue
     fi
+    if [[ "$out" == "!" ]]; then
+      # A parseable row that is not a usable identity object — see cmp_prog.
+      malformed+=("$d")
+      continue
+    fi
     [[ -n "$out" ]] || continue          # already correct — never rewritten
     to_rel+=("$d")
     to_n+=("${out%%$'\t'*}")
@@ -3994,6 +4041,9 @@ rip::ab_repair_companions() {
     print -r -- "rip: ${#nosidecar[@]} stored book(s) have no sidecar at all — run --repair-sidecars:"
     for f in "${(@o)nosidecar}"; do print -r -- "    $f"; done
   fi
+  if (( enum_bad )); then
+    print -r -- "rip: the server file listing was incomplete (find rc=$enum_rc) — at least one directory could not be read, so no count below is the whole library"
+  fi
 
   if (( ${#to_rel[@]} == 0 )); then
     # Narrated in BOTH modes, and split by cause. A silent --apply with
@@ -4002,10 +4052,15 @@ rip::ab_repair_companions() {
     # print the line an operator reads as "the sweep is done".
     if (( ${#dirs[@]} == 0 && seen == 0 )); then
       print -r -- "rip: no books found on the server — nothing to record (is cantina reachable?)"
+      (( enum_bad )) && return 1
       return 0
     fi
     if (( outstanding > 0 )); then
       print -r -- "rip: nothing recorded — $outstanding book(s) could not be read"
+      return 1
+    fi
+    if (( enum_bad )); then
+      print -r -- "rip: nothing to record in the part of the library that could be read"
       return 1
     fi
     print -r -- "rip: nothing to record"
@@ -4023,8 +4078,8 @@ rip::ab_repair_companions() {
     # finish the job either way.
     if (( outstanding > 0 )); then
       print -r -- "rip: $outstanding book(s) could not be read"
-      return 1
     fi
+    (( outstanding > 0 || enum_bad )) && return 1
     return 0
   fi
 
@@ -4071,7 +4126,10 @@ rip::ab_repair_companions() {
   local -i unwritten=$(( ${#to_rel[@]} - recorded ))
   (( unwritten > 0 )) && print -r -- "rip: $unwritten sidecar(s) could not be written"
   (( outstanding > 0 )) && print -r -- "rip: $outstanding book(s) could not be read"
-  (( unwritten > 0 || outstanding > 0 )) && return 1
+  # THE TALLY NEVER CLAIMS A COMPLETENESS NOTHING ESTABLISHED: an enumeration
+  # that could not read the whole tree fails the sweep even when every book it
+  # DID see was recorded.
+  (( unwritten > 0 || outstanding > 0 || enum_bad )) && return 1
   return 0
 }
 

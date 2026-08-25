@@ -3908,6 +3908,104 @@ EOF
     The result of function rc_stray_tmp should equal "0"
   End
 
+  # REVIEW FINDING 1 (2026-08-25). The malformed guard used to test NON-EMPTY,
+  # not SHAPE — and a sidecar whose entire content is the JSON literal `null`
+  # survives the read path: jq accepts a null left operand for `+`, so
+  # rip::_server_sidecars turns it into `{"_path":"A/B"}` and
+  # rip::_sidecar_index strips that back to `{}`, which is non-empty. The book
+  # was laundered out of the malformed report and rewritten as
+  # `{"companions":[...]}` — an identity-less file that now looks SWEPT. The
+  # other malformed shapes (empty, truncated, bare array, string, number) were
+  # already reported correctly; only `null` slipped through.
+  It 'repair-companions: a sidecar that is the JSON literal null is reported, never rewritten'
+    rc_mkbook
+    printf 'null' > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should not equal 0
+    The output should include "A/B"
+    The output should not include "recorded companions for 1"
+    The result of function rc_sha should equal "$before"
+  End
+
+  # A stored empty object carries no identity either, and is indistinguishable
+  # from the `null` above by the time rip::_sidecar_index has run — so the same
+  # refusal covers both. Writing companions into it would manufacture a book
+  # that looks scanned and identifies nothing.
+  It 'repair-companions: a sidecar that is an empty object is reported, never rewritten'
+    rc_mkbook
+    printf '{}' > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
+    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    The status should not equal 0
+    The output should include "A/B"
+    The result of function rc_sha should equal "$before"
+  End
+
+  # REVIEW FINDING 2 (2026-08-25), the eleventh defect of this class in this
+  # subsystem. The remote enumeration is `find … | while read`, and a POSIX
+  # pipeline reports the LAST command status — so find exiting non-zero
+  # because it could not descend into a directory was DISCARDED, and the sweep
+  # printed "recorded companions for 2 of 2" with rc 0 for a library where a
+  # third book was never seen. rip::_server_sidecars under-enumerates
+  # identically, so the denominator agrees with the short listing and nothing
+  # internal catches the discrepancy: a tally claiming a completeness it never
+  # established, on the very count the operator is told to read before writing
+  # 247 files.
+  rc_a2_companions() { jq -r '.companions // "ABSENT"' "$RIP_SANDBOX/server/audiobooks/A2/B2/.fleet-book.json"; }
+
+  It 'repair-companions: a directory find could not read never reads as a complete sweep'
+    rc_mkbook
+    rc_plain_sidecar
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/C/D" "$RIP_SANDBOX/server/audiobooks/A2/B2"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/C/D/D.m4b"
+    printf 'jpg\n'   > "$RIP_SANDBOX/server/audiobooks/C/D/cover.jpg"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"D","authors":["C"],"ids":{}}' \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/C/D/.fleet-book.json"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A2/B2/B2.m4b"
+    printf 'pdf\n'   > "$RIP_SANDBOX/server/audiobooks/A2/B2/B2.pdf"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B2","authors":["A2"],"ids":{}}' \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/A2/B2/.fleet-book.json"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB
+      chmod 000 '$RIP_SANDBOX/server/audiobooks/A2'
+      rip::ab_repair_companions --apply; rc=\$?
+      chmod 755 '$RIP_SANDBOX/server/audiobooks/A2'
+      exit \$rc"
+    The status should equal 1
+    The output should include "incomplete"
+    # The two books it COULD see are still recorded — the refusal is about the
+    # tally claiming to be the whole library, not about refusing to work.
+    The result of function rc_kinds should equal '["pdf"]'
+    # …and the book behind the unreadable directory is demonstrably untouched.
+    The result of function rc_a2_companions should equal "ABSENT"
+  End
+
+  # REVIEW TEST GAP (2026-08-25). `ssh` reads and forwards local stdin unless
+  # given -n, so one inside a loop fed by a pipe swallows the rest of the list
+  # and the loop silently ends after ONE item. Three occurrences in this
+  # module so far, and a guard nobody tests is a guard that gets removed.
+  # fake_server_ssh_reads_stdin is the only fake that models the slurp, and it
+  # HONOURS -n exactly as ssh does — which is what makes this observable.
+  It 'repair-companions: the listing ssh never eats the caller stdin'
+    rc_mkbook
+    rc_plain_sidecar
+    fake_server_ssh_reads_stdin
+    cat > "$RIP_SANDBOX/probe.zsh" <<EOF
+source $RIPLIB
+base="\$(rip::remote_base)"
+n=0
+while IFS= read -r l; do
+  n=\$(( n + 1 ))
+  rip::_server_companion_files "\$base" >/dev/null 2>&1
+done < <(printf 'a\nb\nc\n')
+print -r -- "loops=\$n"
+EOF
+    When run zsh "$RIP_SANDBOX/probe.zsh"
+    The status should equal 0
+    The output should include "loops=3"
+  End
+
   It 'cli: --repair-companions is dispatched, and the usage names it'
     rc_mkbook
     rc_plain_sidecar
