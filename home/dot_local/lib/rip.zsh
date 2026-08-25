@@ -4545,7 +4545,18 @@ rip::ab_worker() {
     # verified against, a sibling's files. Only a directory that was not
     # there a moment ago can be this acquisition.
     pre_dirs=(); for pre_d in "$ab_root/${bpath%%/*}"/*(N/); do pre_dirs[${pre_d:t}]=1; done
-    zsh "$bin" acquire "$id" "$ab_root" 2>&1 \
+    # $bpath (the plan item's own path — <Author>/<Title>) is always passed
+    # as the third, optional argument. It is authoritative: it is what the
+    # panel displayed and what a later task lets the operator EDIT before
+    # ripping, so it must win over anything a provider could re-derive from
+    # the id alone. Passed unconditionally, not just for the folder
+    # provider: rip-provider-libation's own dispatcher only ever forwards
+    # its OWN first two (post-shift) positional args to cmd_acquire —
+    # `acquire) shift; cmd_acquire "${1:?...}" "${2:?...}" ;;` — so a third
+    # argument here is silently discarded there, exactly like `list [root]`
+    # is ignored by a provider that owns its own catalogue (verified by
+    # reading executable_rip-provider-libation's dispatcher, not assumed).
+    zsh "$bin" acquire "$id" "$ab_root" "$bpath" 2>&1 \
       | while IFS= read -r line; do
           case "$line" in
             progress\ *)

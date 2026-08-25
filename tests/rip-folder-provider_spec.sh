@@ -189,9 +189,13 @@ Describe 'rip-provider-folder'
     The output should not include "one="
   End
 
+  # The caller (rip::ab_worker) always passes the plan item's own path as
+  # the third argument now — this mirrors that: production never relies on
+  # directory-structure derivation, so the examples that need a nested
+  # <Author>/<Title> destination pass it explicitly too.
   It 'acquire: copies the book into <dest>/<Author>/<Title>/ and leaves the source alone'
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The path "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
@@ -202,7 +206,7 @@ Describe 'rip-provider-folder'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     printf 'pdf\n' > "$ROOT/Ann Leckie/Ancillary Justice/bonus.pdf"
     printf 'jpg\n' > "$ROOT/Ann Leckie/Ancillary Justice/cover.jpg"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/bonus.pdf" should be exist
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/cover.jpg" should be exist
@@ -241,7 +245,7 @@ Describe 'rip-provider-folder'
   It 'acquire: a partly-copied book is never left in place under the final name'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     chmod 000 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should not equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice" should not be exist
     chmod 644 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"

@@ -160,28 +160,19 @@ cmd_acquire() {
   # name into "author". `acquire <id> <destdir> [relpath]` is additive: a
   # provider that names its own output (libation) ignores a third argument,
   # exactly as `list [root]` is ignored by a provider that owns a catalogue.
-  local rel="${3:-}"
-  if [[ -z "$rel" ]]; then
-    local author="" title="" srcname=""
-    IFS=$'\x1f' read -r author title srcname <<< "$(_derive "$src" "${src:h:h}")"
-    # _derive's directory-structure branch reports the segment right before
-    # the title as "author", whichever root it is handed — correct for a
-    # proper Author/Title layout (the common, documented case), wrong for a
-    # book sitting directly under the operator's chosen root, where the
-    # guessed grandparent overshoots past the real root and its OWN name
-    # gets promoted into "author" (the exact failure the caller-relpath
-    # comment above names). Without the real root, acquire cannot always
-    # tell the two shapes apart from $src's path alone — but ONE guessed
-    # root is never plausible: one that coincides with the parent of this
-    # tool's own staging destination. The operator's book collection and
-    # this run's transient staging tree are different, unrelated trees; a
-    # guess that lands on the same directory as the latter has climbed too
-    # far and is discarded in favor of the safe default (title only).
-    if [[ -n "$author" && "${src:h:h:A}" == "${dest:A:h}" ]]; then
-      author=""
-    fi
-    rel="${author:+$author/}$title"
-  fi
+  # rip::ab_worker always passes the plan item's own path here now, so this
+  # fallback is unreachable in production.
+  #
+  # When relpath is absent anyway, do NOT guess a directory structure:
+  # without the real scan root, /a/b/Book cannot be told apart from a loose
+  # book AT /a/b — the information needed to tell an "Author" folder from
+  # the root itself simply is not in $src's path (acquire is never handed
+  # the root the way `list <root>` is). Guessing is the harmful direction —
+  # it invents provenance and can land a book under a wrong shelf. Declining
+  # to guess is visible (the book stages under its own directory name, no
+  # author) and harmless. So: title is the book directory's own basename,
+  # author is empty, full stop.
+  local rel="${3:-${src:t}}"
 
   mkdir -p "$dest" || die "cannot create $dest"
   local staging="$dest/$rel"

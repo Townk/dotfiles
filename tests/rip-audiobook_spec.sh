@@ -550,6 +550,26 @@ EOF
     The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
   End
 
+  # The worker MUST forward the plan item's own path as the folder
+  # provider's third argument — that path is authoritative: it is what the
+  # panel displayed and what a later task lets the operator EDIT before
+  # ripping (Task 3 review). A source directory named "RawFolder" whose
+  # plan item carries a DIFFERENT, edited path must stage — and land on the
+  # server — under the PLAN's path, never anything derived from the source
+  # directory's own name. Runs the REAL rip-provider-folder binary
+  # (RIP_LIBEXEC_DIR points at the real, tracked libexec dir for this whole
+  # file), so this is an end-to-end proof the worker's third argument
+  # actually reaches cmd_acquire and wins.
+  It "worker: forwards the folder provider's plan path — an inline edit survives acquire"
+    mkdir -p "$RIP_SANDBOX/incoming/RawFolder"
+    printf 'audio\n' > "$RIP_SANDBOX/incoming/RawFolder/RawFolder.m4b"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\",\"authors\":[\"Edited Author\"]}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/RawFolder.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/RawFolder" should not be exist
+  End
+
   # The operator asked to be TOLD, not to have the batch aborted (Task 4):
   # a book already on the server is a refusal worth logging, and the
   # remaining books still acquire. This check stays at ACQUIRE time only —
