@@ -169,6 +169,28 @@ EOF
     The stdout should include "verified"
   End
 
+  # Finding 1 regression guard (review, 2026-08-25): a folder-provider
+  # acquire's temp directory used to be built directly inside $src (the
+  # exact tree this push walks), before the provider was fixed to anchor
+  # it outside instead. Even with that fixed, plant the same shape here —
+  # a leftover, or a future regression, must never be shippable by push
+  # itself: `find` descends into dot-directories by default (only
+  # `.DS_Store` was ever excluded BY NAME), and a copied file's mtime is
+  # the SOURCE's, not the copy's, so the age gate offers no protection —
+  # a half-copied book under a stray dot-directory looks instantly
+  # "settled".
+  It 'push: a leftover acquire temp under the watched tree is never shipped'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/.rip-folder.1"
+    printf 'partial\n' > "$RIP_STAGING_ROOT/audiobooks/A/.rip-folder.1/x.m4b"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
+    touch "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/A/.rip-folder.1" should not be exist
+    The path "$RIP_SANDBOX/server/audiobooks/A" should not be exist
+  End
+
   # rip::ab_worker refuses to re-acquire a book already on the server (Task
   # 4), but push itself must stay idempotent: a push whose checksum
   # verification failed has to be retriable with `rip-push audiobooks` and

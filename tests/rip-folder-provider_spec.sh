@@ -35,6 +35,18 @@ Describe 'rip-provider-folder'
   jq_derived_from() { jq -r .derived_from; }
   jq_path() { jq -r .path; }
 
+  # bonus_pdf_anywhere() — count of "0-bonus.pdf" ANYWHERE under
+  # $RIP_SANDBOX/staging, not just under the book's own final path — the
+  # temp-then-rename guard's whole point is that a file copied before a
+  # LATER failure never survives under ANY name, including the hidden temp
+  # one, not merely that it fails to land at the final path (a naive
+  # "build under the final name, rm -rf on failure" implementation can
+  # satisfy "the final path doesn't exist" with a single unreadable
+  # source file just as well, since nothing was ever copied at all).
+  bonus_pdf_anywhere() {
+    find "$RIP_SANDBOX/staging" -name '0-bonus.pdf' 2>/dev/null | wc -l | tr -d ' '
+  }
+
   It 'capabilities: announces itself as an acquiring provider'
     When run zsh "$FOLDER_BIN" capabilities
     The status should equal 0
@@ -212,6 +224,25 @@ Describe 'rip-provider-folder'
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/cover.jpg" should be exist
   End
 
+  # Finding 5 (review, 2026-08-25): the precondition (`*.m4b(N)`, no type
+  # qualifier) counts a SYMLINKED .m4b as present — exactly the shape an
+  # operator's collection takes when it points into their real store — but
+  # the OLD copy glob (`*(N.)`, plain-file type examined via lstat, which
+  # never follows a link) silently skipped it: the book would publish with
+  # a cover and no audio, exit 0. `(N-.)` on the copy makes the type check
+  # follow the link, so the two globs agree.
+  It 'acquire: a symlinked m4b is followed and copied, not silently skipped'
+    mkdir -p "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice"
+    printf 'real audio\n' > "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+    mkdir -p "$ROOT/Ann Leckie/Ancillary Justice"
+    ln -s "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" \
+          "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    The status should equal 0
+    The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
+    The contents of file "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "real audio"
+  End
+
   It 'acquire: the caller-supplied relpath wins over any derivation'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Edited Author/Edited Title"
@@ -242,12 +273,23 @@ Describe 'rip-provider-folder'
     The stderr should include "no such directory"
   End
 
+  # TWO source files, the SECOND (alphabetically: "0-bonus.pdf" sorts
+  # before "Ancillary Justice.m4b", and zsh's default glob order is
+  # sorted — verified) unreadable: a single unreadable file never
+  # distinguishes temp-then-rename from "build under the final name,
+  # rm -rf on any failure" — both leave nothing, since nothing was ever
+  # copied. With a first file that DOES land successfully before the
+  # second one fails, only the temp-then-rename shape can ever be
+  # PROVEN never to have surfaced it under the final path or the hidden
+  # temp name once the run is done.
   It 'acquire: a partly-copied book is never left in place under the final name'
     mkdirbook "Ann Leckie" "Ancillary Justice"
+    printf 'bonus\n' > "$ROOT/Ann Leckie/Ancillary Justice/0-bonus.pdf"
     chmod 000 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
     When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should not equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice" should not be exist
+    The result of function bonus_pdf_anywhere should equal "0"
     chmod 644 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
   End
 End

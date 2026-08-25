@@ -189,10 +189,21 @@ rip::push_worker() {
   # the rest of .work/.
   local listfile; listfile="$(rip::staging_root)/.work/push-$type.$$.list"
   mkdir -p "${listfile:h}"
+  # -not -path '*/.*/*': nothing inside a dot-DIRECTORY is ever a push
+  # candidate, at any depth — belt-and-suspenders alongside the acquire
+  # providers keeping their own scratch temps (.rip-folder.*, .rip-import.*)
+  # anchored outside $src entirely. `find` descends into dot-directories by
+  # default (only `-name .DS_Store` excluded a dot-FILE, never a
+  # dot-directory's contents), and a copied file's mtime is the SOURCE's,
+  # not the copy's, so the age gate above offers no protection either — a
+  # leftover or still-being-built temp sitting under $src would otherwise
+  # ship as a real book the moment `find` reached it (review finding,
+  # 2026-08-25: rip-provider-folder's own temp used to live at exactly such
+  # a path before that provider was fixed to anchor outside $src).
   if (( age > 0 )); then
-    find "$src" -type f ! -name .DS_Store -mtime +"${age}s" 2>/dev/null
+    find "$src" -type f ! -name .DS_Store -not -path '*/.*/*' -mtime +"${age}s" 2>/dev/null
   else
-    find "$src" -type f ! -name .DS_Store 2>/dev/null
+    find "$src" -type f ! -name .DS_Store -not -path '*/.*/*' 2>/dev/null
   fi | sed "s|^$src/||" > "$listfile"
   if [[ ! -s "$listfile" ]]; then
     print -r -- "rip: nothing settled to push for $type (age gate ${age}s)"
@@ -2558,13 +2569,40 @@ rip::_server_sidecars() {
 # Derived from the ONE ssh rip::_server_sidecars already makes, and cached
 # for the life of the process: an acquire batch consults it per book and
 # must not open a connection per book.
+#
+# CALL AS A PLAIN COMMAND ONCE, BEFORE ANY FORK, then read $_RIP_STORED_SHA
+# directly — the identical contract rip::_server_authors carries (below,
+# and at both its callers), for the identical reason: the cache lives in
+# these globals, and stdout is only a courtesy copy. `$(...)` and `< <(...)`
+# both fork a subshell, and a fork's copy of the cache dies with it.
+# Measured with a counting fake ssh over three books: direct in-shell calls
+# made ONE ssh; `$( )`, `< <( )`, and a plain pipe each made THREE. A
+# consumer that reads the printed copy from inside a per-item loop must
+# prime this once, in the loop's own shell, before the loop starts —
+# exactly as rip::_canonicalize_staged_authors primes rip::_server_authors.
 typeset -g _RIP_STORED_SHA_FETCHED
 typeset -g _RIP_STORED_SHA
 rip::_stored_sha_index() {
   setopt localoptions noerrexit nopipefail
   if [[ -z "${_RIP_STORED_SHA_FETCHED:-}" ]]; then
+    local rows rc=0
+    rows="$(rip::_server_sidecars)" || rc=$?
+    if (( rc != 0 )); then
+      # Do NOT set _FETCHED on failure. rip::_server_sidecars was
+      # deliberately given failure propagation (review finding 4,
+      # 2026-08-24) precisely so an unreachable server cannot be
+      # mistaken for "asked, and it has nothing" — the same distinction
+      # the editions report already protects, and _server_sidecars'
+      # own log_error already told the operator why. This function is a
+      # DEDUPE check: an empty index reads as "not a duplicate", so
+      # swallowing the failure here would silently DISABLE dedupe on an
+      # ssh outage instead of refusing it — and caching _FETCHED=1
+      # anyway would make that outage permanent for the rest of the
+      # process. Leaving it unset lets the next call retry.
+      return $rc
+    fi
     _RIP_STORED_SHA_FETCHED=1
-    _RIP_STORED_SHA="$(rip::_server_sidecars 2>/dev/null \
+    _RIP_STORED_SHA="$(print -r -- "$rows" \
       | jq -r 'select((.ids["local.sha256"] // "") != "") | "\(.ids["local.sha256"])\t\(._path)"' 2>/dev/null)"
   fi
   print -r -- "$_RIP_STORED_SHA"

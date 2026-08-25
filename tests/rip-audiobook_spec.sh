@@ -1543,26 +1543,74 @@ FAKECP
     The output should equal ""
   End
 
+  # server_sidecars_ssh <dir> — install a fake ssh implementing the exact
+  # enumeration rip::_server_sidecars sends over the wire (mindepth/maxdepth
+  # 3, .fleet-book.json only), counting its own invocations into
+  # ssh.count. Ignores the actual remote command argv, like the
+  # --server-library fake above — it re-does the equivalent walk locally
+  # against the sandbox server dir, which is all these examples need.
+  server_sidecars_ssh() {
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cd "$RIP_SANDBOX/server/audiobooks" || exit 2
+find . -mindepth 3 -maxdepth 3 -name .fleet-book.json 2>/dev/null | while read -r f; do
+  d=${f#./}; d=${d%/.fleet-book.json}
+  printf "%s\t" "$d"; tr -d "\n" < "$f"; printf "\n"
+done
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+  }
+
   # rip::_stored_sha_index — the dedupe key acquire consults for a locally
   # imported book: "<sha256>\t<Author>/<Title>" for every stored sidecar
   # carrying ids["local.sha256"]. Derived from the same rip::_server_sidecars
-  # enumeration the editions report above already uses, not a second ssh.
+  # enumeration the editions report above already uses, not a second ssh —
+  # pinned here with a real (fake) ssh rather than the plain-local-dir
+  # remote base the two examples used before, so ssh_calls() means something.
   It 'stored-sha index: maps a stored local.sha256 to its book path'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"fleet.uid":"u1","local.sha256":"deadbeef"}}' \
       | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    server_sidecars_ssh
     When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
     The status should equal 0
     The output should include "deadbeef	A/B"
+    The result of function ssh_calls should equal "1"
   End
 
   It 'stored-sha index: a sidecar with no local.sha256 contributes nothing'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"audible.asin":"X1"}}' \
       | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    server_sidecars_ssh
     When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
     The status should equal 0
     The output should equal ""
+    The result of function ssh_calls should equal "1"
+  End
+
+  # Finding 2 (review, 2026-08-25): rip::_stored_sha_index used to swallow
+  # rip::_server_sidecars' own failure propagation behind `2>/dev/null`,
+  # returning rc 0 with empty output — indistinguishable from "asked the
+  # server, it has no locally-hashed books" for a DEDUPE check, which reads
+  # an empty index as "not a duplicate": an unreachable server would
+  # silently DISABLE dedupe rather than refuse. Mirrors the editions
+  # unreachable-server example above exactly, including the message.
+  It 'stored-sha index: an unreachable server returns non-zero and says so, never a silently empty index'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
+    The status should not equal 0
+    The output should equal ""
+    The stderr should include "could not read the stored sidecars"
   End
 
   # THE REPORT AN OPERATOR READS BEFORE DECIDING WHAT TO DELETE (review

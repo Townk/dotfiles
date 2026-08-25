@@ -176,14 +176,39 @@ cmd_acquire() {
 
   mkdir -p "$dest" || die "cannot create $dest"
   local staging="$dest/$rel"
-  local tmp="${staging:h}/.rip-folder.$$"
+  # Anchor OUTSIDE $dest, not under "${staging:h}": $dest is
+  # rip::staging_for audiobooks, the exact tree rip::push_worker walks and
+  # ships. A temp built one or two levels inside it — as this line used to
+  # do — is a dot-directory, but `find` descends into dot-directories
+  # regardless, and `cp -p` preserves the source mtime, so the push's age
+  # gate offers no protection either: a copied file looks "settled" the
+  # instant it exists. A killed acquire then leaves a partial book the next
+  # push ships as real, sidecar and all; worse, push_worker already runs
+  # concurrently with an acquire batch (its own comment says so), so even
+  # an uninterrupted copy can have its still-open files verify-deleted out
+  # from under it mid-write. rip::ab_import hit this exact prohibition
+  # first (rip.zsh: "Do NOT anchor to ROOT/audiobooks — temp files there
+  # would be enumerated and shipped") — ${dest:h} is the same fix: the
+  # staging root itself, one level above "audiobooks", which neither the
+  # watcher nor the push enumerates, and still the same filesystem as
+  # $dest so the final `mv` stays an atomic rename.
+  local tmp="${dest:h}/.rip-folder.$$"
   mkdir -p "${staging:h}" || die "cannot create ${staging:h}"
   rm -rf -- "$tmp"
   mkdir -p "$tmp" || die "cannot create the staging temp for $rel"
 
   print -r -- "progress -1 copying"
   local f copy_rc=0
-  for f in "$src"/*(N.); do
+  # (N-.): the precondition above (`*.m4b(N)`, no type qualifier) counts a
+  # SYMLINKED .m4b as present — the operator's real store is exactly the
+  # kind of thing a symlink-based collection points at. A plain `(N.)`
+  # examines the dirent itself (a symlink's own type is "l", never "."),
+  # so it silently skipped every such file: precondition says "audio
+  # present", copy loop disagrees and copies nothing for it, and the run
+  # still exits 0 with a book that has a cover but no sound. `-` toggles
+  # the qualifier to examine the symlink's TARGET, so a symlink to a
+  # regular file matches `.` the same way the file itself would.
+  for f in "$src"/*(N-.); do
     if ! cp -p -- "$f" "$tmp/"; then
       copy_rc=1
       break
@@ -192,6 +217,16 @@ cmd_acquire() {
   if (( copy_rc != 0 )); then
     rm -rf -- "$tmp"
     die "copy failed for ${f:t}"
+  fi
+
+  # Belt-and-suspenders on the same disagreement: even with the glob fixed
+  # above, publish nothing unless every .m4b the precondition counted
+  # actually landed as a real file in $tmp — a captured outcome, not
+  # "the copy loop returned 0 so it must be fine".
+  local -a landed=("$tmp"/*.m4b(N-.))
+  if (( ${#landed} != ${#audio} )); then
+    rm -rf -- "$tmp"
+    die "audio did not land in staging for $rel (expected ${#audio}, got ${#landed})"
   fi
 
   # The destination must not already exist: publishing over it would silently
