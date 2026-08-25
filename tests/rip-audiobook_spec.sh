@@ -2520,4 +2520,93 @@ EOF
     The result of function wind_identity should equal '["B0CQ3759C3","2024-12-06T08:00:00","Michael Kramer",220320,"The Stormlight Archive","english",false,"libation",null,false]'
   End
 
+  # --- --adopt-asin: the confirmation verb ----------------------------------
+
+  unf_identity() {
+    jq -c '[.ids["audible.asin"],.published,.narrators,.duration_s,.series.name,
+            .series.position,.language,.abridged,.source.provider,.title,.authors,.work,has("_path")]' \
+      "$(sidecar_at "$UNF")"
+  }
+
+  It 'adopt: an ASIN the provider does not know is refused and nothing is written'
+    fake_provider_rows "$ROW_UNF"
+    mkbook_empty "$UNF" unknown
+    snapshot "$UNF"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$UNF' B0NOTREAL01 --apply"
+    The status should equal 2
+    The stderr should include "has no B0NOTREAL01"
+    The stderr should include "resolves to nothing"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  It 'adopt: a sidecar that already carries an ASIN is refused and nothing is written'
+    fake_provider_rows "$ROW_WIND"
+    mkbook "Brandon Sanderson" "Wind and Truth: Book Five of the Stormlight Archive" B0OLDASIN1 "" "Wind and Truth"
+    snapshot "$WIND"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$WIND' B0CQ3759C3 --apply"
+    The status should equal 2
+    The stderr should include "already carries audible.asin B0OLDASIN1"
+    The stderr should include "never overwrites"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  It 'adopt: --apply populates the FULL row and corrects source.provider away from unknown'
+    fake_provider_rows "$ROW_UNF"
+    mkbook_empty "$UNF" unknown
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46 --apply"
+    The status should equal 0
+    The output should include "rip: adopted B07PX3DC46 for $UNF"
+    # published, narrators, duration_s, series, language and abridged all
+    # arrive — recovering the ASIN alone would leave the book half-identified.
+    # The SERVER's author spelling survives (the row says "Shawn Speakman -
+    # editor" only because that is how Libation files it), `work` stays null,
+    # and `_path` never reaches the file.
+    The result of function unf_identity should equal '["B07PX3DC46","2019-05-07T07:00:00",["Nick Podehl","Kate Rudd"],93600,"Unfettered","3","english",false,"libation","Unfettered III: New Tales by Masters of Fantasy",["Shawn Speakman"],null,false]'
+  End
+
+  It 'adopt: a dry run reports the plan and writes nothing'
+    fake_provider_rows "$ROW_UNF"
+    mkbook_empty "$UNF" unknown
+    snapshot "$UNF"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46"
+    The status should equal 0
+    The output should include "would adopt: $UNF"
+    The output should include "ASIN         : B07PX3DC46"
+    The output should include "re-run with --apply"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  It 'adopt: a write the server never confirms reports failure and leaves the sidecar alone'
+    # Outcome-gated, like every other success line in this module: "adopted"
+    # is printed only when the remote loop said ok for THIS book's key.
+    fake_provider_rows "$ROW_UNF"
+    mkbook_empty "$UNF" unknown
+    snapshot "$UNF"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB
+      chmod 555 '$RIP_SANDBOX/server/audiobooks/$UNF'
+      rip::ab_adopt_asin '$UNF' B07PX3DC46 --apply; rc=\$?
+      chmod 755 '$RIP_SANDBOX/server/audiobooks/$UNF'
+      exit \$rc"
+    The status should equal 1
+    The stderr should include "could not write the sidecar"
+    The output should not include "adopted"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  It 'cli: --adopt-asin refuses an ASIN the provider does not know'
+    fake_provider_rows "$ROW_UNF"
+    mkbook_empty "$UNF" unknown
+    snapshot "$UNF"
+    fake_server_ssh
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --adopt-asin "$UNF" B0NOTREAL01 --apply
+    The status should equal 2
+    The stderr should include "resolves to nothing"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
 End

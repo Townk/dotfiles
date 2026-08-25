@@ -3188,6 +3188,127 @@ rip::_repair_summary() {
   return 0
 }
 
+# rip::ab_adopt_asin <Author/Title> <ASIN> [--apply] — confirm a Case B
+# proposal. Typing the ASIN IS the confirmation; it cannot happen by accident.
+#
+# Four guards, all required:
+#   1. the provider's library must contain the ASIN — never write an
+#      identifier that resolves to nothing;
+#   2. the sidecar must not already carry an `audible.asin` — this repairs
+#      empty identity, it never overwrites identity;
+#   3. the sidecar is populated from that row IN FULL (published, narrators,
+#      duration_s, series, language, abridged), because recovering one field
+#      and leaving the rest null leaves the book half-identified;
+#   4. `source.provider` is corrected away from "unknown" to the provider that
+#      supplied the row — "unknown" is a false statement about a book the
+#      provider demonstrably owns.
+# `work` stays null (or whatever a resolver already put there), as at any
+# fresh ingest.
+rip::ab_adopt_asin() {
+  setopt localoptions noerrexit nopipefail
+  local rel="${1:-}" asin="${2:-}" apply=0
+  [[ "${3:-}" == "--apply" ]] && apply=1
+  [[ -n "$rel" ]]  || { log_error "rip: adopt needs \"<Author>/<Title>\""; return 2 }
+  [[ -n "$asin" ]] || { log_error "rip: adopt needs an ASIN — typing it IS the confirmation"; return 2 }
+
+  local base; base="$(rip::remote_base)"
+  local pname="${RIP_AB_PROVIDER:-libation}"
+  local pbin; pbin="$(rip::ab_provider_bin "$pname")" || return 2
+  local prows; prows="$("$pbin" list 2>/dev/null)"
+
+  # GUARD 1.
+  local row=""
+  [[ -n "$prows" ]] && row="$(print -r -- "$prows" | jq -c --arg a "$asin" \
+    'select(((.id // "") == $a) or ((.ids["audible.asin"] // "") == $a))' 2>/dev/null | head -1)"
+  if [[ -z "$row" ]]; then
+    log_error "rip: the $pname library has no $asin — refusing to write an identifier that resolves to nothing"
+    return 2
+  fi
+
+  local rows; rows="$(rip::_server_sidecars)" || return 2
+  local nrel; nrel="$(rip::_nfc "$rel")"
+  # srel is the SERVER's own spelling of the path — what gets written to.
+  local srel="" have_asin="" oldjson=""
+  local irel istate iprov iasin iuid ijson
+  while IFS=$'\t' read -r irel istate iprov iasin iuid ijson; do
+    [[ -n "$irel" ]] || continue
+    [[ "$irel" == "$nrel" ]] || [[ "$(rip::_nfc "$irel")" == "$nrel" ]] || continue
+    srel="$irel"; have_asin="$iasin"; oldjson="$ijson"
+    break
+  done < <(print -r -- "$rows" | rip::_sidecar_index)
+
+  if [[ -z "$srel" ]]; then
+    log_error "rip: no stored sidecar for $rel — --repair-sidecars creates a missing one"
+    return 2
+  fi
+  # GUARD 2.
+  if [[ "$have_asin" != "-" ]]; then
+    log_error "rip: $rel already carries audible.asin $have_asin — this verb repairs empty identity, it never overwrites it"
+    return 2
+  fi
+  [[ -n "$oldjson" ]] || oldjson='{}'
+
+  # GUARDS 3 and 4. The row is composed through the module's ONE composer, so
+  # an adopted sidecar comes out shaped like a freshly-pushed one, and then:
+  #   * every meaningful value already on the sidecar WINS over the composed
+  #     one — the server's author spelling is the truth about where the book
+  #     lives, and Libation's ("Shawn Speakman - editor") is not. "Meaningful"
+  #     excludes null, "", [] and {}: an empty narrators list is the absence
+  #     the row is here to fill, not a recorded fact;
+  #   * ids MERGE, with any pre-existing namespaced id kept (a Case C book
+  #     later found in the store keeps its fleet.uid) and the ASIN written
+  #     explicitly;
+  #   * `work` is never overwritten;
+  #   * source.provider is taken from the ROW — the one field the old sidecar
+  #     must not win, because "unknown" is exactly what is being corrected.
+  local merged
+  merged="$(jq -n --argjson row "$row" --argjson old "$oldjson" --arg pn "$pname" --arg a "$asin" '
+    ($row | if ((.provider // "") == "" or .provider == "unknown") then .provider = $pn else . end) as $r
+    | ('"$_RIP_SIDECAR_JQ"') as $new
+    | ($old // {}) as $o
+    | ($o | del(._path) | del(.ids) | del(.work) | del(.source)
+          | with_entries(select(.value != null and .value != [] and .value != "" and .value != {}))) as $keep
+    | ($new * $keep)
+    | .ids = (($new.ids // {}) + (($o.ids // {}) | with_entries(select((.value // "") != ""))))
+    | .ids["audible.asin"] = $a
+    | .work = ($o.work // null)
+    | .source = (($new.source // {})
+                 * (($o.source // {}) | del(.provider)
+                    | with_entries(select(.value != null and .value != ""))))' 2>/dev/null)"
+  if [[ -z "$merged" ]]; then
+    log_error "rip: could not compose the adopted sidecar for $rel"
+    return 1
+  fi
+
+  if (( ! apply )); then
+    print -r -- "would adopt: $rel"
+    print -r -- "  ASIN         : $asin"
+    print -r -- "  from row     : $(print -r -- "$row" | jq -r '.path // "?"' 2>/dev/null)"
+    print -r -- "  published    : $(print -r -- "$merged" | jq -r '.published // "null"' 2>/dev/null)"
+    print -r -- "  narrators    : $(print -r -- "$merged" | jq -r '(.narrators // []) | join(", ")' 2>/dev/null)"
+    print -r -- "  provider     : $(print -r -- "$merged" | jq -r '.source.provider // "?"' 2>/dev/null)"
+    print -r -- "(re-run with --apply)"
+    return 0
+  fi
+
+  local payload; payload="$(rip::_sidecar_payload "$srel" "$merged")"
+  if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
+    log_error "rip: could not frame the adopted sidecar for $rel"
+    return 1
+  fi
+  local out; out="$(rip::_sidecars_write "$base" "$payload")"
+  # GATED ON THE REPORTED OUTCOME: "ok" for THIS book's key, or nothing
+  # happened. The transport reports per book precisely so a success line is
+  # never printed on the strength of control flow reaching it.
+  local st="${out%%$'\t'*}" key="${out#*$'\t'}"
+  if [[ "$st" != "ok" || "$key" != "${payload%%$'\t'*}" ]]; then
+    log_error "rip: could not write the sidecar for $rel — it is unchanged"
+    return 1
+  fi
+  print -r -- "rip: adopted $asin for $rel"
+  return 0
+}
+
 # --- author identity --------------------------------------------------------
 #
 # Audible spells an author differently across purchases ("J. R. R. Tolkien" on
