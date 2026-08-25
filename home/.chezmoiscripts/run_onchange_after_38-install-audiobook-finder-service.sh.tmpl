@@ -1,0 +1,33 @@
+{{- $serviceSig := "" -}}
+{{- if eq .chezmoi.os "darwin" -}}
+  {{- $serviceSig = output "sh" "-c" (printf "find %q -type f 2>/dev/null | LC_ALL=C sort | while read -r f; do shasum -a 256 \"$f\"; done | shasum -a 256 | cut -c1-16" (joinPath .chezmoi.sourceDir "dot_local/share/services")) | trim -}}
+{{- end -}}
+#!/bin/sh
+set -eu
+
+{{ if eq .chezmoi.os "darwin" -}}
+# Install the "Browse Audiobook Folder" Finder Quick Action by symlinking the
+# chezmoi-managed workflow bundle (~/.local/share/services) into
+# ~/Library/Services, then flushing Launch Services' Quick Action cache so
+# Finder notices without a restart. A symlink (not a copy) means an edit to
+# the bundle's plists is live the moment chezmoi applies it — this script
+# only needs to re-run to (re)create the symlink and reflush pbs, which is
+# why its own content embeds a hash of the bundle below: that is what makes
+# run_onchange re-fire when Info.plist or document.wflow changes.
+#
+# services content hash: {{ $serviceSig }}
+
+bundle_name="Browse Audiobook Folder.workflow"
+src="$HOME/.local/share/services"
+dest="$HOME/Library/Services/$bundle_name"
+
+mkdir -p "$HOME/Library/Services"
+ln -sfn "$src" "$dest"
+
+/System/Library/CoreServices/pbs -flush
+{{- else }}
+# macOS-only; no-op on this platform.
+exit 0
+{{- end }}
+
+# vim:ft=sh
