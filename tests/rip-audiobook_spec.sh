@@ -769,6 +769,91 @@ EOF
     The stderr should not include "Wind and Truth landed as"
   End
 
+  # …and the same batch, judged on ARTEFACTS rather than stderr (review
+  # finding 3, 2026-08-24): the successful sibling must keep its own identity
+  # in the sidecar, the failed book must not be pushed, and the meta index
+  # must still key both books by their own paths — a re-key of the failed
+  # item onto the sibling would hand the sibling the wrong identity on the
+  # next push.
+  It 'worker: a sibling-success/sibling-failure batch leaves the sidecar and the meta index correct'
+    cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
+# argv is CAPTURED before the parse loop: the loop shifts it away, so a
+# `case "$*"` after it would match nothing at all (and silently turn this
+# fixture into "every acquire succeeds").
+argv="$*"
+books=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o|--override) case "$2" in Books=*) books="${2#Books=}" ;; esac ;; esac
+  shift
+done
+case "$argv" in
+  # The live shape of a lapsed licence: the destination is CREATED and then
+  # nothing is written into it, and the CLI still exits 0.
+  *"--id LOCKED"*) mkdir -p "$books/Brandon Sanderson/Wind and Truth"; exit 0 ;;
+esac
+mkdir -p "$books/Brandon Sanderson/Steelheart"
+printf 'audio\n' > "$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"},{"id":"LOCKED","path":"Brandon Sanderson/Wind and Truth","title":"Wind and Truth"}]}' > "$RIP_SANDBOX/plan.json"
+    # rip::ab_worker removes the meta index at the very END of the run (after
+    # the push), so it cannot be read once `When run` returns. Snapshot it at
+    # the moment the push reads it — the state the sidecar writer actually
+    # sees — by wrapping rip::push_worker around a copy of itself.
+    cat > "$RIP_SANDBOX/run.zsh" <<EOF
+source "$RIPLIB"
+functions -c rip::push_worker rip::_real_push_worker
+rip::push_worker() {
+  cp -- "\$RIP_STAGING_ROOT/.work/ab-meta.jsonl" "\$RIP_SANDBOX/ab-meta.snapshot" 2>/dev/null
+  rip::_real_push_worker "\$@"
+}
+rip::ab_worker "\$RIP_SANDBOX/plan.json"
+EOF
+    When run zsh "$RIP_SANDBOX/run.zsh"
+    The status should not equal 0
+    The stderr should include "acquire produced no files for Brandon Sanderson/Wind and Truth"
+    # THE NON-FACT: the empty composed dir the provider left behind is itself
+    # "new since the snapshot", so the fallback used to name the book as
+    # having landed as ITSELF and spend a jq+mv rewrite of the index on it.
+    The stderr should not include "landed as"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json" should include "B00ECDZ08I"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json" should include "The Reckoners, Book 1"
+    The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Wind and Truth" should not be exist
+    # both books still keyed by their OWN paths: no rewrite happened at all
+    The contents of file "$RIP_SANDBOX/ab-meta.snapshot" should include '"path":"Brandon Sanderson/Steelheart"'
+    The contents of file "$RIP_SANDBOX/ab-meta.snapshot" should include '"path":"Brandon Sanderson/Wind and Truth"'
+  End
+
+  # THE MTIME-ORDER TRAP the same fix closes. A provider that writes its
+  # files into a sanitized sibling and creates the composed dir AFTERWARDS
+  # left the empty dir sorting first under (om), so a genuinely successful
+  # acquire was reported as having produced nothing. Files decide, not mtime.
+  It 'worker: a sanitized sibling holding the files beats an empty composed dir created after it'
+    cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
+books=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o|--override) case "$2" in Books=*) books="${2#Books=}" ;; esac ;; esac
+  shift
+done
+mkdir -p "$books/Brandon Sanderson/Steelheart (Unabridged)"
+printf 'audio\n' > "$books/Brandon Sanderson/Steelheart (Unabridged)/Steelheart.m4b"
+mkdir -p "$books/Brandon Sanderson/Steelheart"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The stderr should include "landed as Brandon Sanderson/Steelheart (Unabridged)"
+    The stderr should not include "acquire produced no files"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart (Unabridged)/.fleet-book.json" should include "B00ECDZ08I"
+  End
+
   # --- ABS author enrichment (rip-abs-authors + the RIP_AB_REMOTE_HOPS
   # first entry, rip::_abs_match_authors) ------------------------------------
   #

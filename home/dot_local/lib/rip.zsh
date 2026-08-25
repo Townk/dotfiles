@@ -4504,7 +4504,20 @@ rip::ab_worker() {
     else
       landed=()
       for pre_d in "$ab_root/${bpath%%/*}"/*(N/om); do
-        [[ -n "${pre_dirs[${pre_d:t}]:-}" ]] || landed+=("$pre_d")
+        [[ -n "${pre_dirs[${pre_d:t}]:-}" ]] && continue
+        # A DIRECTORY WITH NO AUDIO IN IT IS NOT AN ACQUISITION. A provider
+        # that creates its destination and then bails leaves the COMPOSED
+        # path itself sitting here, new since the snapshot and therefore a
+        # candidate — which produced "Red Rising landed as Red Rising —
+        # re-keying the plan identity" (live 2026-08-24): a warning stating
+        # a non-fact, plus a jq+mv rewrite of the meta index to no effect.
+        # It is also mtime-order-fragile: were a provider ever to create the
+        # composed dir AFTER writing into a sanitized sibling, the empty dir
+        # would sort first and a genuinely successful acquire would be
+        # reported as having produced nothing. Files are the evidence here,
+        # exactly as they are for the outcome check below.
+        rip::_dir_has_audio "$pre_d" || continue
+        landed+=("$pre_d")
       done
       if (( ${#landed} )); then
         # NFC-normalize the landed folder name before writing it as the new
@@ -4516,11 +4529,18 @@ rip::ab_worker() {
         # Same bug class as 21322287 (NFC-canonical server names) in this
         # same file.
         actual="${bpath%%/*}/$(rip::_nfc "${landed[1]:t}")"
-        log_warn "rip: $bpath landed as $actual — re-keying the plan identity"
-        jq -c --arg old "$bpath" --arg new "$actual" \
-          'if .path == $old then .path = $new else . end' "$index" > "$index.tmp" \
-          && mv -f -- "$index.tmp" "$index"
-        bdir="${landed[1]}"
+        if [[ "$actual" == "$bpath" ]]; then
+          # The composed path itself, reached through the fallback (its NFC
+          # form equals the plan's). Nothing diverged, so there is nothing to
+          # report and nothing to re-key — say neither.
+          bdir="${landed[1]}"
+        else
+          log_warn "rip: $bpath landed as $actual — re-keying the plan identity"
+          jq -c --arg old "$bpath" --arg new "$actual" \
+            'if .path == $old then .path = $new else . end' "$index" > "$index.tmp" \
+            && mv -f -- "$index.tmp" "$index"
+          bdir="${landed[1]}"
+        fi
       fi
     fi
 
