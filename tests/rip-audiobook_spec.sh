@@ -4378,6 +4378,24 @@ JS
     cat > "$RIP_SANDBOX/dialog.lua" <<'LUA'
 local HS_DIR = os.getenv("HS_DIR")
 
+-- hs.json.encode is NSJSONSerialization dataWithJSONObject:, which escapes
+-- backslash, double quote, the control characters AND the forward slash
+-- (`\/`) — see modules/ripper/session-dialog.lua's json_for_script, whose
+-- whole rationale rests on that last one. A stub that emitted a bare
+-- '"' .. v .. '"' would make every escaping assertion in this file pass
+-- against the STUB rather than against the bridge, which is precisely the
+-- self-validating failure this harness exists to prevent.
+local ESC = {
+  ['"'] = '\\"', ['\\'] = '\\\\', ['/'] = '\\/',
+  ['\b'] = '\\b', ['\f'] = '\\f', ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t',
+}
+local function encstr(v)
+  local out = v:gsub('[%c"\\/]', function(c)
+    return ESC[c] or string.format('\\u%04x', c:byte())
+  end)
+  return '"' .. out .. '"'
+end
+
 local function encode(v)
   -- hs.json.encode requires LS_TTABLE. Mirrored exactly.
   if type(v) ~= "table" then
@@ -4400,9 +4418,9 @@ local function encode(v)
   for _, k in ipairs(keys) do
     local val, enc = v[k], nil
     if type(val) == "table" then enc = encode(val)
-    elseif type(val) == "string" then enc = '"' .. val .. '"'
+    elseif type(val) == "string" then enc = encstr(val)
     else enc = tostring(val) end
-    parts[#parts + 1] = '"' .. k .. '":' .. enc
+    parts[#parts + 1] = encstr(k) .. ":" .. enc
   end
   return "{" .. table.concat(parts, ",") .. "}"
 end
@@ -4443,7 +4461,7 @@ local verb, a = arg[1], arg[2]
 if verb == "setRows" then
   M.setRows({}, a)
 elseif verb == "setSource" then
-  M.setSource(a, a == "folder" and "/Volumes/Media/Incoming" or nil)
+  M.setSource(a, arg[3])
 elseif verb == "sourceFailed" then
   M.sourceFailed()
 end
@@ -4479,10 +4497,32 @@ LUA
   # invisible to the node examples.
   It 'dialog: setSource crosses the bridge with kind and root'
     Skip if 'lua is unavailable' no_lua
-    When call panel_lua setSource folder
+    When call panel_lua setSource folder /Volumes/Media/Incoming
     The status should equal 0
     The output should include '"kind":"folder"'
-    The output should include '/Volumes/Media/Incoming'
+    # The LIVE form. hs.json.encode is NSJSONSerialization, which escapes the
+    # forward slash — asserting the bare path would have passed only under a
+    # stub that did not, i.e. it would have validated the stub.
+    The output should include '"root":"\/Volumes\/Media\/Incoming"'
+  End
+
+  # The property json_for_script EXISTS for, pinned end to end. A root is
+  # operator-supplied and reaches an HTML <script> element, so it is exactly
+  # as attacker-adjacent as a book title: the JSON encoder handles the
+  # quote, the backslash and the slash, and json_for_script's own gsub turns
+  # '<' into \u003C so '<script' cannot switch WebKit's tokenizer into the
+  # double-escaped state and swallow the element's real closing tag
+  # (session-dialog.lua documents that failure at length).
+  It 'dialog: a hostile root is escaped on the way across the bridge'
+    Skip if 'lua is unavailable' no_lua
+    When call panel_lua setSource folder '/inc/a"b\c<script>'
+    The status should equal 0
+    The output should include '\/inc\/a'
+    The output should include '\"b'
+    The output should include '\\c'
+    The output should include '\u003Cscript'
+    # The raw sequence must not survive anywhere in the emitted JS.
+    The output should not include '<script>'
   End
 
   It 'dialog: sourceFailed calls the restore entry point'
