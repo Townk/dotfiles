@@ -596,6 +596,70 @@ EOF
     The stderr should include "1 already on cantina"
   End
 
+  # Task 4: a DIFFERENT refusal, keyed on BYTES rather than on path — the
+  # "already on cantina" pair above still fires unchanged (proven by the
+  # untouched fixture right above this one). The hash happens at ACQUIRE
+  # time only ("list" never hashes), so the fixture gives the duplicate
+  # item a real source directory with a real .m4b in it — the REAL
+  # rip-provider-folder binary runs here (this whole file's setup() points
+  # RIP_LIBEXEC_DIR at the real, tracked libexec dir), exactly like "worker:
+  # forwards the folder provider's plan path" above. A bare "already have
+  # it" would send the operator hunting through 247 books, so the refusal
+  # must NAME the stored book it collided with.
+  It 'session: a local book whose bytes are already stored is refused BY NAME and the batch continues'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
+    mkdir -p "$RIP_SANDBOX/incoming/DupBook"
+    printf 'the bytes\n' > "$RIP_SANDBOX/incoming/DupBook/dup.m4b"
+    sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/DupBook/dup.m4b" | cut -d" " -f1)
+    printf '%s\n' "{\"schema\":1,\"kind\":\"audiobook\",\"title\":\"Ancillary Justice\",\"authors\":[\"Ann Leckie\"],\"ids\":{\"local.sha256\":\"$sha\"}}" \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice/.fleet-book.json"
+    mkdir -p "$RIP_SANDBOX/incoming/Fresh"
+    printf 'fresh bytes\n' > "$RIP_SANDBOX/incoming/Fresh/fresh.m4b"
+    # a plan naming the duplicate first and a fresh book second — the batch
+    # must not abort on the duplicate.
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"},{\"id\":\"$RIP_SANDBOX/incoming/Fresh\",\"path\":\"A/Fresh\",\"title\":\"Fresh\"}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The stderr should include "already stored as"
+    The stderr should include "Ann Leckie/Ancillary Justice"
+    The path "$RIP_SANDBOX/server/audiobooks/A/Fresh/fresh.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Dup" should not be exist
+  End
+
+  It 'session: the duplicate refusal is counted and reported at the end'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
+    mkdir -p "$RIP_SANDBOX/incoming/DupBook"
+    printf 'the bytes\n' > "$RIP_SANDBOX/incoming/DupBook/dup.m4b"
+    sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/DupBook/dup.m4b" | cut -d" " -f1)
+    printf '%s\n' "{\"schema\":1,\"kind\":\"audiobook\",\"title\":\"Ancillary Justice\",\"authors\":[\"Ann Leckie\"],\"ids\":{\"local.sha256\":\"$sha\"}}" \
+      | jq . > "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice/.fleet-book.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The stderr should include "1 already stored"
+  End
+
+  # The index is a DEDUPE check (Task 3's own contract): an unreachable
+  # server must never read as "not a duplicate" — that would silently
+  # disable dedupe on an outage. Simulated with the sandbox's own plain-dir
+  # remote base (no ssh, no rsync target change — no colon anywhere here,
+  # so this stays on the local-filesystem branch every other test in this
+  # file uses; a colon-based RIP_REMOTE_BASE would send the later push's
+  # real rsync at a real ssh, which this suite must never do): removing
+  # audiobooks/ makes rip::_server_sidecars' `cd` fail exactly the way Task
+  # 3's own "unreachable server" example forces it to fail over ssh. The
+  # worker must say so AND must not block the batch on it — an unknown is
+  # not a refusal, the same "never block on unknown" rule
+  # rip::_remote_has_file's rc-2 callers already follow.
+  It 'session: cantina unreachable for the byte-dedupe check warns and still acquires — never a silent, permanently-disabled check'
+    rm -rf "$RIP_SANDBOX/server/audiobooks"
+    mkdir -p "$RIP_SANDBOX/incoming/Fresh"
+    printf 'fresh bytes\n' > "$RIP_SANDBOX/incoming/Fresh/fresh.m4b"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Fresh\",\"path\":\"A/Fresh\",\"title\":\"Fresh\"}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The stderr should include "could not reach cantina"
+    The path "$RIP_SANDBOX/server/audiobooks/A/Fresh/fresh.m4b" should be exist
+  End
+
   # Regression guard (final-review finding, 2026-08-22): rip::staging_for
   # honors RIP_AB_STAGING, but rip::ab_worker used to hardcode
   # "$(rip::staging_root)/audiobooks" as its acquire destination and derive

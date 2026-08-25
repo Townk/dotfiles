@@ -4455,6 +4455,29 @@ rip::ab_enqueue() {
     -- "$RIP_BIN_DIR/rip-audiobook" --session-worker "$queued"
 }
 
+# rip::_sha256_of <file> — the file's sha256, or "" if it cannot be read.
+# macOS ships `shasum`; Linux ships `sha256sum`. Try both, print nothing on
+# failure so a caller never compares against a half-answer.
+#
+# extendedglob IS load-bearing here (review finding, this task): the `##`
+# repeat operator in the validity check below is a no-op glob character
+# without it — `[[ "$out" == [0-9a-f]## ]]` silently matched NOTHING and
+# every real hash came back "" (reproduced: a correctly computed sha256
+# failed this check and the dedupe below never fired). Nowhere else in
+# this file's `[[ ]]` glob matches needs it — `<->` is a separate zsh
+# operator that works unconditionally — so this is the one function that
+# has to ask for it.
+rip::_sha256_of() {
+  setopt localoptions noerrexit nopipefail extendedglob
+  local f="$1" out=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    out="$(sha256sum -- "$f" 2>/dev/null | cut -d' ' -f1)"
+  elif command -v shasum >/dev/null 2>&1; then
+    out="$(shasum -a 256 -- "$f" 2>/dev/null | cut -d' ' -f1)"
+  fi
+  [[ "$out" == [0-9a-f]## ]] && print -r -- "$out"
+}
+
 # rip::ab_worker <plan.json> — the enqueued body, two phases in one capsule:
 #
 #   0–70   ACQUIRE  the provider fetches each item the server lacks into
@@ -4543,7 +4566,7 @@ rip::ab_worker() {
                      (if (.plus // false) then "1" else "0" end),
                      (if (.absent // false) then "1" else "0" end)] | @tsv' "$plan" 2>/dev/null)
 
-  local total=${#items} n=0 rc=0 line pct refused=0
+  local total=${#items} n=0 rc=0 line pct refused=0 dup=0
   local base span; span=$(( 70 / (total > 0 ? total : 1) ))
   # Declared ONCE, out here: a bare `local` in the loop body re-runs per
   # iteration, and this file has been bitten by that before.
@@ -4551,7 +4574,47 @@ rip::ab_worker() {
   # PATTERN-matches, and a book folder is free to contain [ ] ? or *.
   local -A pre_dirs=()
   local -a landed=()
-  local pre_d bdir actual
+  local pre_d bdir actual primary sha
+
+  # Lazy dedupe (Task 4): the hash happens HERE, at acquire time, never in
+  # `list` — `list` must stay responsive over an unbounded tree. Only a
+  # folder-provider plan can possibly collide on bytes (libation's own
+  # ASIN already rules out a re-download of the same book), so the index
+  # is primed only when this plan is one.
+  #
+  # PRIMED ONCE, HERE, BEFORE THE LOOP — never inside it, and never through
+  # a substitution. rip::_stored_sha_index's own contract (see its
+  # definition) is that the cache lives in the globals it sets, not in its
+  # stdout: `$(...)` and `< <(...)` both fork in zsh, and a fork's copy of
+  # the cache dies with the fork, turning what should be ONE ssh into one
+  # per item. Called bare, the cache lands in $_RIP_STORED_SHA in THIS
+  # shell, read once into a lookup table below — exactly the discipline
+  # rip::_canonicalize_staged_authors already owes rip::_server_authors.
+  local sha_idx_rc=0
+  local -A stored_sha=()
+  if [[ "$provider" == folder ]]; then
+    rip::_stored_sha_index >/dev/null
+    sha_idx_rc=$?
+    if (( sha_idx_rc != 0 )); then
+      # Do NOT swallow this. An empty table would read as "nothing
+      # collides" and silently disable the whole check for this batch —
+      # the exact failure Task 3's own contract comment warns against.
+      # Instead: warn ONCE here (not once per item) and let every folder
+      # item's dedupe check below no-op, falling through to acquire
+      # un-checked — "unknown" is not a refusal, the same rule
+      # rip::_remote_has_file's rc-2 callers already follow for the
+      # path-based check just below.
+      log_warn "rip: could not reach cantina to check stored bytes — acquiring this batch's folder items without a duplicate-bytes check"
+    else
+      local sha_line sha_key sha_owner
+      for sha_line in "${(f)_RIP_STORED_SHA}"; do
+        [[ -n "$sha_line" ]] || continue
+        sha_key="${sha_line%%$'\t'*}"; sha_owner="${sha_line#*$'\t'}"
+        stored_sha[$sha_key]="$sha_owner"
+      done
+    fi
+  fi
+
   for entry in "${items[@]}"; do
     id="${entry%%$'\t'*}"; rest="${entry#*$'\t'}"
     bpath="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
@@ -4578,6 +4641,22 @@ rip::ab_worker() {
     # after the acquire is what reports the truth.
     if [[ "$plus" == 1 && "$absent" == 1 ]]; then
       log_warn "rip: $bpath is Audible Plus and absent from Audible's last scan — its licence may already have lapsed; attempting anyway"
+    fi
+    # Lazy dedupe (Task 4): hash ONLY the book about to be acquired, and
+    # only for the folder provider — a DIFFERENT rule from the "already on
+    # cantina" refusal above (keyed on PATH); this one is keyed on BYTES,
+    # and both must keep firing independently. $id is still the folder
+    # provider's SOURCE directory here, ahead of any copy into staging.
+    if [[ "$provider" == folder && $sha_idx_rc -eq 0 ]]; then
+      primary="$(print -rl -- "$id"/*.m4b(N) | head -1)"
+      if [[ -n "$primary" ]]; then
+        sha="$(rip::_sha256_of "$primary")"
+        if [[ -n "$sha" && -n "${stored_sha[$sha]:-}" ]]; then
+          log_error "rip: $bpath is already stored as \"${stored_sha[$sha]}\" (identical bytes) — skipping"
+          dup=$(( dup + 1 ))
+          continue
+        fi
+      fi
     fi
     rip::_progress "$base" "downloading — ${bpath:t}"
     # Snapshot the author dir BEFORE the acquire. The reconcile below falls
@@ -4709,6 +4788,7 @@ rip::ab_worker() {
   done
   rm -f -- "$plan"
   (( refused > 0 )) && log_error "rip: $refused already on cantina — skipped"
+  (( dup > 0 )) && log_error "rip: $dup already stored (identical bytes) — skipped"
 
   # The push owns 70–100. The age gate is disabled for this inner push the
   # same way the disc pipeline disables it: these files are complete by
