@@ -1568,9 +1568,9 @@ EOF
   }
 
   It 'CLI: --at-risk lists the stored books whose Audible Plus licence has lapsed'
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/Network Effect"
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/All Systems Red"
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Wind and Truth"
+    mkbook "Martha Wells" "Network Effect" B08X1 "" "Network Effect"
+    mkbook "Martha Wells" "All Systems Red" B08X2 "" "All Systems Red"
+    mkbook "Brandon Sanderson" "Wind and Truth" B08X3 "" "Wind and Truth"
     at_risk_library <<'JSON'
 [
  {"AudibleProductId":"B08X1","Title":"Network Effect","Subtitle":"","AuthorNames":"Martha Wells",
@@ -1598,7 +1598,7 @@ JSON
   End
 
   It 'CLI: --at-risk says so plainly when nothing is at risk'
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Wind and Truth"
+    mkbook "Brandon Sanderson" "Wind and Truth" B08X3 "" "Wind and Truth"
     at_risk_library <<'JSON'
 [
  {"AudibleProductId":"B08X3","Title":"Wind and Truth","Subtitle":"","AuthorNames":"Brandon Sanderson",
@@ -1614,7 +1614,7 @@ JSON
   # the panel nags about ripping. It must not be listed here, or the verb's
   # answer stops meaning "irreplaceable".
   It 'at-risk: a Plus title still in the catalog is not listed'
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/Fugitive Telemetry"
+    mkbook "Martha Wells" "Fugitive Telemetry" B08X2 "" "Fugitive Telemetry"
     at_risk_library <<'JSON'
 [
  {"AudibleProductId":"B08X2","Title":"Fugitive Telemetry","Subtitle":"","AuthorNames":"Martha Wells",
@@ -1642,13 +1642,13 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_at_risk"
     The status should equal 2
     The output should not include "nothing at risk"
-    The stderr should include "could not list the audiobook library"
+    The stderr should include "could not read the stored sidecars"
   End
 
   # …and the same for a provider that answers with nothing: an empty library
   # cannot be told apart from "Libation did not answer".
   It 'at-risk: an empty provider library is an error, never "nothing at risk"'
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/Network Effect"
+    mkbook "Martha Wells" "Network Effect" B08X1 "" "Network Effect"
     at_risk_library <<'JSON'
 []
 JSON
@@ -1666,8 +1666,11 @@ JSON
   # folded into "not at risk": a lapsed Plus title, the only copy in
   # existence, reported as safe.
   It 'at-risk: a lapsed book whose server author spelling differs from Libation is still found'
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Shawn Speakman/Unfettered III"
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/Network Effect"
+    # No ASIN on this sidecar — the ASIN tier only fires when there is one to
+    # try, so this exercises the title-tier FALLBACK the ASIN tier now sits
+    # in front of, exactly as before.
+    mkbook "Shawn Speakman" "Unfettered III" "" "" "Unfettered III"
+    mkbook "Martha Wells" "Network Effect" B08X1 "" "Network Effect"
     at_risk_library <<'JSON'
 [
  {"AudibleProductId":"B08X9","Title":"Unfettered III","Subtitle":"","AuthorNames":"Shawn Speakman - editor",
@@ -1686,11 +1689,38 @@ JSON
     The output should not include "Plus status is unknown"
   End
 
-  # AND THE OTHER HALF: a stored book no row matches at all is UNKNOWN, and
-  # the empty-case line must stop claiming a universal it cannot support.
-  It 'at-risk: a stored book that matches no provider row is reported as unknown, not as safe'
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Some Author/Ripped Elsewhere"
-    mkdir -p "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Wind and Truth"
+  # THE ASIN TIER IS THE HEADLINE FIX (2026-08-24): it must resolve a stored
+  # book even when NEITHER the composed path NOR the bare title matches — the
+  # exact scenario the exact-path and title tiers both fail on. Author AND
+  # title both diverge from Libation's own spelling here, on purpose, so
+  # nothing but the ASIN can carry this match. Pre-fix (no ASIN tier at all)
+  # this book matches no row by any means and lands in the leftover bucket
+  # instead of "can NEVER be re-acquired" — this example fails pre-fix.
+  It 'at-risk: the ASIN join finds a lapsed book despite BOTH author and title spelling differing from Libation'
+    mkbook "Shawn Speakman" "Unfettered III Anthology" B08X9 "" "Unfettered III Anthology"
+    at_risk_library <<'JSON'
+[
+ {"AudibleProductId":"B08X9","Title":"Unfettered III","Subtitle":"","AuthorNames":"Shawn Speakman - editor",
+  "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":true}
+]
+JSON
+    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    The status should equal 0
+    The output should include "1 stored book(s) can NEVER be re-acquired"
+    The output should include "Shawn Speakman/Unfettered III Anthology"
+    The output should not include "does not seem to be an Audible book"
+    The output should not include "could not be established"
+  End
+
+  # AND THE REAL ANOMALY: a sidecar that CARRIES an Audible ASIN, but no
+  # provider row lists it any more. This is not "unknown" the way a plain
+  # unmatched book is — it is evidence Libation dropped a book that claims an
+  # Audible identity, and the report must say exactly that shape and nothing
+  # more (a lapsed Plus licence, a returned purchase and an account change
+  # all look identical from here — this subsystem does not guess which).
+  It 'at-risk: a stored book carrying an ASIN Libation no longer lists gets its own line, not silence'
+    mkbook "Some Author" "Ripped Elsewhere" B0FAKEGONE "" "Ripped Elsewhere"
+    mkbook "Brandon Sanderson" "Wind and Truth" B08X3 "" "Wind and Truth"
     at_risk_library <<'JSON'
 [
  {"AudibleProductId":"B08X3","Title":"Wind and Truth","Subtitle":"","AuthorNames":"Brandon Sanderson",
@@ -1699,16 +1729,45 @@ JSON
 JSON
     When run zsh -c "source $RIPLIB && rip::ab_at_risk"
     The status should equal 0
-    The output should include "1 stored book(s) could not be matched"
+    The output should include "1 stored book(s) carries an Audible ASIN that libation no longer lists"
+    The output should include "its Plus status could not be established"
     The output should include "Some Author/Ripped Elsewhere"
-    The output should include "Plus status is unknown"
     # THE FALSE REASSURANCE THIS VERB EXISTS TO PREVENT: with a book it could
     # not speak for in hand, it must not say every book on cantina is
     # owned-or-in-catalogue.
     The output should not include "every book on cantina"
-    # the book it DID match is still reported as not at risk
+    # the book it DID resolve is still reported as not at risk
     The output should include "nothing at risk among the books that matched"
     The output should not include "can NEVER be re-acquired"
+    The output should not include "does not seem to be an Audible book"
+  End
+
+  # A MANUAL IMPORT — no `audible.asin` in the sidecar at all — is not an
+  # Audible book to begin with, so calling its Plus status "unknown" is
+  # alarmist and wrong: this check simply does not apply to it. It must be
+  # named plainly and kept out of the "not established" anomaly bucket
+  # above, and its presence alone must not force the "matched a row" hedge
+  # either — every Audible-provider title on cantina WAS resolved.
+  It 'at-risk: a manual import with no ASIN is reported as not an Audible book, not as an anomaly'
+    mkbook "Ernest Cline" "Ready Player One" "" "" "Ready Player One"
+    mkbook "Brandon Sanderson" "Wind and Truth" B08X3 "" "Wind and Truth"
+    at_risk_library <<'JSON'
+[
+ {"AudibleProductId":"B08X3","Title":"Wind and Truth","Subtitle":"","AuthorNames":"Brandon Sanderson",
+  "BookStatus":"Liberated","IsAudiblePlus":false,"AbsentFromLastScan":false}
+]
+JSON
+    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    The status should equal 0
+    The output should include "1 stored book(s) does not seem to be an Audible book:"
+    The output should include "Ernest Cline/Ready Player One"
+    The output should not include "could not be established"
+    The output should not include "can NEVER be re-acquired"
+    # not the hedge — no Audible-identified book was left unresolved, only a
+    # book that was never in this check's scope
+    The output should not include "matched a libation row"
+    The output should not include "every book on cantina"
+    The output should include "nothing at risk among cantina's Audible titles"
   End
 
   # rip::ab_backfill_published — sweep the 248 sidecars already on the server

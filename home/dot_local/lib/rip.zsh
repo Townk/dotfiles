@@ -2328,11 +2328,7 @@ rip::ab_have() {
 # verb is how the operator learns which those are.
 #
 # READ-ONLY by construction: no --apply, no writes, no ssh beyond the ONE
-# listing rip::ab_server_library already makes.
-#
-# Both sides of the join go through rip::_nfc: the server is NFC and macOS
-# composes NFD, so an accented author would otherwise read as "no match" and
-# an irreplaceable book would be quietly left off the list.
+# listing rip::_server_sidecars already makes.
 rip::ab_at_risk() {
   setopt localoptions noerrexit nopipefail
 
@@ -2340,7 +2336,14 @@ rip::ab_at_risk() {
   # an unreachable server is byte-identical to an empty library, and this
   # verb printing "nothing at risk" for a server it never reached is the
   # exact false reassurance it exists to prevent.
-  local lib; lib="$(rip::ab_server_library)" || return 2
+  #
+  # rip::_server_sidecars, not rip::ab_server_library: the ASIN tier below
+  # needs each stored book's ids["audible.asin"], which only the sidecar
+  # carries, and _server_sidecars already emits every sidecar with its
+  # "<Author>/<Title>" attached as `_path`. Reusing it here — the same
+  # enumeration rip::ab_editions and rip::ab_backfill_published already pull
+  # from — is what keeps this verb at ONE remote round trip instead of two.
+  local rows; rows="$(rip::_server_sidecars)" || return 2
 
   local pname="${RIP_AB_PROVIDER:-libation}"
   local pbin; pbin="$(rip::ab_provider_bin "$pname")" || return 2
@@ -2350,59 +2353,90 @@ rip::ab_at_risk() {
     return 2
   fi
 
-  # THE JOIN IS TWO-TIER, exactly the one rip::ab_repair_sidecars already
-  # builds (prow_of / ptitle_rows). An exact-composed-path lookup ALONE is
-  # not enough and this library is already known to break it: Libation files
-  # a book under "Shawn Speakman - editor" where the server holds "Shawn
-  # Speakman", and rip::_canonical_author measured one such author collision
-  # across 116 distinct first-authors on 2026-08-23. Under the old
-  # exact-only join those stored books matched no row at all and were
-  # silently folded into "not at risk" — a lapsed Plus title, the only copy
-  # in existence, reported as safe. What still matches when the author
-  # spelling diverges is the composed TITLE component, so that is the
-  # fallback key.
+  # THE JOIN IS THREE-TIER, ASIN first. 246 of 247 stored sidecars carry
+  # ids["audible.asin"] (backfilled 2026-08-24), and the matching provider
+  # row carries the same value as `.id` — an exact key, immune to the
+  # author/title spelling divergence that motivated the other two tiers:
+  # Libation files a book under "Shawn Speakman - editor" where the server
+  # holds "Shawn Speakman", and rip::_canonical_author measured one such
+  # author collision across 116 distinct first-authors on 2026-08-23.
+  #
+  # The exact-composed-path and title tiers remain, unchanged, as FALLBACKS
+  # for the rare stored book whose sidecar carries no ASIN at all — under a
+  # path-only join those stored books matched no row and were silently
+  # folded into "not at risk"; what still matches when the author spelling
+  # diverges is the composed TITLE component.
   #
   # Every row is indexed, not just the at-risk ones, because this verb has
-  # to tell three states apart: at risk, established-safe, and NOT MATCHED
-  # AT ALL. The flag is "1" (plus AND absent) or "0"; a title key
-  # accumulates one character per candidate row, so "1"/"0" is an unambiguous
-  # answer and "10" is candidates that disagree — which establishes nothing.
+  # to tell four states apart: at risk, established-safe, an ASIN the
+  # provider no longer lists, and no ASIN to try in the first place. The
+  # flag is "1" (plus AND absent) or "0"; the ASIN and path maps take the
+  # FIRST row for a given key (an exact identifier is not expected to
+  # collide), but the title key accumulates one character per candidate
+  # row, so "1"/"0" is an unambiguous answer and "10" is candidates that
+  # disagree — which establishes nothing.
   #
-  # Both sides go through rip::_nfc: the server is NFC and macOS composes
-  # NFD, so an accented author would otherwise read as "no match".
-  local -A prisk=() ptitle_risk=()
-  local ppath pflag ptitle
-  while IFS=$'\t' read -r ppath pflag; do
+  # Path/title matching goes through rip::_nfc: the server is NFC and macOS
+  # composes NFD, so an accented author would otherwise read as "no match".
+  # The ASIN is an opaque identifier and needs no such normalization.
+  local -A prisk=() ptitle_risk=() pasin_risk=()
+  local ppath pflag pasin ptitle
+  while IFS=$'\t' read -r ppath pflag pasin; do
     [[ -n "$ppath" ]] || continue
     ppath="$(rip::_nfc "$ppath")"
     [[ -n "${prisk[$ppath]:-}" ]] || prisk[$ppath]="$pflag"
     ptitle="${ppath##*/}"
     ptitle_risk[$ptitle]+="$pflag"
+    if [[ -n "$pasin" ]]; then
+      [[ -n "${pasin_risk[$pasin]:-}" ]] || pasin_risk[$pasin]="$pflag"
+    fi
   done < <(print -r -- "$prows" \
     | jq -r 'select((.path // "") != "")
              | (.path) + "\t"
                + (if (((.plus // false) == true) and ((.absent // false) == true))
-                  then "1" else "0" end)' 2>/dev/null)
+                  then "1" else "0" end)
+               + "\t" + (.id // "")' 2>/dev/null)
 
-  local -a found=() unknown=()
-  local rel nrel flags
-  for rel in "${(@f)lib}"; do
+  # found: genuinely at risk. not_established: HAS an Audible ASIN, but no
+  # provider row carries it any more — the real anomaly (spec 2026-08-24:
+  # report the SHAPE, not a diagnosis — a lapsed Plus licence, a returned
+  # purchase and an account change all produce this same evidence, and
+  # nothing here can tell them apart). not_audible: no ASIN in the sidecar
+  # at all, so this isn't an Audible-provider book to begin with (a manual
+  # import) — out of this check's scope, not a gap in it.
+  local -a found=() not_established=() not_audible=()
+  local rel asin nrel flags
+  while IFS=$'\t' read -r rel asin; do
     [[ -n "$rel" ]] || continue
-    nrel="$(rip::_nfc "$rel")"
-    flags="${prisk[$nrel]:-}"
-    [[ -n "$flags" ]] || flags="${ptitle_risk[${nrel##*/}]:-}"
-    if [[ -z "$flags" ]]; then
-      # NO ROW AT ALL. "Not matched" is not "not at risk" — the whole defect
-      # this second bucket exists to close.
-      unknown+=("$rel")
-    elif [[ "$flags" != *0* ]]; then
+    if [[ -n "$asin" ]]; then
+      flags="${pasin_risk[$asin]:-}"
+      if [[ -z "$flags" ]]; then
+        not_established+=("$rel")
+        continue
+      fi
+    else
+      nrel="$(rip::_nfc "$rel")"
+      flags="${prisk[$nrel]:-}"
+      [[ -n "$flags" ]] || flags="${ptitle_risk[${nrel##*/}]:-}"
+      if [[ -z "$flags" ]]; then
+        # NO ROW AT ALL, NO ASIN TO TRY. Not an Audible-provider book.
+        not_audible+=("$rel")
+        continue
+      fi
+    fi
+    if [[ "$flags" != *0* ]]; then
       found+=("$rel")
     elif [[ "$flags" == *1* ]]; then
       # Title-tier candidates that disagree: one says lapsed, another says
-      # owned, and nothing here says which one this folder is.
-      unknown+=("$rel")
+      # owned, and nothing here says which one this folder is. Only the
+      # title tier ever accumulates more than one flag, and it is only ever
+      # consulted for a book with no ASIN — so this is the no-ASIN "could
+      # not establish" case, not the real ASIN anomaly above. Never at-risk
+      # either way — do not weaken that.
+      not_audible+=("$rel")
     fi
-  done
+  done < <(print -r -- "$rows" \
+    | jq -r '(._path // "") + "\t" + (.ids["audible.asin"] // "")' 2>/dev/null)
 
   local f
   if (( ${#found} )); then
@@ -2411,18 +2445,39 @@ rip::ab_at_risk() {
     for f in "${(@o)found}"; do
       print -r -- "    $f"
     done
-  elif (( ${#unknown} == 0 )); then
+  elif (( ${#not_established} == 0 && ${#not_audible} == 0 )); then
     print -r -- "rip: nothing at risk — every book on cantina is either owned outright or still in the Audible Plus catalog."
+  elif (( ${#not_established} == 0 )); then
+    # ONLY manual imports are left unaccounted for. That is not a gap in the
+    # Audible check — those books are simply out of its scope — so this
+    # still cannot say "every book on cantina", but for a different reason
+    # than the hedge below: every Audible-provider title WAS resolved.
+    print -r -- "rip: nothing at risk among cantina's Audible titles — each of those is either owned outright or still in the Audible Plus catalog."
   else
-    # CLAIM ONLY WHAT THE JOIN ESTABLISHED. With unmatched books in hand this
-    # line must not say "every book on cantina": the books below are exactly
-    # the ones it could not speak for.
+    # CLAIM ONLY WHAT THE JOIN ESTABLISHED. With a book carrying an Audible
+    # ASIN the provider no longer lists, this line must not say "every book
+    # on cantina": that book is exactly the one it could not speak for.
     print -r -- "rip: nothing at risk among the books that matched a $pname row — each of those is either owned outright or still in the Audible Plus catalog."
   fi
 
-  if (( ${#unknown} )); then
-    print -r -- "rip: ${#unknown} stored book(s) could not be matched to a single $pname row — their Plus status is unknown, NOT established as safe:"
-    for f in "${(@o)unknown}"; do
+  if (( ${#not_established} )); then
+    if (( ${#not_established} == 1 )); then
+      print -r -- "rip: 1 stored book(s) carries an Audible ASIN that $pname no longer lists — its Plus status could not be established:"
+    else
+      print -r -- "rip: ${#not_established} stored book(s) carry an Audible ASIN that $pname no longer lists — their Plus status could not be established:"
+    fi
+    for f in "${(@o)not_established}"; do
+      print -r -- "    $f"
+    done
+  fi
+
+  if (( ${#not_audible} )); then
+    if (( ${#not_audible} == 1 )); then
+      print -r -- "rip: 1 stored book(s) does not seem to be an Audible book:"
+    else
+      print -r -- "rip: ${#not_audible} stored book(s) do not seem to be Audible books:"
+    fi
+    for f in "${(@o)not_audible}"; do
       print -r -- "    $f"
     done
   fi
