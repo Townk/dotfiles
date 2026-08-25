@@ -1,5 +1,10 @@
 # tests/rip-finder-service_spec.sh — the Finder Quick Action's embedded
-# shell script (home/dot_local/share/services/Contents/document.wflow).
+# shell script
+# (home/dot_local/share/services/browse-audiobook-folder/Contents/document.wflow).
+# services/ holds one subdirectory per bundle (browse-audiobook-folder is
+# this one) so a future sibling Quick Action — for movies, audio tracks,
+# eBooks — gets its own subdirectory and its own installer rather than
+# colliding with this one.
 #
 # The Automator bundle itself (plists wiring a Finder service to a "Run
 # Shell Script" action) cannot be meaningfully unit-tested — that needs a
@@ -43,17 +48,29 @@
 # disk is touched, and the real Hammerspoon instance (a different
 # process entirely) is never contacted.
 Describe 'audiobook Finder Quick Action'
-  WFLOW="$SHELLSPEC_PROJECT_ROOT/home/dot_local/share/services/Contents/document.wflow"
-  INFO_PLIST="$SHELLSPEC_PROJECT_ROOT/home/dot_local/share/services/Contents/Info.plist"
+  WFLOW="$SHELLSPEC_PROJECT_ROOT/home/dot_local/share/services/browse-audiobook-folder/Contents/document.wflow"
+  INFO_PLIST="$SHELLSPEC_PROJECT_ROOT/home/dot_local/share/services/browse-audiobook-folder/Contents/Info.plist"
 
+  # A silent-empty extraction (wrong path, a plutil that quietly failed)
+  # must fail LOUDLY here, not let every example below run against an
+  # empty script and pass vacuously (an empty file sources cleanly and
+  # simply never calls the shadowed hs — most assertions would still
+  # fail, but not for a reason anyone could diagnose from the output).
   setup() {
     SANDBOX=$(mktemp -d)
     LOGDIR="$SANDBOX/calls"
     COUNTER="$SANDBOX/counter"
     mkdir -p "$LOGDIR"
     SCRIPT_FILE="$SANDBOX/extracted-script.sh"
-    plutil -extract actions.0.action.ActionParameters.COMMAND_STRING raw -o - "$WFLOW" \
-      > "$SCRIPT_FILE"
+    if ! plutil -extract actions.0.action.ActionParameters.COMMAND_STRING raw -o - "$WFLOW" \
+      > "$SCRIPT_FILE"; then
+      echo "setup: plutil failed to extract COMMAND_STRING from $WFLOW" >&2
+      return 1
+    fi
+    if [ ! -s "$SCRIPT_FILE" ]; then
+      echo "setup: extracted script from $WFLOW is EMPTY — refusing to run examples against nothing" >&2
+      return 1
+    fi
   }
   cleanup() { rm -rf "$SANDBOX"; }
   BeforeEach 'setup'

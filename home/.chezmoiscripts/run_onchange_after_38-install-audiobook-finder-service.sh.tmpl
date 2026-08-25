@@ -1,24 +1,30 @@
 {{- $serviceSig := "" -}}
 {{- if eq .chezmoi.os "darwin" -}}
-  {{- $serviceSig = output "sh" "-c" (printf "find %q -type f 2>/dev/null | LC_ALL=C sort | while read -r f; do shasum -a 256 \"$f\"; done | shasum -a 256 | cut -c1-16" (joinPath .chezmoi.sourceDir "dot_local/share/services")) | trim -}}
+  {{- $serviceSig = output "sh" "-c" (printf "find %q -type f 2>/dev/null | LC_ALL=C sort | while read -r f; do shasum -a 256 \"$f\"; done | shasum -a 256 | cut -c1-16" (joinPath .chezmoi.sourceDir "dot_local/share/services/browse-audiobook-folder")) | trim -}}
 {{- end -}}
 #!/bin/sh
 set -eu
 
 {{ if eq .chezmoi.os "darwin" -}}
 # Install the "Browse Audiobook Folder" Finder Quick Action by symlinking the
-# chezmoi-managed workflow bundle (~/.local/share/services) into
-# ~/Library/Services, then flushing Launch Services' Quick Action cache so
-# Finder notices without a restart. A symlink (not a copy) means an edit to
-# the bundle's plists is live the moment chezmoi applies it — this script
-# only needs to re-run to (re)create the symlink and reflush pbs, which is
-# why its own content embeds a hash of the bundle below: that is what makes
-# run_onchange re-fire when Info.plist or document.wflow changes.
+# chezmoi-managed workflow bundle
+# (~/.local/share/services/browse-audiobook-folder) into ~/Library/Services,
+# then flushing Launch Services' Quick Action cache so Finder notices without
+# a restart. ~/.local/share/services is a directory OF bundles, one
+# subdirectory per Quick Action — this script only ever touches its own
+# (browse-audiobook-folder), so a sibling service added later gets its own
+# subdirectory and its own run_onchange script rather than colliding here.
+# A symlink (not a copy) means an edit to the plists is live the moment
+# chezmoi applies it — this script only needs to re-run to (re)create the
+# symlink and reflush pbs, which is why its own content embeds a hash of
+# JUST this bundle's subtree below: that is what makes run_onchange re-fire
+# when THIS service's Info.plist or document.wflow changes, and NOT when an
+# unrelated sibling service under services/ changes.
 #
 # services content hash: {{ $serviceSig }}
 
 bundle_name="Browse Audiobook Folder.workflow"
-src="$HOME/.local/share/services"
+src="$HOME/.local/share/services/browse-audiobook-folder"
 dest="$HOME/Library/Services/$bundle_name"
 
 mkdir -p "$HOME/Library/Services"
