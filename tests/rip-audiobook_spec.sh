@@ -1573,6 +1573,59 @@ JSON
     The stderr should include "refusing to report an at-risk set"
   End
 
+  # THE JOIN MUST NOT BE EXACT-PATH-ONLY (review finding 1, 2026-08-24).
+  # Libation files a book under "Shawn Speakman - editor" where the server
+  # holds "Shawn Speakman" — a divergence rip::ab_repair_sidecars already
+  # carries a title-tier fallback for, and rip::_canonical_author measured
+  # live. With the exact join alone the stored book matched NOTHING and was
+  # folded into "not at risk": a lapsed Plus title, the only copy in
+  # existence, reported as safe.
+  It 'at-risk: a lapsed book whose server author spelling differs from Libation is still found'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Shawn Speakman/Unfettered III"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Martha Wells/Network Effect"
+    at_risk_library <<'JSON'
+[
+ {"AudibleProductId":"B08X9","Title":"Unfettered III","Subtitle":"","AuthorNames":"Shawn Speakman - editor",
+  "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":true},
+ {"AudibleProductId":"B08X1","Title":"Network Effect","Subtitle":"","AuthorNames":"Martha Wells",
+  "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":true}
+]
+JSON
+    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    The status should equal 0
+    The output should include "2 stored book(s) can NEVER be re-acquired"
+    The output should include "Shawn Speakman/Unfettered III"
+    The output should include "Martha Wells/Network Effect"
+    The output should not include "nothing at risk"
+    # matched by title, so nothing is left unaccounted for
+    The output should not include "Plus status is unknown"
+  End
+
+  # AND THE OTHER HALF: a stored book no row matches at all is UNKNOWN, and
+  # the empty-case line must stop claiming a universal it cannot support.
+  It 'at-risk: a stored book that matches no provider row is reported as unknown, not as safe'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Some Author/Ripped Elsewhere"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Wind and Truth"
+    at_risk_library <<'JSON'
+[
+ {"AudibleProductId":"B08X3","Title":"Wind and Truth","Subtitle":"","AuthorNames":"Brandon Sanderson",
+  "BookStatus":"Liberated","IsAudiblePlus":false,"AbsentFromLastScan":false}
+]
+JSON
+    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    The status should equal 0
+    The output should include "1 stored book(s) could not be matched"
+    The output should include "Some Author/Ripped Elsewhere"
+    The output should include "Plus status is unknown"
+    # THE FALSE REASSURANCE THIS VERB EXISTS TO PREVENT: with a book it could
+    # not speak for in hand, it must not say every book on cantina is
+    # owned-or-in-catalogue.
+    The output should not include "every book on cantina"
+    # the book it DID match is still reported as not at risk
+    The output should include "nothing at risk among the books that matched"
+    The output should not include "can NEVER be re-acquired"
+  End
+
   # rip::ab_backfill_published — sweep the 248 sidecars already on the server
   # (0 of which carry `published`, measured 2026-08-24) so edition detection
   # has something to group on. Each example redirects RIP_LIBEXEC_DIR into

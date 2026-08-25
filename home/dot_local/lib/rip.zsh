@@ -2350,33 +2350,82 @@ rip::ab_at_risk() {
     return 2
   fi
 
-  local -A at_risk=()
-  local ppath
-  while IFS= read -r ppath; do
+  # THE JOIN IS TWO-TIER, exactly the one rip::ab_repair_sidecars already
+  # builds (prow_of / ptitle_rows). An exact-composed-path lookup ALONE is
+  # not enough and this library is already known to break it: Libation files
+  # a book under "Shawn Speakman - editor" where the server holds "Shawn
+  # Speakman", and rip::_canonical_author measured one such author collision
+  # across 116 distinct first-authors on 2026-08-23. Under the old
+  # exact-only join those stored books matched no row at all and were
+  # silently folded into "not at risk" — a lapsed Plus title, the only copy
+  # in existence, reported as safe. What still matches when the author
+  # spelling diverges is the composed TITLE component, so that is the
+  # fallback key.
+  #
+  # Every row is indexed, not just the at-risk ones, because this verb has
+  # to tell three states apart: at risk, established-safe, and NOT MATCHED
+  # AT ALL. The flag is "1" (plus AND absent) or "0"; a title key
+  # accumulates one character per candidate row, so "1"/"0" is an unambiguous
+  # answer and "10" is candidates that disagree — which establishes nothing.
+  #
+  # Both sides go through rip::_nfc: the server is NFC and macOS composes
+  # NFD, so an accented author would otherwise read as "no match".
+  local -A prisk=() ptitle_risk=()
+  local ppath pflag ptitle
+  while IFS=$'\t' read -r ppath pflag; do
     [[ -n "$ppath" ]] || continue
-    at_risk[$(rip::_nfc "$ppath")]=1
+    ppath="$(rip::_nfc "$ppath")"
+    [[ -n "${prisk[$ppath]:-}" ]] || prisk[$ppath]="$pflag"
+    ptitle="${ppath##*/}"
+    ptitle_risk[$ptitle]+="$pflag"
   done < <(print -r -- "$prows" \
-    | jq -r 'select(((.plus // false) == true) and ((.absent // false) == true))
-             | (.path // "") | select(. != "")' 2>/dev/null)
+    | jq -r 'select((.path // "") != "")
+             | (.path) + "\t"
+               + (if (((.plus // false) == true) and ((.absent // false) == true))
+                  then "1" else "0" end)' 2>/dev/null)
 
-  local -a found=()
-  local rel
+  local -a found=() unknown=()
+  local rel nrel flags
   for rel in "${(@f)lib}"; do
     [[ -n "$rel" ]] || continue
-    [[ -n "${at_risk[$(rip::_nfc "$rel")]:-}" ]] && found+=("$rel")
+    nrel="$(rip::_nfc "$rel")"
+    flags="${prisk[$nrel]:-}"
+    [[ -n "$flags" ]] || flags="${ptitle_risk[${nrel##*/}]:-}"
+    if [[ -z "$flags" ]]; then
+      # NO ROW AT ALL. "Not matched" is not "not at risk" — the whole defect
+      # this second bucket exists to close.
+      unknown+=("$rel")
+    elif [[ "$flags" != *0* ]]; then
+      found+=("$rel")
+    elif [[ "$flags" == *1* ]]; then
+      # Title-tier candidates that disagree: one says lapsed, another says
+      # owned, and nothing here says which one this folder is.
+      unknown+=("$rel")
+    fi
   done
 
-  if (( ${#found} == 0 )); then
+  local f
+  if (( ${#found} )); then
+    print -r -- "rip: ${#found} stored book(s) can NEVER be re-acquired."
+    print -r -- "rip: each is an Audible Plus title — licensed while it sits in the catalog, not owned — and Audible's last scan no longer returns it, so its licence has lapsed and Libation cannot liberate it again. The copy on cantina is the only copy that exists."
+    for f in "${(@o)found}"; do
+      print -r -- "    $f"
+    done
+  elif (( ${#unknown} == 0 )); then
     print -r -- "rip: nothing at risk — every book on cantina is either owned outright or still in the Audible Plus catalog."
-    return 0
+  else
+    # CLAIM ONLY WHAT THE JOIN ESTABLISHED. With unmatched books in hand this
+    # line must not say "every book on cantina": the books below are exactly
+    # the ones it could not speak for.
+    print -r -- "rip: nothing at risk among the books that matched a $pname row — each of those is either owned outright or still in the Audible Plus catalog."
   fi
 
-  print -r -- "rip: ${#found} stored book(s) can NEVER be re-acquired."
-  print -r -- "rip: each is an Audible Plus title — licensed while it sits in the catalog, not owned — and Audible's last scan no longer returns it, so its licence has lapsed and Libation cannot liberate it again. The copy on cantina is the only copy that exists."
-  local f
-  for f in "${(@o)found}"; do
-    print -r -- "    $f"
-  done
+  if (( ${#unknown} )); then
+    print -r -- "rip: ${#unknown} stored book(s) could not be matched to a single $pname row — their Plus status is unknown, NOT established as safe:"
+    for f in "${(@o)unknown}"; do
+      print -r -- "    $f"
+    done
+  fi
   return 0
 }
 
