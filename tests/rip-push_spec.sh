@@ -1806,14 +1806,32 @@ EOF
     printf 'pdf-bytes\n' > "$RIP_SANDBOX/bk/B.pdf"
     printf 'jpg-bytes\n' > "$RIP_SANDBOX/bk/B.jpg"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.companions[] | {file,kind}] | sort_by(.file)' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.companions[] | {file,kind,bytes}] | sort_by(.file)' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
-    The output should equal '[{"file":"B.jpg","kind":"cover"},{"file":"B.pdf","kind":"pdf"}]'
+    The output should equal '[{"file":"B.jpg","kind":"cover","bytes":10},{"file":"B.pdf","kind":"pdf","bytes":10}]'
   End
 
   It 'sidecar: the audio file itself is NOT a companion'
     mkdir -p "$RIP_SANDBOX/bk"
     printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '.companions' $RIP_SANDBOX/bk/.fleet-book.json"
+    The status should equal 0
+    The output should equal "[]"
+  End
+
+  # Review finding 1 (2026-08-25): the module already answers "what counts
+  # as audio" in TWO other places (rip::_dir_has_audio, the server-side scan
+  # in rip::_sidecars_hash_primary) with an 11-extension set — a scanner that
+  # excludes only `*.m4b` gives a THIRD, narrower answer, and a retained
+  # Libation `.aax` (the source file it decrypts the `.m4b` FROM) would be
+  # recorded as a companion — the exact thing "the audio IS the book" is
+  # here to forbid — and fully re-read by rip::_sha256_of on every push.
+  It 'sidecar: a non-m4b audio file beside the m4b is also NOT a companion'
+    mkdir -p "$RIP_SANDBOX/bk"
+    printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
+    printf 'source-audio\n' > "$RIP_SANDBOX/bk/B.aax"
+    printf 'chapter\n' > "$RIP_SANDBOX/bk/01 - Chapter One.mp3"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
     When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '.companions' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
@@ -1986,6 +2004,28 @@ EOF
     The status should equal 0
     The output should include "MV_SRC:$RIP_STAGING_ROOT/.work/fleet-book."
     The output should not include "MV_SRC:$RIP_SANDBOX/bk/"
+  End
+
+  # Review finding 3 (2026-08-25): rip::_book_meta_for's own log_warn for a
+  # missing uuidgen used to be swallowed by the ONLY production caller
+  # (rip::_enrich_audiobooks redirects this function's stderr to
+  # /dev/null), so on a host with no uuidgen a folder book pushed with
+  # local.sha256 but no fleet.uid, the push reported success, and nothing
+  # told the operator the identity pair was half-assigned. Fixed by having
+  # rip::_book_meta_for return non-zero on a failed mint, which routes the
+  # message through rip::_enrich_audiobooks' OWN (unsuppressed) "could not
+  # write the identity sidecar" warning instead — proven here by shadowing
+  # `uuidgen` to simulate it being entirely absent from PATH.
+  It 'enrichment: a missing uuidgen for a folder-provider book is reported to the operator, not silently swallowed'
+    export RIP_AB_META_INDEX="$RIP_SANDBOX/index.jsonl"
+    printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder","ids":{"local.sha256":"deadbeef"}}' > "$RIP_AB_META_INDEX"
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+    printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
+    When run zsh -c "source $RIPLIB
+      uuidgen() { return 1 }
+      rip::push_worker audiobooks"
+    The stderr should include "could not write the identity sidecar for A/B"
+    The path "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should not be exist
   End
 
   It 'enrichment with no hops changes exactly one thing: the sidecar appears'

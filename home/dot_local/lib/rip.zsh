@@ -574,6 +574,17 @@ rip::_book_meta_for() {
     # ever runs. A row with nothing threaded gets nothing minted — the same
     # refusal Case C makes for a book it cannot hash: half an identity pair
     # is the very exposure this feature exists to close.
+    #
+    # A failed mint is a hard failure of THIS call, not a silent half-write
+    # (review finding 3, 2026-08-25): the production caller
+    # (rip::_enrich_audiobooks) redirects this function's own stderr to
+    # /dev/null, so a log_warn here alone never reaches the operator, and a
+    # push would report success while shipping a book with local.sha256 but
+    # no fleet.uid — half an identity pair, silently. Returning non-zero
+    # lets that caller's OWN unsuppressed "could not write the identity
+    # sidecar" warning fire instead, the same path the sibling uuidgen
+    # failure in --repair-sidecars Case C already uses to reach the
+    # operator.
     if [[ "$(print -r -- "$row" | jq -r '.provider // ""' 2>/dev/null)" == "folder" ]]; then
       local sha256; sha256="$(print -r -- "$row" | jq -r '.ids["local.sha256"] // ""' 2>/dev/null)"
       if [[ -n "$sha256" ]]; then
@@ -583,6 +594,7 @@ rip::_book_meta_for() {
             '.ids = ((.ids // {}) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
         else
           log_warn "rip: uuidgen produced nothing — cannot assign a local identity to $rel"
+          return 1
         fi
       fi
     fi
@@ -611,6 +623,15 @@ rip::_file_bytes() {
 # sidecar listing itself is a fixpoint nobody needs. Everything else that
 # shipped with the book is recorded, cover included — one uniform notion of
 # "the files belonging to this book" beats two, and consumers filter by kind.
+#
+# The audio exclusion uses the SAME extension set as rip::_dir_has_audio and
+# rip::_sidecars_hash_primary's server-side scan (review finding, 2026-08-25),
+# not just `*.m4b`: a book that still carries its Libation-decrypted `.aax`
+# alongside the `.m4b` (or any other audio format) would otherwise have that
+# audio file recorded as a companion — the exact thing this function exists
+# to exclude — AND fully read end to end by rip::_sha256_of below, which for
+# a retained multi-gigabyte `.aax` is precisely the "hash a large file twice"
+# cost Step 3b exists to avoid.
 rip::_companions_json() {
   setopt localoptions noerrexit nopipefail
   local d="$1" f base kind
@@ -619,7 +640,7 @@ rip::_companions_json() {
     base="${f:t}"
     [[ "$base" == .fleet-book.json ]] && continue
     case "${(L)base}" in
-      *.m4b) continue ;;
+      *.m4b|*.m4a|*.mp3|*.mp4|*.aac|*.flac|*.ogg|*.opus|*.wav|*.aax|*.aaxc) continue ;;
       *.jpg|*.jpeg|*.png) kind=cover ;;
       *.pdf)  kind=pdf ;;
       *.epub) kind=epub ;;
