@@ -67,7 +67,14 @@ Describe 'audiobook Finder Quick Action'
       echo "setup: plutil failed to extract COMMAND_STRING from $WFLOW" >&2
       return 1
     fi
-    if [ ! -s "$SCRIPT_FILE" ]; then
+    # `plutil -extract ... raw` always appends a trailing newline, even
+    # when the extracted value is the empty string — an empty
+    # COMMAND_STRING therefore produces a 1-BYTE file, and `[ -s ... ]`
+    # ("nonzero size") is false for it, so a size check alone silently
+    # misses exactly the case this guard exists to catch. `$(cat ...)`
+    # strips trailing newlines under command substitution, so checking
+    # ITS length (not the file's byte count) catches a lone "\n" too.
+    if [ -z "$(cat "$SCRIPT_FILE")" ]; then
       echo "setup: extracted script from $WFLOW is EMPTY — refusing to run examples against nothing" >&2
       return 1
     fi
