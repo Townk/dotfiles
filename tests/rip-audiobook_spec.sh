@@ -654,6 +654,121 @@ EOF
     The path "$RIP_STAGING_ROOT/.work/ab-plans/x.json" should not be exist
   End
 
+  # --- the acquire's OUTCOME, not its exit code -----------------------------
+  #
+  # LibationCli exits 0 for a title whose Audible Plus licence has lapsed,
+  # having liberated nothing at all (reproduced live 2026-08-24 with
+  # Pierce Brown/Red Rising). The worker's only failure signal used to be
+  # that rc, so it called the item a success, the push found no new files,
+  # and the operator got a "ripping complete" toast for a book that never
+  # arrived — this subsystem's NINTH "success asserted from control flow
+  # reaching a line" defect. These examples pin the fix: the claim rests on
+  # files that exist.
+
+  # locked_libation <id> — a fake LibationCli whose liberate EXITS 0 and
+  # writes nothing for <id>, and lands Steelheart for anything else. That
+  # asymmetry is the point: the batch must survive the silent no-op.
+  locked_libation() {
+    cat > "$RIP_SANDBOX/LibationCli" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "\$RIP_SANDBOX/libation.log"
+case "\$*" in
+  *"--id $1"*) echo "Done. Downloaded 0 books."; exit 0 ;;
+esac
+books=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in -o|--override) case "\$2" in Books=*) books="\${2#Books=}" ;; esac ;; esac
+  shift
+done
+mkdir -p "\$books/Brandon Sanderson/Steelheart"
+printf 'audio\n' > "\$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+  }
+
+  It 'worker: an acquire that exits 0 but produces no files is reported as a failure, and the batch continues'
+    locked_libation LOCKED
+    printf '%s\n' '{"provider":"libation","items":[{"id":"LOCKED","path":"Pierce Brown/Red Rising","title":"Red Rising"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    # the failure is the RUN's exit code, not just a log line
+    The status should not equal 0
+    The stderr should include "acquire produced no files for Pierce Brown/Red Rising"
+    # …and the rest of the batch still landed on the server
+    The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    # NEVER a cause we did not establish: this row carries no plus/absent, so
+    # the message must not blame a licence.
+    The stderr should not include "licence"
+  End
+
+  # A book directory that EXISTS but holds no audio is the same failure: a
+  # provider that created its destination and then bailed must not be read as
+  # a success by the mere presence of the folder.
+  It 'worker: an empty book directory is not a successful acquire'
+    cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
+books=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o|--override) case "$2" in Books=*) books="${2#Books=}" ;; esac ;; esac
+  shift
+done
+mkdir -p "$books/Pierce Brown/Red Rising"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"LOCKED","path":"Pierce Brown/Red Rising","title":"Red Rising"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should not equal 0
+    The stderr should include "acquire produced no files for Pierce Brown/Red Rising"
+  End
+
+  # The diagnostic, built from the ROW'S OWN DATA: a Plus title Audible's
+  # last scan no longer returns is a lapsed licence, and saying so is the
+  # difference between "something went wrong" and "this book is gone".
+  It 'worker: a Plus + absent-from-last-scan row names the lapsed licence'
+    locked_libation LOCKED
+    printf '%s\n' '{"provider":"libation","items":[{"id":"LOCKED","path":"Pierce Brown/Red Rising","title":"Red Rising","plus":true,"absent":true}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should not equal 0
+    The stderr should include "acquire produced no files for Pierce Brown/Red Rising"
+    The stderr should include "Audible Plus and absent from Audible's last scan"
+    The stderr should include "licence has lapsed"
+    # Warned before the attempt, never refused: AbsentFromLastScan can be
+    # stale, and refusing on stale metadata would block a legitimate rip.
+    The stderr should include "attempting anyway"
+    The contents of file "$RIP_SANDBOX/libation.log" should include "--id LOCKED"
+  End
+
+  # The sibling-credit trap. The reconcile step falls back to "the newest
+  # book dir under this author", so in a batch of two books by ONE author it
+  # would happily hand book two the folder book one just created — a failed
+  # acquire re-keyed onto, and verified against, a sibling's files. Only a
+  # directory that was not there before this item's acquire can be it.
+  It 'worker: a failed acquire is not credited with a sibling book by the same author'
+    cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
+case "$*" in
+  *"--id LOCKED"*) echo "Done."; exit 0 ;;
+esac
+books=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o|--override) case "$2" in Books=*) books="${2#Books=}" ;; esac ;; esac
+  shift
+done
+mkdir -p "$books/Brandon Sanderson/Steelheart"
+printf 'audio\n' > "$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+    printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"},{"id":"LOCKED","path":"Brandon Sanderson/Wind and Truth","title":"Wind and Truth"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should not equal 0
+    The stderr should include "acquire produced no files for Brandon Sanderson/Wind and Truth"
+    The stderr should not include "Wind and Truth landed as"
+  End
+
   # --- ABS author enrichment (rip-abs-authors + the RIP_AB_REMOTE_HOPS
   # first entry, rip::_abs_match_authors) ------------------------------------
   #

@@ -379,6 +379,23 @@ rip::_nfc() {
   fi
 }
 
+# rip::_dir_has_audio <dir> — 0 when <dir> holds at least one audio file at
+# any depth, 1 otherwise (including "no such directory").
+#
+# This is the CAPTURED OUTCOME an acquire is judged by. LibationCli exits 0
+# for a title whose licence has lapsed, having written nothing at all
+# (reproduced live 2026-08-24 with Pierce Brown/Red Rising), so the provider's
+# rc alone reports a successful rip for a book that never arrived. Same
+# extension set as rip::_sidecars_hash_primary's server-side scan, so "what
+# counts as audio" has one answer on both sides of the push.
+rip::_dir_has_audio() {
+  setopt localoptions noerrexit nopipefail
+  local d="${1:-}"
+  [[ -n "$d" && -d "$d" ]] || return 1
+  local -a found=("$d"/**/*.(m4b|m4a|mp3|mp4|aac|flac|ogg|opus|wav|aax|aaxc)(N.))
+  (( ${#found} > 0 ))
+}
+
 # --- audiobook identity ----------------------------------------------------
 #
 # Every book folder carries .fleet-book.json: WHO this book is, independent
@@ -4267,15 +4284,35 @@ rip::ab_worker() {
   # rewrites the shell's command search path for the rest of this scope, so
   # every command run afterwards (jq, find, the provider bin, rsync) can
   # fail to resolve. Same bug, same fix as rip::_validate_ab_plan (Task 11).
-  local id bpath entry
-  while IFS=$'\t' read -r id bpath; do
-    [[ -n "$id$bpath" ]] && items+=("$id"$'\t'"$bpath")
-  done < <(jq -r '(.items // [])[] | [(.id // ""), (.path // "")] | @tsv' "$plan" 2>/dev/null)
+  #
+  # FOUR fields per item, not two: `plus`/`absent` (the provider's
+  # IsAudiblePlus / AbsentFromLastScan) are carried through so the
+  # acquire-verification below can name the reason a lapsed title produced
+  # nothing instead of guessing at one. Emitted as "1"/"0" rather than
+  # true/false so an item whose row predates those keys reads as "0" and the
+  # message falls back to the plain wording — never a cause we did not
+  # establish.
+  local id bpath plus absent entry rest
+  while IFS=$'\t' read -r id bpath plus absent; do
+    [[ -n "$id$bpath" ]] && items+=("$id"$'\t'"$bpath"$'\t'"$plus"$'\t'"$absent")
+  done < <(jq -r '(.items // [])[]
+                  | [(.id // ""), (.path // ""),
+                     (if (.plus // false) then "1" else "0" end),
+                     (if (.absent // false) then "1" else "0" end)] | @tsv' "$plan" 2>/dev/null)
 
   local total=${#items} n=0 rc=0 line pct refused=0
   local base span; span=$(( 70 / (total > 0 ? total : 1) ))
+  # Declared ONCE, out here: a bare `local` in the loop body re-runs per
+  # iteration, and this file has been bitten by that before.
+  # pre_dirs is ASSOCIATIVE, not an array searched with (I): the (I) subscript
+  # PATTERN-matches, and a book folder is free to contain [ ] ? or *.
+  local -A pre_dirs=()
+  local -a landed=()
+  local pre_d bdir actual
   for entry in "${items[@]}"; do
-    id="${entry%%$'\t'*}"; bpath="${entry#*$'\t'}"
+    id="${entry%%$'\t'*}"; rest="${entry#*$'\t'}"
+    bpath="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+    plus="${rest%%$'\t'*}"; absent="${rest#*$'\t'}"
     base=$(( n * span )); n=$(( n + 1 ))
     rip::ab_have "$bpath"
     case $? in
@@ -4292,7 +4329,21 @@ rip::ab_worker() {
         ;;
       2) log_warn "rip: could not ask cantina about $bpath — acquiring anyway" ;;
     esac
+    # Warned, NOT refused (the operator's rule, 2026-08-24): AbsentFromLastScan
+    # can be stale, and refusing on stale metadata would block a legitimate
+    # rip. Attempting costs one no-op Libation invocation; the verification
+    # after the acquire is what reports the truth.
+    if [[ "$plus" == 1 && "$absent" == 1 ]]; then
+      log_warn "rip: $bpath is Audible Plus and absent from Audible's last scan — its licence may already have lapsed; attempting anyway"
+    fi
     rip::_progress "$base" "downloading — ${bpath:t}"
+    # Snapshot the author dir BEFORE the acquire. The reconcile below falls
+    # back to "the newest book dir under this author", and in a batch of two
+    # books by ONE author that fallback would happily hand book two the
+    # folder book one just created — a failed acquire re-keyed onto, and
+    # verified against, a sibling's files. Only a directory that was not
+    # there a moment ago can be this acquisition.
+    pre_dirs=(); for pre_d in "$ab_root/${bpath%%/*}"/*(N/); do pre_dirs[${pre_d:t}]=1; done
     zsh "$bin" acquire "$id" "$ab_root" 2>&1 \
       | while IFS= read -r line; do
           case "$line" in
@@ -4326,14 +4377,21 @@ rip::ab_worker() {
     # RECONCILE what actually landed. The plan's path is COMPOSED from store
     # metadata ("<Author>/<Title>: <Subtitle>", per Global Constraints), and
     # a provider may still sanitize a character or truncate a very long name
-    # on its way to the filesystem. If the composed dir is not there, the
-    # newest book dir under the author dir (glob qualifier (N/om): dirs
-    # only, most-recently-modified first) is taken to BE this acquisition —
-    # robust even when a pre-existing sibling book dir is already there —
-    # and the meta index must be re-keyed to the real path or the sidecar it
-    # feeds would never match the folder it belongs to.
-    if [[ ! -d "$ab_root/$bpath" ]]; then
-      local -a landed=("$ab_root/${bpath%%/*}"/*(N/om))
+    # on its way to the filesystem. If the composed dir is not there (or is
+    # there but empty), the newest book dir under the author dir that was NOT
+    # already present before this acquire (glob qualifier (N/om): dirs only,
+    # most-recently-modified first, minus the pre_dirs snapshot) is taken to
+    # BE this acquisition, and the meta index must be re-keyed to the real
+    # path or the sidecar it feeds would never match the folder it belongs
+    # to.
+    bdir=""
+    if rip::_dir_has_audio "$ab_root/$bpath"; then
+      bdir="$ab_root/$bpath"
+    else
+      landed=()
+      for pre_d in "$ab_root/${bpath%%/*}"/*(N/om); do
+        [[ -n "${pre_dirs[${pre_d:t}]:-}" ]] || landed+=("$pre_d")
+      done
       if (( ${#landed} )); then
         # NFC-normalize the landed folder name before writing it as the new
         # key: rip::_book_meta_for (this index's only reader) NFC-normalizes
@@ -4343,14 +4401,36 @@ rip::ab_worker() {
         # match, silently falling back to the path-derived minimal identity.
         # Same bug class as 21322287 (NFC-canonical server names) in this
         # same file.
-        local actual="${bpath%%/*}/$(rip::_nfc "${landed[1]:t}")"
+        actual="${bpath%%/*}/$(rip::_nfc "${landed[1]:t}")"
         log_warn "rip: $bpath landed as $actual — re-keying the plan identity"
         jq -c --arg old "$bpath" --arg new "$actual" \
           'if .path == $old then .path = $new else . end' "$index" > "$index.tmp" \
           && mv -f -- "$index.tmp" "$index"
-      else
-        log_warn "rip: acquire reported success but nothing landed for $bpath"
+        bdir="${landed[1]}"
       fi
+    fi
+
+    # THE ACQUIRE'S ACTUAL OUTCOME. rc 0 from LibationCli is NOT it: a title
+    # whose Audible Plus licence has lapsed makes the CLI exit 0 having
+    # liberated nothing, so the worker called it a success, the push found no
+    # new files, and the operator got a "ripping complete" toast for a book
+    # that never arrived (reproduced live 2026-08-24, Pierce Brown/Red
+    # Rising). That is this subsystem's NINTH defect of one shape — a success
+    # asserted from control flow reaching a line rather than from a captured
+    # outcome — so the success claim now rests on files that exist.
+    #
+    # Treated exactly like an acquire failure: logged, counted in rc, and the
+    # rest of the batch continues (one item's failure is that item's failure).
+    if [[ -z "$bdir" ]] || ! rip::_dir_has_audio "$bdir"; then
+      if [[ "$plus" == 1 && "$absent" == 1 ]]; then
+        log_error "rip: acquire produced no files for $bpath — this title is Audible Plus and absent from Audible's last scan, so its licence has lapsed and it can no longer be liberated"
+      else
+        # NEVER a cause we did not establish: without both flags all we know
+        # is that nothing landed.
+        log_error "rip: acquire produced no files for $bpath"
+      fi
+      rc=1
+      continue
     fi
   done
   rm -f -- "$plan"
