@@ -2263,12 +2263,20 @@ rip::ab_provider_bin() {
   return 2
 }
 
-# rip::ab_library [name] — the provider's JSON lines, passed through
-# unmodified (the panel's own jq does the shaping).
+# rip::ab_library [name] [root] — the provider's JSON lines, passed through
+# unmodified (the panel's own jq does the shaping). `root` is forwarded to
+# the provider's `list` verb ONLY when non-empty: passing "" as $2 would
+# make a scanning provider (rip-provider-folder) walk the empty string, and
+# argv length is part of the contract.
 rip::ab_library() {
   setopt localoptions noerrexit nopipefail
   local bin; bin="$(rip::ab_provider_bin "${1:-}")" || return 2
-  zsh "$bin" list
+  local root="${2:-}"
+  if [[ -n "$root" ]]; then
+    zsh "$bin" list "$root"
+  else
+    zsh "$bin" list
+  fi
 }
 
 # rip::ab_server_library — every <Author>/<Title> cantina holds, from ONE

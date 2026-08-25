@@ -165,6 +165,9 @@ cmd_acquire() {
 
 case "${1:-}" in
   capabilities) cmd_capabilities ;;
+  # `list [root]` — a root is meaningful only to a provider that scans a
+  # directory (rip-provider-folder). This provider owns a catalogue, so it
+  # accepts the argument and ignores it, keeping one uniform contract.
   list) cmd_list ;;
   acquire) shift; cmd_acquire "${1:?acquire: id required}" "${2:?acquire: destdir required}" ;;
   "" | --help) print -ru2 -- 'usage: rip-provider-libation capabilities | list | acquire <id> <destdir>'; exit 2 ;;

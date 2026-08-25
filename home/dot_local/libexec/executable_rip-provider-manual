@@ -11,6 +11,9 @@ set -eu -o pipefail
 
 case "${1:-}" in
   capabilities) jq -nc '{name:"manual", version:"1", can_acquire:false, needs_gui:false}' ;;
+  # `list [root]` — a root is meaningful only to a provider that scans a
+  # directory (rip-provider-folder). This provider owns a catalogue, so it
+  # accepts the argument and ignores it, keeping one uniform contract.
   list) : ;;  # nothing to list — this provider owns no catalogue
   acquire) print -ru2 -- "rip-provider-manual: cannot acquire; use rip-audiobook --import"; exit 2 ;;
   "" | --help) print -ru2 -- 'usage: rip-provider-manual capabilities | list'; exit 2 ;;

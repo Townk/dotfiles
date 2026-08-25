@@ -136,6 +136,46 @@ EOF
     The line 2 should include '"has_pdf":true'
   End
 
+  It 'seam: libation list still works with no root, and ignores one if given'
+    When run zsh "$PROVIDER" list
+    The status should equal 0
+    The line 1 should include '"id"'
+  End
+
+  It 'seam: libation list ignores a root argument rather than failing'
+    When run zsh "$PROVIDER" list /tmp/somewhere
+    The status should equal 0
+    The line 1 should include '"id"'
+  End
+
+  It 'seam: ab_library forwards a root to the provider'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-probe" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf 'ROOT=[%s]\n' "$2"
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-probe"
+    When run zsh -c "source $RIPLIB && rip::ab_library probe /some/root"
+    The status should equal 0
+    The output should equal "ROOT=[/some/root]"
+  End
+
+  It 'seam: ab_library passes NO second argument when no root is given'
+    export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
+    mkdir -p "$RIP_LIBEXEC_DIR"
+    cat > "$RIP_LIBEXEC_DIR/rip-provider-probe" <<'EOF'
+#!/bin/sh
+[ "$1" = list ] && printf 'ARGC=%s\n' "$#"
+exit 0
+EOF
+    chmod +x "$RIP_LIBEXEC_DIR/rip-provider-probe"
+    When run zsh -c "source $RIPLIB && rip::ab_library probe"
+    The status should equal 0
+    The output should equal "ARGC=1"
+  End
+
   It 'provider: rows carry the published date, null when the export omits it'
     When run zsh "$PROVIDER" list
     The status should equal 0
