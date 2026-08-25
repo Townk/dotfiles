@@ -2261,6 +2261,15 @@ EOF
   ROW_UNF='{"id":"B07PX3DC46","path":"Shawn Speakman - editor/Unfettered III: New Tales by Masters of Fantasy","title":"Unfettered III","subtitle":"New Tales by Masters of Fantasy","authors":["Shawn Speakman"],"narrators":["Nick Podehl","Kate Rudd"],"duration_s":93600,"series":"Unfettered","series_position":"3","language":"english","abridged":false,"published":"2019-05-07T07:00:00","ids":{"audible.asin":"B07PX3DC46"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}'
   ROW_UNF_TWIN='{"id":"B0AMBIG999","path":"Someone Else/Unfettered III: New Tales by Masters of Fantasy","title":"Unfettered III","authors":["Someone Else"],"published":"2011-01-01T07:00:00","ids":{"audible.asin":"B0AMBIG999"},"provider":"libation","format":"m4b"}'
 
+  # TWO SERVER BOOKS, ONE PROVIDER ROW — the inverse ambiguity. The
+  # author-variant collision --canonicalize-authors exists for ("J. R. R.
+  # Tolkien" vs "J.R.R. Tolkien") gives the library two folders for one work;
+  # one joins the row by exact path and the other by the title fallback, and
+  # both are handed the SAME ASIN.
+  HOB_A='J.R.R. Tolkien/The Hobbit'
+  HOB_B='J. R. R. Tolkien/The Hobbit'
+  ROW_HOB='{"id":"B0DUP00001","path":"J.R.R. Tolkien/The Hobbit","title":"The Hobbit","authors":["J.R.R. Tolkien"],"published":"2012-01-01T00:00:00","ids":{"audible.asin":"B0DUP00001"},"provider":"libation","format":"m4b"}'
+
   RPO='Ernest Cline/Ready Player One'
 
   # mkbook_bare <Author/Title> — a stored book with audio and NO sidecar.
@@ -2281,6 +2290,20 @@ EOF
         series:null,duration_s:null,language:null,abridged:null,published:null,
         ids:{},work:null,
         source:{provider:$p,provider_version:null,acquired_utc:null,format:"m4b"}}' \
+      > "$RIP_SANDBOX/server/audiobooks/$1/.fleet-book.json"
+  }
+
+  # mkbook_malformed <Author/Title> — a stored book whose sidecar EXISTS but
+  # does not parse: truncated mid-object, the shape a hand edit or an
+  # interrupted write leaves behind. It still carries a resolved `work` and an
+  # id — recoverable by a human reading it, and unrecoverable once something
+  # composes a fresh sidecar over the top. rip::_server_sidecars warns and
+  # DROPS it, so to the classifier it is indistinguishable from a book with no
+  # sidecar at all, which is Case A: the one branch that writes.
+  mkbook_malformed() {
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+    printf 'audio-bytes-%s\n' "$1" > "$RIP_SANDBOX/server/audiobooks/$1/${1##*/}.m4b"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","work":{"id":"OL99W"},"ids":{"audible.asin":"B0HAND0001"},' \
       > "$RIP_SANDBOX/server/audiobooks/$1/.fleet-book.json"
   }
 
@@ -2315,9 +2338,11 @@ EOF
     # The WHOLE row lands, not just the ASIN, and `_path` — the annotation
     # rip::_server_sidecars adds — never reaches the file.
     The result of function wind_identity should equal '["B0CQ3759C3","2024-12-06T08:00:00","Michael Kramer",220320,"The Stormlight Archive","english",false,"libation",null,false]'
-    # THREE ssh calls for one book: enumerate the library, enumerate the
-    # sidecars, ONE write batch. 247 books must never be 247 round-trips.
-    The result of function ssh_calls should equal "3"
+    # FOUR ssh calls for one book: enumerate the library, enumerate the
+    # sidecars, ONE `test -f` confirming the sidecar really is absent before
+    # Case A composes over that path (review finding 2, 2026-08-24), ONE write
+    # batch. 247 books must never be 247 round-trips.
+    The result of function ssh_calls should equal "4"
     # …and nothing the server was asked to run mentions jq. cantina has none.
     The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
   End
@@ -2331,8 +2356,36 @@ EOF
     The output should include "would create sidecar: $WIND"
     The output should include "re-run with --apply"
     The path "$(sidecar_at "$WIND")" should not be exist
-    # The two enumerations, and nothing else.
-    The result of function ssh_calls should equal "2"
+    # The two enumerations plus the Case A absence re-check — and NO write
+    # batch: `mv --` appears only in rip::_sidecars_write's remote script, so
+    # its absence from the command log is the proof, independent of the count.
+    The result of function ssh_calls should equal "3"
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "mv -- "
+  End
+
+  It 'repair: a dry run states the plan but NEVER a write tally — nothing was attempted'
+    # Review finding 1, 2026-08-24. The dry-run caller passes repaired=0
+    # because a dry run deliberately opens no write connection, and the
+    # summary printed that as "repaired 0 of 2 sidecar(s)" followed by
+    # "2 sidecar(s) could not be written" — two failures reported for two
+    # writes nobody attempted, on the first command an operator runs, exiting
+    # 0 while saying it. The seventh line in this subsystem to state an
+    # outcome nothing captured; there must not be an eighth. One Case A and
+    # one Case C candidate, so `intended` is 2 and the old tally is
+    # unmistakable if it comes back.
+    fake_provider_rows "$ROW_WIND"
+    mkbook_bare "$WIND"
+    mkbook_empty "$RPO" manual
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars"
+    The status should equal 0
+    The output should include "would create sidecar: $WIND"
+    The output should include "would assign local identity: $RPO"
+    The output should include "(2 book(s); re-run with --apply)"
+    The output should not include "repaired 0 of"
+    The output should not include "could not be written"
+    The path "$(sidecar_at "$WIND")" should not be exist
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "mv -- "
   End
 
   It 'repair: a book with no sidecar and NO provider row is named, skipped, and the run exits non-zero'
@@ -2347,6 +2400,34 @@ EOF
     The output should include "unrepairable (no sidecar, no provider row): Nobody At All/Orphan Book"
     The output should include "1 book(s) have no sidecar and no provider row"
     The path "$(sidecar_at "Nobody At All/Orphan Book")" should not be exist
+  End
+
+  It 'repair: a MALFORMED sidecar is reported as unreadable, left BYTE-IDENTICAL, and the run exits non-zero'
+    # Review finding 2, 2026-08-24. sc_state is built only from sidecars
+    # rip::_server_sidecars could parse, so an unparseable one arrived at the
+    # classifier as "absent" and fell into Case A — which composed a fresh
+    # sidecar and moved it over the only copy, printing "repaired" on stdout
+    # while stderr said "malformed sidecar … skipped" and the run exited 0.
+    # A stray trailing comma is recoverable by a human right up until this
+    # verb overwrites it. The design forbids it twice: never overwrite an
+    # existing sidecar, and repairing a malformed one is out of scope.
+    fake_provider_rows "$ROW_WIND"
+    mkbook_malformed "$WIND"
+    snapshot "$WIND"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    # THE load-bearing assertion: the bytes on disk, not a re-read field.
+    The result of function sidecar_unchanged should equal "byte-identical"
+    The output should include "unreadable sidecar (not repaired): $WIND"
+    The output should include "does not parse"
+    The output should include "1 book(s) have a sidecar that could not be read"
+    # …and never the contradicting success line the defect printed alongside.
+    The output should not include "repaired: $WIND"
+    The output should not include "repaired 1 of"
+    The stderr should include "malformed sidecar"
+    # No write batch was ever opened.
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "mv -- "
   End
 
   It 'repair: an already-identified sidecar is left byte-identical and the run reports the count'
@@ -2421,6 +2502,32 @@ EOF
     The output should include "B07PX3DC46"
     The output should include "B0AMBIG999"
     The output should include "pick one with : rip-audiobook --adopt-asin"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  It 'repair: one ASIN proposed for TWO books is ambiguous on both, never a high-confidence proposal'
+    # Review finding 3, 2026-08-24. Ambiguity was detected in one direction
+    # only — one server book, two provider rows. The inverse (two server
+    # books, one row) went unnoticed, and the author-variant collision this
+    # module already knows about produces it: the exact-path join claims one
+    # folder and the title fallback claims the other, both proposing
+    # B0DUP00001, and one of them labelled "matched on: path (exact)", which
+    # reads as high confidence. Adopting both would leave two folders carrying
+    # one audible.asin — the duplicated edition identity the sidecar exists to
+    # prevent. A proposal that is not unique is an ambiguity.
+    fake_provider_rows "$ROW_HOB"
+    mkbook_empty "$HOB_A" unknown
+    mkbook_empty "$HOB_B" unknown
+    snapshot "$HOB_A"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    The status should equal 1
+    The output should include "ambiguous (nothing written): $HOB_A"
+    The output should include "ambiguous (nothing written): $HOB_B"
+    The output should include "also proposed for 1 other book(s)"
+    The output should not include "recoverable (needs confirmation)"
+    The output should not include "confirm with"
+    The output should include "2 book(s) are ambiguous"
     The result of function sidecar_unchanged should equal "byte-identical"
   End
 
@@ -2549,6 +2656,25 @@ EOF
     The status should equal 2
     The stderr should include "already carries audible.asin B0OLDASIN1"
     The stderr should include "never overwrites"
+    The result of function sidecar_unchanged should equal "byte-identical"
+  End
+
+  It 'adopt: an ASIN ANOTHER stored sidecar already carries is refused (guard 5)'
+    # Review finding 3(b), 2026-08-24. Guard 2 only ever inspected the TARGET
+    # book's sidecar, so the same proposed ASIN could be adopted for two
+    # different folders one command at a time — no guard, no warning. The
+    # rows index is already in hand for guard 2, so seeing every row costs
+    # nothing.
+    fake_provider_rows "$ROW_UNF"
+    mkbook_empty "$UNF" unknown
+    mkbook "Shawn Speakman" "Unfettered II" B07PX3DC46 2016-01-01T07:00:00 "Unfettered II"
+    snapshot "$UNF"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46 --apply"
+    The status should equal 2
+    The stderr should include "Shawn Speakman/Unfettered II already carries audible.asin B07PX3DC46"
+    The stderr should include "one ASIN identifies one book"
+    The output should not include "adopted"
     The result of function sidecar_unchanged should equal "byte-identical"
   End
 
