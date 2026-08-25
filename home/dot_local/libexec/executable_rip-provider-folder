@@ -18,7 +18,7 @@ cmd_capabilities() {
     '{name: "folder", version: $v, can_acquire: true, needs_gui: false}'
 }
 
-# _derive <bookdir> <root> — print TAB-separated: author, title, source.
+# _derive <bookdir> <root> — print \x1f-separated: author, title, source.
 #
 # Order: embedded tags, then directory structure, then the filename. Whichever
 # wins is REPORTED as `derived_from`, because the operator has to be able to
@@ -36,21 +36,34 @@ _derive() {
     [[ -n "$author" ]] || author="$(print -r -- "$tags" | sed -n 's/^TAG:artist=//p' | head -1)"
     title="$(print -r -- "$tags" | sed -n 's/^TAG:album=//p' | head -1)"
     if [[ -n "$author" && -n "$title" ]]; then
-      print -r -- "$author	$title	tags"
+      print -r -- "$author"$'\x1f'"$title"$'\x1f'"tags"
       return 0
     fi
   fi
 
   # Directory structure: <Author>/<Title>/ relative to the root. This is free
   # and already correct for a collection organised the way cantina stores books.
+  # Guarded against d == root: without it the empty-strip leaves the WHOLE
+  # absolute path in $rel, which trivially contains a "/" and gets routed
+  # here even though the book sits directly in the root — the author would
+  # then become the root's own PARENT directory name.
   local rel="${d#$root/}"
-  if [[ "$rel" == */* ]]; then
-    print -r -- "${rel:h:t}	${rel:t}	path"
+  if [[ "$d" != "$root" && "$rel" == */* ]]; then
+    print -r -- "${rel:h:t}"$'\x1f'"${rel:t}"$'\x1f'"path"
     return 0
   fi
 
   # Last resort. Marked plainly so the panel can flag it as a guess.
-  print -r -- "	${d:t}	filename"
+  #
+  # Field separator is \x1f (unit separator), NOT a tab: `IFS=$'\t' read`
+  # in cmd_list collapses a LEADING tab as ordinary IFS whitespace (POSIX
+  # field-splitting), silently swallowing the empty author field on this
+  # branch and shifting title/src left by one — title would read back as
+  # the literal string "filename" instead of the actual book name, and src
+  # (this branch label) would read back empty. \x1f is not whitespace, so
+  # it is never collapsed; this repo already uses it elsewhere as a field
+  # separator for exactly this reason.
+  print -r -- ""$'\x1f'"${d:t}"$'\x1f'"filename"
 }
 
 cmd_list() {
@@ -68,13 +81,18 @@ cmd_list() {
     seen[$d]=1
   done < <(fd --absolute-path --type f --extension m4b --print0 . "$root" 2>/dev/null)
 
-  local author title src cover dur has_pdf
+  # `one`/`n` are declared HERE, once, not re-declared inside the loop body
+  # below: a `local` statement that re-declares an already-local name on a
+  # later pass through this same function scope makes zsh print "name=value"
+  # to STDOUT for that variable (reproduced in isolation; not documented
+  # behavior we could find, but 100% repeatable) — corrupting the JSON
+  # stream with bare `one=...` / `n=...` lines between rows.
+  local author title src cover dur has_pdf one n
   for d in "${(@ko)seen}"; do
-    IFS=$'\t' read -r author title src <<< "$(_derive "$d" "$root")"
+    IFS=$'\x1f' read -r author title src <<< "$(_derive "$d" "$root")"
     cover="$(print -rl -- "$d"/*.(jpg|jpeg|png)(N) | head -1)"
     dur=0
     if command -v ffprobe >/dev/null 2>&1; then
-      local one n
       for one in "$d"/*.m4b(N); do
         n="$(ffprobe -v error -show_entries format=duration -of csv=p=0 -- "$one" 2>/dev/null)"
         [[ "$n" == <->* ]] && dur=$(( dur + ${n%%.*} ))

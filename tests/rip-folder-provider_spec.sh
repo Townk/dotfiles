@@ -31,6 +31,9 @@ Describe 'rip-provider-folder'
   jq_id() { jq -r .id; }
   jq_provider() { jq -r .provider; }
   jq_ids() { jq -c .ids; }
+  jq_authors() { jq -c .authors; }
+  jq_derived_from() { jq -r .derived_from; }
+  jq_path() { jq -r .path; }
 
   It 'capabilities: announces itself as an acquiring provider'
     When run zsh "$FOLDER_BIN" capabilities
@@ -145,5 +148,44 @@ Describe 'rip-provider-folder'
     When run zsh "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"has_pdf":false'
+  End
+
+  It 'list: a one-level-deep book with no tags falls through to filename, not path'
+    mkdir -p "$ROOT/SingleBook"
+    printf 'fake audio\n' > "$ROOT/SingleBook/x.m4b"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The result of function jq_title should equal "SingleBook"
+    The result of function jq_authors should equal "[]"
+    The result of function jq_derived_from should equal "filename"
+    The result of function jq_path should equal "SingleBook"
+  End
+
+  It 'list: m4b files loose directly in the root do not invent an author from the parent'
+    printf 'fake audio\n' > "$ROOT/loose.m4b"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The result of function jq_authors should equal "[]"
+    The result of function jq_derived_from should equal "filename"
+  End
+
+  It 'list: derived_from is always tags, path or filename — never empty'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    mkdir -p "$ROOT/SingleBook"
+    printf 'fake audio\n' > "$ROOT/SingleBook/x.m4b"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The output should not include '"derived_from":""'
+    The output should include '"derived_from":"path"'
+    The output should include '"derived_from":"filename"'
+  End
+
+  It 'list: multiple books emit clean JSON lines only — no stray shell output between rows'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    mkdirbook "Brandon Sanderson" "Steelheart"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The result of function linecount should equal "2"
+    The output should not include "one="
   End
 End
