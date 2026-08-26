@@ -523,6 +523,33 @@
         + '<span>Audible Plus &mdash; borrowed; rip before it lapses</span></div></div>';
     }
 
+    // One inline identity field, shared by files mode's editHtml (below)
+    // and library mode's libraryEditionHtml. Not a files-mode-only helper:
+    // task 5 puts the SAME markup/validation the Edition field already used
+    // in files mode behind library rows too, and duplicating this function
+    // per mode is exactly the kind of drift that would let the two fall out
+    // of sync.
+    //
+    // data-edit-row, NOT data-row: the enclosing .row div already carries
+    // data-row, and closestAttr() walks outward from the event target —
+    // reusing the name would make every field resolve to its own row div.
+    // The invalid mark is seeded AT RENDER, not only on input: the folder
+    // provider hands us an empty author for every derived_from:"filename"
+    // row, so the field that needs attention is already wrong the moment it
+    // appears and must say so without being touched first.
+    //
+    // Everything is escaped through esc(): these strings come out of
+    // filenames and embedded audio tags (or, for a library row, Audible
+    // metadata), all attacker-adjacent, and they land in an attribute value
+    // here.
+    function editField(r, name, value, placeholder, cls, validFn) {
+      var ok = (validFn || titleValid)(value);
+      return '<input class="edit-input ' + cls + (ok ? '' : ' invalid') + '"'
+        + ' data-edit-row="' + esc(r.id) + '"'
+        + ' data-field="' + name + '" type="text" autocomplete="off" spellcheck="false"'
+        + ' placeholder="' + placeholder + '" value="' + esc(value) + '">';
+    }
+
     // Files mode's identity editor: the row's author and title as two live
     // fields, seeded with whatever rip-provider-folder derived, plus a
     // marker naming WHERE it derived them from.
@@ -532,11 +559,6 @@
     // into three fields — twelve times for a twelve-book series. Here the
     // guess is already in the field and the operator only corrects the two
     // rows that got it wrong.
-    //
-    // Everything is escaped through esc(): these strings come out of
-    // filenames and embedded audio tags, both of which are attacker-
-    // adjacent (a downloaded book carries whatever tags its packager put
-    // there), and they land in an attribute value here.
     function editHtml(r) {
       var from = r.derived_from;
       var mark = '';
@@ -555,26 +577,10 @@
       // it would destroy the field being typed in and its caret), is the
       // shape that lets an operator read a corrected title while the row
       // still ships the guess.
-      //
-      // data-edit-row, NOT data-row: the enclosing .row div already carries
-      // data-row, and closestAttr() walks outward from the event target —
-      // reusing the name would make every field resolve to its own row div.
-      // The invalid mark is seeded AT RENDER, not only on input: the
-      // folder provider hands us an empty author for every
-      // derived_from:"filename" row, so the field that needs attention is
-      // already wrong the moment it appears and must say so without being
-      // touched first.
-      var field = function (name, value, placeholder, cls, validFn) {
-        var ok = (validFn || titleValid)(value);
-        return '<input class="edit-input ' + cls + (ok ? '' : ' invalid') + '"'
-          + ' data-edit-row="' + esc(r.id) + '"'
-          + ' data-field="' + name + '" type="text" autocomplete="off" spellcheck="false"'
-          + ' placeholder="' + placeholder + '" value="' + esc(value) + '">';
-      };
       return '<div class="edit">'
-        + field('title', r.title || '', 'Title', 'edit-title')
+        + editField(r, 'title', r.title || '', 'Title', 'edit-title')
         + '<div class="edit-by">'
-        + field('author', r.authors[0] || '', 'Author', 'edit-author')
+        + editField(r, 'author', r.authors[0] || '', 'Author', 'edit-author')
         // Third, optional field. Empty means "no edition" (the default) and
         // is never invalid — editionValid, not titleValid, is the one
         // validator here that lets '' through. Setting it is what composes
@@ -582,10 +588,27 @@
         // what clears the stored-book block (isStored/storedHtml): the
         // composed path stops colliding, no special case needed either
         // place.
-        + field('edition', r.edition || '', 'Edition', 'edit-edition', editionValid)
+        + editField(r, 'edition', r.edition || '', 'Edition', 'edit-edition', editionValid)
         + mark
         + '</div>'
         + '</div>';
+    }
+
+    // Library mode's ONE editable field. Library rows render `name`/
+    // `byline` below (rowHtml), never editHtml — author and title stay
+    // non-editable there on purpose: this adds a single field, not inline
+    // editing of Audible metadata. Rewriting Audible-derived identity in
+    // place is exactly what the folder provider's inline editing exists to
+    // keep separate (docs/superpowers/specs/2026-08-25-audiobook-editions-
+    // design.md, "The panel: an Edition field, in both modes").
+    //
+    // Reuses editField/editionValid verbatim — same markup, same
+    // validation, same `field === 'edition'` branch the shared `input`
+    // handler and applyEdit already dispatch on, so a set edition composes
+    // <Author>/<Title> (<Edition>) here exactly as it does in files mode,
+    // with no mode-specific composition added.
+    function libraryEditionHtml(r) {
+      return '<div class="edit-by">' + editField(r, 'edition', r.edition || '', 'Edition', 'edit-edition', editionValid) + '</div>';
     }
 
     // The duplicate mark. rip::_validate_ab_plan refuses the WHOLE plan on
@@ -617,7 +640,7 @@
         + cover
         + (isFiles()
             ? '<div class="text">' + editHtml(r) + '</div>'
-            : '<div class="text"><div class="name">' + name + '</div><div class="byline">' + bylineHtml(r) + '</div></div>')
+            : '<div class="text"><div class="name">' + name + '</div><div class="byline">' + bylineHtml(r) + '</div>' + libraryEditionHtml(r) + '</div>')
         + '<div class="meta">' + metaHtml(r) + '</div>'
         + '<span class="toggle" data-toggle="' + esc(r.id) + '" data-on="' + selected + '">' + (selected ? 'Rip' : 'Skip') + '</span>'
         + '</div>'

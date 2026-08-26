@@ -4889,6 +4889,55 @@ JS
     The output should not include "Full/Cast"
   End
 
+  # --- task 5, 2026-08-26: the Edition field in library mode ---------------
+  #
+  # An Audible book can be a distinct edition too (a re-recording, a
+  # full-cast production), and the panel gains ONE editable field there —
+  # not inline editing of Audible metadata. Library rows render `name`/
+  # `byline`, never editHtml, so author and title must stay non-editable:
+  # a change that made the whole row editable would let the operator
+  # silently rewrite Audible-derived identity, which is exactly what the
+  # folder provider's inline editing exists to keep separate.
+  #
+  # panel_files's 6th arg is the source kind, already plumbed for this
+  # (`window.__setSource({ kind: process.argv[6] || 'folder', ... })`), and
+  # its __setRows call is untagged, so it lands regardless of SOURCE.kind —
+  # no need for a dedicated harness.
+  LIBRARY_ROW='[{"id":"1","path":"J. R. R. Tolkien/The Silmarillion","title":"The Silmarillion","subtitle":null,"authors":["J. R. R. Tolkien"],"narrators":[]}]'
+
+  # Both facts pinned in ONE example, deliberately: asserting the absence of
+  # data-field="author"/"title" BY ITSELF would pass even with no
+  # implementation at all (library mode renders neither field today) — a
+  # vacuous pass. Requiring data-field="edition" to ALSO be present in the
+  # same output is what makes the absence assertions mean something.
+  It 'panel: the Edition field renders for a library-mode row, without making the rest editable'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$LIBRARY_ROW" '[]' '' '' 'library'
+    The status should equal 0
+    The output should include 'data-field="edition"'
+    The output should include 'placeholder="Edition"'
+    The output should not include 'data-field="author"'
+    The output should not include 'data-field="title"'
+    The output should include 'class="name"'
+    The output should include 'class="byline"'
+  End
+
+  # applyEdit's field dispatch is already mode-agnostic (task 4), and the
+  # harness fires the `input` event through a synthetic target rather than a
+  # real DOM node — so asserting only the posted path here would pass with
+  # NOTHING written for this task: applyEdit does not consult isFiles(), and
+  # the composition it runs was never mode-specific to begin with. Pinning
+  # `data-field="edition"` in the SAME example ties the claim to the render
+  # path this task actually adds — without it, there is no field for the
+  # operator to have typed into in the first place.
+  It 'panel: a library row with an edition composes <Author>/<Title> (<Edition>), same as files mode'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$LIBRARY_ROW" '[["1","edition","Full Cast"]]' '' '' 'library'
+    The status should equal 0
+    The output should include 'data-field="edition"'
+    The output should include '"path":"J. R. R. Tolkien/The Silmarillion (Full Cast)"'
+  End
+
   # A derived identity is a GUESS, and the panel has to say which kind: the
   # operator scans for the weak ones rather than re-reading every row.
   It 'panel: each files-mode row shows where its identity was guessed from'
