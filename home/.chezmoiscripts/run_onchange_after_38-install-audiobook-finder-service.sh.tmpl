@@ -28,7 +28,40 @@ src="$HOME/.local/share/services/browse-audiobook-folder"
 dest="$HOME/Library/Services/$bundle_name"
 
 mkdir -p "$HOME/Library/Services"
-ln -sfn "$src" "$dest"
+
+# `ln -sfn` ALONE IS NOT ENOUGH, and its failure mode is silent (review
+# finding, 2026-08-25). -n only affects an existing SYMLINK. Against a REAL
+# DIRECTORY at $dest, ln(1) creates the link INSIDE it — leaving
+# "$dest/browse-audiobook-folder" — and exits 0, after which this script
+# flushes Launch Services and reports success while Finder goes on running
+# whatever stale bundle is sitting at $dest.
+#
+# That precondition is reachable through this epic's OWN documented fallback:
+# if `pbs -flush` turns out not to register a SYMLINKED .workflow, the remedy
+# is to `cp -R` the bundle here instead, which leaves exactly a real
+# directory. Every re-run after that would nest again.
+#
+# So the three shapes are handled explicitly, and copy mode is REFRESHED in
+# place rather than silently converted back to a symlink: if someone
+# deliberately replaced the link with a copy, undoing that on the next
+# `chezmoi apply` would re-break Finder for the same reason the copy was made.
+# The refresh stages beside the destination and swaps, so an interrupted
+# copy never leaves a half-written bundle where Finder can find one.
+if [ -L "$dest" ]; then
+  ln -sfn "$src" "$dest"
+elif [ -d "$dest" ]; then
+  printf '%s\n' "audiobook Quick Action: $dest is a real directory (copy mode) — refreshing it from the managed bundle"
+  rm -rf "$dest.new"
+  cp -R "$src" "$dest.new"
+  rm -rf "$dest"
+  mv "$dest.new" "$dest"
+elif [ -e "$dest" ]; then
+  # A plain file where a bundle belongs. Nothing here owns it but us.
+  rm -f "$dest"
+  ln -sfn "$src" "$dest"
+else
+  ln -sfn "$src" "$dest"
+fi
 
 /System/Library/CoreServices/pbs -flush
 {{- else }}

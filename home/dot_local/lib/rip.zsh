@@ -591,7 +591,7 @@ rip::_book_meta_for() {
         local uid; uid="$(uuidgen 2>/dev/null)"; uid="${(L)uid}"
         if [[ -n "$uid" ]]; then
           row="$(print -r -- "$row" | jq -c --arg u "$uid" --arg s "$sha256" \
-            '.ids = ((.ids // {}) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
+            "$_RIP_JQ_IDS_DEF"'.ids = ((.ids | _ids_obj) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
         else
           log_warn "rip: uuidgen produced nothing — cannot assign a local identity to $rel"
           return 1
@@ -679,6 +679,42 @@ rip::_companions_json() {
   fi
 }
 
+# _RIP_JQ_IDS_DEF — the ids COERCION, as jq definitions in ONE place. Prefix
+# it to any program that reads an `ids` map: `(.ids | _ids_obj)` /
+# `($r.ids | _ids_obj)` for a value, `_ids_fix` for a whole row.
+#
+# WHY THIS EXISTS (review finding, 2026-08-25). `ids` is an OBJECT by schema,
+# but an empty one does not survive a Lua round trip: Hammerspoon 1.1.1
+# encodes an empty Lua table as `[]`, not `{}` (LuaSkin's Skin.m at tag
+# 1.1.1 — with maxNatIndex == countNatIndex == 0 it picks NSMutableArray),
+# and the panel re-encodes the plan on its way to the queue. The folder
+# provider is the only producer of an EMPTY ids object, so `"ids": []` is
+# what actually reaches jq for a locally-imported book.
+#
+# `.ids // {}` does NOT rescue that: `[]` is neither null nor false, so it
+# flows straight through and then `[] + {…}` raises "array and object cannot
+# be added" and `.ids["audible.asin"]` raises "Cannot index array with
+# string". Every one of those raises is swallowed by a `2>/dev/null`, and the
+# row it happened on is DROPPED from the stream — measured against jq 1.7.1
+# (Apple) and 1.8.2: a poisoned sidecar disappears from rip::_sidecar_index
+# entirely, which is exactly the book the repair sweep exists to fix.
+#
+# The coercion is deliberately total rather than a `select`: anything that is
+# not an object (an array, a string, a number, null) becomes {}, which is what
+# "no identity recorded" means. Normalizing at every boundary that READS ids
+# also repairs a sidecar already poisoned on the server the next time it is
+# rewritten, instead of only stopping new ones.
+#
+# Two definitions, because the two needs differ. `_ids_obj` maps a VALUE to a
+# usable object (used where an object is about to be indexed or added to).
+# `_ids_fix` repairs an OBJECT IN PLACE and is absence-preserving: a sidecar
+# that never had an `ids` key keeps not having one, so normalizing a row on
+# its way through a reader cannot make an unchanged sidecar churn.
+typeset -g _RIP_JQ_IDS_DEF
+_RIP_JQ_IDS_DEF='def _ids_obj: if type == "object" then . else {} end;
+  def _ids_fix: if (.ids != null) and ((.ids | type) != "object")
+                then .ids = {} else . end;'
+
 # _RIP_SIDECAR_JQ — the sidecar SCHEMA, as one jq program, in ONE place.
 #
 # Reads the provider row from `$r` and emits the whole `.fleet-book.json`
@@ -692,7 +728,8 @@ rip::_companions_json() {
 # A plain constant, not a cache: re-sourcing this file mid-run reassigns the
 # same text, so it needs none of the guards _RIP_AB_PROVIDER_ROWS carries.
 typeset -g _RIP_SIDECAR_JQ
-_RIP_SIDECAR_JQ='{schema: 1, kind: "audiobook",
+_RIP_SIDECAR_JQ="$_RIP_JQ_IDS_DEF"'
+  {schema: 1, kind: "audiobook",
    title: ($r.title // ""),
    subtitle: ($r.subtitle // null),
    authors: ($r.authors // []),
@@ -703,7 +740,7 @@ _RIP_SIDECAR_JQ='{schema: 1, kind: "audiobook",
    language: ($r.language // null),
    abridged: (if ($r|has("abridged")) then $r.abridged else null end),
    published: ($r.published // null),
-   ids: ($r.ids // {}),
+   ids: ($r.ids | _ids_obj),
    work: null,
    companions: $companions,
    source: {provider: ($r.provider // "unknown"),
@@ -1056,7 +1093,8 @@ rip::_fetch_cover() {
 # 2026-08-20): any picture_xl containing this must be rejected outright.
 RIP_ARTIST_IMAGE_PLACEHOLDER_MD5='d41d8cd98f00b204e9800998ecf8427e'
 
-# rip::_remote_has_file <media_relpath> — existence check on the server for
+# rip::_remote_has_file / rip::_remote_has_dir <media_relpath> — existence
+# check on the server for
 # <media_relpath>, relative to the remote base itself (e.g.
 # "music/<Artist>/artist.jpg", "music/<Artist>/<Album>/cover.jpg", or
 # "movies/<Movie>/extras/<Name>.mkv") — ahead of any fetch/encode
@@ -1077,7 +1115,13 @@ RIP_ARTIST_IMAGE_PLACEHOLDER_MD5='d41d8cd98f00b204e9800998ecf8427e'
 # reporting rc 1). Every caller treats 2 exactly like "unknown": never
 # block, never refetch/reprocess blindly, just skip this run and log one
 # line.
-rip::_remote_has_file() {
+#
+# rip::_remote_has_file and rip::_remote_has_dir are the two entry points;
+# both are one-line wrappers over rip::_remote_test, which takes the `test`
+# flag as its first argument. ONE body, so the -n guard, the NFC
+# normalization and the ${(q)} quoting below can never drift apart between a
+# file probe and a directory probe.
+rip::_remote_test() {
   # The tri-state IS this function's contract, so it has to own its own
   # error handling: under the `set -e` the real bins source this file with,
   # an ssh that exits 255 (unreachable host) would kill the whole process
@@ -1091,7 +1135,8 @@ rip::_remote_has_file() {
   # whatever form they were created (often NFD). Normalize before asking,
   # or a present NFC file reads "confirmed absent" — and for the cover
   # check that verdict green-lights a refetch over curated art.
-  local relpath; relpath="$(rip::_nfc "$1")"
+  local flag="$1"
+  local relpath; relpath="$(rip::_nfc "$2")"
   local base; base="$(rip::remote_base)"
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
@@ -1119,15 +1164,22 @@ rip::_remote_has_file() {
     # guard lives HERE, at the source, where it protects every present and
     # future caller instead of one call site.
     "$ssh_bin" -n -o BatchMode=yes -o ConnectTimeout=5 \
-      "$host" "test -f ${(q)rfile}" 2>/dev/null
+      "$host" "test $flag ${(q)rfile}" 2>/dev/null
     local rc=$?
     (( rc == 0 )) && return 0
     (( rc == 1 )) && return 1
     return 2
   fi
-  [[ -f "$base/$relpath" ]] && return 0
+  test "$flag" "$base/$relpath" && return 0
   return 1
 }
+
+rip::_remote_has_file() { rip::_remote_test -f "$1" }
+
+# rip::_remote_has_dir <media_relpath> — the same tri-state for a DIRECTORY.
+# Used where the question is "does the server hold this book/album at all",
+# which must not be answered by guessing at a filename inside it.
+rip::_remote_has_dir() { rip::_remote_test -d "$1" }
 
 # rip::_remote_has_artist_image <artist_reldir> — thin rip::_remote_has_file
 # wrapper for the artist.jpg path shape.
@@ -2465,12 +2517,33 @@ rip::ab_server_library() {
 
 # rip::ab_have <Author/Title> — tri-state, the rip-disc --have shape: 0
 # have / 1 confirmed absent / 2 unknown, straight through from
-# rip::_remote_has_file. The .m4b is named after the title, which is the
-# relpath's last segment.
+# rip::_remote_has_dir.
+#
+# THE BOOK DIRECTORY, NOT A GUESSED FILENAME (review finding, 2026-08-25).
+# This used to probe "<Title>/<Title>.m4b" — an invariant only rip::ab_import
+# upholds and only Libation happens to satisfy. The folder provider copies
+# source basenames verbatim, so for a locally imported book the probe asked
+# about a file that never exists and the "already on cantina" refusal could
+# NEVER fire: re-tag a source file, re-rip, and the book directory ends up
+# holding two differently-named .m4b (rsync carries no --delete by doctrine),
+# after which rip::_sidecars_hash_primary picks whichever sorts first.
+#
+# The directory is the provider-blind question, and it is deliberately the
+# LENIENT one. This check is also on the Libation path, against a library of
+# ~248 books, many of them predating sidecars entirely — so anything stricter
+# than "is the book there" (a sidecar probe, an *.m4b probe) would report a
+# legacy shape as ABSENT and re-push the whole library. Every stored shape —
+# Libation's <Title>/<Title>.m4b, a manual import under any filename, a book
+# stored as .mp3 or .m4a, a book with no .fleet-book.json — answers "present"
+# on the directory alone. rip::ab_retire already reasons this way for the
+# same reason ("a manual import carries whatever filename it was given, and
+# would read as not stored"), only via the whole-library listing; here one
+# targeted probe is enough, and keeps the per-item cost at exactly what it
+# was before.
 rip::ab_have() {
   local rel="$1"
   [[ -n "$rel" ]] || { log_error "rip: empty book path"; return 2 }
-  rip::_remote_has_file "audiobooks/$rel/${rel:t}.m4b"
+  rip::_remote_has_dir "audiobooks/$rel"
 }
 
 # rip::ab_at_risk — the irreplaceable set: books cantina holds that are
@@ -2687,7 +2760,17 @@ rip::_server_sidecars() {
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     rel="${line%%$'\t'*}"; json="${line#*$'\t'}"
-    out="$(print -r -- "$json" | jq -c --arg p "$rel" '. + {_path:$p}' 2>/dev/null)"
+    # NORMALIZE `ids` HERE, at the boundary (review finding, 2026-08-25). A
+    # sidecar written from a Lua-encoded plan can carry `"ids": []` instead of
+    # `{}` (see _RIP_JQ_IDS_DEF), and every downstream reader of these rows
+    # indexes ids by string — `.ids["audible.asin"]`, `.ids["local.sha256"]`,
+    # `.ids + {…}` — each of which RAISES on an array, silently dropping that
+    # book from whichever report is asking. This is the one funnel all of them
+    # pass through, so coercing once here protects rip::ab_at_risk,
+    # rip::ab_editions, rip::_stored_sha_index and rip::_sidecar_index alike.
+    # The two indexes coerce again on their own: they carry their own stdin
+    # contracts and must not depend on who fed them.
+    out="$(print -r -- "$json" | jq -c --arg p "$rel" "$_RIP_JQ_IDS_DEF"'_ids_fix | . + {_path:$p}' 2>/dev/null)"
     if [[ -n "$out" ]]; then
       print -r -- "$out"
     else
@@ -2741,8 +2824,14 @@ rip::_stored_sha_index() {
       return $rc
     fi
     _RIP_STORED_SHA_FETCHED=1
+    # `_ids_obj` before any string subscript: a sidecar carrying `"ids": []`
+    # (see _RIP_JQ_IDS_DEF) makes `.ids["local.sha256"]` raise, and the raise
+    # is swallowed by the `2>/dev/null` right there — the book vanishes from
+    # the dedupe index with rc 0, which reads as "not a duplicate".
     _RIP_STORED_SHA="$(print -r -- "$rows" \
-      | jq -r 'select((.ids["local.sha256"] // "") != "") | "\(.ids["local.sha256"])\t\(._path)"' 2>/dev/null)"
+      | jq -r "$_RIP_JQ_IDS_DEF"'(.ids | _ids_obj) as $ids
+          | select(($ids["local.sha256"] // "") != "")
+          | "\($ids["local.sha256"])\t\(._path)"' 2>/dev/null)"
   fi
   print -r -- "$_RIP_STORED_SHA"
 }
@@ -3182,9 +3271,20 @@ rip::_sidecar_payload() {
 #
 # "ids state" is computed from the VALUES, not from `has`: a sidecar carrying
 # `{"audible.asin": ""}` has an ids object and no identity at all.
+#
+# `ids` is COERCED to an object first, and the JSON column is emitted with the
+# coerced value (review finding, 2026-08-25). A sidecar carrying `"ids": []`
+# (see _RIP_JQ_IDS_DEF) made `.ids["audible.asin"]` raise — swallowed by the
+# `2>/dev/null` below — and the whole row was dropped, so the sweep that
+# exists to REPAIR a book with no identity could not even see the one book
+# whose identity was corrupt. Writing the coerced value back into the JSON
+# column is deliberate: rip::ab_repair_sidecars and rip::ab_adopt_asin compose
+# the replacement sidecar from this column, so the poison is repaired rather
+# than round-tripped onto the server again.
 rip::_sidecar_index() {
   setopt localoptions noerrexit nopipefail
-  jq -r 'select((._path // "") != "")
+  jq -r "$_RIP_JQ_IDS_DEF"'select((._path // "") != "")
+    | _ids_fix
     | (if ([(.ids // {}) | to_entries[] | select((.value // "") != "")] | length) == 0
        then "empty" else "set" end) as $state
     | (._path) + "\t" + $state
@@ -3198,7 +3298,8 @@ rip::_sidecar_index() {
 # Same TAB framing and same "never empty" rule as above.
 rip::_provider_index() {
   setopt localoptions noerrexit nopipefail
-  jq -r 'select((.path // "") != "")
+  jq -r "$_RIP_JQ_IDS_DEF"'select((.path // "") != "")
+    | _ids_fix
     | (.path) + "\t" + (((.id // .ids["audible.asin"]) // "") | if . == "" then "-" else . end)
       + "\t" + tojson' 2>/dev/null
 }
@@ -3677,7 +3778,7 @@ rip::ab_repair_sidecars() {
         continue
       fi
       composed="$(print -r -- "${c_json[i]}" | jq -c --arg u "$uid" --arg s "$sha" \
-        'del(._path) | .ids = ((.ids // {}) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
+        "$_RIP_JQ_IDS_DEF"'del(._path) | .ids = ((.ids | _ids_obj) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
       payload=""
       [[ -n "$composed" ]] && payload="$(rip::_sidecar_payload "${c_rel[i]}" "$composed")"
       if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
@@ -4813,9 +4914,11 @@ rip::ab_import() {
   else
     # Single file: reject if extension-less. Lowercased ("${(L)...}"): taken
     # verbatim, an uppercase source extension (Book.M4B) would stage
-    # <Title>.M4B and record format:"M4B", which rip::ab_have's hardcoded
-    # "${rel:t}.m4b" can never match — the book would look permanently
-    # absent from the server (2026-08-23 review finding).
+    # <Title>.M4B and record format:"M4B" — a shape rip::ab_have used to be
+    # unable to see at all, back when it probed a hardcoded "${rel:t}.m4b"
+    # (2026-08-23 review finding). ab_have now probes the book DIRECTORY and
+    # no longer cares, but the lowercasing stays: `format` is recorded in the
+    # sidecar, and one library spelling "m4b" two ways is its own mess.
     local ext="${(L)${src:e}}"
     [[ -n "$ext" ]] || {
       rm -rf "$temp"
@@ -5042,8 +5145,18 @@ rip::ab_worker() {
   mkdir -p "${index:h}"
   [[ -f "$index" ]] || : > "$index"
   local idx_tmp="$index.tmp.$$"
-  jq -c -s '
-    [.[] | select((.path // "") != "")]
+  # `_ids_fix` on every row: THIS is where a plan enters the meta index, and
+  # the plan arrives from the panel through a Lua encode that turns an EMPTY
+  # ids object into `[]` (see _RIP_JQ_IDS_DEF — the folder provider is the
+  # only producer of an empty one, so this is the normal shape for a locally
+  # imported book). Left uncoerced, `[]` reaches rip::_book_sidecar and every
+  # `.ids + {…}` patch below, each of which raises on an array under a
+  # `2>/dev/null`: the book ships, the job reports success, and its sidecar
+  # carries no fleet.uid and no local.sha256 — identity silently lost, and
+  # byte-dedupe permanently blind to that book. Coercing at the entrance means
+  # no later stage has to know the panel's encoder exists.
+  jq -c -s "$_RIP_JQ_IDS_DEF"'
+    [.[] | select((.path // "") != "") | _ids_fix]
     | reduce .[] as $r ({}; .[$r.path] = $r)
     | .[]
   ' "$index" <(jq -c '(.items // [])[]' "$plan" 2>/dev/null) > "$idx_tmp" 2>/dev/null \
@@ -5180,7 +5293,7 @@ rip::ab_worker() {
           # been acquired) mints the rest of this book's local identity from
           # it, rather than hashing the same multi-gigabyte file twice.
           jq -c --arg p "$bpath" --arg s "$sha" \
-            'if .path == $p then .ids = ((.ids // {}) + {"local.sha256": $s}) else . end' \
+            "$_RIP_JQ_IDS_DEF"'if .path == $p then .ids = ((.ids | _ids_obj) + {"local.sha256": $s}) else . end' \
             "$index" > "$index.tmp" \
             && mv -f -- "$index.tmp" "$index" \
             || { rm -f -- "$index.tmp"; log_warn "rip: could not record the local hash for $bpath in the meta index — its identity will not be assigned this push" }

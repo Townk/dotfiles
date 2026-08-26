@@ -152,3 +152,92 @@ Describe 'audiobook Finder Quick Action'
     The value "$(decoded_path 3)" should equal "/tmp/Folder Three"
   End
 End
+
+# The INSTALLER (home/.chezmoiscripts/run_onchange_after_38-…): it links the
+# managed bundle into ~/Library/Services and flushes Launch Services.
+#
+# Rendered with `chezmoi execute-template` (never `chezmoi apply`), run
+# against a SANDBOX $HOME, with /System/Library/CoreServices/pbs shadowed by
+# a bash function — the same absolute-path interception technique the block
+# above uses for hs, for the same reason: the script hardcodes the path, so a
+# PATH stub would never be reached, and `pbs -flush` must not touch this
+# machine's real Launch Services database.
+Describe 'audiobook Finder Quick Action installer'
+  TPL="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_38-install-audiobook-finder-service.sh.tmpl"
+
+  setup() {
+    SANDBOX=$(mktemp -d)
+    HOOK="$SANDBOX/install.sh"
+    HOME_DIR="$SANDBOX/home"
+    PBS_LOG="$SANDBOX/pbs.log"
+    SRC="$HOME_DIR/.local/share/services/browse-audiobook-folder/Contents"
+    DEST="$HOME_DIR/Library/Services/Browse Audiobook Folder.workflow"
+    mkdir -p "$SRC"
+    printf 'managed\n' > "$SRC/document.wflow"
+    command chezmoi execute-template < "$TPL" > "$HOOK" 2>/dev/null
+    if [ -z "$(cat "$HOOK")" ]; then
+      echo "setup: chezmoi execute-template produced nothing for $TPL" >&2
+      return 1
+    fi
+  }
+  cleanup() { rm -rf "$SANDBOX"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  run_installer() {
+    HOOK="$HOOK" HOME_DIR="$HOME_DIR" PBS_LOG="$PBS_LOG" bash -c '
+      function /System/Library/CoreServices/pbs {
+        printf "%s\n" "$*" >> "$PBS_LOG"
+      }
+      HOME="$HOME_DIR"
+      . "$HOOK"
+    ' bash
+  }
+
+  # Everything the destination could be, one per example. Only the third is
+  # the review finding; the other three are what must keep working.
+  It 'creates the symlink when nothing is there yet'
+    When call run_installer
+    The status should equal 0
+    The value "$(readlink "$DEST")" should equal "$HOME_DIR/.local/share/services/browse-audiobook-folder"
+    The path "$PBS_LOG" should be exist
+  End
+
+  It 'replaces an existing symlink rather than linking beside it'
+    mkdir -p "$HOME_DIR/Library/Services" "$SANDBOX/stale"
+    ln -s "$SANDBOX/stale" "$DEST"
+    When call run_installer
+    The status should equal 0
+    The value "$(readlink "$DEST")" should equal "$HOME_DIR/.local/share/services/browse-audiobook-folder"
+  End
+
+  # THE FINDING. `ln -sfn` -n only affects an existing SYMLINK: against a
+  # real directory ln links INSIDE it and exits 0, so the installer would
+  # report success, flush Launch Services, and leave Finder running the stale
+  # copied bundle forever. That precondition is reachable through this epic's
+  # own documented fallback (`cp -R` if pbs will not register a symlinked
+  # .workflow), which is exactly what this fixture builds.
+  It 'refreshes a real directory in place and never nests a link inside it'
+    mkdir -p "$DEST/Contents"
+    printf 'STALE\n' > "$DEST/Contents/document.wflow"
+    When call run_installer
+    The status should equal 0
+    The stdout should include "copy mode"
+    # no link was created inside the bundle
+    The path "$DEST/browse-audiobook-folder" should not be exist
+    # the destination is still a real directory (copy mode preserved) …
+    The value "$(readlink "$DEST" 2>/dev/null)" should equal ""
+    # … carrying the managed bundle's CURRENT content, not the stale copy
+    The contents of file "$DEST/Contents/document.wflow" should equal "managed"
+    # and the staging directory used for the atomic swap is gone
+    The path "$DEST.new" should not be exist
+  End
+
+  It 'replaces a plain file sitting where the bundle belongs'
+    mkdir -p "$HOME_DIR/Library/Services"
+    printf 'junk\n' > "$DEST"
+    When call run_installer
+    The status should equal 0
+    The value "$(readlink "$DEST")" should equal "$HOME_DIR/.local/share/services/browse-audiobook-folder"
+  End
+End

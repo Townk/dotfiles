@@ -74,12 +74,22 @@ cmd_list() {
 
   # fd, no depth limit (the operator asked for none). -0 so a newline in a
   # path cannot split a record. Directories are deduped by the assoc array.
+  #
+  # --follow IS LOAD-BEARING (review finding, 2026-08-25). Without it fd's
+  # `--type f` examines the dirent itself, so a SYMLINKED .m4b is not a file
+  # and a symlinked directory is not descended into — either shape is
+  # silently invisible to browse, while cmd_acquire below was DELIBERATELY
+  # fixed to follow exactly those links (see its `(N-.)` note: "the
+  # operator's real store is exactly the kind of thing a symlink-based
+  # collection points at"). The two must agree, or acquire's symlink support
+  # is unreachable because nothing can ever be selected. Matches this repo's
+  # own fd idiom in dot_config/zsh/completion.sh.
   local -A seen=()
   local f d
   while IFS= read -r -d '' f; do
     d="${f:h}"
     seen[$d]=1
-  done < <(fd --absolute-path --type f --extension m4b --print0 . "$root" 2>/dev/null)
+  done < <(fd --follow --absolute-path --type f --extension m4b --print0 . "$root" 2>/dev/null)
 
   # `one`/`n` are declared HERE, once, not re-declared inside the loop body
   # below: a `local` statement that re-declares an already-local name on a
@@ -176,6 +186,27 @@ cmd_acquire() {
 
   mkdir -p "$dest" || die "cannot create $dest"
   local staging="$dest/$rel"
+
+  # ALREADY STAGED — CHECKED HERE, BEFORE THE COPY, AND NOT AN ERROR
+  # (review finding, 2026-08-25). This test used to sit AFTER the copy loop,
+  # with a comment claiming rip::ab_worker refuses an already-staged book
+  # upstream. It does not: ab_worker's only pre-acquire check asks the
+  # SERVER (rip::ab_have), which by construction says "absent" for a book
+  # that is staged but not yet pushed. And a staged-but-unpushed book is not
+  # an exotic state — it is the documented retry path: "a push or verify
+  # failure keeps everything staged for a plain `rip-push audiobooks` retry
+  # with no re-download". Re-running the session over that staging tree
+  # re-copied every book in full, multi-gigabyte and all, and then threw the
+  # copy away.
+  #
+  # rc 0, not `die`: the destination already holds this book, which is
+  # exactly what this call was asked to bring about. Failing here reported an
+  # acquire failure (and, via ab_worker, a whole-session rc 2) for a push
+  # that went on to deliver everything. Idempotent, so say so and stop.
+  if [[ -e "$staging" ]]; then
+    print -r -- "rip-provider-folder: already staged, nothing to copy: $rel"
+    return 0
+  fi
   # Anchor OUTSIDE $dest, not under "${staging:h}": $dest is
   # rip::staging_for audiobooks, the exact tree rip::push_worker walks and
   # ships. A temp built one or two levels inside it — as this line used to
@@ -229,9 +260,13 @@ cmd_acquire() {
     die "audio did not land in staging for $rel (expected ${#audio}, got ${#landed})"
   fi
 
-  # The destination must not already exist: publishing over it would silently
-  # merge two books. rip::ab_worker refuses an already-staged book upstream,
-  # so reaching here means something raced us.
+  # Re-checked immediately before the rename, and HARD this time. The cheap
+  # test above answers the ordinary case; this one closes the window between
+  # them, which is a genuine race (rip::push_worker already runs concurrently
+  # with an acquire batch — its own comment says so). It must stay: `mv` of a
+  # directory onto an existing directory does not replace it, it moves the
+  # source INSIDE it, so without this the temp would end up nested one level
+  # down inside the book and pushed as part of it.
   if [[ -e "$staging" ]]; then
     rm -rf -- "$tmp"
     die "already staged: $rel"

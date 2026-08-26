@@ -63,6 +63,14 @@ Describe 'rip-provider-folder'
     grep -c '0-bonus.pdf' "$RIP_SANDBOX/cp-shim.log" | tr -d ' '
   }
 
+  # cp_calls() — how many times `cp` ran at all. "Did not re-copy" is only
+  # provable by counting the copies; a post-hoc look at the destination
+  # cannot tell "never copied" from "copied and then cleaned up".
+  cp_calls() {
+    [ -f "$RIP_SANDBOX/cp-calls.log" ] || { printf '%s\n' 0; return; }
+    wc -l < "$RIP_SANDBOX/cp-calls.log" | tr -d ' '
+  }
+
   It 'capabilities: announces itself as an acquiring provider'
     When run zsh "$FOLDER_BIN" capabilities
     The status should equal 0
@@ -240,6 +248,37 @@ Describe 'rip-provider-folder'
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/cover.jpg" should be exist
   End
 
+  # Final review F3 (2026-08-25): cmd_acquire was deliberately fixed to
+  # follow symlinked audio (the example below), but cmd_list's `fd` had no
+  # --follow, so `--type f` examined the dirent itself: a symlinked .m4b is
+  # not a file and a symlinked directory is never descended into. Both shapes
+  # were silently ABSENT from browse — which makes acquire's symlink support
+  # unreachable, since nothing can be selected that was never listed. Three
+  # shapes, one example, each of which fd 10.4.2 misses without --follow:
+  # a book directory reached THROUGH a symlink, a symlinked .m4b sitting
+  # beside real files, and a book directory whose only audio is a symlink.
+  It 'list: symlinked audio and symlinked book directories are visible to browse'
+    mkdir -p "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice" \
+             "$RIP_SANDBOX/real-store/loose"
+    printf 'real audio\n' > "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+    printf 'real audio\n' > "$RIP_SANDBOX/real-store/loose/Loose.m4b"
+    # 1. the whole book directory is a symlink into the real store
+    mkdir -p "$ROOT/Ann Leckie"
+    ln -s "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice" "$ROOT/Ann Leckie/Ancillary Justice"
+    # 2. a real book directory whose only .m4b is a symlink
+    mkdir -p "$ROOT/Ann Leckie/Provenance"
+    ln -s "$RIP_SANDBOX/real-store/loose/Loose.m4b" "$ROOT/Ann Leckie/Provenance/Provenance.m4b"
+    # 3. a plain, entirely real book — the control: it was always visible,
+    #    and must not stop being so.
+    mkdirbook "Ann Leckie" "Translation State"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The output should include '"path":"Ann Leckie/Ancillary Justice"'
+    The output should include '"path":"Ann Leckie/Provenance"'
+    The output should include '"path":"Ann Leckie/Translation State"'
+    The result of function linecount should equal "3"
+  End
+
   # Finding 5 (review, 2026-08-25): the precondition (`*.m4b(N)`, no type
   # qualifier) counts a SYMLINKED .m4b as present — exactly the shape an
   # operator's collection takes when it points into their real store — but
@@ -323,6 +362,37 @@ Describe 'rip-provider-folder'
   # progress — the discriminator Finding C names (bytes' location DURING
   # the copy), which a post-hoc "does the final path exist" check cannot
   # ever see, cleanup having already erased the evidence either way.
+  # Final review F4 (2026-08-25): the already-staged test used to sit AFTER
+  # the copy loop and `die`. Two harms, both proven here. (1) On the
+  # DOCUMENTED keep-staged retry path — "a push or verify failure keeps
+  # everything staged for a plain `rip-push audiobooks` retry with no
+  # re-download" — every staged book was re-copied in full and then thrown
+  # away, which for this operator's library is multiple gigabytes of pure
+  # waste per retry. (2) It reported an acquire FAILURE (rc 2, and via
+  # rip::ab_worker a whole-session rc 2) for a book that is already exactly
+  # where the caller asked for it.
+  It 'acquire: an already-staged book is not re-copied and is not an error'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    # a previous session's staged copy, kept for the retry path
+    mkdir -p "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice"
+    printf 'staged by the previous run\n' > "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
+    mkdir -p "$RIP_SANDBOX/shim"
+    cat > "$RIP_SANDBOX/shim/cp" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$RIP_CP_LOG"
+exec /bin/cp "$@"
+EOF
+    chmod +x "$RIP_SANDBOX/shim/cp"
+    export PATH="$RIP_SANDBOX/shim:$PATH"
+    export RIP_CP_LOG="$RIP_SANDBOX/cp-calls.log"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    The status should equal 0
+    The output should include "already staged"
+    The result of function cp_calls should equal "0"
+    # and the staged copy is left exactly as it was
+    The contents of file "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "staged by the previous run"
+  End
+
   It 'acquire: nothing under the destination is visible while the copy is running — the temp anchor'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     printf 'bonus\n' > "$ROOT/Ann Leckie/Ancillary Justice/0-bonus.pdf"

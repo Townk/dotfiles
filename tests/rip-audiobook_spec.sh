@@ -371,7 +371,7 @@ EOF
     cat > "$RIP_SANDBOX/ssh" <<FAKESSH
 #!/bin/sh
 case "\$*" in
-  *"audiobooks/$(printf 'Ant\xc3\xb4nio')/Livro/Livro.m4b"*) exit 0 ;;
+  *"test -d "*"audiobooks/$(printf 'Ant\xc3\xb4nio')/Livro"*) exit 0 ;;
 esac
 exit 1
 FAKESSH
@@ -385,6 +385,79 @@ FAKESSH
   It 'CLI: --have reports absent'
     When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --have "Nobody/Nothing"
     The status should equal 1
+  End
+
+  # --- final review F2: --have must be PROVIDER-BLIND ----------------------
+  #
+  # rip::ab_have used to probe "<Author>/<Title>/<Title>.m4b" — an invariant
+  # rip::ab_import upholds and Libation satisfies, but one the folder
+  # provider never does: it copies source basenames verbatim (the fixture at
+  # "worker: forwards the folder provider's plan path" below pins exactly
+  # that, landing RawFolder.m4b inside "Edited Author/Edited Title"). So the
+  # "already on cantina" refusal could never fire for a locally imported
+  # book.
+  #
+  # THE HARD CONSTRAINT ON THE FIX: this check is shared with the Libation
+  # path against ~248 already-stored books, some predating sidecars. Anything
+  # stricter than the directory — a .fleet-book.json probe, an *.m4b probe —
+  # would report a legacy shape as ABSENT and re-push the whole library. Each
+  # legacy shape gets its own line below, and every one must answer 0.
+  It 'have: a folder-provider book answers present even though its .m4b is not named after the title'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/RawFolder.m4b"
+    When run zsh -c "source $RIPLIB && rip::ab_have 'Edited Author/Edited Title'; echo rc=\$?"
+    The output should equal "rc=0"
+  End
+
+  It 'have: every legacy stored shape still answers present, and a missing book still answers absent'
+    # 1. Libation's own <Title>/<Title>.m4b, no sidecar (the pre-sidecar era)
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Libation"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/Libation/Libation.m4b"
+    # 2. a manual import carrying whatever filename it was given, no sidecar
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Manual"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/Manual/some other name.m4b"
+    # 3. a book stored in a format rip::ab_import accepts but the old probe
+    #    hardcoded away (.mp3 / .m4a)
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Mp3"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/Mp3/Mp3.mp3"
+    # 4. an uppercase extension (the 2026-08-23 finding's shape)
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Upper"
+    printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/Upper/Upper.M4B"
+    When run zsh -c "source $RIPLIB
+      for b in 'A/Libation' 'A/Manual' 'A/Mp3' 'A/Upper' 'A/Missing'; do
+        rip::ab_have \"\$b\"; print -r -- \"\$b rc=\$?\"
+      done"
+    The line 1 of output should equal "A/Libation rc=0"
+    The line 2 of output should equal "A/Manual rc=0"
+    The line 3 of output should equal "A/Mp3 rc=0"
+    The line 4 of output should equal "A/Upper rc=0"
+    The line 5 of output should equal "A/Missing rc=1"
+  End
+
+  It 'have: an unreachable server is still UNKNOWN (rc 2), never "absent"'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::ab_have 'A/B'; echo rc=\$?"
+    The output should equal "rc=2"
+  End
+
+  # End to end through the worker, on the exact fixture shape the epic's own
+  # spec pins: a folder book already on the server under a DIFFERENT filename
+  # must be refused, not silently re-acquired into a directory that would
+  # then hold two differently-named .m4b (rsync has no --delete).
+  It 'session: a folder book already stored under a different filename is refused, not re-acquired'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title"
+    printf 'stored audio\n' > "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/RawFolder.m4b"
+    mkdir -p "$RIP_SANDBOX/incoming/RawFolder"
+    printf 'retagged audio\n' > "$RIP_SANDBOX/incoming/RawFolder/Edited Title.m4b"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\"}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The stderr should include "already on cantina"
+    The stderr should include "Edited Author/Edited Title"
+    The stdout should include "nothing settled to push"
+    The path "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/Edited Title.m4b" should not be exist
   End
 
   # --- author identity ------------------------------------------------------
@@ -674,6 +747,120 @@ EOF
     The stderr should include "already stored as"
     The stderr should include "A/Orig"
     The path "$RIP_SANDBOX/server/audiobooks/A/Copy" should not be exist
+  End
+
+  # --- final review F1: "ids": [] from the panel's Lua encode --------------
+  #
+  # THE PANEL REALLY SENDS AN ARRAY. rip-provider-folder emits `ids: {}` —
+  # it is the only producer of an EMPTY ids object — and Hammerspoon 1.1.1
+  # encodes an empty Lua table as `[]`, not `{}` (LuaSkin Skin.m at tag
+  # 1.1.1: with maxNatIndex == countNatIndex == 0 it selects NSMutableArray).
+  # The panel re-encodes the plan on its way to the queue, so `"ids": []` is
+  # what actually lands in the plan file for a locally imported book.
+  #
+  # EVERY OTHER folder fixture in this file OMITS ids entirely, which is why
+  # the suite could not see this: with the key absent, `.ids // {}` supplied
+  # the object and everything worked. These two examples send the array —
+  # the real shape — and nothing else.
+  It 'session: a folder plan carrying the panel empty-table "ids": [] still mints a full identity'
+    mkdir -p "$RIP_SANDBOX/incoming/Orig"
+    printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
+    want_sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/Orig/orig.m4b" | cut -d' ' -f1)
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null 2>&1
+      sidecar=$RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json
+      jq -r '.ids | type' \$sidecar
+      jq -r '((.ids[\"fleet.uid\"]//\"\")|length>0)' \$sidecar
+      jq -r '.ids[\"local.sha256\"]' \$sidecar"
+    The status should equal 0
+    The line 1 of output should equal "object"
+    The line 2 of output should equal "true"
+    The line 3 of output should equal "$want_sha"
+  End
+
+  # The dangerous half: with the array left uncoerced the first import writes
+  # a sidecar with no local.sha256 at all, so rip::_stored_sha_index has
+  # nothing to key on and the BYTE-level duplicate refusal can never fire
+  # again for that book — dedupe silently off, rc 0, no warning anywhere.
+  # This is the "closes the loop" example above with the panel's real ids
+  # shape on the FIRST plan, and nothing else changed.
+  It 'session: byte-dedupe still fires against a book first imported with "ids": []'
+    mkdir -p "$RIP_SANDBOX/incoming/Orig"
+    printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
+    zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json" >/dev/null 2>&1
+
+    mkdir -p "$RIP_SANDBOX/incoming/Copy"
+    printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Copy/copy.m4b"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Copy\",\"path\":\"A/Copy\",\"title\":\"Copy\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan2.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan2.json"
+    The status should equal 0
+    The stderr should include "already stored as"
+    The stderr should include "A/Orig"
+    # Refused before any copy, so the push finds nothing staged. Asserted
+    # rather than left to the reporter's stdout warning: this line IS the
+    # proof that the refusal happened ahead of the acquire, not after it.
+    The stdout should include "nothing settled to push"
+    The path "$RIP_SANDBOX/server/audiobooks/A/Copy" should not be exist
+  End
+
+  # The READ side, independently of who wrote the sidecar: a book already on
+  # the server carrying `"ids": []` must still be ENUMERATED. Fed straight
+  # into rip::_sidecar_index (its contract is stdin), poisoned row FIRST so
+  # the ordering is fixed rather than left to `find`. Uncoerced,
+  # `.ids["audible.asin"]` raises on the array, the raise is swallowed by the
+  # function's own 2>/dev/null, and the row is DROPPED — so --repair-sidecars
+  # cannot see the one book whose identity is actually corrupt.
+  It 'sidecar index: a stored sidecar with "ids": [] is enumerated as empty, not dropped'
+    When run zsh -c "source $RIPLIB
+      printf '%s\n' '{\"schema\":1,\"ids\":[],\"_path\":\"A/Poison\"}' '{\"schema\":1,\"ids\":{\"audible.asin\":\"B01\"},\"_path\":\"Z/Good\"}' | rip::_sidecar_index"
+    The status should equal 0
+    The lines of output should equal 2
+    The line 1 of output should include "A/Poison"
+    The line 1 of output should include "empty"
+    The line 1 of output should include '"ids":{}'
+    The line 2 of output should include "Z/Good"
+  End
+
+  # And the same poison must not cost the byte-dedupe index the OTHER books:
+  # rip::_stored_sha_index is what the acquire loop keys on, and a library
+  # holding one poisoned sidecar must still report every book that does carry
+  # a hash. Driven through rip::_server_sidecars over the sandbox's own
+  # plain-dir remote base (no colon, no ssh).
+  It 'stored-sha index: a poisoned sidecar does not cost the library its hashed books'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A Poison/Book" "$RIP_SANDBOX/server/audiobooks/Z Good/Book"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"Poison","ids":[]}' > "$RIP_SANDBOX/server/audiobooks/A Poison/Book/.fleet-book.json"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"Good","ids":{"local.sha256":"deadbeef"}}' > "$RIP_SANDBOX/server/audiobooks/Z Good/Book/.fleet-book.json"
+    When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
+    The status should equal 0
+    The output should include "deadbeef"
+    The output should include "Z Good/Book"
+  End
+
+  # --- final review F4: the keep-staged retry path -------------------------
+  #
+  # "A push or verify failure keeps everything staged for a plain `rip-push
+  # audiobooks` retry with no re-download" is this worker's own documented
+  # failure-honesty rule. Re-running the SESSION over that staging tree used
+  # to make rip-provider-folder re-copy every book in full and then `die`
+  # ("already staged"), which ab_worker counted as an acquire failure and
+  # returned as rc 2 — for a push that then delivered every byte. The plan's
+  # id here points at a source directory that is deliberately EMPTY of the
+  # staged filename, so a re-copy would be visible in the result: only the
+  # already-staged bytes can reach the server.
+  It 'session: re-running a session over an already-staged book succeeds and pushes it'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/Kept"
+    printf 'staged by the previous run\n' > "$RIP_STAGING_ROOT/audiobooks/A/Kept/Kept.m4b"
+    mkdir -p "$RIP_SANDBOX/incoming/Kept"
+    printf 'a different, fresher copy\n' > "$RIP_SANDBOX/incoming/Kept/Kept.m4b"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Kept\",\"path\":\"A/Kept\",\"title\":\"Kept\"}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The stderr should not include "acquire failed"
+    # the provider took the idempotent path rather than re-copying
+    The stdout should include "already staged"
+    The path "$RIP_SANDBOX/server/audiobooks/A/Kept/Kept.m4b" should be exist
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/Kept/Kept.m4b" should equal "staged by the previous run"
   End
 
   # The index is a DEDUPE check (Task 3's own contract): an unreachable
