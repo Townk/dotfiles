@@ -6245,11 +6245,66 @@ rip::ab_retire() {
   return 0
 }
 
-# rip::ab_canonicalize_authors [--apply] — collapse author folders that are
-# spelling variants of one another.
+# rip::ab_canonicalize_authors [--apply] — bring every stored author to ONE
+# spelling, and to the CANONICAL one.
 #
-# Canonical spelling = most books; tie → the longer string, which favours the
-# more fully punctuated form ("J. R. R." over "J.R.R.") and is deterministic.
+# Two rules, applied in that order:
+#
+#   1. collapse spelling variants of one author onto a single winner —
+#      most books; tie → the longer string, which favours the more fully
+#      punctuated form ("J. R. R." over "J.R.R.") and is deterministic;
+#   2. rewrite that winner through rip::_author_display, the canonical
+#      initials form ("J.K. Rowling" → "J. K. Rowling").
+#
+# RULE 2 IS NOT CONDITIONAL ON RULE 1 FINDING ANYTHING (2026-08-26). This
+# verb used to skip every group holding a single spelling —
+# `[[ "$variants" == *$nl* ]] || continue` — which made it a no-op on the
+# library it was most needed for: the operator's server holds exactly ONE
+# spelling of "J.K. Rowling", across seven books, so the sweep printed
+# "nothing to do" and exited 0. Measured, not assumed. `--retag` mirrors
+# whatever the PATH says into the audio, so leaving the path uncanonical
+# bakes the wrong author into all seven files, and repairing it afterwards
+# costs a SECOND full-library remux of ~248 multi-gigabyte files. The
+# canonical form has to reach the path first; that is why --retag --apply
+# was gated on this.
+#
+# Rule 2 is applied to the WINNER, never to each variant independently: the
+# winner is what the group collapses onto, and its display form is what it
+# should have been spelled as all along. Safe because
+# norm(display(x)) == norm(x) for every x — the rule only ever inserts a
+# space after an initial's period, and rip::_author_norm strips spaces — so
+# the canonical form can never land in a different group from the variants
+# converging on it, and the destination is always inside the group being
+# swept. rip::_author_display is idempotent by construction (once a period
+# is followed by a space the rule no longer fires), which is what makes a
+# second --apply find nothing.
+#
+# THE MERGE THIS CREATES IS THE DANGEROUS PART. Canonicalizing can send a
+# variant into a directory that ALREADY EXISTS — "J.K. Rowling" and
+# "J. K. Rowling" both stored, both converging on the latter. That is the
+# same merge the collision rule already performed and it stays deliberately
+# conservative: rip::_canonicalize_one_author moves book by book with
+# `mv -n`, so a title already present under the canonical spelling is LEFT
+# WHERE IT IS rather than overwritten, `rmdir` then refuses, and the sweep
+# says so and returns 1. The only copy of an audiobook is never clobbered to
+# tidy a folder name.
+#
+# THE SIDECAR MOVES WITH THE DIRECTORY. A rename that repaired the path and
+# left .fleet-book.json saying the old spelling would leave the library
+# internally inconsistent — and .fleet-book.json is the only copy of who a
+# book is. The rule is narrow on purpose: authors[0] is re-spelled ONLY when
+# it rip::_author_norm-matches the author its directory names but is written
+# differently. A sidecar naming a genuinely different person (a pen name) is
+# not a spelling variant and is never touched.
+#
+# Under --apply the sidecar pass reads the server AFTER the moves and keys
+# every write off the path the server's own `find` printed — never off a
+# predicted destination. A book whose `mv -n` was refused is therefore still
+# sitting under the old spelling, its sidecar still agrees with its path,
+# and nothing is written; predicting instead would have written the refused
+# book's corrected sidecar straight over the identity file of the DIFFERENT
+# book occupying the destination. The dry run has no post-state to read, so
+# it predicts — and predicting is harmless there because it writes nothing.
 #
 # Renaming the folder is NOT enough for Audiobookshelf: it matches the moved
 # item by inode and updates its path, but keeps the item's STORED author, so
@@ -6281,8 +6336,8 @@ rip::ab_canonicalize_authors() {
   # $nl, not a literal $'\n' inside the ${...:+...} replacement below: the
   # replacement word of a :+ expansion is NOT re-scanned for ANSI-C quoting,
   # so writing $'\n' there joins the variants with the four LITERAL
-  # characters $'\n' and the *$'\n'* collision test below never matches —
-  # every collision silently reports "nothing to do". Caught by the sweep
+  # characters $'\n' and a *$'\n'* test on the result never matches — every
+  # collision silently reported "nothing to do". Caught by the sweep
   # examples 2026-08-24.
   local nl=$'\n'
   local -A groups=()
@@ -6292,13 +6347,15 @@ rip::ab_canonicalize_authors() {
     groups[$key]="${groups[$key]:-}${groups[$key]:+$nl}$author"
   done
 
-  local base; base="$(rip::remote_base)"
-  local found=0 swept_fail=0 variants canon a
-  local -a vlist
-  for key in "${(@k)groups}"; do
+  # PASS 1 — decide the target spelling for EVERY stored author before
+  # anything moves. The dry run has to predict where each book will end up in
+  # order to report its sidecar honestly, and that prediction is this map.
+  local -a group_keys=("${(@k)groups}")
+  local -A target_for=()
+  local variants canon target a
+  local -a vlist moves
+  for key in "${group_keys[@]}"; do
     variants="${groups[$key]}"
-    [[ "$variants" == *"$nl"* ]] || continue
-    found=1
     # MATERIALISE the variants before iterating them. A
     # `while IFS= read -r a; …; done <<< "$variants"` loop shares fd 0 with
     # every command it runs, and ssh READS STDIN unless told otherwise — so
@@ -6321,15 +6378,140 @@ rip::ab_canonicalize_authors() {
         canon="$a"
       fi
     done
-    print -r -- "author variants → \"$canon\""
+    target="$(rip::_author_display "$canon")"
     for a in "${vlist[@]}"; do
-      [[ "$a" == "$canon" ]] && continue
-      print -r -- "    \"$a\" (${spelling_count[$a]:-0} book(s))"
-      (( apply )) || continue
-      rip::_canonicalize_one_author "$base" "$a" "$canon" || swept_fail=1
+      target_for[$a]="$target"
     done
   done
-  (( found )) || print -r -- "rip: nothing to do — no author spelling variants"
+
+  # PASS 2 — report, and under --apply perform, the directory moves.
+  local base; base="$(rip::remote_base)"
+  local found=0 swept_fail=0
+  for key in "${group_keys[@]}"; do
+    variants="${groups[$key]}"
+    vlist=("${(@f)variants}")
+    target="${target_for[${vlist[1]}]}"
+    moves=()
+    for a in "${vlist[@]}"; do
+      [[ "$a" == "$target" ]] || moves+=("$a")
+    done
+    (( ${#moves} )) || continue
+    found=1
+    # Two different facts, said differently: a group holding several
+    # spellings is a collision being collapsed, a group holding one is a
+    # single author being re-spelled. Calling the second "author variants"
+    # would be a report of something that is not there.
+    if (( ${#vlist} > 1 )); then
+      print -r -- "author variants → \"$target\""
+    else
+      print -r -- "author canonical form → \"$target\""
+    fi
+    for a in "${moves[@]}"; do
+      print -r -- "    \"$a\" (${spelling_count[$a]:-0} book(s))"
+    done
+    (( apply )) || continue
+    for a in "${moves[@]}"; do
+      rip::_canonicalize_one_author "$base" "$a" "$target" || swept_fail=1
+    done
+  done
+
+  # PASS 3 — the sidecars. Captured as a VALUE with its status checked, for
+  # exactly the reason the library listing above is: read through
+  # `< <(...)` an ssh that never landed yields an empty enumeration and rc 0,
+  # and this verb would then report a clean, fully canonical library it never
+  # saw. A sweep in this same file once printed "nothing to backfill" and
+  # exited 0 on a dropped VPN.
+  #
+  # ONE fetch, placed AFTER the moves: under --apply that makes every row's
+  # `_path` the post-move truth (see the header), and under a dry run
+  # nothing has moved so it is simply the current truth.
+  local rows
+  rows="$(rip::_server_sidecars)" || return 2
+
+  # ONE jq for the whole library, not one per book: 248 books is ~5s of pure
+  # fork on this laptop. Raw string concatenation rather than @tsv — @tsv
+  # escapes a backslash as two, which would corrupt any path or name that
+  # contains one. A literal TAB inside a path would break the split, the same
+  # assumption rip::_sidecar_index already makes.
+  local idx=""
+  if [[ -n "$rows" ]]; then
+    idx="$(print -r -- "$rows" | jq -r '
+      (._path // "") as $p
+      | ((.authors) as $a
+         | if ($a | type) == "array" and (($a[0] | type) == "string")
+           then $a[0] else "" end) as $n
+      | $p + "\t" + $n' 2>/dev/null)"
+  fi
+
+  local -a idx_lines=()
+  [[ -n "$idx" ]] && idx_lines=("${(@f)idx}")
+  local -a sc_payloads=()
+  local sline srel sauth sdir seff snew payload
+  local -i sc_seen=0
+  for sline in "${idx_lines[@]}"; do
+    [[ "$sline" == *$'\t'* ]] || continue
+    srel="${sline%%$'\t'*}"; sauth="${sline#*$'\t'}"
+    [[ -n "$srel" && -n "$sauth" ]] || continue
+    sdir="${srel%%/*}"
+    if (( apply )); then
+      seff="$sdir"
+    else
+      seff="${target_for[$sdir]:-$sdir}"
+    fi
+    [[ "$sauth" != "$seff" ]] || continue
+    # The narrow guard: same person, different spelling. rip::_author_norm is
+    # the module's comparison key and the same one the collision rule uses;
+    # anything looser and this sweep would quietly rewrite a pen name.
+    # Reached only by rows that already failed the cheap equality above, so
+    # it forks for the handful that differ, not for all 248.
+    [[ "$(rip::_author_norm "$sauth")" == "$(rip::_author_norm "$seff")" ]] || continue
+    found=1
+    (( sc_seen )) || print -r -- "sidecar author spellings to correct:"
+    sc_seen=1
+    print -r -- "    $srel: \"$sauth\" → \"$seff\""
+    (( apply )) || continue
+    # Composed HERE, with the local jq, and shipped as opaque base64:
+    # cantina has no jq (live finding, 2026-08-24 — every one of 245 books
+    # failed when the write path asked the server to run it). `del(._path)`:
+    # `_path` is rip::_server_sidecars' annotation, not a schema field, and
+    # writing it back would stamp a bogus key into every sidecar touched.
+    snew="$(print -r -- "$rows" | jq -c --arg p "$srel" --arg a "$seff" \
+      'select(._path == $p) | del(._path) | .authors[0] = $a' 2>/dev/null)"
+    if [[ -z "$snew" ]]; then
+      log_warn "rip: could not compose the corrected sidecar for $srel"
+      swept_fail=1
+      continue
+    fi
+    payload="$(rip::_sidecar_payload "$srel" "$snew")"
+    if [[ -z "$payload" ]]; then
+      log_warn "rip: could not frame the corrected sidecar for $srel"
+      swept_fail=1
+      continue
+    fi
+    sc_payloads+=("$payload")
+  done
+
+  local -i sc_wanted=${#sc_payloads} sc_done=0
+  if (( apply && sc_wanted > 0 )); then
+    # COUNT WHAT LANDED, never what was attempted. rip::_sidecars_write
+    # prints one ok/fail line per book precisely so a connection that dies
+    # mid-stream simply stops reporting and every unreported book counts as
+    # a failure.
+    local wout wline
+    wout="$(rip::_sidecars_write "$base" "${sc_payloads[@]}")"
+    local -a wlines=()
+    [[ -n "$wout" ]] && wlines=("${(@f)wout}")
+    for wline in "${wlines[@]}"; do
+      [[ "$wline" == ok$'\t'* ]] && sc_done+=1
+    done
+    print -r -- "rip: re-spelled $sc_done of $sc_wanted sidecar author(s)"
+    if (( sc_done < sc_wanted )); then
+      log_warn "rip: $(( sc_wanted - sc_done )) sidecar author(s) could not be re-spelled — the directory and the sidecar now disagree; re-run --canonicalize-authors --apply"
+      swept_fail=1
+    fi
+  fi
+
+  (( found )) || print -r -- "rip: nothing to do — every author is already in its canonical spelling"
   (( apply )) || { (( found )) && print -r -- "(re-run with --apply)" }
   # A variant that could not be fully swept is reported through the exit
   # status as well as on stderr, for the same reason the unreachable-server
@@ -6362,6 +6544,16 @@ rip::_canonicalize_one_author() {
   local base="$1" variant="$2" canon="$3"
   local aid; aid="$("$RIP_BIN_DIR/rip-abs-authors" --author-id "$canon" 2>/dev/null)"
   local stale; stale="$("$RIP_BIN_DIR/rip-abs-authors" --author-id "$variant" 2>/dev/null)"
+  # A canonical spelling no book has ever used has NO Audiobookshelf author
+  # record, so nothing below can repoint to it. That is the ORDINARY case for
+  # the canonical-initials rule (a lone "J.K. Rowling" becoming
+  # "J. K. Rowling"): the FILES move correctly — which is what --retag reads
+  # and what this whole phase is about — but every item keeps the old author
+  # in Audiobookshelf's own database, and no later sweep can fix it because
+  # the variant directory is gone by then. The per-book warning further down
+  # says "could not resolve its ABS item OR the canonical author" and does
+  # not distinguish the two. Say which one, once, with the remedy.
+  [[ -n "$aid" ]] || log_warn "rip: Audiobookshelf has no author record named \"$canon\" yet — the books move, but their items keep \"$variant\" until you rename that author in the Audiobookshelf UI"
 
   local lib
   lib="$(rip::ab_server_library)" \

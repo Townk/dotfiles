@@ -10,7 +10,7 @@
 #   rip-audiobook --import <path> <Author> <Title> stage a DRM-free file you already have
 #   rip-audiobook --session <plan.json>     enqueue a session
 #   rip-audiobook --retire "<Author>/<Title>" [--apply]  remove one stored book
-#   rip-audiobook --canonicalize-authors [--apply]      collapse author spelling variants
+#   rip-audiobook --canonicalize-authors [--apply]      one canonical spelling per author
 #   rip-audiobook --retag [--apply]                     make stored tags say what the path says
 #   rip-audiobook --repair-sidecars [--apply]           report + repair missing/empty book identity
 #   rip-audiobook --repair-companions [--apply]         record the PDFs/covers stored books already carry

@@ -4532,6 +4532,296 @@ EOF
     The stderr should include "no future sweep will see"
   End
 
+  # --- the canonical initials form (Task 5, 2026-08-26) --------------------
+  #
+  # The sweep used to act ONLY on collisions, so a library holding exactly
+  # ONE spelling of "J.K. Rowling" — the operator's, across seven Harry
+  # Potter books — printed "nothing to do" and exited 0. `--retag` mirrors
+  # whatever the PATH says into the audio, so leaving the path uncanonical
+  # bakes the wrong author into every one of those files and repairing it
+  # afterwards costs a second full-library remux of ~248 multi-gigabyte
+  # files. The canonical form has to reach the PATH first, which is what
+  # these examples pin.
+
+  # ca_book <Author/Title> <sidecar-author> — a stored book with audio and a
+  # schema-shaped sidecar. TWO authors deliberately: the sweep re-spells
+  # authors[0] and must leave every other field, authors[1] included, alone.
+  # Written with jq's default PRETTY printer, which is also what makes the
+  # byte-comparisons below discriminate: anything that rewrites this file
+  # emits compact JSON, so "unchanged" cannot be faked by a rewrite that
+  # happens to preserve the values.
+  ca_book() {
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+    printf 'audio-%s\n' "$1" > "$RIP_SANDBOX/server/audiobooks/$1/${1##*/}.m4b"
+    jq -n --arg t "${1##*/}" --arg a "$2" \
+      '{schema:1,kind:"audiobook",title:$t,subtitle:null,
+        authors:[$a,"Second Author"],narrators:["N"],series:null,
+        duration_s:1,language:"english",abridged:false,
+        published:"2000-01-01T00:00:00",ids:{"audible.asin":"B0CA000001"},
+        work:null,
+        source:{provider:"libation",provider_version:"13",acquired_utc:null,format:"m4b"}}' \
+      > "$RIP_SANDBOX/server/audiobooks/$1/.fleet-book.json"
+  }
+
+  # ca_tree — every path under the served tree, each file with the sha256 of
+  # its CONTENTS. "The dry run wrote nothing" is only proved by comparing
+  # paths AND bytes: a comparison of paths alone passes against a sweep that
+  # rewrote every sidecar in place, and re-reading a field passes against a
+  # rewrite that happened to preserve it.
+  ca_tree() {
+    ( cd "$RIP_SANDBOX/server" && find . | LC_ALL=C sort | while IFS= read -r p; do
+        if [ -f "$p" ]; then
+          printf '%s\t%s\n' "$p" "$(shasum -a 256 < "$p" | cut -d' ' -f1)"
+        else
+          printf '%s\tDIR\n' "$p"
+        fi
+      done )
+  }
+  ca_snap_tree() { ca_tree > "$RIP_SANDBOX/tree.before"; }
+  ca_tree_unchanged() {
+    ca_tree > "$RIP_SANDBOX/tree.after"
+    if cmp -s "$RIP_SANDBOX/tree.before" "$RIP_SANDBOX/tree.after"; then
+      echo "tree-identical"
+    else
+      echo "TREE CHANGED"
+    fi
+  }
+
+  # ca_snap_hallows / ca_hallows_unchanged — the same byte-level guard aimed
+  # at ONE file: the sidecar of the book already sitting under the canonical
+  # spelling when a same-titled variant tries to merge into it.
+  ca_snap_hallows() {
+    cp "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" \
+       "$RIP_SANDBOX/hallows.before"
+  }
+  ca_hallows_unchanged() {
+    if cmp -s "$RIP_SANDBOX/hallows.before" \
+              "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json"; then
+      echo "byte-identical"
+    else
+      echo "CHANGED"
+    fi
+  }
+
+  # PIN, green before and after this feature by design: the collision rule
+  # ran against the operator's real library on 2026-08-23 and must not shift
+  # underneath the new one.
+  #
+  # The fixture makes the two halves of that rule DISAGREE — "Ursula K Le
+  # Guin" has more books, "Ursula K. Le Guin" is the longer string — so the
+  # example pins their PRECEDENCE: book count decides, length is only the
+  # tie-break. Nothing in the suite pinned that before, and a pin whose two
+  # candidates agree would pass against a rule with the order reversed.
+  # Neither spelling contains a bare initial ("K" carries no letter straight
+  # after its period), so the canonical-form rule has nothing to add here and
+  # must not disturb the answer.
+  It 'sweep: book count still beats string length when picking the canonical spelling (pin)'
+    fake_abs_ops_bin_any
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Ursula K Le Guin/A Wizard of Earthsea" \
+             "$RIP_SANDBOX/server/audiobooks/Ursula K Le Guin/The Tombs of Atuan" \
+             "$RIP_SANDBOX/server/audiobooks/Ursula K. Le Guin/The Farthest Shore"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 0
+    The output should include "author variants"
+    The path "$RIP_SANDBOX/server/audiobooks/Ursula K Le Guin/The Farthest Shore" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/Ursula K. Le Guin" should not be exist
+  End
+
+  It 'sweep: a lone non-canonical spelling is reported, and the dry run writes nothing'
+    fake_abs_ops_bin_any
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    ca_book 'J.K. Rowling/Goblet of Fire' 'J.K. Rowling'
+    ca_snap_tree
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    The status should equal 0
+    # The canonical form is NOT a substring of the stored one, so this cannot
+    # pass on an echo of the input.
+    The output should include "J. K. Rowling"
+    The output should include '"J.K. Rowling" (2 book(s))'
+    The output should include "re-run with --apply"
+    The output should not include "nothing to do"
+    # Whole tree, paths AND contents.
+    The result of function ca_tree_unchanged should equal "tree-identical"
+    # …and the snapshot really did hold the library (an empty snapshot would
+    # make the comparison above pass against anything).
+    The contents of file "$RIP_SANDBOX/tree.before" should include "J.K. Rowling"
+    The path "$RIP_SANDBOX/absbin.log" should not be exist
+  End
+
+  It 'sweep (ssh): --apply renames a lone non-canonical author, directory and sidecar together'
+    fake_abs_ops_bin_any
+    fake_server_ssh
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling" should not be exist
+    # The sidecar moved WITH the directory — authors[0] re-spelled, authors[1]
+    # untouched. --retag compares tags against the PATH, so a library whose
+    # sidecar and path disagree is internally inconsistent.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
+    # Identity survives the rewrite: this is the only copy of who the book is.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should include '"audible.asin":"B0CA000001"'
+    # `_path` is rip::_server_sidecars' annotation, never a schema field.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should not include "_path"
+    The output should include "re-spelled 1 of 1"
+    # cantina has no jq: nothing the server was asked to run may mention it.
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+  End
+
+  It 'sweep: an already-canonical author is left byte-for-byte identical'
+    fake_abs_ops_bin_any
+    ca_book 'J. K. Rowling/Deathly Hallows' 'J. K. Rowling'
+    ca_snap_tree
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 0
+    The output should include "nothing to do"
+    The result of function ca_tree_unchanged should equal "tree-identical"
+    The contents of file "$RIP_SANDBOX/tree.before" should include "J. K. Rowling"
+    The path "$RIP_SANDBOX/absbin.log" should not be exist
+  End
+
+  It 'sweep (ssh): a second --apply has nothing left to do and changes nothing'
+    fake_abs_ops_bin_any
+    fake_server_ssh
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply" >/dev/null 2>&1
+    ca_snap_tree
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 0
+    The output should include "nothing to do"
+    The result of function ca_tree_unchanged should equal "tree-identical"
+    # The first pass really did converge — without this the example would
+    # pass against a sweep that never renamed anything at all.
+    The contents of file "$RIP_SANDBOX/tree.before" should include "J. K. Rowling"
+    The contents of file "$RIP_SANDBOX/tree.before" should not include "./audiobooks/J.K. Rowling"
+  End
+
+  # THE MERGE THE NEW RULE CREATES. Canonicalizing sends a variant into a
+  # directory that already exists, and the destination is chosen by the
+  # canonical FORM even though the raw spelling holds more books — which is
+  # exactly the case the old "most books" rule alone would have decided the
+  # other way.
+  It 'sweep (ssh): the canonical form wins over the more populous raw spelling and merges into it'
+    fake_abs_ops_bin_any
+    fake_server_ssh
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    ca_book 'J.K. Rowling/Goblet of Fire' 'J.K. Rowling'
+    ca_book 'J. K. Rowling/Order of the Phoenix' 'J. K. Rowling'
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Goblet of Fire/Goblet of Fire.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Order of the Phoenix/Order of the Phoenix.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling" should not be exist
+    # Exactly the two that needed it, and no more.
+    The output should include "re-spelled 2 of 2"
+  End
+
+  # THE MOST LIKELY WAY THIS TASK DAMAGES A REAL LIBRARY: the destination
+  # directory already holds a book of the SAME title. `mv -n` refuses, the
+  # variant's book stays where it is, `rmdir` refuses, and the sweep says so
+  # and returns 1 — the only copy of an audiobook is never overwritten to
+  # tidy a folder name. The sidecar half must refuse in step: writing the
+  # variant's corrected sidecar to the destination path would land it on top
+  # of a DIFFERENT book's identity file.
+  It 'sweep (ssh): a title already present under the canonical spelling is never clobbered'
+    fake_abs_ops_bin_any
+    fake_server_ssh
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    ca_book 'J.K. Rowling/Goblet of Fire' 'J.K. Rowling'
+    ca_book 'J. K. Rowling/Deathly Hallows' 'J. K. Rowling'
+    printf 'variant-copy\n' > "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/Deathly Hallows.m4b"
+    printf 'canonical-copy\n' > "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b"
+    ca_snap_hallows
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 1
+    The stderr should include "still holds books"
+    # Neither copy of the audio moved or changed.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should equal "canonical-copy"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should equal "variant-copy"
+    # The resident book's identity file was not written over.
+    The result of function ca_hallows_unchanged should equal "byte-identical"
+    # The variant's own sidecar still says what its (unchanged) path says.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json" should include '"J.K. Rowling"'
+    # The book that COULD move did, sidecar and all.
+    The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Goblet of Fire/Goblet of Fire.m4b" should be exist
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Goblet of Fire/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
+    The output should include "re-spelled 1 of 1"
+    # …and the variant's Audiobookshelf author record survives, because a
+    # book still points at it.
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
+  End
+
+  # COUNTS NEVER OVERSTATE. rip::_sidecars_write reports ok/fail per book so
+  # the caller can count what LANDED; a count of what was attempted would
+  # claim a repair that never happened and leave the path and the sidecar
+  # disagreeing with nothing said about it.
+  #
+  # "Order of the Phoenix" is already under the canonical spelling, so it is
+  # never renamed — only its sidecar is wrong — and a read-only book
+  # directory therefore fails the WRITE without also failing a move. (The
+  # first shape of this example chmod'd a directory that then had to be
+  # renamed: moving a directory to a new parent needs write permission on the
+  # directory itself, because its `..` entry is rewritten, so it failed at
+  # `mv` instead and proved nothing about the count.)
+  It 'sweep (ssh): a sidecar that could not be written is never counted as re-spelled'
+    fake_abs_ops_bin_any
+    fake_server_ssh
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    ca_book 'J. K. Rowling/Order of the Phoenix' 'J.K. Rowling'
+    chmod 500 "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Order of the Phoenix"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    chmod 700 "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Order of the Phoenix" 2>/dev/null
+    The status should equal 1
+    The output should include "re-spelled 1 of 2"
+    The stderr should include "could not be re-spelled"
+    # The one that DID land is real…
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
+    # …and the one that did not still says the old spelling, untouched.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Order of the Phoenix/.fleet-book.json" should include '"J.K. Rowling"'
+  End
+
+  # rip::_server_sidecars' status is CAPTURED, never read through
+  # `< <(...)`. This same file already learned that once: a sweep printed
+  # "nothing to backfill" and exited 0 on a dropped VPN. Here the library
+  # listing succeeds and only the sidecar enumeration fails, so the verb
+  # would otherwise sail past it with an empty index and a clean report.
+  It 'sweep: a sidecar enumeration that fails refuses rather than reporting a clean library'
+    fake_abs_ops_bin_any
+    export RIP_REMOTE_BASE="media@cantina:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+[ -t 0 ] || cat > /dev/null
+cmd=""
+while [ \$# -gt 0 ]; do cmd="\$1"; shift; done
+case "\$cmd" in *fleet-book.json*) exit 255 ;; esac
+sh -c "\$(printf '%s' "\$cmd" | sed 's|/srv/media|$RIP_SANDBOX/server|g')"
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    The status should equal 2
+    The output should not include "nothing to do"
+    The stderr should include "could not read the stored sidecars"
+  End
+
+  # A sidecar naming a DIFFERENT person is not a spelling variant. The guard
+  # is rip::_author_norm equality, the same comparison key the collision rule
+  # uses — anything else and this sweep would quietly rewrite a pen name.
+  It 'sweep: a sidecar author who is a different person is left alone'
+    fake_abs_ops_bin_any
+    ca_book 'J. K. Rowling/Deathly Hallows' 'Robert Galbraith'
+    ca_snap_tree
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 0
+    The output should include "nothing to do"
+    The result of function ca_tree_unchanged should equal "tree-identical"
+    The contents of file "$RIP_SANDBOX/tree.before" should include "J. K. Rowling"
+  End
+
+
   # --- sidecar repair: --repair-sidecars / --adopt-asin ---------------------
   #
   # Four outcomes, discriminated on EVIDENCE (is a provider row findable?)
