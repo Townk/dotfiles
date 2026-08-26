@@ -926,6 +926,50 @@ EOF
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I","libation",null]'
   End
 
+  # --- work: an object, protected across a second push (Task 1) ------------
+  #
+  # rip::_book_sidecar is the composer EVERY push runs (rip::_enrich_audiobooks
+  # calls it once per staged book dir, right before the rsync). It merges the
+  # freshly composed sidecar over whatever ALREADY sits at that path with the
+  # old file winning at every depth for a non-null value — the same rule that
+  # protects `ids` across a retried/re-enriched push. `work` has carried that
+  # same protection since it was introduced, but always as `null`, so nothing
+  # has ever exercised it: this pins it now that `work` is about to become an
+  # object a later task actually writes.
+  work_book_sidecar_meta() {
+    printf '%s\n' '{"title":"B","authors":["A"],"provider":"libation","format":"m4b"}' \
+      > "$RIP_SANDBOX/work-meta.json"
+  }
+
+  It 'sidecar: a composed row with no edition still writes work: null — byte-identical to today'
+    work_book_sidecar_meta
+    mkdir -p "$RIP_SANDBOX/work-book-a"
+    When run zsh -c "source $RIPLIB \
+      && rip::_book_sidecar '$RIP_SANDBOX/work-book-a' '$RIP_SANDBOX/work-meta.json' >/dev/null \
+      && jq -c '.work' '$RIP_SANDBOX/work-book-a/.fleet-book.json'"
+    The status should equal 0
+    The output should equal "null"
+  End
+
+  It 'sidecar: work already recorded as an object survives a second push unchanged'
+    work_book_sidecar_meta
+    mkdir -p "$RIP_SANDBOX/work-book-b"
+    When run zsh -c "source $RIPLIB
+      rip::_book_sidecar '$RIP_SANDBOX/work-book-b' '$RIP_SANDBOX/work-meta.json' >/dev/null
+      # Simulate a work already resolved on this staged sidecar — nothing in
+      # this task sets it yet (that is Task 3); this stands in for it so the
+      # merge that will protect it has something non-null to protect.
+      jq '.work = {uid:\"9f1c2a4e-1111-4b22-8aa0-abc123456789\",edition:\"Full Cast\"}' \
+        '$RIP_SANDBOX/work-book-b/.fleet-book.json' > '$RIP_SANDBOX/work-book-b/.fleet-book.json.next'
+      mv '$RIP_SANDBOX/work-book-b/.fleet-book.json.next' '$RIP_SANDBOX/work-book-b/.fleet-book.json'
+      # The second push: same meta, same composer — the old, non-null work
+      # must win over the freshly composed work: null.
+      rip::_book_sidecar '$RIP_SANDBOX/work-book-b' '$RIP_SANDBOX/work-meta.json' >/dev/null
+      jq -c '.work' '$RIP_SANDBOX/work-book-b/.fleet-book.json'"
+    The status should equal 0
+    The output should equal '{"uid":"9f1c2a4e-1111-4b22-8aa0-abc123456789","edition":"Full Cast"}'
+  End
+
   It 'worker: one failing acquire does not abort the batch'
     printf '%s\n' '{"provider":"libation","items":[{"id":"BAD","path":"A/Bad","title":"Bad"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
     cat > "$RIP_SANDBOX/LibationCli" <<'EOF'

@@ -741,7 +741,7 @@ _RIP_SIDECAR_JQ="$_RIP_JQ_IDS_DEF"'
    abridged: (if ($r|has("abridged")) then $r.abridged else null end),
    published: ($r.published // null),
    ids: ($r.ids | _ids_obj),
-   work: null,
+   work: ($r.work // null),
    companions: $companions,
    source: {provider: ($r.provider // "unknown"),
             provider_version: ($r.provider_version // null),
