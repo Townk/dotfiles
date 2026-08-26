@@ -2018,6 +2018,35 @@ FAKECP
       > "$RIP_SANDBOX/server/audiobooks/$1/$2/.fleet-book.json"
   }
 
+  # mkbook_work — the same fixture, but carrying a `work` object, for the
+  # uid-first grouping task 6 adds. <edition> "" means a bare anchor
+  # (edition: null), the same shape rip::ab_backfill_work_uid leaves behind.
+  mkbook_work() { # <author> <dir-title> <asin> <published> <bare-title> <uid> <edition>
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1/$2"
+    jq -nc --arg t "$3" --arg p "$4" --arg ti "$5" --arg a "$1" --arg u "$6" --arg e "$7" \
+      '{schema:1,kind:"audiobook",title:$ti,authors:[$a],ids:{"audible.asin":$t},
+        published:(if $p=="" then null else $p end),
+        work:{uid:$u, edition:(if $e=="" then null else $e end)}}' \
+      > "$RIP_SANDBOX/server/audiobooks/$1/$2/.fleet-book.json"
+  }
+
+  # mkbook_work_array — a POISONED sidecar: `"work": []` instead of an
+  # object. Reproduces the exact shape `_RIP_JQ_IDS_DEF` already documents
+  # for `.ids`: a Lua-encoded empty table round-trips as `[]`, not `{}`, and
+  # `.work.uid` RAISES on an array — the raise aborts the whole `-s` (slurp)
+  # jq program under `2>/dev/null`, silently dropping every OTHER book from
+  # the report while `--editions` still exits 0. This is the shape that
+  # shipped books to the server with no `ids` identity at all under the
+  # identical defect (review finding 2026-08-25); the fixture exists to
+  # prove `--editions` does not repeat it for `work`.
+  mkbook_work_array() { # <author> <dir-title> <asin> <published> <bare-title>
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1/$2"
+    jq -nc --arg t "$3" --arg p "$4" --arg ti "$5" --arg a "$1" \
+      '{schema:1,kind:"audiobook",title:$ti,authors:[$a],ids:{"audible.asin":$t},
+        published:(if $p=="" then null else $p end), work:[]}' \
+      > "$RIP_SANDBOX/server/audiobooks/$1/$2/.fleet-book.json"
+  }
+
   It 'editions: two editions of one work group, newest marked'
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
@@ -2133,6 +2162,109 @@ FAKECP
     When run zsh -c "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should equal ""
+  End
+
+  # --- task 6: --editions groups by work.uid first (design S6) --------------
+  #
+  # These deliberately use DIFFERENT bare titles for the paired books (a real
+  # edition, per design, changes the composed path) and a DISTINCT date pair
+  # so the old author+title+distinct-date pipeline could not accidentally
+  # group them itself — a passing assertion here can only be explained by the
+  # new uid-first grouping actually running.
+
+  # heading_order — the uid heading must precede the date heading (design S6:
+  # "Print the uid section first"), not merely both be present somewhere.
+  heading_order() {
+    out="$(zsh -c "source $RIPLIB && rip::ab_editions")"
+    uid_line="$(print -r -- "$out" | grep -n '^== confirmed editions' | head -1 | cut -d: -f1)"
+    date_line="$(print -r -- "$out" | grep -n '^== possible duplicate editions' | head -1 | cut -d: -f1)"
+    if [[ -n "$uid_line" && -n "$date_line" && "$uid_line" -lt "$date_line" ]]; then
+      echo "uid-first"
+    else
+      echo "wrong-order"
+    fi
+  }
+
+  It 'editions: two books sharing a work.uid group as one, with their edition labels'
+    # Same published date on purpose: under the OLD (pre-task-6) pipeline
+    # these would cluster on author+bare-title ("Foobar") and then be
+    # SUPPRESSED ENTIRELY by the all-distinct-date filter, producing no
+    # output for this pair at all — so this example is genuinely red against
+    # the unmodified function, not just "unimplemented feature, empty by
+    # default".
+    mkbook_work "X Author" "Foobar" S1 2020-01-01T00:00:00 Foobar U-SILM ""
+    mkbook_work "X Author" "Foobar (Full Cast)" S2 2020-01-01T00:00:00 Foobar U-SILM "Full Cast"
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should include "U-SILM"
+    The output should include "(none)"
+    The output should include "Full Cast"
+    The output should include "X Author/Foobar"
+    The output should include "X Author/Foobar (Full Cast)"
+  End
+
+  It 'editions: the date-derived heuristic still reports its group, under its own heading'
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should include "== possible duplicate editions"
+    The output should include "Edgedancer"
+    The output should include "B07626B9D2"
+    The output should include "B0B5M28HZK"
+    The output should include "newest"
+  End
+
+  It 'editions: the two kinds are reported under separate headings'
+    mkbook_work "X Author" "Foobar" S1 2020-01-01T00:00:00 Foobar U-SILM ""
+    mkbook_work "X Author" "Foobar (Full Cast)" S2 2020-01-01T00:00:00 Foobar U-SILM "Full Cast"
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should include "== confirmed editions"
+    The output should include "== possible duplicate editions"
+    The result of function heading_order should equal "uid-first"
+  End
+
+  It 'editions: a work.uid group of ONE is not reported'
+    # Paired control (U-SILM) proves the uid-grouping machinery ran at all;
+    # the solo book (U-SOLO, its own asin S3) must not surface anywhere —
+    # neither as a leaked singleton "work" group (the size-1 filter) nor
+    # folded into the date section (it has no sibling by author+title
+    # either).
+    mkbook_work "X Author" "Foobar" S1 2020-01-01T00:00:00 Foobar U-SILM ""
+    mkbook_work "X Author" "Foobar (Full Cast)" S2 2020-01-01T00:00:00 Foobar U-SILM "Full Cast"
+    mkbook_work "Y Author" "SoloTitle" S3 2020-06-01T00:00:00 SoloTitle U-SOLO ""
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should include "U-SILM"
+    The output should not include "U-SOLO"
+    The output should not include "SoloTitle"
+    The output should not include "S3"
+  End
+
+  It 'editions: a "work": [] sidecar does not drop other books from the report'
+    # THE TRAP (carried from .ids, review finding 2026-08-25): a Lua-encoded
+    # empty table round-trips as `[]`, not `{}`. `.work.uid` on an array
+    # RAISES, and under `2>/dev/null` the raise would abort the whole slurped
+    # jq program — silently dropping every OTHER book, uid-grouped or
+    # date-grouped, while --editions still exits 0. The poisoned book sorts
+    # alphabetically ahead of both control fixtures ("A Poisoned" < "Brandon"
+    # < "X Author"), which is exactly the ordering that made the identical
+    # `.ids` defect ship books with no identity at all — the raise happens on
+    # the FIRST row a naive `.work.uid` would touch.
+    mkbook_work_array "A Poisoned" "BadSidecar" S9 2020-01-01T00:00:00 BadSidecar
+    mkbook_work "X Author" "Foobar" S1 2020-01-01T00:00:00 Foobar U-SILM ""
+    mkbook_work "X Author" "Foobar (Full Cast)" S2 2020-01-01T00:00:00 Foobar U-SILM "Full Cast"
+    mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
+    mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should include "U-SILM"
+    The output should include "Full Cast"
+    The output should include "Edgedancer"
+    The output should include "newest"
   End
 
   # server_sidecars_ssh <dir> — install a fake ssh implementing the exact

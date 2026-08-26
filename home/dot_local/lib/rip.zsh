@@ -2899,20 +2899,69 @@ rip::_stored_sha_index() {
 # the one report an operator consults before deciding what to delete
 # (review finding 4, 2026-08-24). rip::_server_sidecars is captured as a
 # VALUE, not piped: through a pipe its status is invisible here.
+#
+# GROUPS BY `work.uid` FIRST (design doc 2026-08-25-audiobook-editions, S6).
+# The heuristic above catches ACCIDENTAL same-title duplicates; it cannot see
+# a DELIBERATE edition, because a deliberate edition (design S3, the panel's
+# Edition field) composes a DIFFERENT title on purpose — that is what clears
+# the path collision. Two rows sharing a non-null `work.uid` are two editions
+# of one work regardless of what their titles say, so they are grouped on
+# that FIRST, and only a row with no uid falls through to the author+title+
+# date pipeline, unchanged. A uid group of size one — a book that anchors a
+# work but has no sibling edition yet — is not a finding and is dropped,
+# exactly like a same-title cluster of one. The two kinds are printed under
+# separate headings: a confirmed edition set and a suspected accidental
+# duplicate are different findings, and merging them would bury the
+# accidental ones (design S6). Recency has no meaning inside a uid group —
+# editions are not "newer" or "older" than each other — so the "<- newest"
+# marker stays exactly where it was, inside the date-derived section only.
+#
+# THE TRAP (carried forward from `.ids`, review finding 2026-08-25, see
+# _RIP_JQ_WORK_DEF): `.work` can be `[]` rather than `{}` — a Lua-encoded
+# empty table round-trips that way — and `.work.uid` RAISES on an array. The
+# raise would abort the whole `-s` (slurp) program under the `2>/dev/null`
+# below, so ONE poisoned sidecar would silently drop every other book from
+# BOTH sections of this report while `--editions` still exited 0. Every read
+# of `.work` here goes through `_work_obj` first (from $_RIP_JQ_WORK_DEF,
+# prefixed below), never a bare `.work.uid` — a poisoned row simply reads as
+# "no uid" and falls through to the date pipeline like any other unanchored
+# book, instead of taking the rest of the library down with it.
 rip::ab_editions() {
   setopt localoptions noerrexit nopipefail
   local rows
   rows="$(rip::_server_sidecars)" || return 2
-  print -r -- "$rows" | jq -s -r '
-    map(select((.published // "") != "" and ((.authors[0] // "") != "")))
-    | group_by([ (.authors[0] // "" | ascii_downcase | gsub("[^a-z0-9]";"")),
-                 (.title // "" | ascii_downcase | gsub("[^a-z0-9]";"")) ])
-    | map(select(length > 1))
-    | map(select(([.[].published | .[0:10]] | unique | length) == length))
-    | .[]
-    | (max_by(.published)._path) as $newest
-    | "\(.[0].title)",
-      (sort_by(.published)[] | "    \(.published[0:10])  \(.ids["audible.asin"] // "?")  \(._path)\(if ._path == $newest then "   <- newest" else "" end)")
+  print -r -- "$rows" | jq -s -r "$_RIP_JQ_WORK_DEF"'
+    def uid_of: (.work | _work_obj | (.uid // ""));
+    def edition_of: (.work | _work_obj | (.edition // ""));
+    . as $all
+    | ($all | map(select(uid_of != ""))
+             | group_by(uid_of)
+             | map(select(length > 1))) as $ugroups
+    | ($all | map(select(uid_of == ""))) as $rest
+    | ($rest
+        | map(select((.published // "") != "" and ((.authors[0] // "") != "")))
+        | group_by([ (.authors[0] // "" | ascii_downcase | gsub("[^a-z0-9]";"")),
+                     (.title // "" | ascii_downcase | gsub("[^a-z0-9]";"")) ])
+        | map(select(length > 1))
+        | map(select(([.[].published | .[0:10]] | unique | length) == length))
+      ) as $dgroups
+    | (if ($ugroups | length) > 0 then
+         "== confirmed editions (shared work uid) ==",
+         ($ugroups[]
+           | "work \(.[0] | uid_of)",
+             (sort_by(edition_of)[]
+               | "    \(if edition_of == "" then "(none)" else edition_of end)  \(._path)")
+         )
+       else empty end),
+      (if ($dgroups | length) > 0 then
+         "== possible duplicate editions (title/date match) ==",
+         ($dgroups[]
+           | (max_by(.published)._path) as $newest
+           | "\(.[0].title)",
+             (sort_by(.published)[]
+               | "    \(.published[0:10])  \(.ids["audible.asin"] // "?")  \(._path)\(if ._path == $newest then "   <- newest" else "" end)")
+         )
+       else empty end)
   ' 2>/dev/null
 }
 
