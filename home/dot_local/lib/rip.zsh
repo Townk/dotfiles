@@ -920,15 +920,31 @@ rip::_book_sidecar() {
 # same file — a skip rule that was even slightly looser than the verification
 # would skip a book the verification would have refused.
 #
+# BOTH METADATA LEVELS ARE READ, and that is a bug fix, not thoroughness
+# (review finding F1, 2026-08-26). `-show_entries format_tags` is not "the
+# file's tags", it is ONE of the two places a tag can live: mp4/mp3/flac keep
+# these at the FORMAT level, while ogg and opus keep VorbisComment on the
+# audio STREAM. A format-only read of an opus book returns `{}`, so the
+# comparison could never match, the retag could never be verified, and the
+# book was REFUSED on every retry — forever, deterministically, with retry as
+# the only remedy the design offers. Merged with the stream on the right so
+# the stream wins where a container keeps both, which is the container that
+# treats the stream as authoritative.
+#
+# `-select_streams a:0`: the audio stream, not "stream 0" — a file whose
+# attached cover sorts first must not have the picture's own tags read as the
+# book's.
+#
 # jq does the whole comparison rather than shell string-splitting ffprobe's
 # output: a tag value containing a tab, an equals sign or a newline can then
 # never be split wrong on the way to being compared.
 rip::_tags_match() {
   setopt localoptions noerrexit nopipefail
   local ffprobe_bin="${RIP_FFPROBE_BIN:-ffprobe}"
-  "$ffprobe_bin" -v error -show_entries format_tags -of json -- "$1" 2>/dev/null \
+  "$ffprobe_bin" -v error -select_streams a:0 -show_entries format_tags:stream_tags \
+      -of json -- "$1" 2>/dev/null \
     | jq -e --arg aa "$2" --arg bn "$3" \
-        '(.format.tags // {}) as $t
+        '((.format.tags // {}) + (.streams[0].tags // {})) as $t
          | (($t.album_artist // "") == $aa)
            and (($t.album // "") == $bn)
            and (($t.title // "") == $bn)' >/dev/null 2>&1
@@ -1022,8 +1038,17 @@ rip::_retag_book() {
   local tmp="$work_dir/retag.$$.${f:t}"
   rm -f -- "$tmp"
 
+  # WRITTEN AT BOTH LEVELS, for the same reason rip::_tags_match reads both.
+  # `-metadata` alone reaches only the FORMAT level, and the ogg/opus muxers
+  # write the stream's VorbisComment — measured: an opus remux carrying
+  # `-metadata album_artist=<new>` came back still holding the OLD value,
+  # copied off the input stream. `-metadata:s:a:0` is inert for mp4 (its
+  # stream tags carry only language/handler_name, and the format tags land
+  # correctly), so one invocation serves every container this retags.
   "$ffmpeg_bin" -v error -y -i "$f" -map 0 -map "-0:d?" -c copy -map_chapters 0 \
     -metadata album_artist="$author" -metadata album="$bookname" -metadata title="$bookname" \
+    -metadata:s:a:0 album_artist="$author" -metadata:s:a:0 album="$bookname" \
+    -metadata:s:a:0 title="$bookname" \
     -- "$tmp" </dev/null >/dev/null 2>&1
   local wrc=$?
 
@@ -1033,8 +1058,9 @@ rip::_retag_book() {
     # a second probe, so the operator is told what the file actually says
     # rather than just that something went wrong.
     local got
-    got="$("$ffprobe_bin" -v error -show_entries format_tags -of json -- "$tmp" 2>/dev/null \
-      | jq -c '(.format.tags // {}) | {album_artist, album, title}' 2>/dev/null)"
+    got="$("$ffprobe_bin" -v error -select_streams a:0 -show_entries format_tags:stream_tags \
+        -of json -- "$tmp" 2>/dev/null \
+      | jq -c '((.format.tags // {}) + (.streams[0].tags // {})) | {album_artist, album, title}' 2>/dev/null)"
     [[ -n "$got" ]] || got='(nothing readable was written)'
     if (( wrc == 0 )); then
       log_error "rip: ffmpeg reported success but the tags did not take on ${f:t} — wanted album_artist=\"$author\" album=\"$bookname\" title=\"$bookname\", read back $got"
@@ -1058,13 +1084,27 @@ rip::_retag_book() {
 # and verified.
 #
 # EVERY audio file, not just the primary: a multi-part book whose part 2 kept
-# the seller's metadata is the same defect, one file down. `.aax`/`.aaxc` are
-# the ONE deliberate exclusion — a retained Audible original is still DRM
-# encrypted, ffmpeg cannot remux it without the account's activation bytes,
-# and refusing the whole book over a file that is not the book anyone plays
-# would be a regression. It is not the copy the library reads (the `.m4b`
-# beside it is), and the module's own "the audio IS the book" rule already
-# treats it as an also-ran.
+# the seller's metadata is the same defect, one file down.
+#
+# TWO DELIBERATE EXCLUSIONS, and both are WARNED rather than silently skipped:
+#
+#   * `.aax`/`.aaxc` — a retained Audible original is still DRM encrypted and
+#     ffmpeg cannot remux it without the account's activation bytes. It is not
+#     the copy the library reads (the `.m4b` beside it is), and the module's
+#     own "the audio IS the book" rule already treats it as an also-ran.
+#   * `.wav`/`.aac` — the container CANNOT CARRY the tag (review finding F1,
+#     2026-08-26). WAV's RIFF INFO has no album-artist chunk at all (measured:
+#     `album` and `title` take, `album_artist` reads back null), and raw ADTS
+#     `.aac` has no metadata container whatsoever. Without this arm they were
+#     not merely untagged, they were UNPUSHABLE: the verification can never
+#     pass, so the book is refused, and the retry that is this design's whole
+#     remedy can never clear a deterministic failure. A book that cannot be
+#     tagged authoritatively must not become a push that can never succeed —
+#     so it ships, and the operator is told why, in a message they can act on
+#     (re-encode to m4b) rather than a refusal they can only re-run.
+#
+# Both are first-class inputs: rip::ab_import accepts any extension for a
+# single file, and `.opus`/`.wav` are what DRM-free downloads carry.
 rip::_retag_staged_book() {
   setopt localoptions noerrexit nopipefail
   local dir="$1" author="$2" bookname="$3"
@@ -1072,7 +1112,13 @@ rip::_retag_staged_book() {
   for f in "$dir"/*(N.); do
     base="${f:t}"
     case "${(L)base}" in
-      *.m4b|*.m4a|*.mp3|*.mp4|*.aac|*.flac|*.ogg|*.opus|*.wav) ;;
+      *.aax|*.aaxc)
+        log_warn "rip: not retagging ${f:t} — a DRM-encrypted Audible original cannot be remuxed; the library reads the .m4b beside it"
+        continue ;;
+      *.wav|*.aac)
+        log_warn "rip: not retagging ${f:t} — this container cannot carry album_artist, so its tags cannot be made authoritative; re-encode to .m4b if the library must show them"
+        continue ;;
+      *.m4b|*.m4a|*.mp3|*.mp4|*.flac|*.ogg|*.opus) ;;
       *) continue ;;
     esac
     n=$(( n + 1 ))
@@ -1182,7 +1228,7 @@ rip::_enrich_audiobooks() {
   # Declared ONCE, out here, loop variables included: a bare `local` re-run
   # in a loop body prints "name=value" onto the stream this runs on, and
   # this file has been bitten by that before.
-  local d meta hop failed=0 refused=0 b_author b_book
+  local d meta hop failed=0 refused=0 b_author b_book b_rel
   for d in "${dirs[@]}"; do
     [[ -d "$src/$d" ]] || continue
     meta="$(rip::staging_root)/.work/book-meta.$$.json"
@@ -1198,17 +1244,52 @@ rip::_enrich_audiobooks() {
     # THE AUTHORITATIVE TAGS (design doc S2). The author and the book name
     # come from the STAGED PATH, not from the provider row, and they are
     # written VERBATIM, because the path is what the library shows and the
-    # invariant is that the tags say what the path says. The two are NOT the same string: the libation provider
-    # emits title "Steelheart" for a directory it names "Steelheart: The
-    # Reckoners, Book 1", and rip::_canonicalize_staged_authors may have
-    # already renamed the author directory to the spelling the server uses
-    # while the row still carries the provider's. The edition needs no
-    # special handling here for the same reason — the panel composed the
-    # path as "<Author>/<Title> (<Edition>)", so the directory name already
-    # IS "<Title> (<Edition>)".
-    b_author=""
-    b_book="${d:t}"
-    [[ "$d" == */* ]] && b_author="${d:h:t}"
+    # invariant is that the tags say what the path says. The two are NOT the
+    # same string: the libation provider emits title "Steelheart" for a
+    # directory it names "Steelheart: The Reckoners, Book 1", and
+    # rip::_canonicalize_staged_authors may have already renamed the author
+    # directory to the spelling the server uses while the row still carries
+    # the provider's. The edition needs no special handling here for the same
+    # reason — the panel composed the path as "<Author>/<Title> (<Edition>)",
+    # so the directory name already IS "<Title> (<Edition>)".
+    #
+    # EXACTLY TWO COMPONENTS, or the book is refused (review finding F2,
+    # 2026-08-26). $d is ${rel:h}, so a book whose audio sits one level
+    # deeper — "<Author>/<Title>/Disc 1/…", which rip::ab_import's directory
+    # copy will happily produce — used to reach this with the WRONG TWO
+    # SEGMENTS in hand and stamp album_artist="<Title>", album="Disc 1" into
+    # the audio. Audiobookshelf would then show a book called "Disc 1" by an
+    # author called "Deathly Hallows": the exact wrong this phase exists to
+    # fix, no longer merely READ out of the file but written authoritatively
+    # into it. No slicing can recover which segment is the author from a path
+    # that does not say — so refuse and name it, the same answer the
+    # empty-author branch already gives.
+    #
+    # NFC, because the tag is REMOTE text (review finding F4, 2026-08-26).
+    # macOS stages accented names DECOMPOSED and this module deliberately
+    # leaves local staging paths that way (see rip::_nfc's contract), while
+    # the push --iconv's to NFC on the wire — so the server path, and every
+    # comparison spec S4's `--retag` sweep makes against it, is composed. A
+    # tag written from the raw staged bytes would differ from the server path
+    # on every accented author and be rewritten on every sweep: the same
+    # non-convergence the verbatim-author rule removes, through another door.
+    b_author=""; b_book=""; b_rel="$d"
+    if [[ "$d" == */* ]]; then
+      b_author="${d%%/*}"
+      b_book="${${d#*/}%%/*}"
+      b_rel="$b_author/$b_book"
+    fi
+    if [[ -z "$b_author" || -z "$b_book" || "$d" != "$b_rel" ]]; then
+      # $b_rel, not $d: the whole BOOK is refused, companions and sidecar
+      # included, not just the sub-directory the audio happened to sit in.
+      log_error "rip: refusing to push \"$d\" — a staged book is <Author>/<Title>, and tags cannot be written from a path that does not say which is which"
+      rip::_listfile_drop "$listfile" "$b_rel" \
+        || log_error "rip: could not drop \"$b_rel\" from the push list"
+      refused=1
+      continue
+    fi
+    b_author="$(rip::_nfc "$b_author")"
+    b_book="$(rip::_nfc "$b_book")"
     if ! rip::_retag_staged_book "$src/$d" "$b_author" "$b_book"; then
       # REFUSED, not warned (design doc S3, the operator's rule verbatim:
       # "not failing on error is a recipe for drift in the long run"). The

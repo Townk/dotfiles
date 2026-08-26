@@ -575,9 +575,13 @@ FAKESSH
       -metadata title='Wrong Title' "$1/book.m4b"
   }
 
-  # rt_probe <file> <tag> — one format tag, read back with the real ffprobe.
-  # Used only inside the `zsh -c` bodies below, never as the thing under test.
-  RT_PROBE='rt_probe() { ffprobe -v error -show_entries format_tags -of json -- "$1" 2>/dev/null | jq -r --arg k "$2" "(.format.tags // {}) | .[\$k] // \"\""; }'
+  # rt_probe <file> <tag> — one tag, read back with the real ffprobe, from
+  # WHERE THAT CONTAINER ACTUALLY KEEPS IT. mp4/mp3/flac put these at the
+  # format level; ogg and opus put them on the audio STREAM as VorbisComment,
+  # where a `-show_entries format_tags` read returns {} and sees nothing at
+  # all. Used only inside the `zsh -c` bodies below, never as the thing under
+  # test.
+  RT_PROBE='rt_probe() { ffprobe -v error -select_streams a:0 -show_entries format_tags:stream_tags -of json -- "$1" 2>/dev/null | jq -r --arg k "$2" "((.format.tags // {}) + (.streams[0].tags // {})) | .[\$k] // \"\""; }'
 
   # rt_stub_silent — an ffmpeg that exits 0 and writes NOTHING. THE example
   # of this section: without the read-back verification the retag would
@@ -748,6 +752,74 @@ EOF
     The stderr should include "nope.m4b"
   End
 
+  # --- containers that keep their tags somewhere else -----------------------
+  #
+  # `-show_entries format_tags` is not "the file's tags", it is one of the two
+  # places a tag can live. ogg and opus keep VorbisComment on the audio
+  # STREAM, so a format-level read of an opus book returns {} — the
+  # comparison could never match, the retag could never be verified, and the
+  # book was refused on every single retry. Retry is the entire remedy this
+  # design offers, and it cannot clear a deterministic failure: the book sat
+  # in staging forever, rc 1 forever. Writing has the same two levels, and
+  # `-metadata` alone reaches only the format one (measured: an opus remux
+  # with -metadata album_artist=… came back carrying the OLD stream tag).
+
+  # rt_opus <dir> — a real one-second opus book whose tags live on the stream.
+  rt_opus() {
+    mkdir -p "$1"
+    ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a libopus \
+      -metadata:s:a:0 album_artist='Old AA' -metadata:s:a:0 album='Wrong Album' \
+      -metadata:s:a:0 title='Wrong Title' "$1/book.opus"
+  }
+
+  It 'retag: an opus book, whose tags live on the STREAM, is written, verified and converges'
+    rt_real
+    rt_opus "$RIP_SANDBOX/op"
+    printf '%s\n' '#!/bin/sh' 'printf "run\n" >> "$RIP_SANDBOX/ffmpeg.count"' 'exec ffmpeg "$@"' \
+      > "$RIP_SANDBOX/ffmpeg-counting"
+    chmod +x "$RIP_SANDBOX/ffmpeg-counting"
+    export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-counting"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::_retag_book '$RIP_SANDBOX/op/book.opus' 'Ann Leckie' 'Ancillary Justice' || exit 9
+      rt_probe '$RIP_SANDBOX/op/book.opus' album_artist
+      rt_probe '$RIP_SANDBOX/op/book.opus' album
+      rt_probe '$RIP_SANDBOX/op/book.opus' title
+      # THE SECOND PASS IS THE POINT: a book that cannot be verified is
+      # refused on every retry forever, so 'it converges' and 'it is not
+      # permanently wedged' are the same assertion here.
+      rip::_retag_book '$RIP_SANDBOX/op/book.opus' 'Ann Leckie' 'Ancillary Justice' || exit 8
+      print -r -- \"remuxes=\$(wc -l < '$RIP_SANDBOX/ffmpeg.count' | tr -d ' ')\""
+    The status should equal 0
+    The line 1 should equal "Ann Leckie"
+    The line 2 should equal "Ancillary Justice"
+    The line 3 should equal "Ancillary Justice"
+    The line 4 should equal "remuxes=1"
+  End
+
+  # WAV's RIFF INFO has no album-artist chunk (two of the three tags take, one
+  # can never), and raw ADTS .aac has no metadata container at all. Neither
+  # can ever satisfy the verification, so neither may be allowed to become a
+  # push that can never succeed. They are excluded DELIBERATELY and said out
+  # loud, beside .aax/.aaxc — a warning the operator can act on, not a refusal
+  # the operator can only retry.
+  It 'retag: containers that cannot carry album_artist are warned about and pushed, never wedged'
+    rt_real
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/Wav Book" "$RIP_STAGING_ROOT/audiobooks/A/Aac Book"
+    ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a pcm_s16le \
+      "$RIP_STAGING_ROOT/audiobooks/A/Wav Book/book.wav"
+    ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a aac \
+      "$RIP_STAGING_ROOT/audiobooks/A/Aac Book/book.aac"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 0
+    The stderr should include "book.wav"
+    The stderr should include "book.aac"
+    The stderr should not include "refusing to push"
+    The path "$RIP_SANDBOX/server/audiobooks/A/Wav Book/book.wav" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/A/Aac Book/book.aac" should be exist
+    The stdout should include "verified on cantina"
+  End
+
   # --- the enrichment wiring ------------------------------------------------
   #
   # The invariant, end to end: a book's tags say exactly what its PATH says.
@@ -815,6 +887,61 @@ EOF
     The path "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order/book.m4b" should be exist
     # the surviving book really did go the whole way, not just avoid the drop
     The stdout should include "verified on cantina"
+  End
+
+  # A book is <Author>/<Title>. The enrichment derives the tags from ${rel:h},
+  # so a book whose audio sits one level deeper — "<Author>/<Title>/Disc 1/…",
+  # which `rip::ab_import`'s directory copy will happily produce — used to
+  # hand the retag the WRONG TWO SEGMENTS: album_artist="<Title>",
+  # album="Disc 1". Audiobookshelf would then show a book called "Disc 1" by
+  # an author called "Deathly Hallows", written authoritatively into the audio
+  # instead of merely read out of it: the exact wrong this phase exists to
+  # fix, made permanent. Refuse rather than guess — the same branch the
+  # empty-author case already takes.
+  It 'enrich: a book whose audio sits a level deeper is refused, never tagged from the wrong segments'
+    rt_real
+    rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Deathly Hallows/Disc 1"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::push_worker audiobooks >/dev/null
+      print -r -- \"rc=\$?\"
+      rt_probe '$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Deathly Hallows/Disc 1/book.m4b' album
+      rt_probe '$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Deathly Hallows/Disc 1/book.m4b' album_artist"
+    The line 1 should equal "rc=1"
+    # NOT "Disc 1" and NOT "Deathly Hallows": the file was left exactly as it
+    # arrived rather than stamped from the wrong two path segments
+    The line 2 should equal "Wrong Album"
+    The line 3 should equal "J.K. Rowling"
+    The stderr should include "refusing to push"
+    The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Deathly Hallows/Disc 1/book.m4b" should be exist
+  End
+
+  # macOS writes accented staged names DECOMPOSED (NFD: "é" = e + combining
+  # acute) and this module deliberately leaves LOCAL staging paths that way,
+  # while the push --iconv's to NFC on the wire — so the server, and every
+  # comparison spec S4's `--retag` sweep makes against it, speaks NFC. A tag
+  # written from the raw staged bytes would disagree with the server path on
+  # every accented author, and the sweep would rewrite those books on every
+  # run: the same non-convergence the verbatim-author ruling just removed,
+  # coming back through another door.
+  It 'enrich: an NFD staged author is tagged with the NFC bytes the server holds'
+    rt_real
+    nfd_author="$(printf 'Jose\xcc\x81 Saramago')"
+    rt_fixture "$RIP_STAGING_ROOT/audiobooks/$nfd_author/Blindness"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      find '$RIP_STAGING_ROOT/audiobooks' -type f | sed 's|^$RIP_STAGING_ROOT/audiobooks/||' > '$RIP_SANDBOX/lf'
+      rip::_enrich_audiobooks '$RIP_STAGING_ROOT/audiobooks' '$RIP_SANDBOX/lf' || exit 9
+      rt_probe '$RIP_STAGING_ROOT/audiobooks/$nfd_author/Blindness/book.m4b' album_artist
+      print -r -- \"bytes=\$(rt_probe '$RIP_STAGING_ROOT/audiobooks/$nfd_author/Blindness/book.m4b' album_artist | tr -d '\\n' | wc -c | tr -d ' ')\""
+    The status should equal 0
+    # composed, not decomposed — the spelling the server will hold
+    The line 1 should equal "José Saramago"
+    # 14 bytes (NFC), not 15 (NFD): asserted on the bytes as well, because the
+    # two spellings render identically and a string compare alone reads as a
+    # typo to the next person
+    The line 2 should equal "bytes=14"
   End
 
   # A file staged loose at the top of the type's tree is not a shape this
