@@ -1201,6 +1201,58 @@ Unabridged"
     The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
   End
 
+  # "COULD NOT ASK CANTINA" IS NOT "NO BASE BOOK STORED" (review finding,
+  # 2026-08-26). rip::_remote_sidecar_json's contract is tri-state and its
+  # own header says "Unknown must never collapse into absent" — but the read
+  # path treated rc 1 (confirmed absent) and rc 2 (never asked) identically:
+  # mint fresh, rc 0, stderr EMPTY. The two outcomes look the same on disk
+  # and mean opposite things. Absent is legal and expected (the operator is
+  # importing the Full Cast edition first); unknown means the base book may
+  # be sitting on cantina RIGHT NOW with a uid this rip is about to diverge
+  # from, permanently, because both books then carry a non-null `work` and
+  # neither is a --backfill-work-uid candidate again. The write-back failure
+  # path already warns about exactly this consequence; the read path, which
+  # produces the same one, said nothing at all.
+  #
+  # PAIRED, deliberately: the warning has to distinguish, so the absent case
+  # must stay silent. An example that only asserted the warning would pass
+  # against a function that warned unconditionally — which would train the
+  # operator to ignore the one line that matters.
+  wu_uid_shape_of_output() { wu_is_uuid4 "$1"; }
+
+  It 'work uid: a server that could not be asked warns before minting a fresh uid'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::_ab_work_uid_for 'A/B'"
+    The status should equal 0
+    The result of function wu_uid_shape_of_output should equal "uuidv4"
+    The stderr should include "could not read"
+    The stderr should include "A/B"
+    The stderr should include "will not group as one work"
+  End
+
+  It 'work uid: a base book the server CONFIRMS is absent mints quietly'
+    export RIP_REMOTE_BASE="fakehost:/srv/media"
+    # `cat` on a missing file exits 1, and ssh hands that status back: this
+    # is the "no such book is stored" branch, which is legal and must not
+    # warn about anything.
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::_ab_work_uid_for 'A/B'"
+    The status should equal 0
+    The result of function wu_uid_shape_of_output should equal "uuidv4"
+    The stderr should equal ""
+  End
+
   # A BASE BOOK AND ITS OWN EDITION IN ONE BATCH (review finding,
   # 2026-08-26). The memo above only fires for items that CARRY an edition:
   # the whole uid block sits inside `if [[ -n "$edition" ]]`, and the index

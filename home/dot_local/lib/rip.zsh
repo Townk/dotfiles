@@ -3500,6 +3500,18 @@ rip::_ab_anchor_work_uid() {
 #     importing the Full Cast edition first); the second is a refusal to
 #     touch a book we could not read.
 #
+# THOSE LAST TWO ARE ONE BRANCH IN CODE AND OPPOSITE FACTS IN THE WORLD, so
+# the second one SAYS SO (review finding, 2026-08-26). rip::_remote_sidecar_json
+# is tri-state precisely because "unknown must never collapse into absent" —
+# yet both landed here as "mint fresh, rc 0, stderr empty", which is the
+# correct action for absent and a silent permanent split for unknown: the
+# base book may be on cantina right now carrying a uid this rip is about to
+# diverge from, and once both books hold a non-null `work` neither is ever a
+# --backfill-work-uid candidate again. The write-back failure below already
+# warns about that exact consequence; the read side now warns about it too.
+# Absent stays SILENT — it is the expected case, and a warning on it would
+# teach the operator to ignore the one that matters.
+#
 # A uid is only REUSED when it is a non-empty STRING. Anything else in that
 # field is left strictly alone — not reused, not overwritten — because a
 # value of the wrong type is a hand edit or a corruption, and guessing at
@@ -3533,6 +3545,9 @@ rip::_ab_work_uid_for() {
   fi
   local have_base=0
   (( rc == 0 )) && [[ -n "$stored" ]] && have_base=1
+  if (( rc == 2 )); then
+    log_warn "rip: could not read \"$rel\" from cantina — this edition takes a fresh uid and the two will not group as one work"
+  fi
   if (( have_base )); then
     local existing
     # `_work_obj` before the subscript: `.work.uid` RAISES on an array (see
