@@ -667,6 +667,20 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should include "1 already on cantina"
+    # ...and a MACHINE marker beside the prose. Mode B, 2026-08-25: a run that
+    # refused everything exits 0 (nothing failed — the book is already there),
+    # so a capsule that only reports non-zero showed plain success for a run
+    # that shipped nothing. The marker is what lets the caller say so.
+    The output should include "skipped refused=1 dup=0"
+  End
+
+  # The marker must NOT appear when there is nothing to report, or the caller
+  # would raise an alarm on every ordinary successful run.
+  It 'session: no skip marker is emitted when nothing was skipped'
+    printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The output should not include "skipped refused="
   End
 
   # Task 4: a DIFFERENT refusal, keyed on BYTES rather than on path — the
@@ -4288,6 +4302,63 @@ process.stdout.write(els.rows.innerHTML);
 JS
     PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel.js" "$@"
   }
+
+  # panel_rows_shown <rows-json> <server-paths-json> — same, with the "show
+  # library" chip ON, which is the only state in which a stored row is
+  # rendered at all (with it off, visible() filters it out entirely).
+  panel_rows_shown() {
+    cat > "$RIP_SANDBOX/panel2.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', 'null');
+const els = {};
+function stub() {
+  return { innerHTML: '', textContent: '', value: '',
+           classList: { add() {}, remove() {}, toggle() {} },
+           addEventListener() {}, setAttribute() {},
+           getAttribute() { return null; }, setSelectionRange() {} };
+}
+global.document = {
+  getElementById(id) { return els[id] || (els[id] = stub()); },
+  addEventListener() {}
+};
+global.window = global;
+(0, eval)(src);
+// The source MUST be switched first: __setRows discards a delivery whose
+// sourceKind does not match the current SOURCE.kind (the guard that stops a
+// folder scan landing in an Audible panel), so tagging it 'folder' while the
+// panel is still in library mode silently renders nothing.
+window.__setSource({ kind: 'folder', root: '/incoming' });
+window.__setRows(JSON.parse(process.argv[2]), 'folder');
+window.__setServerLibrary(JSON.parse(process.argv[3]));
+window.__setShowLibrary(true);
+process.stdout.write(els.rows.innerHTML);
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel2.js" "$@"
+  }
+
+  # Mode B, 2026-08-25: re-ripping a book the server already held was refused,
+  # but only in the job log — the panel let it be armed and the session exited
+  # 0, so it read as success. The refusal is keyed on the composed path, which
+  # the panel already knows, so it can be prevented instead of reported.
+  It 'panel: a book already on cantina is blocked, with the reason and the way out'
+    Skip if 'node is unavailable' no_node
+    When call panel_rows_shown '[{"id":"1","path":"A/B","title":"B","authors":["A"],"narrators":[],"acquired":true}]' '["A/B"]'
+    The status should equal 0
+    The output should include 'data-blocked="true"'
+    The output should include "already on cantina"
+    # the way out is the edition route, and it must be stated in the row
+    The output should include "edit the title"
+  End
+
+  It 'panel: a book the server does NOT hold is left rippable'
+    Skip if 'node is unavailable' no_node
+    When call panel_rows_shown '[{"id":"1","path":"A/B","title":"B","authors":["A"],"narrators":[],"acquired":true}]' '["Someone/Else"]'
+    The status should equal 0
+    The output should include 'data-blocked="false"'
+    The output should not include "already on cantina"
+  End
 
   BORROWED='[{"id":"1","path":"Martha Wells/Fugitive Telemetry","title":"Fugitive Telemetry","authors":["Martha Wells"],"narrators":[],"plus":true,"absent":false,"acquired":false}]'
 

@@ -5440,6 +5440,16 @@ rip::ab_worker() {
   (( refused > 0 )) && log_error "rip: $refused already on cantina — skipped"
   (( dup > 0 )) && log_error "rip: $dup already stored (identical bytes) — skipped"
 
+  # A MACHINE MARKER for the caller, in the same spirit as the `progress`
+  # lines above. The two log_error lines are for the job log; this one is for
+  # whoever is watching, because a refusal is invisible otherwise: it does not
+  # fail (nothing went wrong — the book is already there), so the session
+  # exits 0 and a capsule that only reports non-zero shows plain success for a
+  # run that shipped nothing. The panel now blocks the path collision it can
+  # see; this covers the one it CANNOT — byte-identical content under a
+  # different name, which is only knowable after hashing.
+  (( refused > 0 || dup > 0 )) && print -r -- "skipped refused=$refused dup=$dup"
+
   # The push owns 70–100. The age gate is disabled for this inner push the
   # same way the disc pipeline disables it: these files are complete by
   # construction (the provider returned) rather than by having held still.

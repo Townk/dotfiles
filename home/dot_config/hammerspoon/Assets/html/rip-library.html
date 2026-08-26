@@ -305,6 +305,17 @@
       render();
     };
 
+    // The "show library" chip's own handler is a DOM listener, which the node
+    // harness cannot dispatch — so without this seam the stored-row block is
+    // unreachable by any automated check, and it only takes effect when the
+    // chip is ON (with it off, a stored row is filtered out of the list
+    // entirely and cannot be selected in the first place). Named for what it
+    // is rather than smuggled in as a bridge call nothing makes.
+    window.__setShowLibrary = function (on) {
+      SHOW_LIBRARY = !!on;
+      render();
+    };
+
     window.__setServerEditions = function (list) {
       SERVER_EDITIONS = arr(list);
       SERVER_EDITIONS_KNOWN = true;
@@ -573,6 +584,12 @@
     // save the rest of the selection — and it says so, naming the path they
     // collide on, because two rows can look completely different (different
     // folders, different formats) and still stage as the same book.
+    function storedHtml(r) {
+      if (!isStored(r)) return '';
+      return '<div class="detail"><div class="dup-blocked">' + SVG_WARN_SM
+        + '<span>already on cantina as ' + esc(r.path) + ' — edit the title to rip this as a separate edition</span></div></div>';
+    }
+
     function duplicateHtml(r) {
       if (!isDuplicate(r)) return '';
       return '<div class="detail"><div class="dup-blocked">' + SVG_WARN_SM
@@ -586,7 +603,7 @@
       var cover = r.cover
         ? '<div class="cover">' + SVG_BOOK + '<img src="' + esc(r.cover) + '" onerror="this.remove()"></div>'
         : '<div class="cover">' + SVG_BOOK + '</div>';
-      return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '" data-focused="' + (r.id === FOCUS_ID) + '" data-blocked="' + (!pathValid(r) || isDuplicate(r)) + '">'
+      return '<div class="row" data-row="' + esc(r.id) + '" data-selected="' + selected + '" data-inlibrary="' + inLibrary + '" data-focused="' + (r.id === FOCUS_ID) + '" data-blocked="' + (!pathValid(r) || isStored(r) || isDuplicate(r)) + '">'
         + '<div class="rowline">'
         + cover
         + (isFiles()
@@ -595,6 +612,7 @@
         + '<div class="meta">' + metaHtml(r) + '</div>'
         + '<span class="toggle" data-toggle="' + esc(r.id) + '" data-on="' + selected + '">' + (selected ? 'Rip' : 'Skip') + '</span>'
         + '</div>'
+        + storedHtml(r)
         + duplicateHtml(r)
         + audiblePlusHtml(r, inLibrary)
         + neverPushedHtml(r, inLibrary)
@@ -694,7 +712,16 @@
     // Independent per-row toggle: no radio semantics, nothing here ever
     // demotes another row (unlike rip-session's Feature control).
     function toggleRow(id) {
-      if (SELECTED.has(id)) SELECTED.delete(id); else SELECTED.add(id);
+      // Deselecting a stored row stays allowed: it can be selected already if
+      // an inline edit moved its path ONTO something the server holds, and
+      // refusing to let go of it would strand the operator.
+      if (!SELECTED.has(id)) {
+        var r = rowById(id);
+        if (r && isStored(r)) return;
+        SELECTED.add(id);
+      } else {
+        SELECTED.delete(id);
+      }
       render();
     }
 
@@ -849,11 +876,21 @@
     // Provider-agnostic on purpose: two Audible rows can compose one path
     // too (a re-release under the same author and title), and the server
     // rule does not care which provider produced them.
+    // A book the server already holds at this composed path. The backend
+    // refuses it anyway (rip::ab_have, keyed on the same path), so letting it
+    // into the plan only produced a refusal the operator never saw. Note this
+    // follows INLINE EDITS: retitling an alternate edition to something the
+    // server does not hold clears the block, which is exactly the route out.
+    function isStored(r) {
+      return SERVER.has(r.path);
+    }
+
     function rippable() {
       var seen = {}, out = [];
       for (var i = 0; i < ROWS.length; i++) {
         var r = ROWS[i];
         if (!SELECTED.has(r.id) || !pathValid(r)) continue;
+        if (isStored(r)) continue;
         if (Object.prototype.hasOwnProperty.call(seen, r.path)) continue;
         seen[r.path] = true;
         out.push(r);
@@ -871,9 +908,11 @@
       RIPPABLE_IDS = new Set(RIPPABLE.map(function (r) { return r.id; }));
     }
 
-    // A selected row that is valid on its own but lost the dedupe.
+    // A selected row that is valid on its own but lost the dedupe. Excludes
+    // stored rows: those are out of RIPPABLE for their OWN reason, and
+    // reporting them as losing a dedupe against a sibling would be a lie.
     function isDuplicate(r) {
-      return SELECTED.has(r.id) && pathValid(r) && !RIPPABLE_IDS.has(r.id);
+      return SELECTED.has(r.id) && pathValid(r) && !isStored(r) && !RIPPABLE_IDS.has(r.id);
     }
 
     //----------------------------------------------------------------------

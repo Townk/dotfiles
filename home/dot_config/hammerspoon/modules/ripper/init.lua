@@ -752,6 +752,24 @@ local function enqueueVisible(bin, args, what, failTitle)
 	local t = hs.task.new(bin, function(rc, stdout, stderr)
 		tasks[id] = nil
 		if rc == 0 then
+			-- A run that refused every book is not a FAILURE — the state the
+			-- operator asked for already holds — so it exits 0 and would
+			-- otherwise report plain success while shipping nothing. The
+			-- worker emits `skipped refused=N dup=N` for exactly this case.
+			local refused, dup = string.match(stdout or "", "skipped refused=(%d+) dup=(%d+)")
+			if refused then
+				local parts = {}
+				if tonumber(refused) > 0 then
+					table.insert(parts, string.format("%s already on cantina", refused))
+				end
+				if tonumber(dup) > 0 then
+					table.insert(parts, string.format("%s already stored (identical bytes)", dup))
+				end
+				local why = table.concat(parts, ", ")
+				osd.notify("glyph:nf-md-alert", "Nothing ripped — " .. why, "Basso")
+				hs.notify.new(nil, { title = "Audiobook rip skipped", informativeText = why, withdrawAfter = 0 })
+					:send()
+			end
 			return
 		end
 		print(
