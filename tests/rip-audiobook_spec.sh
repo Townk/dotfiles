@@ -611,7 +611,15 @@ EOF
     export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-copy" RIP_FFPROBE_BIN=ffprobe
   }
 
-  It 'retag: writes album_artist, album and title, and canonicalizes the author'
+  # VERBATIM, deliberately — the author is written exactly as handed in, with
+  # no canonicalization on the way (coordinator ruling, 2026-08-26). The tag
+  # must equal what the PATH says, or `--retag` (which compares stored tags
+  # against the path) reports a mismatch on every run and rewrites every book
+  # on the server forever: a sweep with no fixed point. The canonical initials
+  # form enters through the PATH instead — the panel normalises on blur, and
+  # --canonicalize-authors repairs stored paths, after which the tags follow
+  # and the sweep goes quiet.
+  It 'retag: writes album_artist, album and title exactly as given, author verbatim'
     rt_real
     rt_fixture "$RIP_SANDBOX/b1"
     When run zsh -c "source $RIPLIB
@@ -621,9 +629,39 @@ EOF
       rt_probe '$RIP_SANDBOX/b1/book.m4b' album
       rt_probe '$RIP_SANDBOX/b1/book.m4b' title"
     The status should equal 0
-    The line 1 should equal "J. K. Rowling"
+    The line 1 should equal "J.K. Rowling"
     The line 2 should equal "Deathly Hallows (Full Cast)"
     The line 3 should equal "Deathly Hallows (Full Cast)"
+  End
+
+  # THE CONVERGENCE PROPERTY, pinned directly. Two things have to be true for
+  # the library-wide `--retag` sweep to ever reach a fixed point: the tags a
+  # second pass reads must already be right, and that second pass must not
+  # rewrite the file. The ffmpeg seam here counts its own invocations, so
+  # "did not rewrite" is observed rather than inferred.
+  It 'retag: a second pass finds the tags already correct and does not rewrite the file'
+    rt_real
+    rt_fixture "$RIP_SANDBOX/b6"
+    printf '%s\n' '#!/bin/sh' 'printf "run\n" >> "$RIP_SANDBOX/ffmpeg.count"' 'exec ffmpeg "$@"' \
+      > "$RIP_SANDBOX/ffmpeg-counting"
+    chmod +x "$RIP_SANDBOX/ffmpeg-counting"
+    export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-counting"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::_retag_book '$RIP_SANDBOX/b6/book.m4b' 'J.K. Rowling' 'Deathly Hallows' || exit 9
+      print -r -- \"after-first=\$(wc -l < '$RIP_SANDBOX/ffmpeg.count' | tr -d ' ')\"
+      rip::_retag_book '$RIP_SANDBOX/b6/book.m4b' 'J.K. Rowling' 'Deathly Hallows' || exit 9
+      print -r -- \"after-second=\$(wc -l < '$RIP_SANDBOX/ffmpeg.count' | tr -d ' ')\"
+      rt_probe '$RIP_SANDBOX/b6/book.m4b' album_artist
+      rt_probe '$RIP_SANDBOX/b6/book.m4b' album"
+    The status should equal 0
+    # the first pass really did remux (without this the second-pass count
+    # below would prove nothing)
+    The line 1 should equal "after-first=1"
+    # the second found them already correct and touched nothing
+    The line 2 should equal "after-second=1"
+    The line 3 should equal "J.K. Rowling"
+    The line 4 should equal "Deathly Hallows"
   End
 
   # "We did not write it" is NOT "it survived the remux" — a remux that
@@ -730,7 +768,10 @@ EOF
       rt_probe \"\$book\" title
       rt_probe \"\$book\" artist"
     The status should equal 0
-    The line 1 should equal "J. K. Rowling"
+    # the author dir's own spelling, verbatim — the tag agrees with the path
+    # byte for byte, which is what makes the invariant checkable in both
+    # directions and what lets the --retag sweep converge
+    The line 1 should equal "J.K. Rowling"
     The line 2 should equal "Goblet of Fire (Full Cast)"
     The line 3 should equal "Goblet of Fire (Full Cast)"
     The line 4 should equal "Jim Dale"
@@ -811,7 +852,7 @@ EOF
     The line 1 should equal "Wrong Album"
     The line 2 should equal "J.K. Rowling"
     The line 3 should equal "Chamber of Secrets"
-    The line 4 should equal "J. K. Rowling"
+    The line 4 should equal "J.K. Rowling"
     # (the ABS remote hop's own 404 against the empty sandbox bin dir is the
     # only thing on stderr here — see setup's RIP_BIN_DIR note)
     The stderr should not include "refusing"

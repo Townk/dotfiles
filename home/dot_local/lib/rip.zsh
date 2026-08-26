@@ -910,15 +910,52 @@ rip::_book_sidecar() {
 # for the folder provider (its acquire COPIES, deliberately, because the
 # local copy IS the original) and does not change here.
 
+# rip::_tags_match <file> <album_artist> <bookname> — rc 0 when <file>'s three
+# authoritative tags already read back EXACTLY as given. Prints nothing; any
+# unreadable file, missing tag or difference is a plain non-zero.
+#
+# ONE comparison, two callers, on purpose: rip::_retag_book asks it before the
+# remux ("is there anything to do?") and again afterwards ("did it take?"),
+# and those two questions must never be able to answer differently for the
+# same file — a skip rule that was even slightly looser than the verification
+# would skip a book the verification would have refused.
+#
+# jq does the whole comparison rather than shell string-splitting ffprobe's
+# output: a tag value containing a tab, an equals sign or a newline can then
+# never be split wrong on the way to being compared.
+rip::_tags_match() {
+  setopt localoptions noerrexit nopipefail
+  local ffprobe_bin="${RIP_FFPROBE_BIN:-ffprobe}"
+  "$ffprobe_bin" -v error -show_entries format_tags -of json -- "$1" 2>/dev/null \
+    | jq -e --arg aa "$2" --arg bn "$3" \
+        '(.format.tags // {}) as $t
+         | (($t.album_artist // "") == $aa)
+           and (($t.album // "") == $bn)
+           and (($t.title // "") == $bn)' >/dev/null 2>&1
+}
+
 # rip::_retag_book <file> <author> <bookname> — rewrite this audio file's
 # authoritative tags. rc 0 ONLY when the tags were written AND read back
 # correctly.
 #
-#   album_artist  the author, through rip::_author_display
+#   album_artist  the author, VERBATIM
 #   album         the book name
 #   title         the book name
 #   artist        LEFT ALONE
 #   composer      LEFT ALONE
+#
+# VERBATIM IS A CONVERGENCE REQUIREMENT, not laziness (coordinator ruling,
+# 2026-08-26). The invariant is checkable in BOTH directions, and the
+# library-wide `--retag` sweep is the direction that checks it: it compares a
+# stored book's tags AGAINST its path. A retag that wrote a TRANSFORMED
+# author — the canonical initials form, say — while the path kept the raw one
+# would make that comparison report a mismatch on every single run and
+# rewrite the file every time: a sweep with no fixed point, rewriting every
+# book on the server forever. So the canonical form enters through the PATH
+# and never through the tag: the panel normalises the author on blur, so new
+# rips get canonical paths and the tags follow for free, and
+# --canonicalize-authors repairs stored paths, after which a retag brings
+# those books' tags into line ONCE and then goes quiet.
 #
 # `artist` is deliberately not written: it holds the narrator in some of
 # these files and the author in others, there is no reliable narrator to
@@ -963,8 +1000,16 @@ rip::_retag_book() {
   # not land in the library carrying whatever the seller happened to embed.
   [[ -n "$bookname" ]] || { log_error "rip: refusing to retag ${f:t} — no book name to write"; return 1 }
   [[ -n "$author" ]] || { log_error "rip: refusing to retag ${f:t} — no author to write"; return 1 }
-  local aa; aa="$(rip::_author_display "$author")"
-  [[ -n "$aa" ]] || { log_error "rip: refusing to retag ${f:t} — the author canonicalized to nothing"; return 1 }
+
+  # ALREADY CORRECT → do nothing at all. Idempotence is what makes the
+  # documented keep-staged retry path (a book re-enriched after a failed
+  # verify) cheap instead of a second full remux of a multi-gigabyte file,
+  # and it is the half of the convergence property that the sweep in the
+  # header comment depends on: a pass that finds nothing to change must
+  # leave the bytes, and the mtime, exactly where they were.
+  if rip::_tags_match "$f" "$author" "$bookname"; then
+    return 0
+  fi
 
   # The scratch write lives under .work/, never inside the book dir itself —
   # the same rule (and the same reasoning) as rip::_book_sidecar's temp: a
@@ -978,25 +1023,21 @@ rip::_retag_book() {
   rm -f -- "$tmp"
 
   "$ffmpeg_bin" -v error -y -i "$f" -map 0 -map "-0:d?" -c copy -map_chapters 0 \
-    -metadata album_artist="$aa" -metadata album="$bookname" -metadata title="$bookname" \
+    -metadata album_artist="$author" -metadata album="$bookname" -metadata title="$bookname" \
     -- "$tmp" </dev/null >/dev/null 2>&1
   local wrc=$?
 
-  # Read the tags back out of what was actually written. jq does the whole
-  # comparison so a value containing a tab, an equals sign or a newline can
-  # never be split wrong on the way to being compared.
-  local probe
-  probe="$("$ffprobe_bin" -v error -show_entries format_tags -of json -- "$tmp" 2>/dev/null)"
-  if ! print -r -- "$probe" | jq -e --arg aa "$aa" --arg bn "$bookname" \
-       '(.format.tags // {}) as $t
-        | (($t.album_artist // "") == $aa)
-          and (($t.album // "") == $bn)
-          and (($t.title // "") == $bn)' >/dev/null 2>&1; then
+  # Read the tags back out of what was ACTUALLY written, and judge on that.
+  if ! rip::_tags_match "$tmp" "$author" "$bookname"; then
+    # Only now (a failure is rare, and this is the message's only reader) pay
+    # a second probe, so the operator is told what the file actually says
+    # rather than just that something went wrong.
     local got
-    got="$(print -r -- "$probe" | jq -c '(.format.tags // {}) | {album_artist, album, title}' 2>/dev/null)"
+    got="$("$ffprobe_bin" -v error -show_entries format_tags -of json -- "$tmp" 2>/dev/null \
+      | jq -c '(.format.tags // {}) | {album_artist, album, title}' 2>/dev/null)"
     [[ -n "$got" ]] || got='(nothing readable was written)'
     if (( wrc == 0 )); then
-      log_error "rip: ffmpeg reported success but the tags did not take on ${f:t} — wanted album_artist=\"$aa\" album=\"$bookname\" title=\"$bookname\", read back $got"
+      log_error "rip: ffmpeg reported success but the tags did not take on ${f:t} — wanted album_artist=\"$author\" album=\"$bookname\" title=\"$bookname\", read back $got"
     else
       log_error "rip: could not write tags to ${f:t} (ffmpeg rc=$wrc) — read back $got"
     fi
@@ -1155,9 +1196,9 @@ rip::_enrich_audiobooks() {
     fi
     rm -f -- "$meta"
     # THE AUTHORITATIVE TAGS (design doc S2). The author and the book name
-    # come from the STAGED PATH, not from the provider row, because the path
-    # is what the library shows and the invariant is that the tags say what
-    # the path says. The two are NOT the same string: the libation provider
+    # come from the STAGED PATH, not from the provider row, and they are
+    # written VERBATIM, because the path is what the library shows and the
+    # invariant is that the tags say what the path says. The two are NOT the same string: the libation provider
     # emits title "Steelheart" for a directory it names "Steelheart: The
     # Reckoners, Book 1", and rip::_canonicalize_staged_authors may have
     # already renamed the author directory to the spelling the server uses
@@ -5124,9 +5165,17 @@ rip::_author_norm() {
 # rip::_author_display <name> — the canonical DISPLAY form: initials get a
 # space after their period. This is a DIFFERENT job from _author_norm above:
 # norm throws punctuation and case away to answer "is this the same person
-# as that other spelling", and must never be shown or written anywhere: its
-# output feeds the panel and the file tags directly, so the punctuation and
-# case it preserves is exactly what makes it presentable.
+# as that other spelling", and must never be shown or written anywhere: this
+# one's output is meant to be READ, so the punctuation and case it preserves
+# is exactly what makes it presentable.
+#
+# APPLIED TO THE PATH, NEVER TO A TAG (coordinator ruling, 2026-08-26). The
+# panel normalises the author field on blur and --canonicalize-authors
+# repairs stored author directories; rip::_retag_book then writes whatever
+# the path says, verbatim. Canonicalizing on the way into a TAG instead would
+# leave the tag disagreeing with the path, and the `--retag` sweep — which
+# compares the two — would report a mismatch on every run and rewrite every
+# book forever. See rip::_retag_book's header for the full argument.
 #
 # The rule: a SINGLE letter, a period, then immediately another letter (no
 # space between them) gets a space inserted after the period. Two letters
