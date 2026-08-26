@@ -917,6 +917,89 @@ EOF
     The path "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Deathly Hallows/Disc 1/book.m4b" should be exist
   End
 
+  # THE SECOND-ORDER EFFECT OF THAT REFUSAL (review finding, 2026-08-26).
+  # rip::_enrich_audiobooks derives its book set from ${rel:h} per listed
+  # file, with no notion of nesting — so ONE book laid out the way
+  # rip::ab_import's `cp -R` produces it,
+  #
+  #     <Author>/<Title>/zz-notes.pdf
+  #     <Author>/<Title>/Disc 1/book.m4b
+  #
+  # arrives as TWO entries: the valid two-segment "<Author>/<Title>" and the
+  # invalid three-segment "<Author>/<Title>/Disc 1". The refusal above
+  # correctly drops the deep one — but the shallow one is a perfectly valid
+  # book path in its own right, so it was still processed as its own book and
+  # wrote a `.fleet-book.json` for a book whose audio had just been refused.
+  # Worse, rip::_enrich_add RE-ADDS that sidecar to the push list, so when the
+  # deep sibling was refused FIRST the sidecar was added back after the drop
+  # and shipped: an orphan identity on cantina for a book that never arrived,
+  # with the push reporting rc 1 and "verified on cantina" in the same breath.
+  #
+  # ORDER DECIDES WHICH SYMPTOM YOU GET, and the order is `find`'s unsorted
+  # readdir order — so this was intermittent, not absent, and a test that
+  # takes whatever order it is handed is a test that passes here and fails on
+  # the operator's machine. The two examples below therefore drive
+  # rip::_enrich_audiobooks with a HAND-WRITTEN listfile and force each order
+  # explicitly. Both must end with nothing written and nothing listed: the
+  # group is refused ONCE, up front, before any member is processed.
+
+  # nested_book — one book, audio a level down, a companion at the top.
+  nested_book() {
+    rt_fixture "$RIP_STAGING_ROOT/audiobooks/A/T/Disc 1"
+    printf 'notes\n' > "$RIP_STAGING_ROOT/audiobooks/A/T/zz-notes.pdf"
+  }
+  # nested_probe — rc, what survives in the push list, and whether a sidecar
+  # was written for the refused book. `sidecars=0` is what catches BOTH
+  # orderings: companion-first left the file in staging without shipping it,
+  # disc-first shipped it.
+  NESTED_PROBE='rip::_enrich_audiobooks "$RIP_STAGING_ROOT/audiobooks" "$RIP_SANDBOX/lf"
+      print -r -- "rc=$?"
+      print -r -- "listed=$(wc -l < "$RIP_SANDBOX/lf" | tr -d " ")"
+      print -r -- "sidecars=$(find "$RIP_STAGING_ROOT/audiobooks" -name .fleet-book.json | wc -l | tr -d " ")"'
+
+  It 'enrich: a nested book is refused as ONE book — companion listed first'
+    rt_real
+    nested_book
+    printf '%s\n' 'A/T/zz-notes.pdf' 'A/T/Disc 1/book.m4b' > "$RIP_SANDBOX/lf"
+    When run zsh -c "source $RIPLIB
+      $NESTED_PROBE"
+    The line 1 should equal "rc=3"
+    The line 2 should equal "listed=0"
+    The line 3 should equal "sidecars=0"
+    The stderr should include "refusing to push"
+  End
+
+  It 'enrich: a nested book is refused as ONE book — the deep audio listed first'
+    rt_real
+    nested_book
+    printf '%s\n' 'A/T/Disc 1/book.m4b' 'A/T/zz-notes.pdf' > "$RIP_SANDBOX/lf"
+    When run zsh -c "source $RIPLIB
+      $NESTED_PROBE"
+    The line 1 should equal "rc=3"
+    # THIS is the ordering that shipped an orphan: the drop happened, and then
+    # the shallow sibling put its sidecar back on the list
+    The line 2 should equal "listed=0"
+    The line 3 should equal "sidecars=0"
+    The stderr should include "refusing to push"
+  End
+
+  # And the same thing end to end, because "nothing was listed" is a claim
+  # about a file while "nothing reached cantina" is the claim that matters.
+  # Whichever order find happens to return here, the server must be untouched
+  # and every staged byte must still be staged.
+  It 'enrich: a nested book leaves NOTHING on the server and everything in staging'
+    rt_real
+    nested_book
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 1
+    The stderr should include "refusing to push"
+    # not one file, not even an identity sidecar
+    The path "$RIP_SANDBOX/server/audiobooks/A" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/A/T/Disc 1/book.m4b" should be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/A/T/zz-notes.pdf" should be exist
+    The stdout should not include "verified on cantina"
+  End
+
   # macOS writes accented staged names DECOMPOSED (NFD: "é" = e + combining
   # acute) and this module deliberately leaves LOCAL staging paths that way,
   # while the push --iconv's to NFC on the wire — so the server, and every

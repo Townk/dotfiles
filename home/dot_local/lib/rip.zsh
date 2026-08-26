@@ -1152,6 +1152,24 @@ rip::_retag_staged_book() {
   return $rc
 }
 
+# rip::_book_rel_of <staged relpath> — the "<Author>/<Title>" a staged path
+# belongs to: its first two components, or the whole thing when it has fewer.
+#
+# ONE answer to "which book is this?", because two callers now need it to
+# agree exactly: the pre-scan that decides whether a book is refused, and the
+# per-directory loop that has to skip every member of a refused book. A path
+# that is already exactly <Author>/<Title> comes back unchanged, which is how
+# both callers tell a valid book from a too-deep or too-shallow one — `$d`
+# equals its own book rel if and only if it IS the book.
+rip::_book_rel_of() {
+  local d="${1:-}"
+  if [[ "$d" == */* ]]; then
+    print -r -- "${d%%/*}/${${d#*/}%%/*}"
+  else
+    print -r -- "$d"
+  fi
+}
+
 # rip::_listfile_drop <listfile> <reldir> — remove every entry under <reldir>
 # from the push list, so a refused book cannot reach the rsync.
 #
@@ -1250,8 +1268,51 @@ rip::_enrich_audiobooks() {
   # in a loop body prints "name=value" onto the stream this runs on, and
   # this file has been bitten by that before.
   local d meta hop failed=0 refused=0 b_author b_book b_rel
+  local -A refused_book=()
+
+  # THE PRE-SCAN, AND IT HAS TO BE A PRE-SCAN (review finding, 2026-08-26).
+  #
+  # `dirs` is one entry per distinct ${rel:h}, with no notion of nesting, so
+  # ONE book laid out the way rip::ab_import's `cp -R` produces it —
+  # "<Author>/<Title>/zz-notes.pdf" beside "<Author>/<Title>/Disc 1/book.m4b"
+  # — arrives here as TWO entries: the valid "<Author>/<Title>" and the
+  # invalid "<Author>/<Title>/Disc 1". Refusing them one at a time inside the
+  # loop below is not enough, because the shallow entry is a perfectly valid
+  # book path in its own right: it wrote a `.fleet-book.json` for a book whose
+  # audio had just been refused, and rip::_enrich_add PUT THAT SIDECAR BACK on
+  # the push list after the refusal had dropped it. An orphan identity then
+  # shipped to cantina for a book that never arrived, with the push reporting
+  # rc 1 and "verified on cantina" in the same breath.
+  #
+  # Which symptom you got depended on which sibling `find` returned first
+  # (rip::push_worker's find is unsorted), so it was intermittent rather than
+  # absent — the worst shape a bug can have.
+  #
+  # Deciding the whole book's fate BEFORE any member is touched is what makes
+  # iteration order irrelevant: nothing under a refused book is meta-read,
+  # sidecar-written, tagged, re-added or hopped, in any order.
+  for d in "${dirs[@]}"; do
+    b_rel="$(rip::_book_rel_of "$d")"
+    # Refused when the entry is not exactly its own <Author>/<Title>: too
+    # deep ("A/B/Disc 1"), or too shallow ("A", or "." for a file staged at
+    # the top of the type's tree). No slicing can recover which segment is
+    # the author from a path that does not say, so refuse and name it.
+    [[ "$d" == "$b_rel" && "$b_rel" == */* && "$b_rel" != */*/* ]] && continue
+    refused_book[$b_rel]=1
+  done
+  for b_rel in "${(@k)refused_book}"; do
+    log_error "rip: refusing to push \"$b_rel\" — a staged book is <Author>/<Title>, and tags cannot be written from a path that does not say which is which"
+    # The whole BOOK is dropped, companions and sidecar included, not just
+    # the sub-directory the audio happened to sit in.
+    rip::_listfile_drop "$listfile" "$b_rel" \
+      || log_error "rip: could not drop \"$b_rel\" from the push list"
+    refused=1
+  done
+
   for d in "${dirs[@]}"; do
     [[ -d "$src/$d" ]] || continue
+    # Every member of a refused book, skipped before anything is written.
+    (( ${+refused_book[$(rip::_book_rel_of "$d")]} )) && continue
     meta="$(rip::staging_root)/.work/book-meta.$$.json"
     mkdir -p "${meta:h}"
     if rip::_book_meta_for "$d" > "$meta" 2>/dev/null \
@@ -1274,17 +1335,15 @@ rip::_enrich_audiobooks() {
     # reason — the panel composed the path as "<Author>/<Title> (<Edition>)",
     # so the directory name already IS "<Title> (<Edition>)".
     #
-    # EXACTLY TWO COMPONENTS, or the book is refused (review finding F2,
-    # 2026-08-26). $d is ${rel:h}, so a book whose audio sits one level
-    # deeper — "<Author>/<Title>/Disc 1/…", which rip::ab_import's directory
-    # copy will happily produce — used to reach this with the WRONG TWO
-    # SEGMENTS in hand and stamp album_artist="<Title>", album="Disc 1" into
-    # the audio. Audiobookshelf would then show a book called "Disc 1" by an
-    # author called "Deathly Hallows": the exact wrong this phase exists to
-    # fix, no longer merely READ out of the file but written authoritatively
-    # into it. No slicing can recover which segment is the author from a path
-    # that does not say — so refuse and name it, the same answer the
-    # empty-author branch already gives.
+    # EXACTLY TWO COMPONENTS, guaranteed by the pre-scan above (review
+    # finding F2, 2026-08-26). $d is ${rel:h}, so a book whose audio sits one
+    # level deeper — "<Author>/<Title>/Disc 1/…", which rip::ab_import's
+    # directory copy will happily produce — used to reach this with the WRONG
+    # TWO SEGMENTS in hand and stamp album_artist="<Title>", album="Disc 1"
+    # into the audio. Audiobookshelf would then show a book called "Disc 1"
+    # by an author called "Deathly Hallows": the exact wrong this phase
+    # exists to fix, no longer merely READ out of the file but written
+    # authoritatively into it.
     #
     # NFC, because the tag is REMOTE text (review finding F4, 2026-08-26).
     # macOS stages accented names DECOMPOSED and this module deliberately
@@ -1294,23 +1353,10 @@ rip::_enrich_audiobooks() {
     # tag written from the raw staged bytes would differ from the server path
     # on every accented author and be rewritten on every sweep: the same
     # non-convergence the verbatim-author rule removes, through another door.
-    b_author=""; b_book=""; b_rel="$d"
-    if [[ "$d" == */* ]]; then
-      b_author="${d%%/*}"
-      b_book="${${d#*/}%%/*}"
-      b_rel="$b_author/$b_book"
-    fi
-    if [[ -z "$b_author" || -z "$b_book" || "$d" != "$b_rel" ]]; then
-      # $b_rel, not $d: the whole BOOK is refused, companions and sidecar
-      # included, not just the sub-directory the audio happened to sit in.
-      log_error "rip: refusing to push \"$d\" — a staged book is <Author>/<Title>, and tags cannot be written from a path that does not say which is which"
-      rip::_listfile_drop "$listfile" "$b_rel" \
-        || log_error "rip: could not drop \"$b_rel\" from the push list"
-      refused=1
-      continue
-    fi
-    b_author="$(rip::_nfc "$b_author")"
-    b_book="$(rip::_nfc "$b_book")"
+    # Exactly two components by construction now — the pre-scan above refused
+    # and skipped anything else, so this is a plain split, not a check.
+    b_author="$(rip::_nfc "${d%%/*}")"
+    b_book="$(rip::_nfc "${d#*/}")"
     if ! rip::_retag_staged_book "$src/$d" "$b_author" "$b_book"; then
       # REFUSED, not warned (design doc S3, the operator's rule verbatim:
       # "not failing on error is a recipe for drift in the long run"). The
