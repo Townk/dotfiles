@@ -4863,6 +4863,49 @@ rip::_author_norm() {
   print -r -- "${n//[^a-z0-9]/}"
 }
 
+# rip::_author_display <name> — the canonical DISPLAY form: initials get a
+# space after their period. This is a DIFFERENT job from _author_norm above:
+# norm throws punctuation and case away to answer "is this the same person
+# as that other spelling", and must never be shown or written anywhere: its
+# output feeds the panel and the file tags directly, so the punctuation and
+# case it preserves is exactly what makes it presentable.
+#
+# The rule: a SINGLE letter, a period, then immediately another letter (no
+# space between them) gets a space inserted after the period. Two letters
+# before the period is not an initial ("Dr.Smith" stays as-is — "Dr" is an
+# abbreviation, not two initials), and a period already followed by a space
+# is already correct ("St. Martin" is untouched). Scanned character by
+# character rather than with a single regex substitution: a naive global
+# "letter.letter" replace consumes the letter after the period as part of
+# its match, which is fine for one initial but wrong for a run of them
+# ("J.R.R. Tolkien") — the middle letter needs to be read BOTH as the
+# letter following one period and as the single letter preceding the next,
+# and a regex that consumes matched characters can't reuse it that way.
+# A left-to-right scan that only ever consumes the period never has that
+# problem. Idempotent by construction: once a period is followed by a
+# space, the "immediately another letter" condition no longer holds.
+rip::_author_display() {
+  local s="$1"
+  local -a chars
+  chars=("${(@s::)s}")
+  local n=${#chars}
+  local out="" c prev prev2 nxt
+  local i
+  for (( i = 1; i <= n; i++ )); do
+    c="${chars[i]}"
+    out+="$c"
+    if [[ "$c" == "." ]]; then
+      prev="${chars[i-1]:-}"
+      prev2="${chars[i-2]:-}"
+      nxt="${chars[i+1]:-}"
+      if [[ "$prev" == [A-Za-z] && "$prev2" != [A-Za-z] && "$nxt" == [A-Za-z] ]]; then
+        out+=" "
+      fi
+    fi
+  done
+  print -r -- "$out"
+}
+
 # rip::_server_authors — the distinct author spellings the server holds.
 # Derived from the ONE ssh rip::ab_server_library already makes, and cached for
 # the life of the process: a push canonicalizes every staged author and must

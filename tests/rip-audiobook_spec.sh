@@ -473,6 +473,59 @@ FAKESSH
     The line 3 should equal "johnronaldreueltolkien"
   End
 
+  It 'author display: initials get a space after the period'
+    When run zsh -c "source $RIPLIB
+      print -r -- \$(rip::_author_display 'J.K. Rowling')
+      print -r -- \$(rip::_author_display 'J.R.R. Tolkien')
+      print -r -- \$(rip::_author_display 'e.e. cummings')
+      print -r -- \$(rip::_author_display 'A.A. Milne')"
+    The status should equal 0
+    The line 1 should equal "J. K. Rowling"
+    The line 2 should equal "J. R. R. Tolkien"
+    The line 3 should equal "e. e. cummings"
+    The line 4 should equal "A. A. Milne"
+  End
+
+  # The negative cases are the point: a rule that spaces every period would
+  # mangle both of these. "Dr" is two letters before the period (not a lone
+  # initial); "St. Martin" already has its space and must not gain another.
+  It 'author display: two letters before the period is not an initial'
+    When run zsh -c "source $RIPLIB && rip::_author_display 'Dr.Smith'"
+    The status should equal 0
+    The output should equal "Dr.Smith"
+  End
+
+  It 'author display: a period already followed by a space is left alone'
+    When run zsh -c "source $RIPLIB && rip::_author_display 'St. Martin'"
+    The status should equal 0
+    The output should equal "St. Martin"
+  End
+
+  It 'author display: a name with no periods is untouched'
+    When run zsh -c "source $RIPLIB && rip::_author_display 'Brandon Sanderson'"
+    The status should equal 0
+    The output should equal "Brandon Sanderson"
+  End
+
+  It 'author display: empty input stays empty'
+    When run zsh -c "source $RIPLIB && rip::_author_display ''"
+    The status should equal 0
+    The output should equal ""
+  End
+
+  It 'author display: idempotent — a second pass changes nothing'
+    When run zsh -c "source $RIPLIB
+      once=\$(rip::_author_display 'J.K. Rowling')
+      twice=\$(rip::_author_display \"\$once\")
+      print -r -- \"\$once\"
+      print -r -- \"\$twice\"
+      print -r -- \$(rip::_author_display 'J. K. Rowling')"
+    The status should equal 0
+    The line 1 should equal "J. K. Rowling"
+    The line 2 should equal "J. K. Rowling"
+    The line 3 should equal "J. K. Rowling"
+  End
+
   It 'canonical author: adopts the spelling the server already uses'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
     When run zsh -c "source $RIPLIB && rip::_canonical_author 'J.R.R. Tolkien'"
