@@ -5109,4 +5109,140 @@ JS
     The output should not include "never pushed"
   End
 
+  # --- rip::ab_backfill_work_uid ---------------------------------------------
+  #
+  # Mints `work.uid` for every stored book whose `work` is null, leaving
+  # `edition: null` behind — the anchor of a work, not a named edition of one
+  # (design doc S5). Mirrors rip::ab_backfill_published's shape (dry run by
+  # default, --apply required, compose locally + ship base64-framed payloads
+  # because cantina has no jq) — reuses that section's mkbook_empty,
+  # sidecar_at, fake_server_ssh and ssh_calls helpers, already defined above.
+  #
+  # This writes to the only copy of a book's identity on 248 real sidecars —
+  # the byte-identity and distinct-uid guards below are the ones that matter
+  # most: a book that already anchors a work must never be re-serialized, and
+  # a loop that mints once and reuses the value would silently merge the
+  # whole library into one "work".
+
+  bwu_sha() { shasum -a 256 "$(sidecar_at "$1")" | cut -d' ' -f1; }
+  bwu_uid_at() { jq -r '.work.uid // ""' "$(sidecar_at "$1")"; }
+  bwu_uid_ok() {
+    bwu_uid_at "$1" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' \
+      && echo "uuidv4" || echo "NOT A UUIDV4"
+  }
+  # "The result of function NAME" invokes NAME with no meaningful args (the
+  # prior When's stdout/stderr/status land in $1-$3, unused here) — these
+  # zero-arg wrappers close over a fixed path the way rpo_uid_ok closes over
+  # $RPO above.
+  bwu_uid_ok_ab() { bwu_uid_ok "A/B"; }
+  bwu_already_sha() { bwu_sha "A/Already"; }
+  bwu_two_uids_distinct() {
+    u1=$(bwu_uid_at "A/One"); u2=$(bwu_uid_at "A/Two")
+    if [ -n "$u1" ] && [ -n "$u2" ] && [ "$u1" != "$u2" ]; then
+      echo "distinct"
+    else
+      echo "u1=$u1 u2=$u2"
+    fi
+  }
+  # bwu_tree_digest — one hash covering every stored file's PATH and CONTENT,
+  # so "the dry run writes nothing at all" is proved against the whole server
+  # tree, not just the one sidecar an example happens to name (mission brief:
+  # "prove it by comparing the whole sandbox server tree before and after,
+  # not by trusting the absence of a log line").
+  bwu_tree_digest() {
+    ( cd "$RIP_SANDBOX/server" && find . -type f | LC_ALL=C sort | while IFS= read -r f; do
+        printf '%s\n' "$f"
+        shasum -a 256 "$f" | cut -d' ' -f1
+      done ) | shasum -a 256 | cut -d' ' -f1
+  }
+
+  It 'backfill-work-uid: dry-run names the candidate and writes nothing at all'
+    mkbook_empty "A/B" libation
+    before=$(bwu_tree_digest)
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid"
+    The status should equal 0
+    The output should include "would assign a work uid: A/B"
+    The output should include "re-run with --apply"
+    The result of function bwu_tree_digest should equal "$before"
+  End
+
+  It 'backfill-work-uid: --apply mints a uuidv4 and leaves edition null'
+    mkbook_empty "A/B" libation
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    The status should equal 0
+    The output should include "backfilled 1 of 1 sidecar(s)"
+    The result of function bwu_uid_ok_ab should equal "uuidv4"
+  End
+
+  It 'backfill-work-uid: a book that already carries a work object is untouched byte-for-byte'
+    # Deliberately irregular formatting (extra spaces, a pre-existing edition
+    # label) — a rewrite that merely re-serializes to the SAME parsed value
+    # would still fail this, because the check is on the raw bytes.
+    ALREADY='{"schema":1,   "kind":"audiobook","title":"Already","authors":["A"],"ids":{},"work":{"uid":"11111111-1111-4111-8111-111111111111","edition":"Full Cast"},"source":{"provider":"libation"}}'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Already"
+    printf '%s' "$ALREADY" > "$(sidecar_at "A/Already")"
+    before=$(bwu_sha "A/Already")
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    The status should equal 0
+    The output should include "nothing to backfill"
+    The result of function bwu_already_sha should equal "$before"
+  End
+
+  It 'backfill-work-uid: two candidate books mint two DIFFERENT uids'
+    mkbook_empty "A/One" libation
+    mkbook_empty "A/Two" libation
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    The status should equal 0
+    The output should include "backfilled 2 of 2 sidecar(s)"
+    The result of function bwu_two_uids_distinct should equal "distinct"
+  End
+
+  It 'backfill-work-uid: an enumerator that returns nothing is distinguished from a satisfied library'
+    # No mkbook_empty call at all — nothing staged in $RIP_SANDBOX/server,
+    # the same "seen==0" wording rip::ab_backfill_published uses so an
+    # unreachable server is never conflated with a genuinely empty sweep.
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid"
+    The status should equal 0
+    The output should include "no sidecars found on the server"
+    The output should include "cantina reachable"
+  End
+
+  It 'backfill-work-uid: --apply writes through a server with NO jq, in ONE ssh for the whole batch'
+    mkbook_empty "A/B" libation
+    mkbook_empty "C/D" libation
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    The status should equal 0
+    The output should include "backfilled 2 of 2 sidecar(s)"
+    # ONE ssh to enumerate, ONE for the whole write batch — not one per book.
+    The result of function ssh_calls should equal "2"
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+  End
+
+  It 'backfill-work-uid: a write that fails leaves the good sidecar untouched and reports the book failed'
+    mkbook_empty "A/B" libation
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB
+      chmod 555 '$RIP_SANDBOX/server/audiobooks/A/B'
+      rip::ab_backfill_work_uid --apply; rc=\$?
+      chmod 755 '$RIP_SANDBOX/server/audiobooks/A/B'
+      exit \$rc"
+    The status should equal 1
+    The output should include "backfilled 0 of 1 sidecar(s)"
+    The output should include "1 sidecar(s) could not be written"
+    The stderr should include "could not backfill A/B"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"work": null'
+    The result of function stray_tmp_files should equal "0"
+  End
+
+  It 'backfill-work-uid: a dry run against the ssh branch writes nothing and opens no write connection'
+    mkbook_empty "A/B" libation
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid"
+    The status should equal 0
+    The output should include "re-run with --apply"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"work": null'
+    The result of function ssh_calls should equal "1"
+  End
+
 End

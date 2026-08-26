@@ -3114,6 +3114,149 @@ rip::ab_backfill_published() {
   return 0
 }
 
+# rip::ab_backfill_work_uid [--apply] — mint `work.uid` for every stored book
+# whose `work` is null, leaving `edition: null` behind — recording that the
+# book anchors a work, not that it is a named edition of one (design doc
+# docs/superpowers/specs/2026-08-25-audiobook-editions-design.md, S5).
+#
+# This is what makes the common edition-rip path READ-ONLY afterward:
+# rip::ab_worker's own uid-resolution step (reuse an existing work.uid; mint
+# and write back only when the book it finds has none) would otherwise turn
+# a read of the anchor book's sidecar into a write on the only copy of its
+# identity, once per work, the first time anyone ever rips a second edition
+# of it. That write path is retained regardless — a book can still arrive on
+# cantina by paths this subsystem does not own — but after this sweep runs
+# it should never fire.
+#
+# Same discipline as rip::ab_backfill_published, mirrored closely: dry run
+# by default, --apply required, one enumerating ssh + one writing ssh for
+# the whole sweep (cantina has no jq — compose the replacement sidecar
+# LOCALLY and ship it as an opaque base64 payload; see rip::_sidecars_write).
+#
+# ADDITIVE AND EXCLUSIVE: a sidecar whose `work` is already non-null is never
+# even considered a candidate — not read into $to_fill, not touched, not
+# re-serialized — so it comes back from a run of this sweep byte-for-byte
+# identical to what it was. Any candidate that IS filled mints its OWN
+# uuidgen call: sharing one value across the loop would silently merge every
+# anchored book in the sweep into a single "work", which is the one mistake
+# this verb must never make on the operator's real library.
+rip::ab_backfill_work_uid() {
+  setopt localoptions noerrexit nopipefail
+  local apply=0
+  [[ "${1:-}" == "--apply" ]] && apply=1
+
+  local base; base="$(rip::remote_base)"
+  # $to_fill holds the "<rel>" of every null-`work` candidate, for the
+  # dry-run report and the tallies; $to_fill_json holds the SAME books'
+  # stored JSON, index for index — composing the replacement sidecar needs
+  # the original object (the server has no jq to do it for us).
+  local -a to_fill=() to_fill_json=()
+  local -i seen=0
+  local line rel has_work
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    (( seen++ ))
+    rel="$(print -r -- "$line" | jq -r '._path // ""' 2>/dev/null)"
+    [[ -n "$rel" ]] || continue
+    # `.work` present and non-null — an object with `edition: null` (a bare
+    # anchor) is STILL non-null and must be left alone; only genuine absence
+    # (missing key or a literal `null`) is a candidate.
+    has_work="$(print -r -- "$line" | jq -r 'if (.work // null) == null then "" else "x" end' 2>/dev/null)"
+    [[ -z "$has_work" ]] || continue      # already anchors a work — never rewritten
+    to_fill+=("$rel")
+    to_fill_json+=("$line")
+  done < <(rip::_server_sidecars)
+
+  if (( ${#to_fill[@]} == 0 )); then
+    # Same seen==0 vs "genuinely satisfied" distinction as
+    # rip::ab_backfill_published, and for the same reason: this is a
+    # one-shot sweep over the whole library, and a false "nothing to
+    # backfill" reads as "the sweep is done" when it could instead mean the
+    # ssh to cantina never landed (rip::_server_sidecars's own ssh runs
+    # under 2>/dev/null, so an unreachable server and a satisfied library
+    # both yield zero lines and rc 0 here).
+    if (( seen == 0 )); then
+      print -r -- "rip: no sidecars found on the server — nothing to backfill (is cantina reachable?)"
+    else
+      print -r -- "rip: nothing to backfill"
+    fi
+    return 0
+  fi
+
+  local rel2
+  if (( ! apply )); then
+    for rel2 in "${to_fill[@]}"; do
+      print -r -- "would assign a work uid: $rel2"
+    done
+    print -r -- "(${#to_fill[@]} book(s); re-run with --apply)"
+    return 0
+  fi
+
+  # COMPOSE LOCALLY, WRITE REMOTELY (see rip::ab_backfill_published for why:
+  # cantina has no jq). `del(._path)`: rip::_server_sidecars ANNOTATES every
+  # row it emits with the "<Author>/<Title>" it came from, and that key is
+  # NOT in the stored file — writing the annotated object back would
+  # permanently add a bogus `_path` field to every sidecar it touches.
+  local -a payloads=() sent_rels=() ok_flags=()
+  local -A idx_of=()
+  local -i i
+  local payload b64rel uid
+  for (( i = 1; i <= ${#to_fill[@]}; i++ )); do
+    rel="${to_fill[i]}"
+    # uuidgen LOCALLY, ONE PER CANDIDATE — see rip::ab_repair_sidecars Case C
+    # and rip::_book_meta_for's folder-provider mint for the same pattern.
+    # Lowercased so two runs (or a hand-typed uid elsewhere) compare equal
+    # byte for byte.
+    uid="$(uuidgen 2>/dev/null)"; uid="${(L)uid}"
+    if [[ -z "$uid" ]]; then
+      log_warn "rip: uuidgen produced nothing — cannot assign a work uid to $rel"
+      continue
+    fi
+    payload="$(print -r -- "${to_fill_json[i]}" | jq -r --arg u "$uid" \
+      '(._path|@base64) + "\t" + ((del(._path) | .work = {uid: $u, edition: null}) | tojson | @base64)' 2>/dev/null)"
+    if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
+      # Never ship a half-composed payload: the remote would write it.
+      log_warn "rip: could not backfill $rel"
+      continue
+    fi
+    payloads+=("$payload")
+    sent_rels+=("$rel")
+    ok_flags+=(0)
+    b64rel="${payload%%$'\t'*}"
+    idx_of[$b64rel]=${#payloads}
+  done
+
+  # ONE ssh for the whole sweep, on top of the ONE that enumerated it.
+  local out=""
+  (( ${#payloads[@]} > 0 )) && out="$(rip::_sidecars_write "$base" "${payloads[@]}")"
+
+  # GATED ON THE REPORTED OUTCOME, never on the write having been attempted —
+  # the recurring defect class in this module (rip::ab_backfill_published's
+  # "backfilled 0 of 245" among 11+ instances): a book counts as filled only
+  # when the remote loop said "ok" for it.
+  local -i filled=0
+  local rline st key
+  while IFS= read -r rline; do
+    [[ -n "$rline" ]] || continue
+    st="${rline%%$'\t'*}"; key="${rline#*$'\t'}"
+    [[ "$st" == "ok" ]] || continue
+    i=${idx_of[$key]:-0}
+    (( i > 0 )) && ok_flags[i]=1
+  done <<< "$out"
+  for (( i = 1; i <= ${#sent_rels[@]}; i++ )); do
+    if (( ok_flags[i] )); then
+      (( filled++ ))
+    else
+      log_warn "rip: could not backfill ${sent_rels[i]}"
+    fi
+  done
+  print -r -- "rip: backfilled $filled of ${#to_fill[@]} sidecar(s)"
+  local -i unwritten=$(( ${#to_fill[@]} - filled ))
+  (( unwritten > 0 )) && print -r -- "rip: $unwritten sidecar(s) could not be written"
+  (( unwritten > 0 )) && return 1
+  return 0
+}
+
 # rip::_sidecars_write <base> <payload…> — write a batch of
 # already-composed sidecars, atomically, in ONE ssh.
 #

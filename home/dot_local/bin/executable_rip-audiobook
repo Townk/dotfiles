@@ -50,6 +50,7 @@ case "${1:-}" in
   --session-worker) shift; rip::ab_worker "${1:?plan file required}" ;;
   --editions) rip::ab_editions ;;
   --backfill-published) shift; rip::ab_backfill_published "${1:-}" ;;
+  --backfill-work-uid) shift; rip::ab_backfill_work_uid "${1:-}" ;;
   --retire) shift; rip::ab_retire "${1:?--retire: \"<Author>/<Title>\" required}" "${2:-}" ;;
   --canonicalize-authors) shift; rip::ab_canonicalize_authors "${1:-}" ;;
   --repair-sidecars) shift; rip::ab_repair_sidecars "${1:-}" ;;
@@ -58,7 +59,7 @@ case "${1:-}" in
   --at-risk) rip::ab_at_risk ;;
   --server-editions) rip::_server_sidecars | jq -c 'select((.published // "") != "") | {author:(.authors[0] // ""), title:(.title // ""), published, path:._path}' ;;
   "" | --help)
-    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --browse <root> | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply] | --repair-sidecars [--apply] | --repair-companions [--apply] | --adopt-asin "<Author>/<Title>" <ASIN> [--apply] | --at-risk | --server-editions'
+    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --browse <root> | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --backfill-work-uid [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply] | --repair-sidecars [--apply] | --repair-companions [--apply] | --adopt-asin "<Author>/<Title>" <ASIN> [--apply] | --at-risk | --server-editions'
     exit 2
     ;;
   *) print -ru2 -- "rip-audiobook: unknown option: $1"; exit 2 ;;
