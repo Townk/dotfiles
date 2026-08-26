@@ -5670,7 +5670,23 @@ rip::ab_worker() {
   local -A pre_dirs=()
   local -a landed=()
   local pre_d bdir actual primary sha
-  local ed_suffix base_rel base_raw work_uid
+  local ed_suffix base_rel base_raw base_rk work_uid
+  # THE RE-KEY LEDGER, declared HERE with the other loop locals for the same
+  # reason batch_work_uid is (a `local` re-run in the loop body prints
+  # "name=value" onto the stream this worker writes progress lines to).
+  #
+  # Maps a plan path to the path the reconcile below re-keyed it to. The
+  # anchor patch matches the base row by the path THE PLAN gave it, and the
+  # reconcile rewrites exactly that key once a provider lands the book
+  # somewhere else — so after the base item has been acquired, the anchor
+  # matched nothing and the base shipped with `work: null` (review finding,
+  # 2026-08-26, round 2). Only a provider that re-keys can reach this:
+  # rip-provider-folder honours the relpath the worker hands it, while
+  # rip-provider-libation's dispatcher forwards only its own first two
+  # post-shift args to cmd_acquire, discarding that third argument — so
+  # Libation lands where it likes and the ":" in "Title: Subtitle" comes back
+  # sanitized.
+  local -A rekeyed=()
   # THE BATCH'S OWN work-uid memo, declared HERE with the other loop locals —
   # never inside the loop body, where a re-run `local` prints "name=value" to
   # stdout and corrupts the stream this worker also writes progress lines to.
@@ -5854,6 +5870,13 @@ rip::ab_worker() {
         work_uid="$(rip::_ab_work_uid_for "$base_rel")"
         [[ -n "$base_rel" && -n "$work_uid" ]] && batch_work_uid[$base_rel]="$work_uid"
       fi
+      # The base row's CURRENT key, if this batch already re-keyed it. Both
+      # spellings are tried for the same reason the patch tries both below:
+      # the ledger is keyed on the base item's own plan path, which is the
+      # plan's raw bytes.
+      base_rk=""
+      [[ -n "$base_raw" ]] && base_rk="${rekeyed[$base_raw]:-}"
+      [[ -z "$base_rk" && -n "$base_rel" ]] && base_rk="${rekeyed[$base_rel]:-}"
       if [[ -n "$work_uid" ]]; then
         # Onto THIS item's meta-index row, by path — the same targeted jq
         # patch the local-hash thread above uses on the same file. The row is
@@ -5878,16 +5901,26 @@ rip::ab_worker() {
         # it shares a work with — the same rule rip::_ab_anchor_work_uid
         # follows for a base book already on the server.
         #
-        # Keyed on `.path`, so it is ORDER-INDEPENDENT: the whole plan was
-        # merged into this index before the loop started, so the base row is
-        # there to patch whether it is acquired before or after its edition.
+        # Keyed on `.path`, and the whole plan was merged into this index
+        # before the loop started, so the base row is there to patch whether
+        # it is acquired before or after its edition. That is order-independent
+        # ONLY absent a re-key, and it is worth saying plainly rather than
+        # shorter: the reconcile step further down REWRITES `.path` on the row
+        # of any item whose provider landed the book somewhere other than the
+        # planned relpath. Once the base item has been acquired, the planned
+        # key is gone — so the patch also tries the spelling `rekeyed` recorded
+        # for it (review finding, 2026-08-26, round 2; base-first was a silent
+        # permanent split on every libation plan whose title contains a ":").
+        #
         # Only a row whose `work` is still null is touched — never one an
         # earlier item already resolved, and never a book outside this plan
         # (this file is the meta index, not a sidecar).
         jq -c --arg p "$bpath" --arg b "$base_raw" --arg bn "$base_rel" \
-              --arg u "$work_uid" --arg e "$edition" \
+              --arg br "$base_rk" --arg u "$work_uid" --arg e "$edition" \
           'if .path == $p then .work = {uid: $u, edition: $e}
-           elif ($b != "" and (.path == $b or .path == $bn) and .work == null)
+           elif ($b != ""
+                 and (.path == $b or .path == $bn or ($br != "" and .path == $br))
+                 and .work == null)
              then .work = {uid: $u, edition: null}
            else . end' \
           "$index" > "$index.tmp" \
@@ -5992,6 +6025,9 @@ rip::ab_worker() {
           bdir="${landed[1]}"
         else
           log_warn "rip: $bpath landed as $actual — re-keying the plan identity"
+          # Remembered for the work-uid anchor, which looks the base row up
+          # by its PLANNED path and would otherwise find nothing here.
+          rekeyed[$bpath]="$actual"
           jq -c --arg old "$bpath" --arg new "$actual" \
             'if .path == $old then .path = $new else . end' "$index" > "$index.tmp" \
             && mv -f -- "$index.tmp" "$index"

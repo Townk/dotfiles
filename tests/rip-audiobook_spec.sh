@@ -1319,6 +1319,96 @@ EOF
 {"has_uid":true,"edition":"Full Cast"}'
   End
 
+  # THE RE-KEY MOVES THE TARGET (review finding, 2026-08-26, round 2). The
+  # anchor above matches the base row by the path THE PLAN gave it — but the
+  # reconcile step later in this same loop rewrites that key to the folder
+  # that actually landed ("... landed as ... — re-keying the plan identity").
+  # Once the base item has been acquired, its row no longer answers to the
+  # planned path, so the edition's anchor matches nothing and the base ships
+  # with `work: null`: exactly the permanent split the anchor exists to
+  # prevent, reappearing whenever the base is acquired FIRST.
+  #
+  # THE PROVIDER MUST BE ONE THAT RE-KEYS, or this cannot fail. The folder
+  # provider honours the relpath the worker hands it as a third argument, so
+  # a folder plan never re-keys and every existing example here is blind to
+  # this. rip-provider-libation's dispatcher forwards only its own first two
+  # post-shift args to cmd_acquire, so that third argument is DISCARDED and
+  # Libation lands the book wherever it likes — here, with the ":" sanitized
+  # out of the folder name, which is the shape the live "landed as" warnings
+  # in this subsystem's ledger already have. Same class as the NFC bug that
+  # APFS hid: green suite, broken on the only provider that reaches it.
+  wu_rekey_plan() { # <first: base|edition>
+    jq -nc --arg first "$1" \
+      '{base:{id:"BASEID",path:"A/B: Sub",title:"B",subtitle:"Sub",
+              ids:{"audible.asin":"BASEID"},provider:"libation",format:"m4b"},
+        ed:{id:"EDID",path:"A/B: Sub (Full Cast)",title:"B",subtitle:"Sub",
+            ids:{"audible.asin":"EDID"},provider:"libation",format:"m4b",edition:"Full Cast"}}
+       | {provider:"libation", items:(if $first == "base" then [.base,.ed] else [.ed,.base] end)}' \
+      > "$RIP_SANDBOX/plan.json"
+    cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+#!/bin/sh
+printf '%s
+' "$*" >> "$RIP_SANDBOX/libation.log"
+[ "$1" = "liberate" ] || exit 0
+id=""; books=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --id) id="$2" ;;
+    -o|--override) case "$2" in Books=*) books="${2#Books=}" ;; esac ;;
+  esac
+  shift
+done
+[ -n "$books" ] || { echo "no Books override" >&2; exit 1; }
+case "$id" in
+  BASEID) d="$books/A/B - Sub" ;;
+  EDID)   d="$books/A/B - Sub (Full Cast)" ;;
+  *) echo "unknown id" >&2; exit 1 ;;
+esac
+mkdir -p "$d"
+printf 'audio-%s\n' "$id" > "$d/book.m4b"
+echo "Completed"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/LibationCli"
+  }
+  # Read from the LANDED paths, not the planned ones — that is where the two
+  # books actually are once the provider has had its way with the name.
+  wu_rekey_share() {
+    ub=$(jq -r '.work.uid // ""' "$RIP_SANDBOX/server/audiobooks/A/B - Sub/.fleet-book.json" 2>/dev/null)
+    ue=$(jq -r '.work.uid // ""' "$RIP_SANDBOX/server/audiobooks/A/B - Sub (Full Cast)/.fleet-book.json" 2>/dev/null)
+    if [ -n "$ub" ] && [ "$ub" = "$ue" ]; then wu_is_uuid4 "$ub"; else echo "base=$ub edition=$ue"; fi
+  }
+  wu_rekey_shapes() {
+    wu_work_shape "$RIP_SANDBOX/server/audiobooks/A/B - Sub/.fleet-book.json"
+    wu_work_shape "$RIP_SANDBOX/server/audiobooks/A/B - Sub (Full Cast)/.fleet-book.json"
+  }
+
+  It 'work uid: a base book RE-KEYED by its provider is still anchored (base first)'
+    wu_rekey_plan base
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    # The re-key is what this example is about: assert it HAPPENED, or a
+    # provider fake that quietly landed the planned path would make the
+    # whole example pass without ever exercising the case.
+    The stderr should include "re-keying the plan identity"
+    The result of function wu_rekey_share should equal "uuidv4"
+    The result of function wu_rekey_shapes should equal '{"has_uid":true,"edition":null}
+{"has_uid":true,"edition":"Full Cast"}'
+  End
+
+  # The order that already worked — the edition resolves before the base has
+  # been acquired, so the planned key is still live. Pinned so the added
+  # alternative cannot break it.
+  It 'work uid: a base book RE-KEYED by its provider is still anchored (edition first)'
+    wu_rekey_plan edition
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The stderr should include "re-keying the plan identity"
+    The result of function wu_rekey_share should equal "uuidv4"
+    The result of function wu_rekey_shapes should equal '{"has_uid":true,"edition":null}
+{"has_uid":true,"edition":"Full Cast"}'
+  End
+
   # The anchor patch must never reach a book that is NOT in this plan, and
   # must never overwrite a work another edition already recorded. Here the
   # base is stored on the server with its own uid and is NOT part of the
