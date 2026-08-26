@@ -886,8 +886,40 @@ rip::_book_sidecar() {
     # array values element-wise, it just lets one win outright, so leaving
     # the old array in would freeze companions at whatever the FIRST push
     # saw and a PDF added later would never appear.
+    #
+    # `.source.provider` IS STRIPPED TOO (review finding F1, 2026-08-26), and
+    # for a sharper reason than either: it is the field that must NAME THE ROW
+    # THAT ACQUIRED THE BYTES, and old-wins let it outlive that row.
+    #
+    # The interleaving is entirely supported, no misuse required:
+    # `--import` stages "<Author>/<Title>" and records a provider "manual"
+    # row; the push writes a manual sidecar and then FAILS ITS VERIFY, which
+    # by documented design leaves everything staged for a retry; the operator
+    # then rips the same book through the folder panel (rip::ab_have says
+    # absent, so it is offered), the folder provider's "already staged,
+    # nothing to copy" branch leaves the OLD sidecar in place, and
+    # rip::ab_worker threads the SOURCE hash of the file it just handled into
+    # `ids["local.sha256"]`. Merge old-wins, and the sidecar ends up saying
+    # `provider: "manual"` about a `local.sha256` that is a SOURCE hash.
+    #
+    # That combination is exactly what rip::ab_retag's re-key reads as "a
+    # --repair-sidecars Case C stored-bytes hash" — so the sweep would move a
+    # genuine source hash to `local.stored.sha256`, rip::_stored_sha_index
+    # would stop seeing it, and the byte-dedupe would silently die for that
+    # book with nothing able to detect it afterwards. The gate's premise is
+    # that provider names the writer of the ids; this is what makes that TRUE
+    # rather than merely usual.
+    #
+    # Guarded on `.source` actually being an object: a hand-corrupted
+    # `"source": []` (the shape `_RIP_JQ_IDS_DEF` and `_RIP_JQ_WORK_DEF` exist
+    # for) makes `del(.source.provider)` RAISE, and a raise here fails the
+    # whole sidecar write. Left alone it merges exactly as it did before —
+    # already wrong, but not newly fatal.
     merged="$(jq -n --argjson new "$built" --slurpfile old "$sidecar" \
-      '$new * (($old[0] // {}) | del(.companions) | with_entries(select(.value != null)))' 2>/dev/null)" \
+      '$new * (($old[0] // {})
+               | del(.companions)
+               | (if (.source | type) == "object" then del(.source.provider) else . end)
+               | with_entries(select(.value != null)))' 2>/dev/null)" \
       || { log_error "rip: could not merge the sidecar at $sidecar"; return 1 }
   fi
 
@@ -3896,9 +3928,11 @@ rip::ab_backfill_work_uid() {
 # from probe JSON the server base64-frames back, through the one shared
 # predicate (_RIP_JQ_TAGS_OK) that rip::_retag_book verifies with.
 #
-# THREE CONNECTIONS FOR THE WHOLE LIBRARY, one per stage: enumerate the
-# sidecars, probe every book's audio, rewrite the mismatched. Plus a fourth
-# only when there is a sidecar to re-key (below). Never one per book.
+# FOUR CONNECTIONS FOR THE WHOLE LIBRARY, one per stage: enumerate the
+# sidecars, list the book directories (to name the ones holding no sidecar,
+# which the enumerator cannot see), probe every book's audio, rewrite the
+# mismatched. Plus a fifth only when there is a sidecar to re-key (below).
+# Never one per book.
 
 # rip::_retag_probe <base> <base64 relpath…> — the tags every stored book's
 # audio actually carries, in ONE ssh.
@@ -3924,9 +3958,14 @@ rip::ab_backfill_work_uid() {
 # dropped VPN" defect wearing a different hat — and this is the sweep that
 # REWRITES AUDIO, so it is the one that must refuse loudest.
 #
-# `</dev/null` on the ffprobe: the payload arrives on this script's stdin and
-# a child that inherits fd 0 eats the rest of the batch. Exactly the bug
-# rip::_remote_test's `ssh -n` exists for, one layer in.
+# `</dev/null` on the ffprobe (and on rip::_retag_write's ffmpeg): the payload
+# arrives on this script's stdin and a child that inherits fd 0 can eat the
+# rest of the batch — exactly the bug rip::_remote_test's `ssh -n` exists for,
+# one layer in. UNPROVABLE HERE, and kept anyway: ffmpeg 9.0.1 leaves a
+# non-tty stdin untouched, so no fixture on this machine can reproduce the
+# hazard at any size, but cantina runs Debian's ffmpeg and `-nostdin` exists
+# precisely because older builds do drain it. A guard whose absence cannot be
+# demonstrated locally is not a guard that is unnecessary remotely.
 #
 # POSIX sh + coreutils only, and no single quote anywhere in the script, so
 # ${(qq)} — which is what a real POSIX /bin/sh needs, unlike ${(q)}'s $'\n' —
@@ -4160,7 +4199,7 @@ rip::ab_retag() {
         + "\t" + (((.ids | _ids_obj)["local.sha256"] // "") | if . == "" then "-" else . end)' 2>/dev/null)"
 
   local -a b64rels=()
-  local -A rel_of_b64=() prov_of=() json_of=() sha_of=()
+  local -A rel_of_b64=() prov_of=() json_of=() sha_of=() known=()
   local irel istate iprov iasin iuid ijson xrel xb64 xsha
   while IFS=$'\t' read -r irel istate iprov iasin iuid ijson; do
     [[ -n "$irel" ]] || continue
@@ -4170,6 +4209,7 @@ rip::ab_retag() {
   while IFS=$'\t' read -r xrel xb64 xsha; do
     [[ -n "$xrel" && -n "$xb64" ]] || continue
     rel_of_b64[$xb64]="$xrel"
+    known[$xrel]=1
     b64rels+=("$xb64")
     [[ "$xsha" != "-" ]] && sha_of[$xrel]="$xsha"
   done <<< "$sha_rows"
@@ -4180,6 +4220,38 @@ rip::ab_retag() {
     # function never managed to look at.
     log_error "rip: could not index the stored sidecars — refusing to report on a library we could not read"
     return 2
+  fi
+
+  # THE BOOKS WITH NO SIDECAR AT ALL (review finding F3, 2026-08-26). The only
+  # enumerator this sweep has is rip::_server_sidecars, whose remote `find`
+  # matches `.fleet-book.json` — so a stored book directory carrying audio and
+  # no sidecar is never probed, never warned about, and never counted in
+  # "retagged N of M". That population is real and already known: it is
+  # rip::ab_repair_sidecars' `norow` bucket, which that verb reports by name
+  # and deliberately never repairs. This function's promise is EVERY stored
+  # book whose tags disagree with its path, so the gap is NAMED rather than
+  # quietly counted as done — the same class of silence the seen==0 guard
+  # above exists to prevent, one level in.
+  #
+  # Both sides come from the server's own `find`, so they are compared
+  # BYTE-FOR-BYTE with no rip::_nfc pass: normalizing one side of a comparison
+  # whose other side is already the server's spelling is how a decomposed
+  # legacy path would be reported missing on every single run.
+  #
+  # A listing that fails is WARNED about, not fatal. The sidecar enumeration
+  # already landed, so the sweep itself is sound and refusing here would turn
+  # a working retag into a failure; what must never happen is a silent gap, and
+  # "I could not check" is not silence.
+  local lib="" lib_rc=0 librel
+  lib="$(rip::ab_server_library)" || lib_rc=$?
+  if (( lib_rc != 0 )); then
+    log_warn "rip: could not list the stored book directories — cannot say whether a book is missing its sidecar and was skipped for that reason"
+  else
+    while IFS= read -r librel; do
+      [[ -n "$librel" ]] || continue
+      (( ${+known[$librel]} )) \
+        || log_warn "rip: no sidecar for $librel — not retagged; run --repair-sidecars"
+    done <<< "$lib"
   fi
 
   local probe_out="" probe_rc=0

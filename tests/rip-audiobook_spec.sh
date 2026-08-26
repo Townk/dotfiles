@@ -7171,6 +7171,16 @@ EOF
     find "$RIP_SANDBOX/server/audiobooks" \( -name '.work' -o -name 'retag.*' \) 2>/dev/null | wc -l | tr -d ' '
   }
   rtg_ids_bad()   { rtg_ids "A Author/Bad Book"; }
+  rtg_ids_ab()    { rtg_ids "A Author/B Book"; }
+  rtg_orphan_sha() { rtg_sha "Orphan Author/Orphan Book"; }
+
+  # rtg_meta <file> <provider> <ids-json> — one provider row, the shape
+  # rip::_book_meta_for hands rip::_book_sidecar.
+  rtg_meta() {
+    jq -n --arg p "$2" --argjson i "$3" \
+      '{path:"A Author/B Book",title:"B Book",authors:["A Author"],ids:$i,provider:$p,format:"m4b"}' \
+      > "$1"
+  }
   rtg_ids_m()     { rtg_ids "M Author/M Book"; }
   rtg_ids_f()     { rtg_ids "F Author/F Book"; }
 
@@ -7380,7 +7390,8 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The output should include "retagged 2 of 2 book(s)"
-    The result of function ssh_calls should equal "3"
+    # enumerate, list, probe, write — one per STAGE, not one per book.
+    The result of function ssh_calls should equal "4"
     The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
     The result of function rtg_tags_ab should equal "A Author|B Book|B Book"
     The result of function rtg_stray should equal "0"
@@ -7404,8 +7415,105 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_retag"
     The status should equal 0
     The output should include "re-run with --apply"
-    The result of function ssh_calls should equal "2"
+    # enumerate + list. No probe-side write, and no write connection at all.
+    The result of function ssh_calls should equal "3"
     The result of function rtg_tree_digest should equal "$before"
+  End
+
+  # --- review finding F1: `source.provider` must name the row that acquired --
+  #
+  # rip::ab_retag's re-key gate reads `source.provider` as "which writer put
+  # this local.sha256 here". The merge in rip::_book_sidecar is old-wins, and
+  # `.source` was not stripped from the old side — so a stale provider could
+  # outlive the row that minted the hash, and the gate's premise would be
+  # merely usual rather than true.
+  #
+  # The interleaving needs no misuse: --import stages the book and records a
+  # provider "manual" row; the push writes the manual sidecar and FAILS its
+  # verify, which by documented design leaves everything staged for a retry;
+  # the operator then rips the same book through the folder panel (ab_have
+  # says absent, so it is offered), the folder acquire finds the files already
+  # staged and copies nothing, and rip::ab_worker threads the SOURCE hash into
+  # ids["local.sha256"]. Driven here as the two sequential sidecar writes that
+  # sequence actually performs, not as a hand-written end state.
+  It 'sidecar: a re-acquire by another provider records the provider that acquired the bytes'
+    mkdir -p "$RIP_SANDBOX/stage/A Author/B Book"
+    printf 'audio\n' > "$RIP_SANDBOX/stage/A Author/B Book/book.m4b"
+    rtg_meta "$RIP_SANDBOX/meta-manual.json" manual '{}'
+    rtg_meta "$RIP_SANDBOX/meta-folder.json" folder '{"local.sha256":"SOURCEHASH"}'
+    When run zsh -c "source $RIPLIB
+      SC='$RIP_SANDBOX/stage/A Author/B Book/.fleet-book.json'
+      rip::_book_sidecar '$RIP_SANDBOX/stage/A Author/B Book' '$RIP_SANDBOX/meta-manual.json' || exit 9
+      jq -r '.source.provider' \"\$SC\"
+      rip::_book_sidecar '$RIP_SANDBOX/stage/A Author/B Book' '$RIP_SANDBOX/meta-folder.json' || exit 8
+      jq -r '.source.provider' \"\$SC\"
+      jq -r '.ids[\"local.sha256\"]' \"\$SC\""
+    The status should equal 0
+    The line 1 should equal "manual"
+    The line 2 should equal "folder"
+    The line 3 should equal "SOURCEHASH"
+  End
+
+  # The strip is guarded on `.source` actually being an object. A
+  # hand-corrupted `"source": []` — the shape _RIP_JQ_IDS_DEF and
+  # _RIP_JQ_WORK_DEF exist for — makes `del(.source.provider)` RAISE, and a
+  # raise here fails the WHOLE sidecar write, turning a merge that was merely
+  # wrong into a push that cannot record identity at all. Guarded, it merges
+  # exactly as it did before the fix.
+  It 'sidecar: a poisoned "source": [] does not turn the merge into a failed write'
+    mkdir -p "$RIP_SANDBOX/stage2/A Author/B Book"
+    printf 'audio\n' > "$RIP_SANDBOX/stage2/A Author/B Book/book.m4b"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","source":[],"ids":{"audible.asin":"B0KEEP"}}' \
+      > "$RIP_SANDBOX/stage2/A Author/B Book/.fleet-book.json"
+    rtg_meta "$RIP_SANDBOX/meta-folder.json" folder '{}'
+    When run zsh -c "source $RIPLIB
+      rip::_book_sidecar '$RIP_SANDBOX/stage2/A Author/B Book' '$RIP_SANDBOX/meta-folder.json' || exit 9
+      jq -r '.ids[\"audible.asin\"]' '$RIP_SANDBOX/stage2/A Author/B Book/.fleet-book.json'"
+    The status should equal 0
+    The output should equal "B0KEEP"
+  End
+
+  # And the consequence the fix exists for, end to end: that book's SOURCE
+  # hash must survive the sweep. The sidecar is built by the real composer
+  # from the real two-step sequence rather than hand-written into the shape
+  # the gate is supposed to see — a hand-written sidecar would pass whatever
+  # the merge does.
+  It 'retag: a book re-acquired by the folder provider keeps its source hash through the sweep'
+    rtg_seed
+    rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title" manual '{}'
+    rtg_meta "$RIP_SANDBOX/meta-manual.json" manual '{}'
+    rtg_meta "$RIP_SANDBOX/meta-folder.json" folder '{"local.sha256":"SOURCEHASH"}'
+    zsh -c "source $RIPLIB
+      rip::_book_sidecar '$RIP_SANDBOX/server/audiobooks/A Author/B Book' '$RIP_SANDBOX/meta-manual.json'
+      rip::_book_sidecar '$RIP_SANDBOX/server/audiobooks/A Author/B Book' '$RIP_SANDBOX/meta-folder.json'"
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The output should include "retagged 1 of 1 book(s)"
+    The output should not include "re-keyed"
+    The result of function rtg_ids_ab should equal '{"local.sha256":"SOURCEHASH"}'
+  End
+
+  # --- review finding F3: a stored book with no sidecar is invisible --------
+  #
+  # rip::_server_sidecars' remote `find` matches `.fleet-book.json`, so a book
+  # directory holding audio and no sidecar is never probed and never counted —
+  # and "retagged N of M" would report a complete sweep over a library it did
+  # not entirely look at. That population is real: it is
+  # rip::ab_repair_sidecars' `norow` bucket, which that verb reports by name
+  # and deliberately never repairs.
+  It 'retag: a stored book with no sidecar at all is named, never counted as done'
+    rtg_seed
+    rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title"
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Orphan Author/Orphan Book"
+    ffmpeg -v error -y -i "$RIP_SANDBOX/rtg-a.m4a" -c:a copy \
+      "$RIP_SANDBOX/server/audiobooks/Orphan Author/Orphan Book/book.m4b"
+    orphan_before=$(rtg_orphan_sha)
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The stderr should include "no sidecar for Orphan Author/Orphan Book"
+    The stderr should include "run --repair-sidecars"
+    The output should include "retagged 1 of 1 book(s)"
+    The result of function rtg_orphan_sha should equal "$orphan_before"
   End
 
 End
