@@ -52,6 +52,79 @@ _sibling_of() {
   print -rl -- "$d"/*.${~pat}(N-.) | head -1
 }
 
+# _embedded_cover <m4b> — the book's own cover art, extracted from the file
+# and cached, or empty. Used only when no sidecar image exists.
+#
+# We already trust this file's embedded tags for author, title and duration;
+# refusing to trust them for the cover was an inconsistency, not a policy. A
+# ripped-from-Audible collection routinely carries art inside the m4b and no
+# .jpg beside it, so "no sidecar" is the common case, not the exotic one.
+#
+# Cached because extraction costs an ffmpeg exec per file and browse lists a
+# whole tree at once: the key is path + mtime + size, so a re-tagged or
+# replaced file misses the cache and is re-extracted, while an unchanged tree
+# browses at full speed the second time.
+#
+# RIP_COVER_CACHE exists so tests can point this somewhere disposable. Like
+# every other RIP_* seam it falls back to the PRODUCTION path, so a test that
+# forgets to export it writes to the real cache rather than failing loudly.
+_embedded_cover() {
+  setopt localoptions noerrexit nopipefail
+  local f="$1" codec ext key out
+  command -v ffmpeg >/dev/null 2>&1 || return 0
+  command -v ffprobe >/dev/null 2>&1 || return 0
+
+  # Only an ATTACHED PICTURE is cover art. A stray video stream in an audio
+  # container is not, and copying one out would hand the panel a frame of
+  # video to render as a book cover.
+  codec="$(ffprobe -v error -select_streams v -show_entries stream=codec_name:stream_disposition=attached_pic \
+             -of csv=p=0 -- "$f" 2>/dev/null | awk -F, '$2 == 1 { print $1; exit }')"
+  [[ -n "$codec" ]] || return 0
+  # Always JPEG, whatever the source codec is, because we re-encode anyway
+  # (see the scale below) — which also means no codec-to-extension mapping to
+  # get wrong. A PNG cover loses an alpha channel it almost never has, at a
+  # size where it could not be seen.
+  ext=jpg
+
+  local cache="${RIP_COVER_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/rip/folder-covers}"
+  key="$(print -r -- "$f"$'\x1f'"$(_file_stamp "$f")" | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
+  [[ -n "$key" ]] || return 0
+  out="$cache/$key.$ext"
+  [[ -f "$out" ]] && { print -r -- "$out"; return 0; }
+
+  mkdir -p -- "$cache" 2>/dev/null || return 0
+  # Extract to a temp and rename: a browse interrupted mid-extraction must
+  # not leave a truncated image in the cache that every later browse then
+  # serves from, forever, without ever re-extracting it.
+  # The temp MUST keep the real extension: ffmpeg picks its muxer from the
+  # output filename, so a ".part" suffix makes it fail to find any output
+  # format at all — and this function reports a failed extraction exactly the
+  # same way it reports a book with no art, so that failure was invisible.
+  # Dot-prefixed instead, and in the cache dir, so the mv stays atomic.
+  local tmp="$cache/.$key.$$.$ext"
+  # DOWNSCALED, and that is not an optimisation — it is what makes this safe
+  # to turn on for every book. The panel renders a cover in a 48px box
+  # (rip-library.css .row .cover), embedded art in a retail m4b is routinely
+  # 1000x1000 and ~350KB, and library-dialog.lua inlines every file:// cover
+  # into the page as a base64 data URI. Extracting at full size would put
+  # ~100MB of base64 in the document for a 300-book tree. 128px wide leaves
+  # headroom for a 2x display and lands each cover around 6KB.
+  if ffmpeg -v error -y -i "$f" -an -vframes 1 -vf 'scale=128:-1' -c:v mjpeg -q:v 4 -- "$tmp" </dev/null >/dev/null 2>&1 \
+     && [[ -s "$tmp" ]] && mv -f -- "$tmp" "$out"; then
+    print -r -- "$out"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  return 0
+}
+
+# _file_stamp <file> — mtime and size, the cheap identity of a file's contents
+# for cache purposes. Separate from rip::_file_bytes in the library: this
+# binary is standalone and does not source it.
+_file_stamp() {
+  stat -f '%m %z' -- "$1" 2>/dev/null || stat -c '%Y %s' -- "$1" 2>/dev/null
+}
+
 # _book_files <m4b> — everything that must travel with this book, published
 # into the global array _RIP_BOOK_FILES.
 #
@@ -166,7 +239,10 @@ cmd_list() {
   local author title src cover dur has_pdf n
   for f in "${(@o)books}"; do
     IFS=$'\x1f' read -r author title src <<< "$(_derive "$f" "$root")"
+    # A sidecar image wins: it is what the operator put there deliberately.
+    # Embedded art is the fallback, not the other way round.
     cover="$(_sibling_of "$f" '(jpg|jpeg|png)')"
+    [[ -n "$cover" ]] || cover="$(_embedded_cover "$f")"
     dur=0
     if command -v ffprobe >/dev/null 2>&1; then
       n="$(ffprobe -v error -show_entries format=duration -of csv=p=0 -- "$f" 2>/dev/null)"

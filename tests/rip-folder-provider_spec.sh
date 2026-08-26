@@ -10,6 +10,10 @@ Describe 'rip-provider-folder'
     # its later prefix-strip against fd's output actually matches) — so an
     # unresolved $ROOT would never equal the id/path this spec expects back.
     ROOT="${ROOT:A}"
+    # RIP_COVER_CACHE falls back to the PRODUCTION path (~/.cache/rip), like
+    # every other RIP_* seam, so it must be pointed somewhere disposable here
+    # or these examples would populate the operator's real cover cache.
+    export RIP_COVER_CACHE="$RIP_SANDBOX/covercache"
   }
   cleanup() { rm -rf "$RIP_SANDBOX"; }
   BeforeEach 'setup'
@@ -20,6 +24,37 @@ Describe 'rip-provider-folder'
     mkdir -p "$ROOT/$1/$2"
     printf 'fake audio\n' > "$ROOT/$1/$2/$2.m4b"
   }
+
+  # A book with REAL embedded cover art. ffmpeg synthesizes a 1-second silent
+  # m4b carrying a 64x64 attached picture and album tags — about 1.2KB, so it
+  # is cheap enough to build per example, and it is genuine media rather than
+  # a stub: these examples exercise the actual ffprobe/ffmpeg path, which a
+  # faked binary would not.
+  mkartbook() {
+    mkdir -p "$ROOT/$1/$2"
+    ffmpeg -v error -y -f lavfi -i anullsrc=r=44100:cl=mono -t 1 \
+      -f lavfi -i "color=c=${3:-red}:s=64x64" -frames:v 1 \
+      -map 0:a -map 1:v -c:a aac -c:v mjpeg -disposition:v attached_pic \
+      -metadata album_artist="$1" -metadata album="$2" \
+      "$ROOT/$1/$2/$2.m4b" </dev/null >/dev/null 2>&1
+  }
+  # NOTE THE POLARITY: shellspec's `Skip if <reason> <func>` skips when the
+  # function SUCCEEDS. A `have_ffmpeg` here reads naturally and does exactly
+  # the wrong thing — it skipped all five examples on a machine that has
+  # ffmpeg, and they reported green without ever running.
+  no_ffmpeg() { ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; }
+  cover_in_cache() { jq -r '.cover // ""' | grep -c "covercache" | tr -d ' '; }
+  # The extracted cover's WIDTH, which is what discriminates: the test art is
+  # a 64x64 square, so a copied stream stays 64 and a scaled one becomes 128.
+  # Asserting on FILE SIZE would not have discriminated at all — a flat red
+  # 64x64 is ~300 bytes either way.
+  cover_width() {
+    jq -r '.cover // ""' | sed 's|^file://||' | head -1 | while IFS= read -r c; do
+      [ -n "$c" ] && ffprobe -v error -select_streams v -show_entries stream=width \
+        -of csv=p=0 -- "$c" 2>/dev/null
+    done
+  }
+  cached_files() { ls "$RIP_COVER_CACHE" 2>/dev/null | wc -l | tr -d ' '; }
 
   # `The result of "wc -l"` etc. is not valid shellspec 0.28.1 grammar — that
   # modifier only accepts a defined shell FUNCTION name (shellspec_is_function
@@ -451,5 +486,69 @@ EOF
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The result of function bonus_seen_under_dest should equal "0"
+  End
+
+  # Mode B, 2026-08-25: the operator's real collection showed no covers at
+  # all. Those files carry their art INSIDE the m4b and have no .jpg beside
+  # them — the common shape for a ripped-from-Audible library — and the
+  # provider only ever looked for sidecar images. We already trust the same
+  # file's embedded tags for author, title and duration, so refusing to trust
+  # them for the cover was an inconsistency rather than a policy.
+  It 'list: a cover embedded in the m4b is extracted when there is no sidecar image'
+    Skip if 'ffmpeg is not installed' no_ffmpeg
+    mkartbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The result of function cover_in_cache should equal "1"
+  End
+
+  It 'list: a sidecar image still wins over the embedded art'
+    Skip if 'ffmpeg is not installed' no_ffmpeg
+    mkartbook "Ann Leckie" "Ancillary Justice"
+    printf 'jpg\n' > "$ROOT/Ann Leckie/Ancillary Justice/cover.jpg"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The result of function jq_cover_is_sibling should equal "true"
+  End
+
+  It 'list: a book with neither sidecar nor embedded art reports no cover, never a guess'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The output should include '"cover":null'
+  End
+
+  # The extraction is downscaled, and that is load-bearing rather than tidy:
+  # library-dialog.lua inlines every file:// cover into the panel as a base64
+  # data URI, and retail embedded art is routinely 1000x1000 / ~350KB. At full
+  # size a 300-book tree would carry ~100MB of base64 in one document. The
+  # panel draws covers in a 48px box.
+  It 'list: the extracted cover is downscaled, not the full-size embedded art'
+    Skip if 'ffmpeg is not installed' no_ffmpeg
+    mkartbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The result of function cover_width should equal "128"
+  End
+
+  # Extraction costs an ffmpeg exec per book, and browse lists a whole tree at
+  # once, so a second browse of an unchanged tree must not pay it again.
+  It 'list: an unchanged tree reuses the cached cover instead of re-extracting'
+    Skip if 'ffmpeg is not installed' no_ffmpeg
+    mkartbook "Ann Leckie" "Ancillary Justice"
+    zsh "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
+    before=$(ls -lT "$RIP_COVER_CACHE" 2>/dev/null)
+    zsh "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
+    When call test "$before" = "$(ls -lT "$RIP_COVER_CACHE" 2>/dev/null)"
+    The status should equal 0
+  End
+
+  It 'list: extraction leaves no partial temp behind in the cache'
+    Skip if 'ffmpeg is not installed' no_ffmpeg
+    mkartbook "Ann Leckie" "Ancillary Justice"
+    zsh "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
+    When run ls -a "$RIP_COVER_CACHE"
+    The status should equal 0
+    The output should not include ".part"
   End
 End
