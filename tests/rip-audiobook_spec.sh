@@ -1239,13 +1239,18 @@ EOF
 
   # --- Task 5, Step 3b: identity assigned at import ----------------------
   #
-  # ids["local.sha256"] used to be written ONLY by --repair-sidecars Case C,
+  # ids["local.sha256"] used to be written only by --repair-sidecars Case C,
   # gated to provider "manual" — so a folder-acquired book never got it in
   # its OWN sidecar, and Task 4's byte-level duplicate refusal above (which
   # this file's fixtures always hand-author) could never fire against a
   # re-import of a book THIS feature itself imported. These two examples
   # prove the gap is closed: no hand-authored sidecar anywhere below — the
   # first import's own sidecar is what the second import's refusal reads.
+  #
+  # The acquire is now the ONLY writer of that key (review finding F3,
+  # 2026-08-26), and deliberately so: it is the only place that ever holds
+  # the SOURCE file to hash. Case C, repairing a book already on the server,
+  # records `local.stored.sha256` instead.
 
   It 'session: a folder-provider acquire mints a fleet.uid and records the real hash of the primary file'
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
@@ -4449,7 +4454,7 @@ EOF
   #
   #   A  no sidecar + exact-path row      -> written (the only automatic write)
   #   B  empty ids + a findable row       -> REPORTED ONLY, never written
-  #   C  empty ids + no row + "manual"    -> fleet.uid + local.sha256 assigned
+  #   C  empty ids + no row + "manual"    -> fleet.uid + local.stored.sha256
   #   4  empty ids + no row + not manual  -> unidentifiable, nothing written
   #
   # Every example here runs the SSH branch through fake_server_ssh: the two
@@ -4764,12 +4769,26 @@ EOF
   }
   rpo_sha_ok() {
     want=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/$RPO/Ready Player One.m4b" | cut -d' ' -f1)
-    got=$(jq -r '.ids["local.sha256"] // ""' "$(sidecar_at "$RPO")")
+    got=$(jq -r '.ids["local.stored.sha256"] // ""' "$(sidecar_at "$RPO")")
     if [ -n "$got" ] && [ "$want" = "$got" ]; then echo "hash matches the audio"; else echo "MISMATCH want=$want got=$got"; fi
+  }
+  # THE KEY MATTERS, not just the value. local.sha256 is the hash of the
+  # SOURCE that was imported, and rip::ab_worker's byte-dedupe compares a
+  # about-to-be-imported source file against exactly that. Case C has no
+  # source to hash — it can only ever hash the STORED bytes, which the retag
+  # rewrites — so recording its answer under local.sha256 would hand the
+  # dedupe a value it can never match and silently stop it firing for every
+  # repaired book.
+  rpo_no_source_sha() {
+    if jq -e '.ids | has("local.sha256")' "$(sidecar_at "$RPO")" >/dev/null 2>&1; then
+      echo "CLAIMED A SOURCE HASH IT NEVER SAW"
+    else
+      echo "no source hash claimed"
+    fi
   }
   rpo_untouched_fields() { jq -c '[.title,.source.provider,.published,.work]' "$(sidecar_at "$RPO")"; }
 
-  It 'repair: a manual book with no provider row is assigned fleet.uid + a server-computed local.sha256'
+  It 'repair: a manual book with no provider row is assigned fleet.uid + a server-computed local.stored.sha256'
     # Case C. Both keys deliberately: a minted uid alone repeats the exposure
     # that started this work (lose the sidecar, lose the id forever), and a
     # hash alone dies at the next re-encode. The uid is the join key; the hash
@@ -4783,12 +4802,41 @@ EOF
     The output should include "repaired 1 of 1 sidecar(s)"
     The result of function rpo_uid_ok should equal "uuidv4"
     The result of function rpo_sha_ok should equal "hash matches the audio"
+    The result of function rpo_no_source_sha should equal "no source hash claimed"
     # Additive: nothing else on the sidecar is rewritten.
     The result of function rpo_untouched_fields should equal '["Ready Player One","manual",null,null]'
     # library + sidecars + hash + write.
     The result of function ssh_calls should equal "4"
     # The hash is sha256sum's job, not jq's — the server has no jq.
     The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+  End
+
+  # THE REASON THE KEY WAS SPLIT, stated as behaviour rather than as a field
+  # name. rip::_stored_sha_index is the byte-dedupe's whole input, and
+  # rip::ab_worker feeds it the sha256 of the SOURCE FILE it is about to
+  # copy. A Case C hash is of the STORED bytes — which the enrichment's
+  # retag rewrites — so listing it there would offer the dedupe a value no
+  # source can ever match, and dedupe would silently stop firing for every
+  # repaired book with nothing on screen to say so. The control book beside
+  # it is what stops this reading as "the index came back empty".
+  It 'stored-sha index: a Case C repair contributes nothing — its hash is of the stored bytes, not of an imported source'
+    fake_provider_rows "$ROW_WIND"
+    mkbook_empty "$RPO" manual
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Z Control/Book"
+    printf 'ctl\n' > "$RIP_SANDBOX/server/audiobooks/Z Control/Book/Book.m4b"
+    printf '%s\n' '{"schema":1,"kind":"audiobook","title":"Book","authors":["Z Control"],"ids":{"fleet.uid":"u1","local.sha256":"deadbeef"}}' \
+      > "$RIP_SANDBOX/server/audiobooks/Z Control/Book/.fleet-book.json"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB
+      rip::ab_repair_sidecars --apply >/dev/null 2>&1
+      rip::_stored_sha_index"
+    The status should equal 0
+    # a book whose local.sha256 really is a source hash still indexes
+    The output should include "deadbeef"
+    The output should include "Z Control/Book"
+    # the Case C book does not
+    The output should not include "Ready Player One"
+    The stderr should not include "malformed"
   End
 
   It 'repair: re-running --apply on a repaired Case C book mints no second uid'

@@ -586,7 +586,12 @@ rip::_book_meta_for() {
     # the one place every row (index, provider-list fallback) converges
     # before becoming a sidecar, so it is where that gap closes: a
     # provider-"folder" row is stamped with a locally minted fleet.uid, the
-    # same durable join key Case C mints, PAIRED with local.sha256.
+    # same durable join key Case C mints, PAIRED with local.sha256 — and the
+    # pairing is what makes THIS the site that can write that key at all:
+    # here the SOURCE file was hashed moments ago, so `local.sha256` means
+    # what it says. Case C, repairing a book already on the server, has no
+    # source to hash and records `local.stored.sha256` instead (review
+    # finding F3, 2026-08-26).
     #
     # local.sha256 is never (re)hashed here — rip::ab_worker already hashes
     # the primary m4b once, for its own duplicate-bytes check, and threads
@@ -773,9 +778,25 @@ _RIP_JQ_WORK_DEF='def _work_obj: if type == "object" then . else {} end;'
 # sidecar will NOT reproduce the value recorded here. That is not drift. The
 # field exists for the byte-level duplicate refusal in rip::ab_worker, which
 # hashes the operator's SOURCE file before acquiring it and compares against
-# exactly this recorded source hash, so dedupe keeps working untouched. A
-# second `stored.sha256` was considered and deliberately NOT added: nothing
-# would consume it, and an unread field is a liability, not a safety net.
+# exactly this recorded source hash — so dedupe keeps working for every book
+# whose source was actually hashed, which is every book acquired through the
+# worker.
+#
+# The books it does NOT cover are the ones nobody ever hashed a source for:
+# --repair-sidecars Case C repairs a book that was already on the server and
+# can only hash the STORED bytes. Those are recorded under their own key,
+# `local.stored.sha256`, precisely BECAUSE of the sentence above (review
+# finding F3, 2026-08-26): filed as `local.sha256` they would offer the
+# dedupe a value no source file can ever match, and it would silently stop
+# firing for every repaired book. A book whose source hash nobody knows is
+# absent from the dedupe index, which is the honest answer rather than a
+# wrong one.
+#
+# `local.stored.sha256` is NOT the `stored.sha256` the design doc refused to
+# add. That refusal was about the PUSH composer minting a second hash of a
+# file it had already hashed, for no reader. This one is the only hash Case C
+# can compute, it names what it actually is, and it is the recovery anchor
+# rip::_sidecars_hash_primary exists for.
 typeset -g _RIP_SIDECAR_JQ
 _RIP_SIDECAR_JQ="$_RIP_JQ_IDS_DEF$_RIP_JQ_WORK_DEF"'
   {schema: 1, kind: "audiobook",
@@ -3814,7 +3835,8 @@ rip::_remote_sidecar_json() {
 #
 # THIS IS THE ONLY WRITE IN THIS PHASE THAT TOUCHES A BOOK NOBODY ASKED TO
 # RIP, on the operator's live server, mid-session, to the file holding the
-# only copy of that book's identity (`fleet.uid`, `local.sha256`). After
+# only copy of that book's identity (`fleet.uid`, `local.sha256` /
+# `local.stored.sha256`). After
 # rip::ab_backfill_work_uid has run it should never fire at all; it exists
 # because a book can reach cantina by paths this subsystem does not own.
 #
@@ -4069,7 +4091,13 @@ done'
 #   Case C  sidecar present, `ids` empty, NO provider row, and the recorded
 #           provider is "manual" -> assign identity: a locally minted
 #                                 `fleet.uid` plus a server-computed
-#                                 `local.sha256` of the primary audio file.
+#                                 `local.stored.sha256` of the primary audio
+#                                 file. STORED, not `local.sha256`: this
+#                                 repair can only hash the bytes on the
+#                                 server, and since the enrichment retags a
+#                                 book on its way in, those are no longer the
+#                                 source bytes the byte-dedupe compares
+#                                 against (review finding F3, 2026-08-26).
 #   (4th)   sidecar present, `ids` empty, NO provider row, provider NOT
 #           "manual"           -> UNIDENTIFIABLE. Reported by name, nothing
 #                                 written, nothing minted.
@@ -4157,6 +4185,16 @@ rip::_provider_index() {
 # file years later, which is exactly what `sha256sum` on the stored bytes
 # gives (the `shasum -a 256` fallback is for the hermetic tests' local
 # branch, which runs this same script on macOS).
+#
+# WHAT THIS HASHES IS THE STORED BYTES, AND SINCE 2026-08-26 THAT IS NO
+# LONGER THE SOURCE (review finding F3). The enrichment retags every book on
+# its way into the library (rip::_retag_book), so the file on the server
+# differs from the file that was imported. Both facts are still true and
+# useful — this one is re-derivable from the orphan, the other is what the
+# byte-dedupe compares — but they are DIFFERENT facts, so its only caller
+# records this one as `local.stored.sha256` and leaves `local.sha256` to mean
+# what it says: the hash of the source that was imported. See
+# rip::ab_repair_sidecars' Case C block and the note on _RIP_SIDECAR_JQ.
 #
 # Primary audio file = the `.m4b` (Libation's own output, and one per book);
 # failing that, the LARGEST audio file in the directory — a multi-part book's
@@ -4555,7 +4593,7 @@ rip::ab_repair_sidecars() {
       print -r -- "would create sidecar: ${a_rel[i]}  ->  ${a_id[i]}"
     done
     for (( i = 1; i <= ${#c_rel[@]}; i++ )); do
-      print -r -- "would assign local identity: ${c_rel[i]}  (fleet.uid + local.sha256)"
+      print -r -- "would assign local identity: ${c_rel[i]}  (fleet.uid + local.stored.sha256)"
     done
     if (( intended > 0 )); then
       print -r -- "($intended book(s); re-run with --apply)"
@@ -4596,6 +4634,22 @@ rip::ab_repair_sidecars() {
     # stable join key and the hash is the recovery anchor — half of that pair
     # is the very exposure this repair exists to close, so a book with no hash
     # gets nothing at all.
+    #
+    # THE HASH IS RECORDED AS `local.stored.sha256`, NOT `local.sha256`
+    # (review finding F3, 2026-08-26). The two are different facts and only
+    # one of them is knowable here. `local.sha256` means "the hash of the
+    # SOURCE that was imported", and rip::ab_worker's byte-dedupe compares an
+    # about-to-be-copied source file against exactly that. This repair has no
+    # source to hash — it hashes the STORED bytes, on the server, because
+    # that is the only copy there is — and since the enrichment now retags
+    # every book on its way in (rip::_retag_book), stored bytes and source
+    # bytes are no longer the same bytes. Recorded as `local.sha256` it would
+    # hand the dedupe a value no source file can ever match: dedupe silently
+    # stops firing for every repaired book, with nothing on screen to say so.
+    # Under its own key it stays exactly what it is — the recovery anchor
+    # that makes an orphaned file re-identifiable years later — and the
+    # dedupe index simply does not list a book whose source hash nobody
+    # knows, which is the honest answer rather than a wrong one.
     local -a c_b64=()
     for (( i = 1; i <= ${#c_rel[@]}; i++ )); do
       c_b64+=("$(jq -rn --arg r "${c_rel[i]}" '$r|@base64' 2>/dev/null)")
@@ -4622,7 +4676,7 @@ rip::ab_repair_sidecars() {
         continue
       fi
       composed="$(print -r -- "${c_json[i]}" | jq -c --arg u "$uid" --arg s "$sha" \
-        "$_RIP_JQ_IDS_DEF"'del(._path) | .ids = ((.ids | _ids_obj) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
+        "$_RIP_JQ_IDS_DEF"'del(._path) | .ids = ((.ids | _ids_obj) + {"fleet.uid": $u, "local.stored.sha256": $s})' 2>/dev/null)"
       payload=""
       [[ -n "$composed" ]] && payload="$(rip::_sidecar_payload "${c_rel[i]}" "$composed")"
       if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
