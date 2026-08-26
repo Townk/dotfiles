@@ -564,8 +564,9 @@
       // derived_from:"filename" row, so the field that needs attention is
       // already wrong the moment it appears and must say so without being
       // touched first.
-      var field = function (name, value, placeholder, cls) {
-        return '<input class="edit-input ' + cls + (titleValid(value) ? '' : ' invalid') + '"'
+      var field = function (name, value, placeholder, cls, validFn) {
+        var ok = (validFn || titleValid)(value);
+        return '<input class="edit-input ' + cls + (ok ? '' : ' invalid') + '"'
           + ' data-edit-row="' + esc(r.id) + '"'
           + ' data-field="' + name + '" type="text" autocomplete="off" spellcheck="false"'
           + ' placeholder="' + placeholder + '" value="' + esc(value) + '">';
@@ -574,6 +575,14 @@
         + field('title', r.title || '', 'Title', 'edit-title')
         + '<div class="edit-by">'
         + field('author', r.authors[0] || '', 'Author', 'edit-author')
+        // Third, optional field. Empty means "no edition" (the default) and
+        // is never invalid — editionValid, not titleValid, is the one
+        // validator here that lets '' through. Setting it is what composes
+        // <Author>/<Title> (<Edition>) in applyEdit below, which is also
+        // what clears the stored-book block (isStored/storedHtml): the
+        // composed path stops colliding, no special case needed either
+        // place.
+        + field('edition', r.edition || '', 'Edition', 'edit-edition', editionValid)
         + mark
         + '</div>'
         + '</div>';
@@ -587,7 +596,7 @@
     function storedHtml(r) {
       if (!isStored(r)) return '';
       return '<div class="detail"><div class="dup-blocked">' + SVG_WARN_SM
-        + '<span>already on cantina as ' + esc(r.path) + ' — edit the title to rip this as a separate edition</span></div></div>';
+        + '<span>already on cantina as ' + esc(r.path) + ' — set an Edition to rip this as a separate edition</span></div></div>';
     }
 
     function duplicateHtml(r) {
@@ -742,6 +751,13 @@
     // equal what these two fields say the moment they say it, not what the
     // provider derived when it listed the tree.
     //
+    // A third field, `edition`, is optional and APPENDS " (" + edition + ")"
+    // to that composed path rather than replacing any of it — the exact
+    // suffix rip::ab_worker strips back off to resolve the shared base book
+    // (docs/superpowers/specs/2026-08-25-audiobook-editions-design.md, S3/S4).
+    // Empty (the default) composes the base path unchanged, byte-identical
+    // to before this field existed.
+    //
     // An emptied author collapses to the title alone, matching the folder
     // provider's own rule (rip-provider-folder's cmd_list): "" + "/" + title
     // is a LEADING slash, an absolute path where a two-component relative
@@ -755,10 +771,12 @@
       if (!r) return;
       if (field === 'author') r.authors = value === '' ? [] : [value];
       else if (field === 'title') r.title = value;
+      else if (field === 'edition') r.edition = value;
       else return;
       var a = r.authors[0] || '';
       var t = String(r.title == null ? '' : r.title);
-      r.path = a === '' ? t : a + '/' + t;
+      var e = String(r.edition == null ? '' : r.edition).trim();
+      r.path = (a === '' ? t : a + '/' + t) + (e === '' ? '' : ' (' + e + ')');
     }
 
     // Keyboard row navigation, ported from the disc panel's moveFocus idiom
@@ -825,6 +843,16 @@
       return n !== '' && n !== '.' && n !== '..' && n.indexOf('/') === -1;
     }
 
+    // Same rule, minus the non-empty requirement: an edition label is
+    // OPTIONAL (empty is the default, and composes the base <Author>/<Title>
+    // path unchanged), but once present it becomes a path component exactly
+    // like author/title and must follow the same no-slash, never "."/".."
+    // rule — an edition containing '/' would inject a path component.
+    function editionValid(n) {
+      n = String(n || '').trim();
+      return n === '' || (n !== '.' && n !== '..' && n.indexOf('/') === -1);
+    }
+
     // Mirrors the PER-PATH half of rip::_validate_ab_plan
     // (home/dot_local/lib/rip.zsh): split on the FIRST slash for the author
     // and the LAST for the title, run rip::_check_title\'s rule over both,
@@ -879,8 +907,9 @@
     // A book the server already holds at this composed path. The backend
     // refuses it anyway (rip::ab_have, keyed on the same path), so letting it
     // into the plan only produced a refusal the operator never saw. Note this
-    // follows INLINE EDITS: retitling an alternate edition to something the
-    // server does not hold clears the block, which is exactly the route out.
+    // follows INLINE EDITS: retitling, or — the intended route — setting the
+    // Edition field, to something the server does not hold clears the block,
+    // which is exactly the way out.
     function isStored(r) {
       return SERVER.has(r.path);
     }
@@ -954,11 +983,15 @@
           t.value = cleaned;
           t.setSelectionRange(caret, caret);
         }
-        // BOTH fields, not just the title. An empty author composes a
-        // single-segment path, which rip::_validate_ab_plan refuses for the
-        // WHOLE plan, so the inline editor has to hold that line here.
+        // BOTH author and title, not just the title. An empty author
+        // composes a single-segment path, which rip::_validate_ab_plan
+        // refuses for the WHOLE plan, so the inline editor has to hold that
+        // line here. Edition is the one field where empty is legal — this
+        // is the same field/validator pairing editHtml's field() uses at
+        // render time, kept in sync here for every keystroke after.
         var field = host.getAttribute('data-field');
-        t.classList.toggle('invalid', !titleValid(t.value));
+        var valid = field === 'edition' ? editionValid(t.value) : titleValid(t.value);
+        t.classList.toggle('invalid', !valid);
         applyEdit(host.getAttribute('data-edit-row'), field, t.value.trim());
         // The footer counts only rippable rows, so an edit that blocks or
         // unblocks one has to repaint it. The ROW is deliberately not

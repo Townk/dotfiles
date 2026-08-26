@@ -346,6 +346,19 @@ body { background: transparent; overflow: hidden; }
   flex: 0 1 auto;
 }
 .edit-author:hover, .edit-author:focus { opacity: 1; }
+/* Third, optional field: empty by default, same size/opacity rhythm as
+ * .edit-author but capped narrower so a page of untouched rows still reads
+ * as author + title, not a three-column form. Italic while empty (the
+ * placeholder only) marks it as the one field nothing requires. */
+.edit-edition {
+  font-size: var(--meta-size);
+  color: rgba(224, 224, 224, 1);
+  opacity: var(--dim);
+  flex: 0 1 96px;
+  min-width: 40px;
+}
+.edit-edition:hover, .edit-edition:focus { opacity: 1; }
+.edit-edition::placeholder { font-style: italic; }
 .edit-input::placeholder { color: rgba(150, 150, 150, 0.7); }
 
 /* Where this identity came from. Peach for the two real guesses (the

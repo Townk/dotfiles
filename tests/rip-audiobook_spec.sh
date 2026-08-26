@@ -4637,8 +4637,11 @@ JS
     The status should equal 0
     The output should include 'data-blocked="true"'
     The output should include "already on cantina"
-    # the way out is the edition route, and it must be stated in the row
-    The output should include "edit the title"
+    # the way out is the Edition field, and it must be stated in the row
+    # (2026-08-26: was "edit the title" — the title route still worked but
+    # silently turned a deliberate edition into an unrelated book with an
+    # odd title; the Edition field is the named, tracked route now).
+    The output should include "set an Edition"
   End
 
   It 'panel: a book the server does NOT hold is left rippable'
@@ -4826,6 +4829,64 @@ JS
     The output should not include '"path":"/Ancilary Justice"'
     The output should not include '"action":"start"'
     The output should include 'data-blocked="true"'
+  End
+
+  # --- the Edition field (task 4, 2026-08-26) -------------------------------
+  #
+  # A third inline field beside Author and Title, files mode only. Empty by
+  # default (an ordinary rip is unchanged); setting one composes
+  # <Author>/<Title> (<Edition>) — the exact suffix rip::ab_worker strips
+  # back off to resolve the shared base book. This is also what clears the
+  # stored-book block above (the "already on cantina" tests): the composed
+  # path stops colliding, so isStored(r) goes false with no special case
+  # added anywhere.
+
+  It 'panel: the Edition field renders beside Author and Title in files mode'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW"
+    The status should equal 0
+    The output should include 'data-field="edition"'
+    The output should include 'placeholder="Edition"'
+  End
+
+  It 'panel: setting an edition composes <Author>/<Title> (<Edition>)'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","edition","Full Cast"]]'
+    The status should equal 0
+    The output should include '"path":"Anncillary/Ancilary Justice (Full Cast)"'
+  End
+
+  It 'panel: a row blocked as stored becomes unblocked once an edition is set'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","edition","Full Cast"]]' '["Anncillary/Ancilary Justice"]'
+    The status should equal 0
+    The output should include '"path":"Anncillary/Ancilary Justice (Full Cast)"'
+    The output should include 'data-blocked="false"'
+    The output should not include "already on cantina"
+  End
+
+  # Not merely "the path has no suffix" — an unrecognized field would be a
+  # silent no-op that happens to leave the path unchanged too, which would
+  # pass this whole example even with no edition support at all. Pinning
+  # the rendered field's OWN presence and its valid (non-'invalid') class
+  # is what actually exercises "empty is legal" (editionValid, not
+  # titleValid) rather than "nothing happened".
+  It 'panel: an empty edition composes the unsuffixed path, unchanged'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","edition",""]]'
+    The status should equal 0
+    The output should include '"path":"Anncillary/Ancilary Justice"'
+    The output should not include '" ("'
+    The output should include 'edit-edition'
+    The output should not include 'edit-edition invalid'
+  End
+
+  It 'panel: a slash in the edition field is stripped as typed'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","edition","Full/Cast"]]'
+    The status should equal 0
+    The output should include '"path":"Anncillary/Ancilary Justice (FullCast)"'
+    The output should not include "Full/Cast"
   End
 
   # A derived identity is a GUESS, and the panel has to say which kind: the
