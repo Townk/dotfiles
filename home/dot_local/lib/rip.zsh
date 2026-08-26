@@ -5267,8 +5267,8 @@ rip::ab_worker() {
     # Lazy dedupe (Task 4): hash ONLY the book about to be acquired, and
     # only for the folder provider — a DIFFERENT rule from the "already on
     # cantina" refusal above (keyed on PATH); this one is keyed on BYTES,
-    # and both must keep firing independently. $id is still the folder
-    # provider's SOURCE directory here, ahead of any copy into staging.
+    # and both must keep firing independently. $id is the folder provider's
+    # SOURCE FILE here, ahead of any copy into staging.
     #
     # The hash is computed regardless of $sha_idx_rc now (Task 5, Step 3b):
     # only the DUPLICATE COMPARISON below needs the stored-sha index, but
@@ -5277,7 +5277,15 @@ rip::ab_worker() {
     # fetched still needs its own hash threaded through, or it would carry
     # no local.sha256 at all and re-enter exactly the gap this task closes.
     if [[ "$provider" == folder ]]; then
-      primary="$(print -rl -- "$id"/*.m4b(N) | head -1)"
+      # One .m4b is one book, so the plan's id IS the primary file. The
+      # directory branch is kept for one reason only: a plan queued by a
+      # panel from before that change still names a directory, and a queued
+      # plan outlives the code that wrote it. It is not a shape we emit.
+      if [[ -f "$id" ]]; then
+        primary="$id"
+      else
+        primary="$(print -rl -- "$id"/*.m4b(N) | head -1)"
+      fi
       if [[ -n "$primary" ]]; then
         sha="$(rip::_sha256_of "$primary")"
         if [[ $sha_idx_rc -eq 0 && -n "$sha" && -n "${stored_sha[$sha]:-}" ]]; then

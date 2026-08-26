@@ -452,7 +452,7 @@ FAKESSH
     printf 'stored audio\n' > "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/RawFolder.m4b"
     mkdir -p "$RIP_SANDBOX/incoming/RawFolder"
     printf 'retagged audio\n' > "$RIP_SANDBOX/incoming/RawFolder/Edited Title.m4b"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\"}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder/Edited Title.m4b\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\"}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The stderr should include "already on cantina"
     The stderr should include "Edited Author/Edited Title"
@@ -636,7 +636,7 @@ EOF
   It "worker: forwards the folder provider's plan path — an inline edit survives acquire"
     mkdir -p "$RIP_SANDBOX/incoming/RawFolder"
     printf 'audio\n' > "$RIP_SANDBOX/incoming/RawFolder/RawFolder.m4b"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\",\"authors\":[\"Edited Author\"]}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder/RawFolder.m4b\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\",\"authors\":[\"Edited Author\"]}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/RawFolder.m4b" should be exist
@@ -690,7 +690,7 @@ EOF
     printf 'fresh bytes\n' > "$RIP_SANDBOX/incoming/Fresh/fresh.m4b"
     # a plan naming the duplicate first and a fresh book second — the batch
     # must not abort on the duplicate.
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"},{\"id\":\"$RIP_SANDBOX/incoming/Fresh\",\"path\":\"A/Fresh\",\"title\":\"Fresh\"}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook/dup.m4b\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"},{\"id\":\"$RIP_SANDBOX/incoming/Fresh/fresh.m4b\",\"path\":\"A/Fresh\",\"title\":\"Fresh\"}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should include "already stored as"
@@ -706,7 +706,7 @@ EOF
     sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/DupBook/dup.m4b" | cut -d" " -f1)
     printf '%s\n' "{\"schema\":1,\"kind\":\"audiobook\",\"title\":\"Ancillary Justice\",\"authors\":[\"Ann Leckie\"],\"ids\":{\"local.sha256\":\"$sha\"}}" \
       | jq . > "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice/.fleet-book.json"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook/dup.m4b\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The stderr should include "1 already stored"
   End
@@ -725,7 +725,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     want_sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/Orig/orig.m4b" | cut -d' ' -f1)
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null 2>&1 && jq -r '((.ids[\"fleet.uid\"]//\"\")|length>0)' $RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json && jq -r '.ids[\"local.sha256\"]' $RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json"
     The status should equal 0
     The lines of output should equal 2
@@ -736,12 +736,12 @@ EOF
   It 'session: identity assigned at import closes the loop — a folder-provider re-import of the same bytes is refused'
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
     zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json" >/dev/null 2>&1
 
     mkdir -p "$RIP_SANDBOX/incoming/Copy"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Copy/copy.m4b"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Copy\",\"path\":\"A/Copy\",\"title\":\"Copy\"}]}" > "$RIP_SANDBOX/plan2.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Copy/copy.m4b\",\"path\":\"A/Copy\",\"title\":\"Copy\"}]}" > "$RIP_SANDBOX/plan2.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan2.json"
     The status should equal 0
     The stderr should include "already stored as"
@@ -766,7 +766,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     want_sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/Orig/orig.m4b" | cut -d' ' -f1)
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null 2>&1
       sidecar=$RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json
       jq -r '.ids | type' \$sidecar
@@ -787,12 +787,12 @@ EOF
   It 'session: byte-dedupe still fires against a book first imported with "ids": []'
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
     zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json" >/dev/null 2>&1
 
     mkdir -p "$RIP_SANDBOX/incoming/Copy"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Copy/copy.m4b"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Copy\",\"path\":\"A/Copy\",\"title\":\"Copy\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan2.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Copy/copy.m4b\",\"path\":\"A/Copy\",\"title\":\"Copy\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan2.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan2.json"
     The status should equal 0
     The stderr should include "already stored as"
@@ -853,7 +853,7 @@ EOF
     printf 'staged by the previous run\n' > "$RIP_STAGING_ROOT/audiobooks/A/Kept/Kept.m4b"
     mkdir -p "$RIP_SANDBOX/incoming/Kept"
     printf 'a different, fresher copy\n' > "$RIP_SANDBOX/incoming/Kept/Kept.m4b"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Kept\",\"path\":\"A/Kept\",\"title\":\"Kept\"}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Kept/Kept.m4b\",\"path\":\"A/Kept\",\"title\":\"Kept\"}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should not include "acquire failed"
@@ -879,7 +879,7 @@ EOF
     rm -rf "$RIP_SANDBOX/server/audiobooks"
     mkdir -p "$RIP_SANDBOX/incoming/Fresh"
     printf 'fresh bytes\n' > "$RIP_SANDBOX/incoming/Fresh/fresh.m4b"
-    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Fresh\",\"path\":\"A/Fresh\",\"title\":\"Fresh\"}]}" > "$RIP_SANDBOX/plan.json"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Fresh/fresh.m4b\",\"path\":\"A/Fresh\",\"title\":\"Fresh\"}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The stderr should include "could not reach cantina"
     The path "$RIP_SANDBOX/server/audiobooks/A/Fresh/fresh.m4b" should be exist

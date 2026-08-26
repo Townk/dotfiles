@@ -23,12 +23,59 @@ cmd_capabilities() {
 # Order: embedded tags, then directory structure, then the filename. Whichever
 # wins is REPORTED as `derived_from`, because the operator has to be able to
 # see what was guessed before ripping 40 books on trust.
+# _dir_is_collection <dir> — true when the directory holds more than one .m4b.
+#
+# This is the whole distinction the provider turns on. A directory with ONE
+# book is that book's own folder: its name is the title, and the cover and PDF
+# sitting beside it are its own. A directory with SEVEN is a shelf — its name
+# is the shelf's, and nothing in it belongs to any single book by position
+# alone. Collapsing the two is what made a 7-book Harry Potter folder list as
+# one 114-hour book carrying Book 1's tags.
+_dir_is_collection() {
+  local -a m=("$1"/*.m4b(N-.))
+  (( ${#m} > 1 ))
+}
+
+# _sibling_of <m4b> <ext-pattern> — the companion belonging to THIS book, or
+# empty. Stem match first (Book3.Foo.pdf beside Book3.Foo.m4b). A bare
+# directory-level file counts only when the directory holds exactly one book:
+# on a shelf a lone cover.jpg belongs to no one book, and attaching it to all
+# of them would be a guess wearing the costume of a fact.
+_sibling_of() {
+  local f="$1" pat="$2" d="${f:h}" stem="${f:t:r}" hit
+  hit="$(print -rl -- "$d/$stem."${~pat}(N-.) | head -1)"
+  if [[ -n "$hit" ]]; then
+    print -r -- "$hit"
+    return 0
+  fi
+  _dir_is_collection "$d" && return 0
+  print -rl -- "$d"/*.${~pat}(N-.) | head -1
+}
+
+# _book_files <m4b> — everything that must travel with this book, published
+# into the global array _RIP_BOOK_FILES.
+#
+# A global, not a "$(...)" capture, on purpose: command substitution forks,
+# and an array assigned inside the fork dies with it. This repo has been bitten
+# by that three times.
+_book_files() {
+  local f="$1" d="${1:h}" stem="${1:t:r}" c
+  _RIP_BOOK_FILES=("$f")
+  for c in "$d/$stem."*(N-.); do
+    [[ "$c" == "$f" ]] || _RIP_BOOK_FILES+=("$c")
+  done
+  _dir_is_collection "$d" && return 0
+  for c in "$d"/*(N-.); do
+    [[ "$c" == *.m4b ]] && continue
+    (( ${_RIP_BOOK_FILES[(Ie)$c]} )) || _RIP_BOOK_FILES+=("$c")
+  done
+}
+
 _derive() {
   setopt localoptions noerrexit nopipefail
-  local d="$1" root="$2" f author title
-  f="$(print -rl -- "$d"/*.m4b(N) | head -1)"
+  local f="$1" root="$2" d="${1:h}" author title
 
-  if [[ -n "$f" ]] && command -v ffprobe >/dev/null 2>&1; then
+  if [[ -f "$f" ]] && command -v ffprobe >/dev/null 2>&1; then
     local tags
     tags="$(ffprobe -v error -show_entries format_tags=album_artist,artist,album,title \
               -of default=noprint_wrappers=1:nokey=0 -- "$f" 2>/dev/null)"
@@ -47,8 +94,12 @@ _derive() {
   # absolute path in $rel, which trivially contains a "/" and gets routed
   # here even though the book sits directly in the root — the author would
   # then become the root's own PARENT directory name.
+  # ...and only when the book's own directory is NOT a shelf. In
+  # <Author>/<Title>/one.m4b the directory names the book; in
+  # <Anything>/{a,b,c}.m4b it names the shelf, and borrowing it would hand
+  # every book on that shelf the same author and title.
   local rel="${d#$root/}"
-  if [[ "$d" != "$root" && "$rel" == */* ]]; then
+  if [[ "$d" != "$root" && "$rel" == */* ]] && ! _dir_is_collection "$d"; then
     print -r -- "${rel:h:t}"$'\x1f'"${rel:t}"$'\x1f'"path"
     return 0
   fi
@@ -63,7 +114,18 @@ _derive() {
   # (this branch label) would read back empty. \x1f is not whitespace, so
   # it is never collapsed; this repo already uses it elsewhere as a field
   # separator for exactly this reason.
-  print -r -- ""$'\x1f'"${d:t}"$'\x1f'"filename"
+  # Last resort, and WHICH name depends on the same shelf test. A directory
+  # holding exactly one book IS that book's folder, so its name is the title
+  # (SingleBook/x.m4b is "SingleBook", not "x"). On a shelf the directory
+  # names the shelf, and a file loose in the root has no directory of its own
+  # to borrow — both fall back to the file's own stem.
+  local base
+  if [[ "$d" != "$root" ]] && ! _dir_is_collection "$d"; then
+    base="${d:t}"
+  else
+    base="${f:t:r}"
+  fi
+  print -r -- ""$'\x1f'"$base"$'\x1f'"filename"
 }
 
 cmd_list() {
@@ -84,11 +146,15 @@ cmd_list() {
   # collection points at"). The two must agree, or acquire's symlink support
   # is unreachable because nothing can ever be selected. Matches this repo's
   # own fd idiom in dot_config/zsh/completion.sh.
-  local -A seen=()
-  local f d
+  # One .m4b is one book. m4b is a single-file whole-book format, so a
+  # directory holding several is a shelf, not a book in parts — see
+  # _dir_is_collection. Keying this scan by DIRECTORY silently dropped six of
+  # seven books in a real collection folder and summed their durations into
+  # the survivor.
+  local -a books=()
+  local f
   while IFS= read -r -d '' f; do
-    d="${f:h}"
-    seen[$d]=1
+    books+=("$f")
   done < <(fd --follow --absolute-path --type f --extension m4b --print0 . "$root" 2>/dev/null)
 
   # `one`/`n` are declared HERE, once, not re-declared inside the loop body
@@ -97,24 +163,22 @@ cmd_list() {
   # to STDOUT for that variable (reproduced in isolation; not documented
   # behavior we could find, but 100% repeatable) — corrupting the JSON
   # stream with bare `one=...` / `n=...` lines between rows.
-  local author title src cover dur has_pdf one n
-  for d in "${(@ko)seen}"; do
-    IFS=$'\x1f' read -r author title src <<< "$(_derive "$d" "$root")"
-    cover="$(print -rl -- "$d"/*.(jpg|jpeg|png)(N) | head -1)"
+  local author title src cover dur has_pdf n
+  for f in "${(@o)books}"; do
+    IFS=$'\x1f' read -r author title src <<< "$(_derive "$f" "$root")"
+    cover="$(_sibling_of "$f" '(jpg|jpeg|png)')"
     dur=0
     if command -v ffprobe >/dev/null 2>&1; then
-      for one in "$d"/*.m4b(N); do
-        n="$(ffprobe -v error -show_entries format=duration -of csv=p=0 -- "$one" 2>/dev/null)"
-        [[ "$n" == <->* ]] && dur=$(( dur + ${n%%.*} ))
-      done
+      n="$(ffprobe -v error -show_entries format=duration -of csv=p=0 -- "$f" 2>/dev/null)"
+      [[ "$n" == <->* ]] && dur=${n%%.*}
     fi
     # A sibling PDF is a real, local, checkable signal — unlike everything
     # else Audible-shaped in this row, this one costs nothing to establish
     # honestly, so it is not left null/false by default.
     has_pdf=false
-    [[ -n "$(print -rl -- "$d"/*.pdf(N) | head -1)" ]] && has_pdf=true
+    [[ -n "$(_sibling_of "$f" 'pdf')" ]] && has_pdf=true
     jq -nc \
-      --arg id "$d" --arg title "$title" --arg author "$author" \
+      --arg id "$f" --arg title "$title" --arg author "$author" \
       --arg src "$src" --arg cover "$cover" --argjson dur "$dur" \
       --argjson has_pdf "$has_pdf" --arg v "$VERSION" '
       {id: $id,
@@ -157,10 +221,13 @@ cmd_list() {
 # was bitten by exactly this).
 cmd_acquire() {
   setopt localoptions noerrexit nopipefail
+  # $src is a FILE now, not a directory: one .m4b is one book (see
+  # _dir_is_collection). -f, not -e, and it follows a symlink deliberately —
+  # the operator's real store is exactly the kind of thing a symlink-based
+  # collection points at.
   local src="$1" dest="$2"
-  [[ -d "$src" ]] || die "no such directory: $src"
-  local -a audio=("$src"/*.m4b(N))
-  (( ${#audio} )) || die "no m4b in $src — nothing to acquire"
+  [[ -f "$src" ]] || die "no such file: $src"
+  [[ "$src" == *.m4b ]] || die "not an m4b: $src"
 
   # The caller OWNS the destination path. Do not re-derive it here when it is
   # given: (a) a later panel lets the operator EDIT author/title inline
@@ -182,7 +249,7 @@ cmd_acquire() {
   # to guess is visible (the book stages under its own directory name, no
   # author) and harmless. So: title is the book directory's own basename,
   # author is empty, full stop.
-  local rel="${3:-${src:t}}"
+  local rel="${3:-${src:t:r}}"
 
   mkdir -p "$dest" || die "cannot create $dest"
   local staging="$dest/$rel"
@@ -229,6 +296,10 @@ cmd_acquire() {
   mkdir -p "$tmp" || die "cannot create the staging temp for $rel"
 
   print -r -- "progress -1 copying"
+  # This book's own file plus the companions that belong to IT — not every
+  # file in the directory, which on a shelf is six other people's books.
+  local -a _RIP_BOOK_FILES=()
+  _book_files "$src"
   local f copy_rc=0
   # (N-.): the precondition above (`*.m4b(N)`, no type qualifier) counts a
   # SYMLINKED .m4b as present — the operator's real store is exactly the
@@ -239,7 +310,7 @@ cmd_acquire() {
   # still exits 0 with a book that has a cover but no sound. `-` toggles
   # the qualifier to examine the symlink's TARGET, so a symlink to a
   # regular file matches `.` the same way the file itself would.
-  for f in "$src"/*(N-.); do
+  for f in "${_RIP_BOOK_FILES[@]}"; do
     if ! cp -p -- "$f" "$tmp/"; then
       copy_rc=1
       break
@@ -255,9 +326,9 @@ cmd_acquire() {
   # actually landed as a real file in $tmp — a captured outcome, not
   # "the copy loop returned 0 so it must be fine".
   local -a landed=("$tmp"/*.m4b(N-.))
-  if (( ${#landed} != ${#audio} )); then
+  if (( ${#landed} != 1 )); then
     rm -rf -- "$tmp"
-    die "audio did not land in staging for $rel (expected ${#audio}, got ${#landed})"
+    die "audio did not land in staging for $rel (expected 1, got ${#landed})"
   fi
 
   # Re-checked immediately before the rename, and HARD this time. The cheap

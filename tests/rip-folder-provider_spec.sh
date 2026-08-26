@@ -101,13 +101,43 @@ Describe 'rip-provider-folder'
     The output should include '"derived_from":"path"'
   End
 
-  It 'list: one directory is ONE book however many m4b files it holds'
-    mkdir -p "$ROOT/Ann Leckie/Ancillary Justice"
-    printf 'a\n' > "$ROOT/Ann Leckie/Ancillary Justice/part1.m4b"
-    printf 'b\n' > "$ROOT/Ann Leckie/Ancillary Justice/part2.m4b"
+  # THE CONTRACT, and it used to be the opposite one. A directory holding
+  # several .m4b files was treated as ONE book: a real 7-book Harry Potter
+  # folder listed as a single 114-hour title carrying Book 1's tags, and six
+  # books were silently unreachable. m4b is a single-file whole-book format,
+  # so several of them side by side is a shelf, not a book in parts.
+  It 'list: each m4b in a shelf directory is its own book'
+    mkdir -p "$ROOT/Collection"
+    printf 'a\n' > "$ROOT/Collection/Book1.m4b"
+    printf 'b\n' > "$ROOT/Collection/Book2.m4b"
+    printf 'c\n' > "$ROOT/Collection/Book3.m4b"
     When run zsh "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
-    The result of function linecount should equal "1"
+    The result of function linecount should equal "3"
+  End
+
+  # The corollary: on a shelf, the DIRECTORY name is the shelf's, not any
+  # book's, so path-derivation must not hand all of them the same author.
+  It 'list: a shelf directory does not lend its name to the books on it'
+    mkdir -p "$ROOT/Some Author/Some Shelf"
+    printf 'a\n' > "$ROOT/Some Author/Some Shelf/First.m4b"
+    printf 'b\n' > "$ROOT/Some Author/Some Shelf/Second.m4b"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The output should include '"title":"First"'
+    The output should include '"title":"Second"'
+    The output should not include '"title":"Some Shelf"'
+    The output should include '"derived_from":"filename"'
+  End
+
+  # ...but a directory holding exactly ONE book still IS that book's folder:
+  # its name is the title and its siblings are its companions.
+  It 'list: a lone m4b still takes its author and title from its directory'
+    mkdirbook "Ann Leckie" "Ancillary Sword"
+    When run zsh "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The output should include '"path":"Ann Leckie/Ancillary Sword"'
+    The output should include '"derived_from":"path"'
   End
 
   It 'list: finds books at any depth, with no recursion limit'
@@ -141,11 +171,11 @@ Describe 'rip-provider-folder'
     The result of function jq_cover_is_sibling should equal "true"
   End
 
-  It 'list: the id is the book directory, so acquire can find it again'
+  It 'list: the id is the m4b file itself, so acquire can find it again'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     When run zsh "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
-    The result of function jq_id should equal "$ROOT/Ann Leckie/Ancillary Justice"
+    The result of function jq_id should equal "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
   End
 
   It 'list: never claims Audible concepts for a local file'
@@ -231,7 +261,7 @@ Describe 'rip-provider-folder'
   # <Author>/<Title> destination pass it explicitly too.
   It 'acquire: copies the book into <dest>/<Author>/<Title>/ and leaves the source alone'
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The path "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
@@ -242,7 +272,7 @@ Describe 'rip-provider-folder'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     printf 'pdf\n' > "$ROOT/Ann Leckie/Ancillary Justice/bonus.pdf"
     printf 'jpg\n' > "$ROOT/Ann Leckie/Ancillary Justice/cover.jpg"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/bonus.pdf" should be exist
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/cover.jpg" should be exist
@@ -292,7 +322,7 @@ Describe 'rip-provider-folder'
     mkdir -p "$ROOT/Ann Leckie/Ancillary Justice"
     ln -s "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" \
           "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The contents of file "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "real audio"
@@ -300,7 +330,7 @@ Describe 'rip-provider-folder'
 
   It 'acquire: the caller-supplied relpath wins over any derivation'
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Edited Author/Edited Title"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Edited Author/Edited Title"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Edited Author/Edited Title/Ancillary Justice.m4b" should be exist
     The path "$RIP_SANDBOX/staging/Ann Leckie" should not be exist
@@ -309,23 +339,34 @@ Describe 'rip-provider-folder'
   It 'acquire: a book sitting directly under the root derives no bogus author'
     mkdir -p "$ROOT/LooseBook"
     printf 'a\n' > "$ROOT/LooseBook/LooseBook.m4b"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/LooseBook" "$RIP_SANDBOX/staging"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/LooseBook/LooseBook.m4b" "$RIP_SANDBOX/staging"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/LooseBook/LooseBook.m4b" should be exist
   End
 
-  It 'acquire: refuses a source directory holding no m4b'
-    mkdir -p "$ROOT/Someone/Empty"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Someone/Empty" "$RIP_SANDBOX/staging"
+  # One .m4b is one book, so acquire is handed a FILE. A directory is no
+  # longer a book id — passing one used to copy every file in it, which on a
+  # shelf directory is six other people's books.
+  It 'acquire: refuses a directory, which is no longer a book id'
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
     The status should equal 2
-    The stderr should include "no m4b"
-    The path "$RIP_SANDBOX/staging/Someone/Empty" should not be exist
+    The stderr should include "no such file"
+    The path "$RIP_SANDBOX/staging/Ancillary Justice" should not be exist
   End
 
-  It 'acquire: refuses an id that is not a directory'
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/nope" "$RIP_SANDBOX/staging"
+  It 'acquire: refuses a file that is not an m4b'
+    mkdir -p "$ROOT/Someone/Book"
+    printf 'x\n' > "$ROOT/Someone/Book/book.mp3"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Someone/Book/book.mp3" "$RIP_SANDBOX/staging"
     The status should equal 2
-    The stderr should include "no such directory"
+    The stderr should include "not an m4b"
+  End
+
+  It 'acquire: refuses an id that does not exist'
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/nope.m4b" "$RIP_SANDBOX/staging"
+    The status should equal 2
+    The stderr should include "no such file"
   End
 
   # TWO source files, the SECOND (alphabetically: "0-bonus.pdf" sorts
@@ -341,7 +382,7 @@ Describe 'rip-provider-folder'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     printf 'bonus\n' > "$ROOT/Ann Leckie/Ancillary Justice/0-bonus.pdf"
     chmod 000 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should not equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice" should not be exist
     The result of function bonus_pdf_anywhere should equal "0"
@@ -385,7 +426,7 @@ EOF
     chmod +x "$RIP_SANDBOX/shim/cp"
     export PATH="$RIP_SANDBOX/shim:$PATH"
     export RIP_CP_LOG="$RIP_SANDBOX/cp-calls.log"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The output should include "already staged"
     The result of function cp_calls should equal "0"
@@ -406,7 +447,7 @@ EOF
     export PATH="$RIP_SANDBOX/shim:$PATH"
     export RIP_SHIM_DEST="$RIP_SANDBOX/staging"
     export RIP_SHIM_LOG="$RIP_SANDBOX/cp-shim.log"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The result of function bonus_seen_under_dest should equal "0"
