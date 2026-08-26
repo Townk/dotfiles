@@ -5655,7 +5655,7 @@ rip::ab_worker() {
   local -A pre_dirs=()
   local -a landed=()
   local pre_d bdir actual primary sha
-  local ed_suffix base_rel work_uid
+  local ed_suffix base_rel base_raw work_uid
   # THE BATCH'S OWN work-uid memo, declared HERE with the other loop locals —
   # never inside the loop body, where a re-run `local` prints "name=value" to
   # stdout and corrupts the stream this worker also writes progress lines to.
@@ -5807,15 +5807,24 @@ rip::ab_worker() {
     if [[ -n "$edition" ]]; then
       ed_suffix=" ($edition)"
       base_rel=""
+      base_raw=""
       # No suffix, no base path: this row was not composed by the panel (a
       # hand-written or pre-suffix plan), so there is no book to share a work
       # with and the honest answer is a fresh uid — never a guess at which
       # stored book was meant. Same for a suffix that consumed the whole
       # title, which would leave a bogus "<Author>/" to read.
       if [[ "$bpath" == *"$ed_suffix" ]]; then
-        base_rel="${bpath%"$ed_suffix"}"
-        [[ "${base_rel##*/}" == "" ]] && base_rel=""
+        base_raw="${bpath%"$ed_suffix"}"
+        [[ "${base_raw##*/}" == "" ]] && base_raw=""
       fi
+      # TWO spellings of the base path, deliberately. $base_raw is the plan's
+      # OWN bytes — that is what an in-plan sibling row's `.path` is compared
+      # against below, where the two strings were composed by one panel from
+      # one pair of fields and a normalization pass would only introduce a
+      # difference. $base_rel is the NFC one, for the SERVER: the read and the
+      # write-back must both speak the server's spelling (see
+      # rip::_ab_work_uid_for). Both are tried by the anchor patch.
+      base_rel="$base_raw"
       # NFC on the KEY as well, for the same reason rip::_ab_work_uid_for
       # normalizes its argument: two spellings of one directory must be ONE
       # entry in this table, not two.
@@ -5836,8 +5845,36 @@ rip::ab_worker() {
         # what rip::_book_meta_for hands the sidecar composer, and
         # _RIP_SIDECAR_JQ emits `work: ($r.work | _work_obj)`, so this is the
         # single point where a rip records which work it belongs to.
-        jq -c --arg p "$bpath" --arg u "$work_uid" --arg e "$edition" \
-          'if .path == $p then .work = {uid: $u, edition: $e} else . end' \
+        #
+        # AND THE BASE ROW, IF IT IS IN THIS SAME PLAN (review finding,
+        # 2026-08-26). The memo above makes two EDITIONS share a uid, but a
+        # base book being ripped alongside its own edition carries no
+        # `edition` of its own, so it never entered this block at all and
+        # landed with `work: null` — then --backfill-work-uid minted it a
+        # DIFFERENT uid, and with both rows non-null neither is ever a
+        # candidate again: two unrelated works, repairable only by hand on
+        # cantina. It is the NATURAL flow, not a corner: two files that both
+        # derive <Author>/<Title> collide in the panel's path-keyed
+        # rippable() dedupe, so setting an Edition on one is the only way to
+        # rip both at once.
+        #
+        # The base row is anchored (`edition: null`) rather than labelled:
+        # the edition name belongs to the book being ripped, never to the one
+        # it shares a work with — the same rule rip::_ab_anchor_work_uid
+        # follows for a base book already on the server.
+        #
+        # Keyed on `.path`, so it is ORDER-INDEPENDENT: the whole plan was
+        # merged into this index before the loop started, so the base row is
+        # there to patch whether it is acquired before or after its edition.
+        # Only a row whose `work` is still null is touched — never one an
+        # earlier item already resolved, and never a book outside this plan
+        # (this file is the meta index, not a sidecar).
+        jq -c --arg p "$bpath" --arg b "$base_raw" --arg bn "$base_rel" \
+              --arg u "$work_uid" --arg e "$edition" \
+          'if .path == $p then .work = {uid: $u, edition: $e}
+           elif ($b != "" and (.path == $b or .path == $bn) and .work == null)
+             then .work = {uid: $u, edition: null}
+           else . end' \
           "$index" > "$index.tmp" \
           && mv -f -- "$index.tmp" "$index" \
           || { rm -f -- "$index.tmp"; log_warn "rip: could not record the work uid for $bpath in the meta index — this edition will ship without one" }

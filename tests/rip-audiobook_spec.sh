@@ -1201,6 +1201,88 @@ Unabridged"
     The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
   End
 
+  # A BASE BOOK AND ITS OWN EDITION IN ONE BATCH (review finding,
+  # 2026-08-26). The memo above only fires for items that CARRY an edition:
+  # the whole uid block sits inside `if [[ -n "$edition" ]]`, and the index
+  # patch only ever touched the edition's own row — so a no-edition base item
+  # in the same plan recorded no `work` at all. It landed with `work: null`
+  # while its edition landed with a uid, the later --backfill-work-uid sweep
+  # minted the base a DIFFERENT one, and from then on both carry a non-null
+  # `work` so neither is ever a candidate again: two unrelated works in
+  # `--editions`, repairable only by hand on the server.
+  #
+  # And it is the NATURAL flow, not a corner: two files that both derive
+  # A/B collide in the panel's path-keyed rippable() dedupe, so setting an
+  # Edition on ONE of them is the only way to rip both at once.
+  #
+  # The patch is keyed on `.path`, so BOTH ORDERS are pinned — the edition
+  # can resolve before or after the base is even looked at.
+  wu_base_and_edition_share() {
+    ub=$(jq -r '.work.uid // ""' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" 2>/dev/null)
+    ue=$(jq -r '.work.uid // ""' "$RIP_SANDBOX/server/audiobooks/A/B (Full Cast)/.fleet-book.json" 2>/dev/null)
+    if [ -n "$ub" ] && [ "$ub" = "$ue" ]; then wu_is_uuid4 "$ub"; else echo "base=$ub edition=$ue"; fi
+  }
+  # The base is the ANCHOR: it shares the uid, never the edition label. Read
+  # as a SHAPE, not as `.work.edition` — on a book with `work: null` that
+  # expression prints "null" too, so an assertion written that way would pass
+  # against the very defect these examples exist for.
+  wu_work_shape() {
+    jq -c 'if (.work // null) == null then "no work at all"
+           else {has_uid: ((.work.uid // "") != ""), edition: .work.edition} end' \
+      "$1" 2>/dev/null
+  }
+  wu_base_and_edition_labels() {
+    wu_work_shape "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    wu_work_shape "$RIP_SANDBOX/server/audiobooks/A/B (Full Cast)/.fleet-book.json"
+  }
+  # <first-item> — the two-item plan, in the given order. Distinct bytes per
+  # file: identical ones would be refused by the sha256 dedupe first and the
+  # second book would never be acquired at all.
+  wu_pair_plan() {
+    mkdir -p "$RIP_SANDBOX/incoming/Base" "$RIP_SANDBOX/incoming/Full"
+    printf 'base bytes\n' > "$RIP_SANDBOX/incoming/Base/base.m4b"
+    printf 'full cast bytes\n' > "$RIP_SANDBOX/incoming/Full/full.m4b"
+    jq -nc --arg b "$RIP_SANDBOX/incoming/Base/base.m4b" --arg f "$RIP_SANDBOX/incoming/Full/full.m4b" --arg first "$1" \
+      '{base:{id:$b,path:"A/B",title:"B",authors:["A"],provider:"folder"},
+        ed:{id:$f,path:"A/B (Full Cast)",title:"B",authors:["A"],provider:"folder",edition:"Full Cast"}}
+       | {provider:"folder", items:(if $first == "base" then [.base,.ed] else [.ed,.base] end)}' \
+      > "$RIP_SANDBOX/plan.json"
+  }
+
+  It 'work uid: a base book and its edition in ONE batch share a uid (base first)'
+    wu_pair_plan base
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_base_and_edition_share should equal "uuidv4"
+    The result of function wu_base_and_edition_labels should equal '{"has_uid":true,"edition":null}
+{"has_uid":true,"edition":"Full Cast"}'
+  End
+
+  It 'work uid: a base book and its edition in ONE batch share a uid (edition first)'
+    wu_pair_plan edition
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_base_and_edition_share should equal "uuidv4"
+    The result of function wu_base_and_edition_labels should equal '{"has_uid":true,"edition":null}
+{"has_uid":true,"edition":"Full Cast"}'
+  End
+
+  # The anchor patch must never reach a book that is NOT in this plan, and
+  # must never overwrite a work another edition already recorded. Here the
+  # base is stored on the server with its own uid and is NOT part of the
+  # batch: the existing read path reuses that uid (it must), and the stored
+  # sidecar stays byte-identical — the anchoring patch is an in-plan,
+  # meta-index-only operation.
+  It 'work uid: the in-plan anchor never rewrites a stored base book'
+    wu_base "9f1c2a4e-3333-4b22-8aa0-abc123456789"
+    before=$(wu_base_sha)
+    wu_plan "Full Cast"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_ed_uid should equal "9f1c2a4e-3333-4b22-8aa0-abc123456789"
+    The result of function wu_base_sha should equal "$before"
+  End
+
   # THE NO-EDITION CASE, on the very path that would tempt a parenthesis
   # parser: the book is titled "B (Full Cast)" and the operator set no
   # edition. Nothing may be resolved, nothing read, nothing written — the
