@@ -6387,6 +6387,7 @@ rip::ab_canonicalize_authors() {
   # PASS 2 — report, and under --apply perform, the directory moves.
   local base; base="$(rip::remote_base)"
   local found=0 swept_fail=0
+  local -i unpointed=0
   for key in "${group_keys[@]}"; do
     variants="${groups[$key]}"
     vlist=("${(@f)variants}")
@@ -6411,7 +6412,17 @@ rip::ab_canonicalize_authors() {
     done
     (( apply )) || continue
     for a in "${moves[@]}"; do
-      rip::_canonicalize_one_author "$base" "$a" "$target" || swept_fail=1
+      # rc 3 is NOT a failure: the books moved and the path is correct, but
+      # Audiobookshelf holds no author record by the canonical name to
+      # repoint them to. Counted separately and reported separately (see the
+      # summary below) — folding it into swept_fail is what made a correct
+      # rename exit 1 and taught the operator to ignore the exit status.
+      rip::_canonicalize_one_author "$base" "$a" "$target"
+      case $? in
+        0) ;;
+        3) (( unpointed++ )) ;;
+        *) swept_fail=1 ;;
+      esac
     done
   done
 
@@ -6511,6 +6522,11 @@ rip::ab_canonicalize_authors() {
     fi
   fi
 
+  # THE SUMMARY SEPARATES THEM TOO, not just the exit status: "renamed but
+  # not repointed" is an outcome the operator has to act on in a different
+  # place (the Audiobookshelf UI), and one that no later run of this verb can
+  # reach — the variant directory is gone by then.
+  (( unpointed )) && print -r -- "rip: $unpointed author(s) renamed on disk but NOT repointed in Audiobookshelf — the files and sidecars are correct; rename the author in the Audiobookshelf UI (see the warnings above)"
   (( found )) || print -r -- "rip: nothing to do — every author is already in its canonical spelling"
   (( apply )) || { (( found )) && print -r -- "(re-run with --apply)" }
   # A variant that could not be fully swept is reported through the exit
@@ -6523,6 +6539,11 @@ rip::ab_canonicalize_authors() {
 # rip::_canonicalize_one_author <base> <variant> <canonical> — move every book
 # out of <variant> into <canonical>, repoint each ABS item, then delete the
 # emptied author record.
+#
+# rc 0 swept clean · rc 1 something genuinely failed · rc 3 the books moved and
+# the path is correct, but Audiobookshelf holds no author record by the
+# canonical name to repoint them to. rc 3 is NOT a failure — see the
+# three-outcome note inside.
 #
 # `mv -n` throughout: a title already present under the canonical spelling is
 # left where it is rather than overwritten — the only copy of an audiobook is
@@ -6537,8 +6558,11 @@ rip::ab_canonicalize_authors() {
 # its ABS item still stores the variant spelling, and the record that spelling
 # pointed at is gone. `rmdir`'s exit status is the one honest signal that the
 # variant is genuinely bookless — ask for it rather than inferring it from
-# `rmdir`, and keep the record when any book failed to move or failed to be
-# repointed. (Review findings 2 and 4, 2026-08-24.)
+# `rmdir`, and keep the record whenever any book failed to move, or any item
+# Audiobookshelf knows still names the variant. (Review findings 2 and 4,
+# 2026-08-24; "still names the variant" separated from "the repoint failed"
+# by the coordinator ruling of 2026-08-26 — the first is an outcome, only the
+# second is an error.)
 rip::_canonicalize_one_author() {
   setopt localoptions noerrexit nopipefail
   local base="$1" variant="$2" canon="$3"
@@ -6566,7 +6590,31 @@ rip::_canonicalize_one_author() {
   done
 
   local title item
-  local -i unrepointed=0
+  # THREE OUTCOMES, NOT TWO (coordinator ruling, 2026-08-26). These used to
+  # share one counter, so a rename that moved every book correctly into a
+  # spelling Audiobookshelf has simply never seen — the ORDINARY case for the
+  # canonical-initials rule — exited 1. Reporting failure for "there was
+  # nothing to do here" trains the operator to ignore the exit status, which
+  # costs more than the signal is worth, and it is this subsystem's own
+  # recurring defect inverted: asserting a verdict the code never established.
+  #
+  #   a repoint ATTEMPTED and refused    a real failure. Counted, rc 1.
+  #   $aid empty                         ABS holds no author record by the
+  #                                      canonical name. Nothing to repoint
+  #                                      TO — not a failure, not counted;
+  #                                      named once, up front, with the
+  #                                      remedy.
+  #   $item empty                        ABS has not scanned this book. Not
+  #                                      something this sweep did wrong —
+  #                                      warned per book, not counted.
+  #
+  # `still_pointing` is a THIRD fact and deliberately neither of the above:
+  # "an item Audiobookshelf KNOWS still names the variant author". Deleting
+  # the variant's record then strands that item on a record that no longer
+  # exists (review finding 2, 2026-08-24) — true whether the repoint failed
+  # or was never possible in the first place. It gates the DELETE. It does
+  # not set the exit status.
+  local -i unrepointed=0 still_pointing=0
   for title in "${books[@]}"; do
     if [[ "$base" == *:* ]]; then
       local ssh_bin="${RIP_SSH_BIN:-ssh}"
@@ -6580,12 +6628,18 @@ rip::_canonicalize_one_author() {
         || { log_warn "rip: could not move $title"; continue }
     fi
     item="$("$RIP_BIN_DIR/rip-abs-authors" --find-item "$canon/$title" 2>/dev/null)"
-    if [[ -n "$item" && -n "$aid" ]]; then
-      "$RIP_BIN_DIR/rip-abs-authors" --repoint-item "$item" "$aid" "$canon" >/dev/null 2>&1 \
-        || { log_warn "rip: moved $title but could not repoint its ABS item"; (( unrepointed++ )) }
-    else
-      log_warn "rip: moved $title but could not resolve its ABS item or the canonical author"
+    if [[ -z "$item" ]]; then
+      log_warn "rip: moved $title, but Audiobookshelf does not know this book yet — nothing to repoint"
+      continue
+    fi
+    if [[ -z "$aid" ]]; then
+      (( still_pointing++ ))
+      continue
+    fi
+    if ! "$RIP_BIN_DIR/rip-abs-authors" --repoint-item "$item" "$aid" "$canon" >/dev/null 2>&1; then
+      log_warn "rip: moved $title but could not repoint its ABS item"
       (( unrepointed++ ))
+      (( still_pointing++ ))
     fi
   done
 
@@ -6626,6 +6680,21 @@ rip::_canonicalize_one_author() {
   if (( unrepointed )); then
     log_warn "rip: $unrepointed book(s) from \"$variant\" could not be repointed — leaving its Audiobookshelf author record in place"
     return 1
+  fi
+  # NOTHING TO REPOINT TO, which is not the same fact as A REPOINT THAT
+  # FAILED. The books are where they should be and the path — the thing
+  # --retag reads and this whole phase is about — is correct. The variant's
+  # author record is still kept, because items Audiobookshelf knows still
+  # name it, but this is reported as an outcome rather than as an error.
+  # rc 3, so the caller can say so in its summary without treating it as a
+  # failed sweep; nothing outside rip::ab_canonicalize_authors calls this.
+  if (( still_pointing )); then
+    log_warn "rip: $still_pointing book(s) moved out of \"$variant\" still name it in Audiobookshelf — there is no author record called \"$canon\" to repoint them to, so \"$variant\" is left in place; rename that author in the Audiobookshelf UI"
+    if (( state == 11 )); then
+      log_warn "rip: \"$variant\" holds no books but is not empty (non-book files remain, left for you to clean up)"
+      return 1
+    fi
+    return 3
   fi
   # Every book is out and repointed, so the variant author record is genuinely
   # empty and is removed — including in the 11 case. Keeping it there would

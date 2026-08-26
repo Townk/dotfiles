@@ -4368,7 +4368,14 @@ EOF
   # author cannot be resolved, so nothing gets repointed. Deleting the
   # variant record then strands every moved item on a record that no longer
   # exists.
-  It 'sweep (ssh): an unresolvable canonical author keeps the variant record'
+  # AMENDED 2026-08-26 (coordinator ruling). The record is still kept — items
+  # Audiobookshelf knows still name the variant, and deleting it would strand
+  # them — but the exit status is no longer 1. "There is no author record to
+  # repoint to" is an outcome, not an error: nothing failed, the books moved
+  # and the path is correct. This example used to assert rc 1 and the
+  # "could not be repointed" wording, both of which belonged to the OTHER
+  # branch (a repoint that was attempted and refused).
+  It 'sweep (ssh): an unresolvable canonical author keeps the variant record, without failing'
     fake_ssh_server
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
@@ -4383,9 +4390,11 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
     When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
-    The status should equal 1
+    The status should equal 0
     The output should include "author variants"
-    The stderr should include "could not be repointed"
+    The stderr should include "still name it in Audiobookshelf"
+    # NOT the wording of a genuine failure.
+    The stderr should not include "could not be repointed"
     The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" should be exist
     The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
   End
@@ -4819,6 +4828,74 @@ EOF
     The output should include "nothing to do"
     The result of function ca_tree_unchanged should equal "tree-identical"
     The contents of file "$RIP_SANDBOX/tree.before" should include "J. K. Rowling"
+  End
+
+  # --- "nothing to repoint" vs "the repoint failed" (coordinator ruling,
+  # 2026-08-26) ------------------------------------------------------------
+  #
+  # These two used to share one counter, so the ORDINARY case for the
+  # canonical-initials rule — a rename into a spelling Audiobookshelf has
+  # never seen — exited 1 even though every book moved correctly. Reporting
+  # failure for "there was nothing to do here" trains the operator to ignore
+  # the exit status. The pair below is what stops them collapsing back
+  # together: one asserts rc 0, the other rc 1, and neither passes with the
+  # other's wording.
+
+  # ca_abs_bin <case-body> — an ABS double whose --author-id / --repoint-item
+  # behaviour the example dictates. --find-item always resolves, so these
+  # examples turn on the author record and the repoint alone.
+  ca_abs_bin() {
+    {
+      printf '#!/bin/sh\n'
+      printf 'printf "%%s\\n" "$*" >> "%s/absbin.log"\n' "$RIP_SANDBOX"
+      printf 'case "$1" in\n  --find-item) echo item-x ;;\n%b\nesac\nexit 0\n' "$1"
+    } > "$RIP_BIN_DIR/rip-abs-authors"
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+  }
+
+  It 'sweep (ssh): a rename into a spelling Audiobookshelf has never seen is NOT a failure'
+    fake_server_ssh
+    ca_abs_bin '  --author-id) case "$2" in "J. K. Rowling") exit 1 ;; *) echo auth-x ;; esac ;;'
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    # Nothing went wrong. The files are where they should be.
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling" should not be exist
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
+    # …and the operator is told, in the summary and not only on stderr, that
+    # one thing is left for them to do somewhere this verb cannot reach.
+    The output should include "renamed on disk but NOT repointed"
+    The stderr should include 'has no author record named "J. K. Rowling"'
+    The stderr should include "still name it in Audiobookshelf"
+    # NOT the wording of a genuine failure.
+    The stderr should not include "could not be repointed"
+    # There was nothing to repoint TO, so nothing was attempted…
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--repoint-item"
+    # …and the variant's record survives, because items still name it.
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
+  End
+
+  It 'sweep (ssh): a repoint that was attempted and refused is still a failure'
+    fake_server_ssh
+    ca_abs_bin '  --author-id) echo auth-x ;;\n  --repoint-item) exit 1 ;;'
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 1
+    The stderr should include "could not repoint its ABS item"
+    The stderr should include "could not be repointed"
+    # NOT the outcome wording, and NOT the summary line: a real error must
+    # never be filed under "there was nothing to do here".
+    The stderr should not include "still name it in Audiobookshelf"
+    The output should not include "renamed on disk but NOT repointed"
+    # It WAS attempted — this is a refusal, not a skipped call…
+    The contents of file "$RIP_SANDBOX/absbin.log" should include "--repoint-item"
+    # …and the record the un-repointed item still names is kept.
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
+    # The filesystem half is an ABS-side failure's business to leave alone:
+    # the book moved and its sidecar followed.
+    The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
   End
 
 
