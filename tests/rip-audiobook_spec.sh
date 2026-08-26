@@ -2267,6 +2267,55 @@ FAKECP
     The output should include "newest"
   End
 
+  # --- AFTER THE MANDATORY BACKFILL (review finding, 2026-08-26) -----------
+  #
+  # The state every one of the examples above misses: `--backfill-work-uid
+  # --apply` is REQUIRED (design S5) and mints a uid for EVERY stored book,
+  # so the library the operator actually consults this report against has NO
+  # uid-less books left in it. Every date example above uses `mkbook` (work
+  # null) and every uid example uses `mkbook_work`; none mixed a
+  # date-duplicate pair WITH uids, which is the only state the library is
+  # ever in after that sweep — and in that state the partition on the mere
+  # PRESENCE of a uid left `$rest` empty, so the date section never printed
+  # again while each of those books was ALSO a singleton uid group and so
+  # dropped from the uid section too. The pair vanished from BOTH sections:
+  # rc 0, no output at all.
+  #
+  # These two fixtures are the same Edgedancer pair the date examples use,
+  # anchored the way the sweep leaves them: each its own uid, `edition: null`.
+  It 'editions: a date-derived duplicate pair still reports after the required backfill has anchored every book'
+    mkbook_work "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer U-ANCH-1 ""
+    mkbook_work "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer U-ANCH-2 ""
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should include "== possible duplicate editions"
+    The output should include "B07626B9D2"
+    The output should include "B0B5M28HZK"
+    The output should include "newest"
+    # ...and neither singleton uid leaks into the confirmed section on its way
+    # through: falling through to the heuristic is not the same as being a
+    # work of one.
+    The output should not include "== confirmed editions"
+    The output should not include "U-ANCH-1"
+  End
+
+  # The other half of the same partition, and the reason it cannot simply be
+  # "every book falls through": a book that IS in a reported uid group must
+  # NOT also be date-grouped. These two share one uid AND would satisfy the
+  # heuristic on their own (same first author, same bare title, distinct
+  # dates), so a fix that sent every anchored book through the fallback would
+  # report this pair twice, under both headings.
+  It 'editions: a reported uid group is not ALSO reported by the date heuristic'
+    mkbook_work "X Author" "Foobar" S1 2020-01-01T00:00:00 Foobar U-SILM ""
+    mkbook_work "X Author" "Foobar (Full Cast)" S2 2021-01-01T00:00:00 Foobar U-SILM "Full Cast"
+    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    The status should equal 0
+    The output should include "== confirmed editions"
+    The output should include "U-SILM"
+    The output should not include "== possible duplicate editions"
+    The output should not include "newest"
+  End
+
   # server_sidecars_ssh <dir> — install a fake ssh implementing the exact
   # enumeration rip::_server_sidecars sends over the wire (mindepth/maxdepth
   # 3, .fleet-book.json only), counting its own invocations into

@@ -2906,15 +2906,31 @@ rip::_stored_sha_index() {
 # Edition field) composes a DIFFERENT title on purpose — that is what clears
 # the path collision. Two rows sharing a non-null `work.uid` are two editions
 # of one work regardless of what their titles say, so they are grouped on
-# that FIRST, and only a row with no uid falls through to the author+title+
-# date pipeline, unchanged. A uid group of size one — a book that anchors a
-# work but has no sibling edition yet — is not a finding and is dropped,
-# exactly like a same-title cluster of one. The two kinds are printed under
-# separate headings: a confirmed edition set and a suspected accidental
-# duplicate are different findings, and merging them would bury the
-# accidental ones (design S6). Recency has no meaning inside a uid group —
-# editions are not "newer" or "older" than each other — so the "<- newest"
-# marker stays exactly where it was, inside the date-derived section only.
+# that FIRST, and every row NOT in a reported uid group falls through to the
+# author+title+date pipeline, unchanged. A uid group of size one — a book
+# that anchors a work but has no sibling edition yet — is not a finding as a
+# uid group and is dropped from that section, exactly like a same-title
+# cluster of one.
+#
+# BUT IT FALLS THROUGH TO THE DATE PIPELINE, and that is the whole reason
+# the partition below splits on GROUP MEMBERSHIP rather than on the mere
+# PRESENCE of a uid (review finding, 2026-08-26). --backfill-work-uid is
+# REQUIRED (design S5) and mints a uid for EVERY stored book, so after the
+# one sweep the operator is told to run, "books without a uid" is the empty
+# set: a `$rest` defined as `uid_of == ""` made the date section stop
+# printing forever, while each of those books was also a singleton uid group
+# and therefore dropped from the uid section too. The date-derived pair
+# vanished from BOTH sections — rc 0, no output, on the one report an
+# operator consults before deciding what to delete. An anchored book with no
+# sibling edition is exactly as unexamined as it was before it was anchored,
+# so it must reach the heuristic exactly as it did then.
+#
+# The two kinds are printed under separate headings: a confirmed edition set
+# and a suspected accidental duplicate are different findings, and merging
+# them would bury the accidental ones (design S6). Recency has no meaning
+# inside a uid group — editions are not "newer" or "older" than each other —
+# so the "<- newest" marker stays exactly where it was, inside the
+# date-derived section only.
 #
 # THE TRAP (carried forward from `.ids`, review finding 2026-08-25, see
 # _RIP_JQ_WORK_DEF): `.work` can be `[]` rather than `{}` — a Lua-encoded
@@ -2934,10 +2950,10 @@ rip::ab_editions() {
     def uid_of: (.work | _work_obj | (.uid // ""));
     def edition_of: (.work | _work_obj | (.edition // ""));
     . as $all
-    | ($all | map(select(uid_of != ""))
-             | group_by(uid_of)
-             | map(select(length > 1))) as $ugroups
-    | ($all | map(select(uid_of == ""))) as $rest
+    | ($all | map(select(uid_of != "")) | group_by(uid_of)) as $ubuckets
+    | ($ubuckets | map(select(length > 1)))                 as $ugroups
+    | (($all | map(select(uid_of == "")))
+       + ($ubuckets | map(select(length == 1)) | add // [])) as $rest
     | ($rest
         | map(select((.published // "") != "" and ((.authors[0] // "") != "")))
         | group_by([ (.authors[0] // "" | ascii_downcase | gsub("[^a-z0-9]";"")),
