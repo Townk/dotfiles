@@ -5324,6 +5324,7 @@ JS
   # zero-arg wrappers close over a fixed path the way rpo_uid_ok closes over
   # $RPO above.
   bwu_uid_ok_ab() { bwu_uid_ok "A/B"; }
+  bwu_ab_sha() { bwu_sha "A/B"; }
   bwu_already_sha() { bwu_sha "A/Already"; }
   bwu_two_uids_distinct() {
     u1=$(bwu_uid_at "A/One"); u2=$(bwu_uid_at "A/Two")
@@ -5363,17 +5364,48 @@ JS
     The result of function bwu_uid_ok_ab should equal "uuidv4"
   End
 
+  # Review finding, 2026-08-26. `done < <(rip::_server_sidecars)` discarded
+  # the enumerator's status, so an unreachable cantina yielded zero rows,
+  # printed "nothing to backfill" and exited 0 — `--backfill-work-uid --apply
+  # && echo done` said "done" on a dropped VPN. It matters more for THIS sweep
+  # than any other: running it is what makes the rip path read-only, so a
+  # falsely complete run leaves the write-into-another-book's-sidecar path
+  # armed with nobody aware. Mirrors the repair-companions example above.
+  It 'backfill-work-uid: an unreachable server refuses and never says "nothing to backfill"'
+    mkbook_empty "A/B" libation
+    fake_server_ssh
+    printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"
+    chmod +x "$RIP_SANDBOX/ssh"
+    before=$(bwu_sha "A/B")
+    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    The status should equal 2
+    The output should not include "nothing to backfill"
+    The output should not include "backfilled"
+    The result of function bwu_ab_sha should equal "$before"
+  End
+
   It 'backfill-work-uid: a book that already carries a work object is untouched byte-for-byte'
     # Deliberately irregular formatting (extra spaces, a pre-existing edition
     # label) — a rewrite that merely re-serializes to the SAME parsed value
     # would still fail this, because the check is on the raw bytes.
+    #
+    # A CANDIDATE MUST BE PRESENT TOO (review finding, 2026-08-26). With only
+    # the anchored book staged, `to_fill` comes back empty and the function
+    # returns before the compose-and-ship loop ever runs — so the sha only
+    # guarded the CLASSIFIER, and the write path went unexercised. Nothing in
+    # the suite ran --apply over a library holding both kinds, which is the
+    # only shape the operator's library actually has. Proved by mutation:
+    # making the apply loop iterate every enumerated row instead of the
+    # candidates left all eight examples green while this book's uid and
+    # edition were destroyed and it printed "backfilled 2 of 1".
     ALREADY='{"schema":1,   "kind":"audiobook","title":"Already","authors":["A"],"ids":{},"work":{"uid":"11111111-1111-4111-8111-111111111111","edition":"Full Cast"},"source":{"provider":"libation"}}'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Already"
     printf '%s' "$ALREADY" > "$(sidecar_at "A/Already")"
+    mkbook_empty "A/B" libation
     before=$(bwu_sha "A/Already")
     When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
     The status should equal 0
-    The output should include "nothing to backfill"
+    The output should include "backfilled 1 of 1"
     The result of function bwu_already_sha should equal "$before"
   End
 

@@ -3166,6 +3166,26 @@ rip::ab_backfill_work_uid() {
   # dry-run report and the tallies; $to_fill_json holds the SAME books'
   # stored JSON, index for index — composing the replacement sidecar needs
   # the original object (the server has no jq to do it for us).
+  # CAPTURE the enumerator's status (review finding, 2026-08-26). This used
+  # to read `done < <(rip::_server_sidecars)`, and a process substitution
+  # throws the rc away: an unreachable cantina then produced zero lines,
+  # printed "nothing to backfill", and exited 0 — so
+  # `--backfill-work-uid --apply && echo done` said "done" on a dropped VPN.
+  # That matters more for this sweep than for any other, because running it
+  # is precisely what makes the rip path read-only (design §5): a falsely
+  # complete run leaves rip::ab_worker's write-back-into-another-book's-
+  # sidecar path live with nobody aware it is still armed.
+  #
+  # The comment that justified the old form claimed rip::_server_sidecars
+  # yields rc 0 on failure. That was true once and is not any more — it was
+  # given failure propagation on 2026-08-24 and now returns 2 with a
+  # log_error. Capturing it is this module's own convention:
+  # rip::ab_repair_companions, rip::ab_editions, rip::ab_canonicalize_authors
+  # and rip::ab_retire all refuse the same way.
+  local rows sidecars_rc=0
+  rows="$(rip::_server_sidecars)" || sidecars_rc=$?
+  (( sidecars_rc == 0 )) || return 2
+
   local -a to_fill=() to_fill_json=()
   local -i seen=0
   local line rel has_work
@@ -3181,7 +3201,7 @@ rip::ab_backfill_work_uid() {
     [[ -z "$has_work" ]] || continue      # already anchors a work — never rewritten
     to_fill+=("$rel")
     to_fill_json+=("$line")
-  done < <(rip::_server_sidecars)
+  done <<< "$rows"
 
   if (( ${#to_fill[@]} == 0 )); then
     # Same seen==0 vs "genuinely satisfied" distinction as
