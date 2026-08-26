@@ -3842,11 +3842,14 @@ EOF
   # the server.
   #
   # `stat`, `sha256sum` and `shasum` joined the list for --repair-sidecars'
-  # Case C hash, which cantina computes with sha256sum. jq is STILL absent and
+  # Case C hash, which cantina computes with sha256sum. `ffmpeg`/`ffprobe`
+  # joined it for --retag, which remuxes a STORED book in place on the server
+  # (design doc S4: cantina has both, verified 2026-08-26, which is what makes
+  # the sweep a remote operation with no round trip). jq is STILL absent and
   # must stay absent: that is the whole point of the handpicked list.
   fake_server_ssh() {
     mkdir -p "$RIP_SANDBOX/remotebin"
-    for c in sh find sed tr mv rm mkdir rmdir head cat ls printf test base64 stat sha256sum shasum; do
+    for c in sh find sed tr mv rm mkdir rmdir head cat ls printf test base64 stat sha256sum shasum ffmpeg ffprobe; do
       p=$(command -v "$c" 2>/dev/null || true)
       if [ -n "$p" ]; then ln -sf "$p" "$RIP_SANDBOX/remotebin/$c"; fi
     done
@@ -7057,6 +7060,352 @@ EOF
     When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/Broken'"
     The status should equal 2
     The output should equal ""
+  End
+
+  # --- rip::ab_retag — --retag, for the library that already exists (S4) -----
+  #
+  # The same invariant as the enrichment retag, read from the other end: a
+  # book's tags say exactly what its PATH says. The enrichment writes that
+  # into a staged copy on the way in; this sweeps the ~248 books that were
+  # already on cantina before the feature existed and were never tagged at
+  # all.
+  #
+  # cantina has ffmpeg and ffprobe (design doc S4, verified 2026-08-26), so
+  # the remux happens THERE — nothing is fetched, rewritten and pushed back.
+  # These examples exercise exactly that shape: the sweep ships a POSIX sh
+  # script, the "server" runs it against real media, and every judgement about
+  # whether the tags took is made locally from probe JSON the server returned.
+  #
+  # REAL MEDIA, not six-byte text files named *.m4b, for the same reason the
+  # enrichment section uses real media: a remux is the thing under test, and a
+  # fake ffmpeg that copies its input would let a sweep that writes nothing at
+  # all pass every assertion below.
+
+  # rtg_seed — the parts every book here is muxed from, built once per
+  # example: a 1s aac stream, an attached cover picture, and a chapter.
+  #
+  # THE CHAPTER IS NOT DECORATION. An m4b's chapters live in a text track that
+  # ffmpeg's mov demuxer exposes as a `bin_data` stream, and the ipod muxer
+  # refuses to copy it ("Tag text incompatible with output codec id
+  # \'98314\'", rc 183, unreadable output) — which is why the remux excludes
+  # data streams and regenerates chapters. A fixture with no chapter cannot
+  # tell a correct remux from one missing that exclusion: verified by
+  # mutation, a fixture without one left the whole sweep green while
+  # $_RIP_RETAG_FF_MAP was broken.
+  rtg_seed() {
+    ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a aac -b:a 8k \
+      "$RIP_SANDBOX/rtg-a.m4a"
+    ffmpeg -v error -y -f lavfi -i 'color=c=red:s=16x16:d=1' -frames:v 1 "$RIP_SANDBOX/rtg-cover.jpg"
+    printf '%s\n' ';FFMETADATA1' '[CHAPTER]' 'TIMEBASE=1/1000' 'START=0' 'END=1000' \
+      'title=Chapter One' > "$RIP_SANDBOX/rtg-chap.txt"
+  }
+
+  # rtg_sidecar <Author/Title> <provider> <ids-json>
+  rtg_sidecar() {
+    jq -n --arg t "${1##*/}" --arg a "${1%%/*}" --arg p "$2" --argjson i "$3" \
+      '{schema:1,kind:"audiobook",title:$t,subtitle:null,authors:[$a],narrators:[],
+        series:null,duration_s:null,language:null,abridged:null,published:null,
+        ids:$i,work:null,
+        source:{provider:$p,provider_version:null,acquired_utc:null,format:"m4b"}}' \
+      > "$RIP_SANDBOX/server/audiobooks/$1/.fleet-book.json"
+  }
+
+  # rtg_book <Author/Title> <album_artist> <album> <title> [provider] [ids]
+  #
+  # A stored book: a real m4b carrying those three tags PLUS an artist holding
+  # the narrator and a composer, so "we did not write it" can be told apart
+  # from "it survived the remux" by value rather than by hope.
+  rtg_book() {
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+    ffmpeg -v error -y -i "$RIP_SANDBOX/rtg-a.m4a" -i "$RIP_SANDBOX/rtg-cover.jpg" \
+      -i "$RIP_SANDBOX/rtg-chap.txt" \
+      -map 0:a -map 1:v -map_metadata 2 -map_chapters 2 \
+      -c:a copy -c:v mjpeg -disposition:v attached_pic \
+      -metadata album_artist="$2" -metadata artist='Jim Dale' \
+      -metadata composer='Comp Person' -metadata album="$3" -metadata title="$4" \
+      "$RIP_SANDBOX/server/audiobooks/$1/book.m4b"
+    rtg_ids_json='{}'
+    [ $# -ge 6 ] && rtg_ids_json="$6"
+    rtg_sidecar "$1" "${5:-libation}" "$rtg_ids_json"
+  }
+
+  # rtg_tree_digest — one hash over every stored file's PATH and CONTENT. "The
+  # dry run writes nothing" is only proved against the WHOLE server tree: an
+  # assertion on one file, or on the absence of a log line, would pass against
+  # a sweep that rewrote a neighbour.
+  rtg_tree_digest() {
+    ( cd "$RIP_SANDBOX/server" && find . -type f | LC_ALL=C sort | while IFS= read -r f; do
+        printf '%s\n' "$f"
+        shasum -a 256 "$f" | cut -d' ' -f1
+      done ) | shasum -a 256 | cut -d' ' -f1
+  }
+
+  rtg_sha() { shasum -a 256 "$RIP_SANDBOX/server/audiobooks/$1/book.m4b" | cut -d' ' -f1; }
+  rtg_tag() {
+    ffprobe -v error -select_streams a:0 -show_entries format_tags:stream_tags -of json -- \
+      "$RIP_SANDBOX/server/audiobooks/$1/book.m4b" 2>/dev/null \
+      | jq -r --arg k "$2" '((.format.tags // {}) + (.streams[0].tags // {})) | .[$k] // ""'
+  }
+  rtg_tags() { printf '%s|%s|%s' "$(rtg_tag "$1" album_artist)" "$(rtg_tag "$1" album)" "$(rtg_tag "$1" title)"; }
+  rtg_ids() { jq -Sc '.ids' "$(sidecar_at "$1")"; }
+
+  # rtg_survived_ab — what a remux that dropped the exclusion would lose:
+  # the chapter (whose text track is the thing the ipod muxer refuses) and
+  # the attached cover picture.
+  rtg_survived_ab() {
+    ab="$RIP_SANDBOX/server/audiobooks/A Author/B Book/book.m4b"
+    printf '%s|%s' \
+      "$(ffprobe -v error -show_chapters -of json -- "$ab" 2>/dev/null | jq -r '[.chapters[].tags.title] | join(",")')" \
+      "$(ffprobe -v error -select_streams v -show_entries stream=codec_name -of csv=p=0 -- "$ab" 2>/dev/null | tr -d '\n')"
+  }
+  rtg_tags_ab()   { rtg_tags "A Author/B Book"; }
+  rtg_extra_ab()  { printf '%s|%s' "$(rtg_tag "A Author/B Book" artist)" "$(rtg_tag "A Author/B Book" composer)"; }
+  rtg_good_sha()  { rtg_sha "Good Author/Good Book"; }
+  rtg_bad_sha()   { rtg_sha "A Author/Bad Book"; }
+  # rtg_stray — neither a leftover temp nor the .work directory itself may
+  # outlive the batch. A killed or failed remux that left a second audio file
+  # anywhere under a BOOK directory would be shipped as part of the book by
+  # the next push's age-gated find, which is why the temp lives in .work at
+  # all; a .work left behind is how that guarantee starts eroding.
+  rtg_stray() {
+    find "$RIP_SANDBOX/server/audiobooks" \( -name '.work' -o -name 'retag.*' \) 2>/dev/null | wc -l | tr -d ' '
+  }
+  rtg_ids_bad()   { rtg_ids "A Author/Bad Book"; }
+  rtg_ids_m()     { rtg_ids "M Author/M Book"; }
+  rtg_ids_f()     { rtg_ids "F Author/F Book"; }
+
+  It 'retag: a dry run names every book whose tags disagree with its path and writes NOTHING'
+    rtg_seed
+    rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
+    before=$(rtg_tree_digest)
+    When run zsh -c "source $RIPLIB && rip::ab_retag"
+    The status should equal 0
+    The output should include "would retag: A Author/B Book"
+    The output should include 'album_artist="A Author"'
+    The output should include 'album="B Book"'
+    The output should include "re-run with --apply"
+    The result of function rtg_tree_digest should equal "$before"
+  End
+
+  # VERBATIM FROM THE PATH, and the artist/composer assertion is not padding:
+  # `artist` holds the NARRATOR in the files this feature exists for, and a
+  # remux that dropped it would look identical to one that preserved it in
+  # every other assertion here.
+  It 'retag: --apply rewrites a mismatched book so its tags say what its path says'
+    rtg_seed
+    rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The output should include "retagged: A Author/B Book"
+    The output should include "retagged 1 of 1 book(s)"
+    The result of function rtg_tags_ab should equal "A Author|B Book|B Book"
+    The result of function rtg_extra_ab should equal "Jim Dale|Comp Person"
+    The result of function rtg_survived_ab should equal "Chapter One|mjpeg"
+  End
+
+  # BYTES, not tags. A sweep that remuxed every book and happened to write the
+  # same three values back would pass a tag assertion and fail this one — and
+  # it is the failure that matters, because a no-op remux of 248 books changes
+  # every mtime on the server and burns hours for nothing.
+  #
+  # A MISMATCHED BOOK IS STAGED TOO (the lesson --backfill-work-uid paid for):
+  # with only the matching book present the function returns before the write
+  # path ever runs, so the digest would guard the classifier and nothing else.
+  It 'retag: --apply leaves a book whose tags already match byte-for-byte identical'
+    rtg_seed
+    rtg_book "Good Author/Good Book" "Good Author" "Good Book" "Good Book"
+    rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
+    before=$(rtg_good_sha)
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The output should include "retagged 1 of 1 book(s)"
+    The output should not include "retagged: Good Author/Good Book"
+    The result of function rtg_good_sha should equal "$before"
+  End
+
+  # The defect --backfill-work-uid was fixed for, in this verb: an enumerator
+  # read through a process substitution throws its status away, so a dropped
+  # VPN yields zero rows, prints "nothing to retag" and exits 0 — on the sweep
+  # that rewrites audio in the operator's only copy of their library.
+  It 'retag: an unreachable server refuses with rc 2 and never says "nothing to retag"'
+    rtg_seed
+    rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
+    fake_server_ssh
+    printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"
+    chmod +x "$RIP_SANDBOX/ssh"
+    before=$(rtg_tree_digest)
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 2
+    The output should not include "nothing to retag"
+    The output should not include "retagged"
+    The result of function rtg_tree_digest should equal "$before"
+  End
+
+  # The SECOND connection is a separate hole from the first: the enumeration
+  # can land and the probe die, and an empty probe reads exactly like a
+  # library whose tags are all already correct.
+  It 'retag: a probe connection that dies is refused, not read as a library already in order'
+    rtg_seed
+    rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
+    fake_server_ssh
+    dash_bin=$(command -v dash)
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cmd=""
+for a in "\$@"; do cmd="\$a"; done
+case "\$cmd" in *ffprobe*) exit 255 ;; esac
+PATH="$RIP_SANDBOX/remotebin"; export PATH
+exec "$dash_bin" -c "\$cmd"
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    before=$(rtg_tree_digest)
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 2
+    The output should not include "nothing to retag"
+    The output should not include "retagged"
+    The result of function rtg_tree_digest should equal "$before"
+  End
+
+  # "The count never exceeds what actually changed" — the recurring defect in
+  # this module ("backfilled 0 of 245") is a total taken from what was
+  # ATTEMPTED. Here one book's remux fails, and the failure must show up as
+  # both a smaller count and untouched bytes.
+  It 'retag: --apply counts only the books whose bytes actually changed'
+    rtg_seed
+    rtg_book "A Author/Good Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
+    rtg_book "A Author/Bad Book" "J.K. Rowling" "Wrong Album" "Wrong Title" manual \
+      '{"local.sha256":"aaaa"}'
+    mkdir -p "$RIP_SANDBOX/stub"
+    real_ffmpeg=$(command -v ffmpeg)
+    cat > "$RIP_SANDBOX/stub/ffmpeg" <<EOF
+#!/bin/sh
+for a in "\$@"; do
+  case "\$a" in *"Bad Book"*) exit 1 ;; esac
+done
+exec "$real_ffmpeg" "\$@"
+EOF
+    chmod +x "$RIP_SANDBOX/stub/ffmpeg"
+    before=$(rtg_bad_sha)
+    When run zsh -c "PATH='$RIP_SANDBOX/stub':\$PATH; source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 1
+    The output should include "retagged 1 of 2 book(s)"
+    The output should include "retagged: A Author/Good Book"
+    The output should not include "retagged: A Author/Bad Book"
+    The stderr should include "could not retag A Author/Bad Book"
+    The result of function rtg_bad_sha should equal "$before"
+    # AND ITS local.sha256 STAYS PUT. The re-key is gated on the server having
+    # reported the rename, not on the book having been a candidate: a book
+    # whose remux failed still holds bytes that match its recorded hash.
+    The output should not include "re-keyed"
+    The result of function rtg_ids_bad should equal '{"local.sha256":"aaaa"}'
+    The result of function rtg_stray should equal "0"
+  End
+
+  # THE RE-KEY (design doc S5, carried into S4). A book repaired by an EARLIER
+  # --repair-sidecars Case C run holds a STORED-BYTES hash under
+  # `local.sha256`. That was correct when it was written and is stale the
+  # instant this sweep rewrites those bytes — stale under the very key
+  # rip::_stored_sha_index reads. Nothing can tell the two apart afterwards,
+  # so the re-key has to happen in the pass that invalidates it.
+  #
+  # The discriminator is `source.provider`, and it is exact rather than a
+  # heuristic: Case C only ever fires for a sidecar recording provider
+  # "manual" whose ids were EMPTY, and the acquire only ever mints
+  # `local.sha256` for a provider "folder" row. Both halves are asserted here
+  # — moving the acquire's SOURCE hash would silently disable the byte-dedupe
+  # for every folder-imported book, which is the failure this whole re-key
+  # exists to prevent, pointed the other way.
+  It 'retag: --apply re-keys a Case C stored-bytes hash and PRESERVES an acquire source hash'
+    rtg_seed
+    rtg_book "M Author/M Book" "Wrong" "Wrong Album" "Wrong Title" manual \
+      '{"fleet.uid":"11111111-1111-4111-8111-111111111111","local.sha256":"aaaa"}'
+    rtg_book "F Author/F Book" "Wrong" "Wrong Album" "Wrong Title" folder \
+      '{"fleet.uid":"22222222-2222-4222-8222-222222222222","local.sha256":"bbbb"}'
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The output should include "retagged 2 of 2 book(s)"
+    The output should include "re-keyed: M Author/M Book"
+    The output should not include "re-keyed: F Author/F Book"
+    The result of function rtg_ids_m should equal '{"fleet.uid":"11111111-1111-4111-8111-111111111111","local.stored.sha256":"aaaa"}'
+    The result of function rtg_ids_f should equal '{"fleet.uid":"22222222-2222-4222-8222-222222222222","local.sha256":"bbbb"}'
+  End
+
+  # SCOPED TO WHAT THIS RUN REWROTE. A Case C hash on a book whose tags
+  # already agree with its path is still a working dedupe entry — the stored
+  # bytes ARE the bytes anyone re-importing would hash, until something
+  # rewrites them. Re-keying it would delete a live entry for a book nobody
+  # touched; the key becomes wrong exactly when the bytes change, so that is
+  # when it moves.
+  It 'retag: --apply leaves the local.sha256 of a book it did not rewrite exactly where it was'
+    rtg_seed
+    rtg_book "M Author/M Book" "M Author" "M Book" "M Book" manual '{"local.sha256":"aaaa"}'
+    rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title"
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The output should include "retagged 1 of 1 book(s)"
+    The output should not include "re-keyed"
+    The result of function rtg_ids_m should equal '{"local.sha256":"aaaa"}'
+  End
+
+  # WARNED, NEVER REFUSED (design doc, "Containers that cannot carry these
+  # tags"). WAV's RIFF INFO has no album-artist chunk and raw ADTS aac has no
+  # metadata container at all, so the verification can never pass — and a
+  # deterministic failure cannot be cleared by a retry. A sweep that returned
+  # non-zero here would report the operator's library as permanently broken
+  # every single run.
+  It 'retag: a container that cannot carry album_artist is skipped with a warning, never refused'
+    rtg_seed
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/W Author/W Book"
+    ffmpeg -v error -y -i "$RIP_SANDBOX/rtg-a.m4a" "$RIP_SANDBOX/server/audiobooks/W Author/W Book/book.wav"
+    rtg_sidecar "W Author/W Book" libation '{}'
+    before=$(rtg_tree_digest)
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The stderr should include "not retagging W Author/W Book/book.wav"
+    The stderr should include "cannot carry album_artist"
+    The output should include "nothing to retag"
+    The result of function rtg_tree_digest should equal "$before"
+  End
+
+  # THE REMOTE SHAPE. cantina has no jq, its /bin/sh is dash, and the sweep
+  # ships two multi-line scripts through ${(qq)} — the exact quoting the
+  # "backfilled 0 of 245" failure came from. One connection per STAGE
+  # (enumerate, probe, write), never one per book.
+  It 'retag: --apply drives a server with NO jq, in ONE ssh per stage'
+    rtg_seed
+    rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title"
+    rtg_book "C Author/D Book" "Wrong" "Wrong Album" "Wrong Title"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The output should include "retagged 2 of 2 book(s)"
+    The result of function ssh_calls should equal "3"
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function rtg_tags_ab should equal "A Author|B Book|B Book"
+    The result of function rtg_stray should equal "0"
+  End
+
+  It 'CLI: --retag is wired and dry-run by default'
+    rtg_seed
+    rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
+    before=$(rtg_tree_digest)
+    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --retag
+    The status should equal 0
+    The output should include "would retag: A Author/B Book"
+    The result of function rtg_tree_digest should equal "$before"
+  End
+
+  It 'retag: a dry run against the ssh branch writes nothing and opens no write connection'
+    rtg_seed
+    rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title"
+    fake_server_ssh
+    before=$(rtg_tree_digest)
+    When run zsh -c "source $RIPLIB && rip::ab_retag"
+    The status should equal 0
+    The output should include "re-run with --apply"
+    The result of function ssh_calls should equal "2"
+    The result of function rtg_tree_digest should equal "$before"
   End
 
 End

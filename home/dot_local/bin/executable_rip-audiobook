@@ -11,6 +11,7 @@
 #   rip-audiobook --session <plan.json>     enqueue a session
 #   rip-audiobook --retire "<Author>/<Title>" [--apply]  remove one stored book
 #   rip-audiobook --canonicalize-authors [--apply]      collapse author spelling variants
+#   rip-audiobook --retag [--apply]                     make stored tags say what the path says
 #   rip-audiobook --repair-sidecars [--apply]           report + repair missing/empty book identity
 #   rip-audiobook --repair-companions [--apply]         record the PDFs/covers stored books already carry
 #   rip-audiobook --adopt-asin "<Author>/<Title>" <ASIN> [--apply]  confirm one proposed ASIN
@@ -53,13 +54,14 @@ case "${1:-}" in
   --backfill-work-uid) shift; rip::ab_backfill_work_uid "${1:-}" ;;
   --retire) shift; rip::ab_retire "${1:?--retire: \"<Author>/<Title>\" required}" "${2:-}" ;;
   --canonicalize-authors) shift; rip::ab_canonicalize_authors "${1:-}" ;;
+  --retag) shift; rip::ab_retag "${1:-}" ;;
   --repair-sidecars) shift; rip::ab_repair_sidecars "${1:-}" ;;
   --repair-companions) shift; rip::ab_repair_companions "${1:-}" ;;
   --adopt-asin) shift; rip::ab_adopt_asin "${1:?--adopt-asin: \"<Author>/<Title>\" required}" "${2:?--adopt-asin: ASIN required}" "${3:-}" ;;
   --at-risk) rip::ab_at_risk ;;
   --server-editions) rip::_server_sidecars | jq -c 'select((.published // "") != "") | {author:(.authors[0] // ""), title:(.title // ""), published, path:._path}' ;;
   "" | --help)
-    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --browse <root> | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --backfill-work-uid [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply] | --repair-sidecars [--apply] | --repair-companions [--apply] | --adopt-asin "<Author>/<Title>" <ASIN> [--apply] | --at-risk | --server-editions'
+    print -ru2 -- 'usage: rip-audiobook [--provider <name>] --library | --browse <root> | --server-library | --have "<Author>/<Title>" | --import <path> "<Author>" "<Title>" | --session <plan.json> | --editions | --backfill-published [--apply] | --backfill-work-uid [--apply] | --retire "<Author>/<Title>" [--apply] | --canonicalize-authors [--apply] | --retag [--apply] | --repair-sidecars [--apply] | --repair-companions [--apply] | --adopt-asin "<Author>/<Title>" <ASIN> [--apply] | --at-risk | --server-editions'
     exit 2
     ;;
   *) print -ru2 -- "rip-audiobook: unknown option: $1"; exit 2 ;;

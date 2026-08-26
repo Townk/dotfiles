@@ -959,16 +959,55 @@ rip::_book_sidecar() {
 # jq does the whole comparison rather than shell string-splitting ffprobe's
 # output: a tag value containing a tab, an equals sign or a newline can then
 # never be split wrong on the way to being compared.
+# _RIP_JQ_TAGS_OK — THE comparison, as one jq definition, in ONE place.
+#
+# `_tags_ok($p; $aa; $bn)` is true when the ffprobe JSON `$p` already carries
+# exactly these three authoritative tags. FOUR call sites now ask that
+# question and none of them may ever be able to answer differently about the
+# same bytes: rip::_retag_book asks it before a remux ("is there anything to
+# do?") and after ("did it take?"), and rip::ab_retag asks it twice more over
+# JSON a SERVER produced — "does this stored book disagree with its path?"
+# and "did the remote rewrite take?". A skip rule even slightly looser than
+# the verification would skip a book the verification would have refused, and
+# a sweep whose comparison differed from the writer's would never reach a
+# fixed point. Sharing the TEXT, not the intent, is what makes that
+# impossible rather than merely unlikely.
+#
+# `.format.tags` merged with the a:0 stream's tags, STREAM ON THE RIGHT:
+# mp4/mp3/flac keep these at the FORMAT level while ogg and opus keep
+# VorbisComment on the audio STREAM (review finding F1, 2026-08-26), and a
+# container that keeps both treats the stream as authoritative.
+#
+# Written defensively against a MISSING `streams` array as well as an empty
+# one: the sweep feeds this JSON that came off another machine, where a probe
+# of an unreadable file yields `{}` rather than the shape ffprobe promises.
+typeset -g _RIP_JQ_TAGS_OK
+_RIP_JQ_TAGS_OK='def _tags_ok($p; $aa; $bn):
+  ((($p.format.tags) // {}) + (((($p.streams // [])[0]).tags) // {})) as $t
+  | (($t.album_artist // "") == $aa)
+    and (($t.album // "") == $bn)
+    and (($t.title // "") == $bn);
+'
+
+# rip::_tags_match_json <ffprobe-json> <album_artist> <bookname> — the
+# predicate above, over JSON that is already in hand. Empty, truncated or
+# unparseable input is a plain non-zero, never a match: this is the half of
+# the pair that runs against a probe performed on cantina, and "we could not
+# read it" must never read as "it is already correct".
+rip::_tags_match_json() {
+  setopt localoptions noerrexit nopipefail
+  print -r -- "${1:-}" \
+    | jq -e --arg aa "${2:-}" --arg bn "${3:-}" \
+        "$_RIP_JQ_TAGS_OK"'_tags_ok(.; $aa; $bn)' >/dev/null 2>&1
+}
+
 rip::_tags_match() {
   setopt localoptions noerrexit nopipefail
   local ffprobe_bin="${RIP_FFPROBE_BIN:-ffprobe}"
-  "$ffprobe_bin" -v error -select_streams a:0 -show_entries format_tags:stream_tags \
-      -of json -- "$1" 2>/dev/null \
-    | jq -e --arg aa "$2" --arg bn "$3" \
-        '((.format.tags // {}) + (.streams[0].tags // {})) as $t
-         | (($t.album_artist // "") == $aa)
-           and (($t.album // "") == $bn)
-           and (($t.title // "") == $bn)' >/dev/null 2>&1
+  local js
+  js="$("$ffprobe_bin" -v error -select_streams a:0 -show_entries format_tags:stream_tags \
+      -of json -- "$1" 2>/dev/null)"
+  rip::_tags_match_json "$js" "$2" "$3"
 }
 
 # rip::_retag_book <file> <author> <bookname> — rewrite this audio file's
@@ -1027,6 +1066,20 @@ rip::_tags_match() {
 #
 # RIP_FFMPEG_BIN / RIP_FFPROBE_BIN are the usual test seams (the
 # RIP_RSYNC_BIN / RIP_SSH_BIN idiom), defaulting to the real tools.
+# _RIP_RETAG_FF_MAP — the stream-selection half of the retag remux, in ONE
+# place, because the remux is now written TWICE: here, in zsh, against a
+# STAGED file, and inside rip::_retag_write's POSIX sh script, against a
+# STORED file on cantina. Both encode the same two measured facts (the
+# `bin_data` chapter track the ipod muxer refuses, and the chapters that must
+# therefore be regenerated), and a change made to one and not the other would
+# leave the library-wide sweep remuxing differently from the push that wrote
+# the book in the first place — a divergence nothing would report.
+#
+# Split at whitespace by BOTH readers: `${=_RIP_RETAG_FF_MAP}` here, `set -f`
+# plus an unquoted expansion there. The `?` in `-0:d?` is why the remote half
+# needs `set -f` — a POSIX sh would otherwise offer it to pathname expansion.
+typeset -g _RIP_RETAG_FF_MAP='-map 0 -map -0:d? -c copy -map_chapters 0'
+
 rip::_retag_book() {
   setopt localoptions noerrexit nopipefail
   local f="$1" author="$2" bookname="$3"
@@ -1066,7 +1119,7 @@ rip::_retag_book() {
   # copied off the input stream. `-metadata:s:a:0` is inert for mp4 (its
   # stream tags carry only language/handler_name, and the format tags land
   # correctly), so one invocation serves every container this retags.
-  "$ffmpeg_bin" -v error -y -i "$f" -map 0 -map "-0:d?" -c copy -map_chapters 0 \
+  "$ffmpeg_bin" -v error -y -i "$f" ${=_RIP_RETAG_FF_MAP} \
     -metadata album_artist="$author" -metadata album="$bookname" -metadata title="$bookname" \
     -metadata:s:a:0 album_artist="$author" -metadata:s:a:0 album="$bookname" \
     -metadata:s:a:0 title="$bookname" \
@@ -3802,6 +3855,514 @@ rip::ab_backfill_work_uid() {
   local -i unwritten=$(( ${#to_fill[@]} - filled ))
   (( unwritten > 0 )) && print -r -- "rip: $unwritten sidecar(s) could not be written"
   (( unwritten > 0 )) && return 1
+  return 0
+}
+
+# --- --retag: the library that already exists (design doc S4) ---------------
+#
+# The enrichment writes authoritative tags into a STAGED copy on the way in.
+# This is the same invariant read from the other end, for the ~248 books that
+# were already on cantina before the feature existed and were never tagged at
+# all: report every stored book whose album_artist/album/title disagree with
+# its PATH, and under --apply rewrite them.
+#
+# THE PATH IS THE AUTHORITY, VERBATIM — not the sidecar's `title`, and not a
+# canonicalized spelling of the author. Three consequences, all deliberate:
+#
+#   * the sidecar's `title` is the PROVIDER's title ("Steelheart") while the
+#     directory is what the operator asked for and what the library shows
+#     ("Steelheart: The Reckoners, Book 1"). Comparing against the sidecar
+#     would rewrite every Libation book to a name the library does not use;
+#   * the EDITION needs no special handling: the panel composed the directory
+#     as "<Title> (<Edition>)", so the directory name already IS the book name
+#     the design says to write;
+#   * NO rip::_author_display here. The canonical initials form enters through
+#     the PATH (the panel normalises on blur, --canonicalize-authors repairs
+#     stored paths) and never through the tag. A sweep that wrote a
+#     TRANSFORMED author while the path kept the raw one would report a
+#     mismatch on every run and rewrite every book on the server forever — a
+#     sweep with no fixed point. Same ruling, same reason, as
+#     rip::_retag_book's header.
+#
+# The server's own spelling is used byte-for-byte, with no rip::_nfc pass. On
+# the staging side _nfc is REQUIRED (the tag must match what rsync --iconv
+# will land), but here both sides of the comparison are already the server's,
+# and normalizing only one of them is how a decomposed legacy path would be
+# rewritten on every single sweep.
+#
+# WHERE THE WORK HAPPENS: on cantina. It has ffmpeg and ffprobe (verified
+# 2026-08-26), so a stored book is remuxed IN PLACE — nothing is fetched,
+# rewritten and pushed back. It has no jq, so every judgement is made HERE,
+# from probe JSON the server base64-frames back, through the one shared
+# predicate (_RIP_JQ_TAGS_OK) that rip::_retag_book verifies with.
+#
+# THREE CONNECTIONS FOR THE WHOLE LIBRARY, one per stage: enumerate the
+# sidecars, probe every book's audio, rewrite the mismatched. Plus a fourth
+# only when there is a sidecar to re-key (below). Never one per book.
+
+# rip::_retag_probe <base> <base64 relpath…> — the tags every stored book's
+# audio actually carries, in ONE ssh.
+#
+# Prints one line per file:
+#
+#   probe   <b64 rel> <b64 filename> <b64 ffprobe-json>
+#   skip    <b64 rel> <b64 filename> drm|notags
+#   noaudio <b64 rel>
+#   nodir   <b64 rel>
+#
+# The skip set is rip::_retag_staged_book's, for the same measured reasons:
+# `.aax`/`.aaxc` are DRM-encrypted originals ffmpeg cannot remux, and
+# `.wav`/`.aac` cannot carry `album_artist` at ALL (RIFF INFO has no such
+# chunk; raw ADTS has no metadata container). Both are reported so the
+# operator hears about them, and neither is a failure — a deterministic
+# failure cannot be cleared by a retry, and a sweep that returned non-zero for
+# one would report the library as permanently broken on every run.
+#
+# THE STATUS PROPAGATES, unlike rip::_sidecars_hash_primary's (whose caller
+# judges per line). An empty probe here is indistinguishable from a library
+# whose tags are all already correct, which is the "nothing to backfill on a
+# dropped VPN" defect wearing a different hat — and this is the sweep that
+# REWRITES AUDIO, so it is the one that must refuse loudest.
+#
+# `</dev/null` on the ffprobe: the payload arrives on this script's stdin and
+# a child that inherits fd 0 eats the rest of the batch. Exactly the bug
+# rip::_remote_test's `ssh -n` exists for, one layer in.
+#
+# POSIX sh + coreutils only, and no single quote anywhere in the script, so
+# ${(qq)} — which is what a real POSIX /bin/sh needs, unlike ${(q)}'s $'\n' —
+# wraps it exactly.
+rip::_retag_probe() {
+  setopt localoptions noerrexit nopipefail
+  local base="$1"; shift
+  (( $# > 0 )) || return 0
+  local script='while read -r br; do
+  [ -n "$br" ] || continue
+  d=$(printf %s "$br" | base64 -d 2>/dev/null)
+  if [ -z "$d" ] || [ ! -d "$d" ]; then printf "nodir\t%s\n" "$br"; continue; fi
+  n=0
+  for c in "$d"/*; do
+    [ -f "$c" ] || continue
+    b=${c##*/}
+    lb=$(printf %s "$b" | tr "[:upper:]" "[:lower:]")
+    case "$lb" in
+      *.aax|*.aaxc) k=drm ;;
+      *.wav|*.aac) k=notags ;;
+      *.m4b|*.m4a|*.mp3|*.mp4|*.flac|*.ogg|*.opus) k=audio ;;
+      *) continue ;;
+    esac
+    n=$((n+1))
+    bn=$(printf %s "$b" | base64 | tr -d "\n")
+    if [ "$k" = audio ]; then
+      j=$(ffprobe -v error -select_streams a:0 -show_entries format_tags:stream_tags -of json -- "$c" </dev/null 2>/dev/null | base64 | tr -d "\n")
+      printf "probe\t%s\t%s\t%s\n" "$br" "$bn" "$j"
+    else
+      printf "skip\t%s\t%s\t%s\n" "$br" "$bn" "$k"
+    fi
+  done
+  [ "$n" -gt 0 ] || printf "noaudio\t%s\n" "$br"
+done'
+  local out="" rc=0
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    out="$(print -rl -- "$@" | "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "cd ${(q)rpath}/audiobooks && sh -c ${(qq)script} sh" 2>/dev/null)" || rc=$?
+  else
+    # No ':' — the hermetic tests' plain local dir.
+    out="$(print -rl -- "$@" | ( cd "$base/audiobooks" 2>/dev/null && sh -c "$script" sh ) 2>/dev/null)" || rc=$?
+  fi
+  [[ -n "$out" ]] && print -r -- "$out"
+  return $rc
+}
+
+# rip::_retag_write <base> <framed line…> — remux the named files in place on
+# the server, in ONE ssh. Each input line is
+# "<b64 rel>\t<b64 filename>\t<b64 album_artist>\t<b64 bookname>".
+#
+# Prints "ok<TAB><b64 rel><TAB><b64 filename><TAB><b64 ffprobe-json>" for a
+# file it wrote and moved into place, "fail<TAB><b64 rel><TAB><b64 filename>"
+# otherwise — so the caller counts what it actually got rather than inferring
+# it from an exit status, the rule this module keeps relearning.
+#
+# THE VERIFICATION IS SPLIT ACROSS THE TWO MACHINES, and that is forced, not
+# preferred. rip::_retag_book verifies the TEMP and only then renames, so a
+# failure leaves the original exactly as it was; doing that from here would
+# mean shipping every temp's probe back and opening a THIRD connection to
+# rename the good ones — with the whole library's temps alive at once, which
+# for 248 multi-gigabyte books is hundreds of gigabytes of server disk. So the
+# remote makes the rename decision from an EXACT comparison of the three
+# values it reads back out of the temp (stream level first, format level as
+# the fallback — the same precedence _RIP_JQ_TAGS_OK encodes), and the
+# authoritative count is still made HERE, by that shared predicate, over the
+# probe of the file as it finally sits. The remote may only ever be
+# optimistic: a file it renamed but this side cannot verify is reported as a
+# failure and retried, and it is still a valid `-c copy` remux of the
+# original, never a truncated one.
+#
+# The scratch write lives in `<audiobooks>/.work/`, never in the book
+# directory — the same prohibition rip::_retag_book and rip::_book_sidecar
+# document: a process killed mid-remux would otherwise leave a second,
+# differently named audio file INSIDE the book, where the next push's
+# age-gated find would ship it as part of the book. `.work` sits at depth 1,
+# below rip::ab_server_library's `-mindepth 2` and rip::_server_sidecars'
+# `-mindepth 3`, so it is invisible to every enumerator; it is rmdir'd when
+# the batch empties it.
+#
+# `set -f` is load-bearing: $_RIP_RETAG_FF_MAP is expanded UNQUOTED so it word
+# splits, and it contains `-0:d?`, which a POSIX sh would otherwise offer to
+# pathname expansion.
+rip::_retag_write() {
+  setopt localoptions noerrexit nopipefail
+  local base="$1"; shift
+  (( $# > 0 )) || return 0
+  local script='set -f
+mf=$1
+mkdir -p .work 2>/dev/null
+tv() {
+  s=$(ffprobe -v error -select_streams a:0 -show_entries "stream_tags=$2" -of default=noprint_wrappers=1:nokey=1 -- "$1" </dev/null 2>/dev/null)
+  if [ -n "$s" ]; then printf %s "$s"; return 0; fi
+  ffprobe -v error -show_entries "format_tags=$2" -of default=noprint_wrappers=1:nokey=1 -- "$1" </dev/null 2>/dev/null
+}
+while read -r br bn ba bk; do
+  [ -n "$br" ] || continue
+  d=$(printf %s "$br" | base64 -d 2>/dev/null)
+  n=$(printf %s "$bn" | base64 -d 2>/dev/null)
+  a=$(printf %s "$ba" | base64 -d 2>/dev/null)
+  k=$(printf %s "$bk" | base64 -d 2>/dev/null)
+  if [ -z "$d" ] || [ -z "$n" ] || [ -z "$a" ] || [ -z "$k" ]; then printf "fail\t%s\t%s\n" "$br" "$bn"; continue; fi
+  f="$d/$n"
+  if [ ! -f "$f" ]; then printf "fail\t%s\t%s\n" "$br" "$bn"; continue; fi
+  t=".work/retag.$$.$n"
+  rm -f -- "$t"
+  ffmpeg -v error -y -i "$f" $mf -metadata album_artist="$a" -metadata album="$k" -metadata title="$k" -metadata:s:a:0 album_artist="$a" -metadata:s:a:0 album="$k" -metadata:s:a:0 title="$k" -- "$t" </dev/null >/dev/null 2>&1
+  if [ ! -s "$t" ]; then rm -f -- "$t"; printf "fail\t%s\t%s\n" "$br" "$bn"; continue; fi
+  if [ "$(tv "$t" album_artist)" = "$a" ] && [ "$(tv "$t" album)" = "$k" ] && [ "$(tv "$t" title)" = "$k" ] && mv -- "$t" "$f"; then
+    j=$(ffprobe -v error -select_streams a:0 -show_entries format_tags:stream_tags -of json -- "$f" </dev/null 2>/dev/null | base64 | tr -d "\n")
+    printf "ok\t%s\t%s\t%s\n" "$br" "$bn" "$j"
+  else
+    rm -f -- "$t"
+    printf "fail\t%s\t%s\n" "$br" "$bn"
+  fi
+done
+rmdir .work 2>/dev/null
+exit 0'
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    print -rl -- "$@" | "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
+      "cd ${(q)rpath}/audiobooks && sh -c ${(qq)script} sh ${(qq)_RIP_RETAG_FF_MAP}" 2>/dev/null
+  else
+    # No ':' — the hermetic tests' plain local dir.
+    print -rl -- "$@" \
+      | ( cd "$base/audiobooks" 2>/dev/null && sh -c "$script" sh "$_RIP_RETAG_FF_MAP" ) 2>/dev/null
+  fi
+  return 0
+}
+
+# rip::ab_retag [--apply] — the sweep.
+#
+# Dry run by default, the same discipline as --backfill-published,
+# --backfill-work-uid and --repair-sidecars: report by default, write only
+# under --apply, and NEVER report a count that exceeds what actually changed.
+#
+# rip::_server_sidecars is captured as a VALUE and its status checked. Read
+# through `< <(...)` a process substitution throws the rc away, and an
+# unreachable cantina then yields zero rows, prints "nothing to retag" and
+# exits 0 — the live defect --backfill-work-uid was fixed for, and worse here,
+# because this sweep is the one that rewrites the audio in the operator's only
+# copy of their library.
+#
+# THE RE-KEY, and why it lives inside this pass (design doc S5, carried into
+# S4). --repair-sidecars' Case C used to record its hash under
+# `local.sha256`. That value is a hash of the STORED BYTES — the only bytes
+# that repair can reach — and it was correct when it was written. It is stale
+# the instant this sweep rewrites those bytes, and it is stale under the exact
+# key rip::_stored_sha_index reads, so the byte-dedupe would go on consulting
+# a value no source file can ever match. Case C now writes
+# `local.stored.sha256`; the books an EARLIER Case C run repaired still hold
+# the old key, and NOTHING on a sidecar records when it was written relative
+# to a feature landing, so nothing can find them afterwards. They are re-keyed
+# here, in the pass that invalidates them.
+#
+# HOW THE TWO KINDS ARE TOLD APART — this is the load-bearing judgement of
+# this function, so it is written out in full:
+#
+#   `local.sha256` has exactly two writers in this module, and they are
+#   disjoint on `source.provider`.
+#
+#     * THE ACQUIRE (rip::ab_worker threads the hash it took of the operator's
+#       SOURCE file; rip::_book_meta_for mints the pair from it) fires ONLY
+#       when the provider row says "folder" — `if [[ "$provider" == folder ]]`
+#       in the worker, `.provider == "folder"` in the mint. That value is a
+#       SOURCE hash. It must be preserved: moving it would silently disable
+#       the byte-dedupe for every folder-imported book, which is the very
+#       failure this re-key exists to prevent, pointed the other way.
+#     * CASE C fires ONLY when the stored sidecar records provider "manual"
+#       AND its ids were EMPTY (`sc_prov[$nrel] == "manual"`, reached only
+#       under `sc_state == "empty"`). A book that reaches Case C therefore had
+#       no `local.sha256` at all beforehand, and the one it carries afterwards
+#       came from rip::_sidecars_hash_primary — the STORED bytes.
+#
+#   So: provider "manual" + a `local.sha256` present == a Case C value, with
+#   no residual ambiguity to guess at. The acquire cannot have put it there,
+#   because rip::ab_import records provider "manual" with `ids: {}` and the
+#   worker's hash-threading is gated on "folder".
+#
+# THE TEMPTING TEST IS THE WRONG ONE, and it is worth naming so nobody
+# "improves" this later: comparing the recorded hash against a fresh hash of
+# the stored bytes does NOT discriminate. Until the enrichment retag landed
+# (2026-08-26) a folder-acquired book's stored bytes WERE its source bytes, so
+# the hashes are equal for both populations, and every legacy folder book
+# would be re-keyed — destroying exactly the dedupe entries this is meant to
+# protect.
+#
+# SCOPED TO WHAT THIS RUN ACTUALLY REWROTE, gated on the server having
+# reported the rename ("ok"), not on the write having been attempted. A Case C
+# hash on a book nobody touched is still a live, working dedupe entry: the
+# stored bytes are the bytes a re-import would hash. It becomes wrong exactly
+# when the bytes change, so that is when it moves — and any later sweep that
+# rewrites that book will re-key it then.
+rip::ab_retag() {
+  setopt localoptions noerrexit nopipefail
+  local apply=0
+  [[ "${1:-}" == "--apply" ]] && apply=1
+
+  local base; base="$(rip::remote_base)"
+
+  local rows sidecars_rc=0
+  rows="$(rip::_server_sidecars)" || sidecars_rc=$?
+  (( sidecars_rc == 0 )) || return 2
+
+  local -i seen=0
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && (( seen++ ))
+  done <<< "$rows"
+  if (( seen == 0 )); then
+    # The same seen==0 vs "genuinely satisfied" distinction the other sweeps
+    # draw: rip::_server_sidecars' own ssh runs under 2>/dev/null, so a
+    # server that answered with nothing and a library with nothing in it
+    # arrive here identical.
+    print -r -- "rip: no sidecars found on the server — nothing to retag (is cantina reachable?)"
+    return 0
+  fi
+
+  # TWO jq passes over the enumeration, not two per book: the shared
+  # rip::_sidecar_index for provider + stored object, and one more for the
+  # base64 relpath the remote scripts are framed with and the `local.sha256`
+  # the re-key needs. rip::_sidecar_index deliberately does not carry that
+  # key — six positional columns are read by three other callers and a
+  # seventh would silently land inside their JSON column.
+  local idx_rows sha_rows
+  idx_rows="$(print -r -- "$rows" | rip::_sidecar_index)"
+  sha_rows="$(print -r -- "$rows" | jq -r "$_RIP_JQ_IDS_DEF"'select((._path // "") != "")
+      | (._path) + "\t" + (._path|@base64)
+        + "\t" + (((.ids | _ids_obj)["local.sha256"] // "") | if . == "" then "-" else . end)' 2>/dev/null)"
+
+  local -a b64rels=()
+  local -A rel_of_b64=() prov_of=() json_of=() sha_of=()
+  local irel istate iprov iasin iuid ijson xrel xb64 xsha
+  while IFS=$'\t' read -r irel istate iprov iasin iuid ijson; do
+    [[ -n "$irel" ]] || continue
+    prov_of[$irel]="$iprov"
+    json_of[$irel]="$ijson"
+  done <<< "$idx_rows"
+  while IFS=$'\t' read -r xrel xb64 xsha; do
+    [[ -n "$xrel" && -n "$xb64" ]] || continue
+    rel_of_b64[$xb64]="$xrel"
+    b64rels+=("$xb64")
+    [[ "$xsha" != "-" ]] && sha_of[$xrel]="$xsha"
+  done <<< "$sha_rows"
+  if (( ${#b64rels[@]} == 0 )); then
+    # Sidecars were enumerated but none survived indexing — a jq that is not
+    # there, or output nothing can parse. Refusing is the only honest answer:
+    # an empty plan here would print "nothing to retag" about a library this
+    # function never managed to look at.
+    log_error "rip: could not index the stored sidecars — refusing to report on a library we could not read"
+    return 2
+  fi
+
+  local probe_out="" probe_rc=0
+  probe_out="$(rip::_retag_probe "$base" "${b64rels[@]}")" || probe_rc=$?
+  if (( probe_rc != 0 )) || [[ -z "$probe_out" ]]; then
+    log_error "rip: could not read the stored tags from cantina (rc=$probe_rc) — refusing to report on a library we could not probe"
+    return 2
+  fi
+
+  # Reported, never fatal (design doc, "Containers that cannot carry these
+  # tags"): a book that cannot be tagged authoritatively must not become a
+  # sweep that can never succeed.
+  local ptype pb64rel pb64name pinfo prel pname
+  while IFS=$'\t' read -r ptype pb64rel pb64name pinfo; do
+    [[ -n "$ptype" ]] || continue
+    prel="${rel_of_b64[$pb64rel]:-$pb64rel}"
+    case "$ptype" in
+      skip)
+        pname="$(jq -rn --arg b "$pb64name" '$b|@base64d' 2>/dev/null)"
+        if [[ "$pinfo" == drm ]]; then
+          log_warn "rip: not retagging $prel/$pname — a DRM-encrypted Audible original cannot be remuxed; the library reads the .m4b beside it"
+        else
+          log_warn "rip: not retagging $prel/$pname — this container cannot carry album_artist, so its tags cannot be made authoritative; re-encode to .m4b if the library must show them"
+        fi ;;
+      noaudio) log_warn "rip: no taggable audio in $prel — nothing to retag there" ;;
+      nodir)   log_warn "rip: $prel is not a directory on the server — skipped" ;;
+    esac
+  done <<< "$probe_out"
+
+  # THE COMPARISON, in ONE jq for the whole library, through the SAME
+  # predicate rip::_retag_book verifies with (_RIP_JQ_TAGS_OK). The expected
+  # values are derived inside jq from the relpath the server itself printed,
+  # so the string the tag is compared against and the string the book is
+  # stored under cannot drift apart on the way.
+  local plan
+  plan="$(print -r -- "$probe_out" | jq -Rr "$_RIP_JQ_TAGS_OK"'
+      split("\t") as $c
+      | select(($c[0] // "") == "probe")
+      | ($c[1] | @base64d) as $rel
+      | ($rel | split("/")) as $seg
+      | ($seg[0]) as $aa
+      | ($seg[1:] | join("/")) as $bn
+      | (try ($c[3] | @base64d | fromjson) catch null) as $j
+      | if $j == null then "unreadable\t" + $c[1] + "\t" + $c[2]
+        elif _tags_ok($j; $aa; $bn) then empty
+        else "retag\t" + $c[1] + "\t" + $c[2] + "\t" + ($aa|@base64) + "\t" + ($bn|@base64)
+        end' 2>/dev/null)"
+
+  local -a payloads=()
+  local -A need_of=()
+  local rtype rb64rel rb64name rb64aa rb64bn
+  while IFS=$'\t' read -r rtype rb64rel rb64name rb64aa rb64bn; do
+    prel="${rel_of_b64[$rb64rel]:-$rb64rel}"
+    case "$rtype" in
+      retag)
+        payloads+=("$rb64rel"$'\t'"$rb64name"$'\t'"$rb64aa"$'\t'"$rb64bn")
+        need_of[$prel]=$(( ${need_of[$prel]:-0} + 1 )) ;;
+      unreadable)
+        pname="$(jq -rn --arg b "$rb64name" '$b|@base64d' 2>/dev/null)"
+        log_warn "rip: could not read the tags of $prel/$pname — skipped, never assumed correct" ;;
+    esac
+  done <<< "$plan"
+
+  if (( ${#need_of} == 0 )); then
+    print -r -- "rip: nothing to retag"
+    return 0
+  fi
+
+  # Sorted, so two runs over the same library print the same report.
+  local -a books=("${(@ko)need_of}")
+  local -a rekeys=()
+  local rel2
+  for rel2 in "${books[@]}"; do
+    [[ "${prov_of[$rel2]:-}" == "manual" && -n "${sha_of[$rel2]:-}" ]] && rekeys+=("$rel2")
+  done
+
+  if (( ! apply )); then
+    for rel2 in "${books[@]}"; do
+      print -r -- "would retag: $rel2  (${need_of[$rel2]} file(s))  ->  album_artist=\"${rel2%%/*}\" album=\"${rel2#*/}\" title=\"${rel2#*/}\""
+    done
+    for rel2 in "${rekeys[@]}"; do
+      print -r -- "would re-key: $rel2  (local.sha256 -> local.stored.sha256)"
+    done
+    print -r -- "(${#books[@]} book(s); re-run with --apply)"
+    return 0
+  fi
+
+  # --- apply ---------------------------------------------------------------
+  local write_out=""
+  write_out="$(rip::_retag_write "$base" "${payloads[@]}")"
+
+  # ok_of counts the files the SERVER renamed — the bytes that changed, which
+  # is what the re-key is gated on. verified_of counts the files THIS side
+  # confirmed with the shared predicate — what may be counted as retagged.
+  # They are different questions and are deliberately not merged.
+  local -A ok_of=() verified_of=()
+  local wtype wb64rel wb64name wb64json
+  while IFS=$'\t' read -r wtype wb64rel wb64name wb64json; do
+    [[ "$wtype" == "ok" ]] || continue
+    prel="${rel_of_b64[$wb64rel]:-$wb64rel}"
+    ok_of[$prel]=$(( ${ok_of[$prel]:-0} + 1 ))
+  done <<< "$write_out"
+
+  local checked
+  checked="$(print -r -- "$write_out" | jq -Rr "$_RIP_JQ_TAGS_OK"'
+      split("\t") as $c
+      | select(($c[0] // "") == "ok")
+      | ($c[1] | @base64d) as $rel
+      | ($rel | split("/")) as $seg
+      | (try ($c[3] | @base64d | fromjson) catch null) as $j
+      | (if $j != null and _tags_ok($j; $seg[0]; ($seg[1:] | join("/")))
+         then "verified" else "unverified" end) + "\t" + $c[1] + "\t" + $c[2]' 2>/dev/null)"
+  local vtype vb64rel vb64name
+  while IFS=$'\t' read -r vtype vb64rel vb64name; do
+    [[ "$vtype" == "verified" ]] || continue
+    prel="${rel_of_b64[$vb64rel]:-$vb64rel}"
+    verified_of[$prel]=$(( ${verified_of[$prel]:-0} + 1 ))
+  done <<< "$checked"
+
+  # GATED ON THE REPORTED OUTCOME, per book and per FILE: a multi-part book
+  # counts as retagged only when every file that needed one reads back
+  # correctly. The recurring defect class here ("backfilled 0 of 245") is a
+  # total taken from what was attempted.
+  local -i retagged=0
+  for rel2 in "${books[@]}"; do
+    if (( ${verified_of[$rel2]:-0} == ${need_of[$rel2]} )); then
+      (( retagged++ ))
+      print -r -- "retagged: $rel2"
+    else
+      log_warn "rip: could not retag $rel2 — ${verified_of[$rel2]:-0} of ${need_of[$rel2]} file(s) verified"
+    fi
+  done
+
+  # COMPOSE LOCALLY, WRITE REMOTELY (cantina has no jq — the live "backfilled
+  # 0 of 245" failure). The stored object is AMENDED, never re-composed from a
+  # provider row it does not have. An already-present local.stored.sha256 wins
+  # over the stale key rather than being overwritten by it.
+  local -a rk_payloads=() rk_rels=() rk_ok=()
+  local -A rk_idx=()
+  local composed payload
+  for rel2 in "${rekeys[@]}"; do
+    (( ${ok_of[$rel2]:-0} > 0 )) || continue
+    composed="$(print -r -- "${json_of[$rel2]:-}" | jq -c "$_RIP_JQ_IDS_DEF"'
+        (.ids | _ids_obj) as $i
+        | .ids = (($i + {"local.stored.sha256": ($i["local.stored.sha256"] // $i["local.sha256"])})
+                  | del(.["local.sha256"]))' 2>/dev/null)"
+    payload=""
+    [[ -n "$composed" ]] && payload="$(rip::_sidecar_payload "$rel2" "$composed")"
+    if [[ -z "$payload" || "$payload" != *$'\t'* ]]; then
+      # Never ship a half-composed payload: the remote would write it.
+      log_warn "rip: could not compose the re-keyed sidecar for $rel2"
+      continue
+    fi
+    rk_payloads+=("$payload"); rk_rels+=("$rel2"); rk_ok+=(0)
+    rk_idx[${payload%%$'\t'*}]=${#rk_payloads}
+  done
+
+  local rkout=""
+  (( ${#rk_payloads[@]} > 0 )) && rkout="$(rip::_sidecars_write "$base" "${rk_payloads[@]}")"
+  local -i rekeyed=0 i=0
+  local rline st key
+  while IFS= read -r rline; do
+    [[ -n "$rline" ]] || continue
+    st="${rline%%$'\t'*}"; key="${rline#*$'\t'}"
+    [[ "$st" == "ok" ]] || continue
+    i=${rk_idx[$key]:-0}
+    (( i > 0 )) && rk_ok[i]=1
+  done <<< "$rkout"
+  for (( i = 1; i <= ${#rk_rels[@]}; i++ )); do
+    if (( rk_ok[i] )); then
+      (( rekeyed++ ))
+      print -r -- "re-keyed: ${rk_rels[i]}  (local.sha256 -> local.stored.sha256)"
+    else
+      log_warn "rip: could not re-key the sidecar for ${rk_rels[i]} — its local.sha256 is now a stale hash of bytes this sweep has already rewritten"
+    fi
+  done
+
+  print -r -- "rip: retagged $retagged of ${#books[@]} book(s)"
+  (( ${#rk_rels[@]} > 0 )) && print -r -- "rip: re-keyed $rekeyed of ${#rk_rels[@]} sidecar(s)"
+  local -i unfinished=$(( ${#books[@]} - retagged ))
+  local -i unkeyed=$(( ${#rk_rels[@]} - rekeyed ))
+  (( unfinished > 0 )) && print -r -- "rip: $unfinished book(s) could not be retagged"
+  (( unfinished > 0 || unkeyed > 0 )) && return 1
   return 0
 }
 
