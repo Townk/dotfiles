@@ -4751,12 +4751,17 @@ EOF
     The contents of file "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should equal "variant-copy"
     # The resident book's identity file was not written over.
     The result of function ca_hallows_unchanged should equal "byte-identical"
-    # The variant's own sidecar still says what its (unchanged) path says.
-    The contents of file "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json" should include '"J.K. Rowling"'
+    # The refused book's OWN sidecar is moved forward to the canonical
+    # spelling even though its directory is stuck — the spelling and the
+    # location are separate questions, and the dry run names this file too
+    # (review finding 2, 2026-08-26). What must never happen is the write
+    # landing on the RESIDENT book above; that is pinned by bytes, not by
+    # wording.
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
     # The book that COULD move did, sidecar and all.
     The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Goblet of Fire/Goblet of Fire.m4b" should be exist
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Goblet of Fire/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
-    The output should include "re-spelled 1 of 1"
+    The output should include "re-spelled 2 of 2"
     # …and the variant's Audiobookshelf author record survives, because a
     # book still points at it.
     The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
@@ -4841,21 +4846,24 @@ EOF
   # together: one asserts rc 0, the other rc 1, and neither passes with the
   # other's wording.
 
-  # ca_abs_bin <case-body> — an ABS double whose --author-id / --repoint-item
-  # behaviour the example dictates. --find-item always resolves, so these
-  # examples turn on the author record and the repoint alone.
+  # ca_abs_bin <case-body> — an ABS double whose every verb the example
+  # dictates. The WHOLE case body is the argument, with no arm supplied here:
+  # an earlier version hardcoded `--find-item) echo item-x ;;` first, which
+  # silently SHADOWED an example's own --find-item arm (first match wins in a
+  # POSIX case) and left that example passing for the wrong reason. Nothing a
+  # fixture supplies may be quietly overridden by the fixture builder.
   ca_abs_bin() {
     {
       printf '#!/bin/sh\n'
       printf 'printf "%%s\\n" "$*" >> "%s/absbin.log"\n' "$RIP_SANDBOX"
-      printf 'case "$1" in\n  --find-item) echo item-x ;;\n%b\nesac\nexit 0\n' "$1"
+      printf 'case "$1" in\n%b\nesac\nexit 0\n' "$1"
     } > "$RIP_BIN_DIR/rip-abs-authors"
     chmod +x "$RIP_BIN_DIR/rip-abs-authors"
   }
 
   It 'sweep (ssh): a rename into a spelling Audiobookshelf has never seen is NOT a failure'
     fake_server_ssh
-    ca_abs_bin '  --author-id) case "$2" in "J. K. Rowling") exit 1 ;; *) echo auth-x ;; esac ;;'
+    ca_abs_bin '  --find-item) echo item-x ;;\n  --author-id) case "$2" in "J. K. Rowling") exit 1 ;; *) echo auth-x ;; esac ;;'
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
     When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     # Nothing went wrong. The files are where they should be.
@@ -4878,7 +4886,7 @@ EOF
 
   It 'sweep (ssh): a repoint that was attempted and refused is still a failure'
     fake_server_ssh
-    ca_abs_bin '  --author-id) echo auth-x ;;\n  --repoint-item) exit 1 ;;'
+    ca_abs_bin '  --find-item) echo item-x ;;\n  --author-id) echo auth-x ;;\n  --repoint-item) exit 1 ;;'
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
     When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
@@ -4896,6 +4904,89 @@ EOF
     # the book moved and its sidecar followed.
     The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
+  End
+
+  # REVIEW FINDING 1 (2026-08-26). The ruling that "nothing to repoint" is not
+  # a failure was implemented on the $aid-empty branch and not on the
+  # $item-empty one, which left the latter routed nowhere at all: nothing
+  # incremented, `rmdir` succeeded, and control reached the delete block.
+  #
+  # --find-item matches Audiobookshelf's STORED relPath, and it runs
+  # milliseconds after the `mv` — ABS only learns the new path on its next
+  # scan. So an empty $item here is the NORMAL reading during that window, and
+  # it does not mean ABS has nothing filed under the old author; it usually
+  # means the opposite. Deleting the variant record there strands every item
+  # that still names it, reporting rc 0 — review finding 2 (2026-08-24)
+  # reproduced, and a regression of the collision behaviour that predates this
+  # whole feature.
+  It 'sweep (ssh): a book Audiobookshelf has not scanned yet keeps the variant author record, without failing'
+    fake_server_ssh
+    ca_abs_bin '  --find-item) exit 1 ;;\n  --author-id) echo auth-x ;;'
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    # Nothing went wrong: there was simply nothing to repoint.
+    The status should equal 0
+    The stderr should include "does not know this book yet"
+    The stderr should include "were left unrepointed"
+    # NOT the wording of a genuine failure, and NOT the no-author-record one
+    # either — Audiobookshelf HAS a record for the canonical name here.
+    The stderr should not include "could not be repointed"
+    The stderr should not include "no author record called"
+    # THE FIX. The record the un-repointed items may still name survives.
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
+    The output should include "renamed on disk but NOT repointed"
+    # The filesystem half completed regardless.
+    The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
+  End
+
+  # ca_snap_variant / ca_variant_unchanged — bytes of the sidecar under the RAW
+  # spelling, the file review finding 2 showed --apply rewriting backwards.
+  ca_snap_variant() {
+    cp "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json" \
+       "$RIP_SANDBOX/variant.before"
+  }
+  ca_variant_unchanged() {
+    if cmp -s "$RIP_SANDBOX/variant.before" \
+              "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json"; then
+      echo "byte-identical"
+    else
+      echo "CHANGED"
+    fi
+  }
+
+  # REVIEW FINDING 2 (2026-08-26). --apply derived the target spelling from the
+  # post-move DIRECTORY, which is the canonical spelling for every book that
+  # moved but the RAW one for a book whose `mv -n` was refused. A staged book
+  # can arrive with an already-canonical sidecar under a raw-spelled directory
+  # — the panel canonicalises the author field on blur, while
+  # rip::_canonicalize_staged_authors renames the staged DIRECTORY to whatever
+  # spelling the server already holds and never touches the sidecar — so
+  # --apply rewrote a CORRECT sidecar backwards, to a spelling the dry run had
+  # named neither the file nor the change for.
+  #
+  # The dry run is captured first and asserted silent about sidecars: "--apply
+  # wrote nothing the dry run did not name" cannot be checked against the
+  # apply run alone.
+  It 'sweep (ssh): --apply never rewrites a sidecar the dry run did not name'
+    fake_abs_ops_bin_any
+    fake_server_ssh
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J. K. Rowling'
+    ca_book 'J. K. Rowling/Deathly Hallows' 'J. K. Rowling'
+    zsh -c "source $RIPLIB && rip::ab_canonicalize_authors" > "$RIP_SANDBOX/dry.txt" 2>/dev/null
+    ca_snap_variant
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    # The same-title collision still refuses, exactly as before.
+    The status should equal 1
+    The stderr should include "still holds books"
+    # The dry run had nothing to say about any sidecar…
+    The contents of file "$RIP_SANDBOX/dry.txt" should not include "sidecar author spellings to correct"
+    # …so --apply must write none, and must not claim to have.
+    The result of function ca_variant_unchanged should equal "byte-identical"
+    The output should not include "re-spelled"
+    # The dry run really did run and really did see the collision — without
+    # this the "should not include" above would pass against an empty file.
+    The contents of file "$RIP_SANDBOX/dry.txt" should include "author variants"
   End
 
 

@@ -6297,14 +6297,25 @@ rip::ab_retire() {
 # differently. A sidecar naming a genuinely different person (a pen name) is
 # not a spelling variant and is never touched.
 #
-# Under --apply the sidecar pass reads the server AFTER the moves and keys
-# every write off the path the server's own `find` printed — never off a
-# predicted destination. A book whose `mv -n` was refused is therefore still
-# sitting under the old spelling, its sidecar still agrees with its path,
-# and nothing is written; predicting instead would have written the refused
-# book's corrected sidecar straight over the identity file of the DIFFERENT
-# book occupying the destination. The dry run has no post-state to read, so
-# it predicts — and predicting is harmless there because it writes nothing.
+# THE WRITE IS ADDRESSED BY THE SERVER'S OWN PATH, NEVER BY A COMPOSED ONE.
+# Under --apply the sidecar pass reads the server AFTER the moves, so every
+# `_path` it holds is a path that exists, and each payload is addressed to the
+# very row it was read from. That is what keeps a book whose `mv -n` was
+# refused from having its corrected sidecar written straight over the identity
+# file of the DIFFERENT book occupying the destination — the destination is
+# never named at all.
+#
+# WHICH SPELLING is a separate question from WHERE IT IS WRITTEN, and it is
+# answered identically in both modes: the group's target. Deriving it from the
+# post-move directory instead made --apply disagree with the dry run — for a
+# refused book the directory still says the raw spelling, so a sidecar that
+# was already canonical got rewritten BACKWARDS, and the dry run had named
+# neither the file nor the change (review finding 2, 2026-08-26). The
+# consequence of the one rule is that a refused book's sidecar is moved
+# FORWARD to the canonical spelling while its directory waits for the operator
+# to resolve the collision: announced by the dry run, harmless to --retag
+# (which reads the path, not the sidecar), and already correct when the
+# directory catches up.
 #
 # Renaming the folder is NOT enough for Audiobookshelf: it matches the moved
 # item by inode and updates its path, but keeps the item's STORED author, so
@@ -6464,11 +6475,19 @@ rip::ab_canonicalize_authors() {
     srel="${sline%%$'\t'*}"; sauth="${sline#*$'\t'}"
     [[ -n "$srel" && -n "$sauth" ]] || continue
     sdir="${srel%%/*}"
-    if (( apply )); then
-      seff="$sdir"
-    else
-      seff="${target_for[$sdir]:-$sdir}"
-    fi
+    # ONE RULE FOR BOTH MODES (review finding 2, 2026-08-26). `--apply` used
+    # to take the directory as `find` printed it, which is the CANONICAL
+    # spelling for every book that moved but the RAW one for a book whose
+    # `mv -n` was refused. A staged book can arrive with a canonical sidecar
+    # under a raw-spelled directory — the panel canonicalises the author field
+    # on blur while rip::_canonicalize_staged_authors renames the staged
+    # DIRECTORY to whatever spelling the server already holds, and never
+    # touches the sidecar — so that combination is reachable in the ordinary
+    # workflow, and `--apply` would then rewrite a correct sidecar BACKWARDS,
+    # to a spelling the dry run had named neither the file nor the change for.
+    # The target spelling is the same fact in both modes; only the writing
+    # differs.
+    seff="${target_for[$sdir]:-$sdir}"
     [[ "$sauth" != "$seff" ]] || continue
     # The narrow guard: same person, different spelling. rip::_author_norm is
     # the module's comparison key and the same one the collision rule uses;
@@ -6629,7 +6648,19 @@ rip::_canonicalize_one_author() {
     fi
     item="$("$RIP_BIN_DIR/rip-abs-authors" --find-item "$canon/$title" 2>/dev/null)"
     if [[ -z "$item" ]]; then
+      # STILL GATES THE DELETE. --find-item matches ABS's STORED relPath, and
+      # this lookup runs milliseconds after the `mv` — ABS only learns the new
+      # path on its next scan (see this function's header). So an empty $item
+      # here does NOT mean "ABS has nothing filed under the old author"; it
+      # usually means the opposite. Left unrouted, `rmdir` succeeded, control
+      # reached the delete block, and --delete-author removed the variant's
+      # record while every un-repointed item still named it — review finding
+      # 2 (2026-08-24) reproduced, now reporting rc 0, and a regression of the
+      # collision behaviour that predates this feature. NOT counted as a
+      # failure: nothing went wrong, there was simply nothing to repoint.
+      # (Review finding 1, 2026-08-26.)
       log_warn "rip: moved $title, but Audiobookshelf does not know this book yet — nothing to repoint"
+      (( still_pointing++ ))
       continue
     fi
     if [[ -z "$aid" ]]; then
@@ -6689,7 +6720,16 @@ rip::_canonicalize_one_author() {
   # rc 3, so the caller can say so in its summary without treating it as a
   # failed sweep; nothing outside rip::ab_canonicalize_authors calls this.
   if (( still_pointing )); then
-    log_warn "rip: $still_pointing book(s) moved out of \"$variant\" still name it in Audiobookshelf — there is no author record called \"$canon\" to repoint them to, so \"$variant\" is left in place; rename that author in the Audiobookshelf UI"
+    # Two causes, two remedies, so two messages: with no canonical author
+    # record there is nothing to repoint TO and the operator renames the
+    # author; with one, Audiobookshelf simply has not scanned these books yet
+    # and the leftover record is theirs to check. Saying only the first would
+    # assert something untrue in the second case.
+    if [[ -z "$aid" ]]; then
+      log_warn "rip: $still_pointing book(s) moved out of \"$variant\" still name it in Audiobookshelf — there is no author record called \"$canon\" to repoint them to, so \"$variant\" is left in place; rename that author in the Audiobookshelf UI"
+    else
+      log_warn "rip: $still_pointing book(s) moved out of \"$variant\" were left unrepointed — Audiobookshelf has not seen them at their new path yet, so \"$variant\" is left in place; check for a leftover author in the Audiobookshelf UI"
+    fi
     if (( state == 11 )); then
       log_warn "rip: \"$variant\" holds no books but is not empty (non-book files remain, left for you to clean up)"
       return 1
