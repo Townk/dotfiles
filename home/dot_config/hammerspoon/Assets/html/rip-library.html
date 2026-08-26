@@ -248,6 +248,17 @@
       out.id = String(r.id);
       out.authors = arr(r.authors);
       out.narrators = arr(r.narrators);
+      // The PROVIDER's composed path, kept before any edit can touch it.
+      // applyEdit recomposes `path` from authors[0] + title, which is the
+      // folder provider's own rule (path = author + "/" + title) but NOT
+      // libation's: that provider composes the path component as
+      // "Title: Subtitle" while `title` stays bare, so recomposing a library
+      // row from its fields DROPS the subtitle (review finding, 2026-08-26).
+      // Library rows are not identity-editable — only their Edition is — so
+      // for them the path the provider composed IS the base, and the edition
+      // suffix hangs off that. Captured here, once, at the same place `id`
+      // and the two arrays are normalized.
+      out.base_path = r.path;
       return out;
     }
 
@@ -799,7 +810,17 @@
       var a = r.authors[0] || '';
       var t = String(r.title == null ? '' : r.title);
       var e = String(r.edition == null ? '' : r.edition).trim();
-      r.path = (a === '' ? t : a + '/' + t) + (e === '' ? '' : ' (' + e + ')');
+      // FILES mode recomposes from the two editable fields — that is the
+      // whole point of them, and it matches rip-provider-folder's own rule.
+      // LIBRARY mode has no editable author or title, so there is nothing to
+      // recompose FROM: the provider's own path is the base and only the
+      // suffix is ours to add. Recomposing there dropped the subtitle out of
+      // every libation path ("Title: Subtitle" is the folder; `title` is
+      // bare), which both pointed the worker at a base book that does not
+      // exist AND made touch-and-clear — type one character, delete it —
+      // silently unblock a row already stored on cantina.
+      var basep = isFiles() ? (a === '' ? t : a + '/' + t) : String(r.base_path || r.path || '');
+      r.path = basep + (e === '' ? '' : ' (' + e + ')');
     }
 
     // Keyboard row navigation, ported from the disc panel's moveFocus idiom

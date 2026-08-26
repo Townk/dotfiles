@@ -4948,6 +4948,10 @@ window.__setRows(rows);
 if (process.argv[4] !== undefined && process.argv[4] !== '') {
   window.__setServerLibrary(JSON.parse(process.argv[4]));
 }
+// 7th arg 'show' flips the "show library" chip ON. Without it visible()
+// filters a STORED row out of the markup entirely, so an example asserting
+// that a row is blocked again would have nothing to assert against.
+if (process.argv[7] === 'show') window.__setShowLibrary(true);
 for (const [id, field, value] of edits) {
   els.rows.fire('input', Object.assign(ev(), { target: editTarget(String(id), field, value) }));
 }
@@ -5117,6 +5121,59 @@ JS
     The status should equal 0
     The output should include 'data-field="edition"'
     The output should include '"path":"J. R. R. Tolkien/The Silmarillion (Full Cast)"'
+  End
+
+  # --- THE SUBTITLE (review finding, 2026-08-26) ---------------------------
+  #
+  # applyEdit recomposes `path` from authors[0] + title. That invariant holds
+  # for FOLDER rows — rip-provider-folder emits path = author + "/" + title
+  # — but NOT for the libation rows library mode is made of: that provider
+  # composes `$folder` as "Title: Subtitle" and emits path = "$author/
+  # $folder" while `title` stays BARE. LIBRARY_ROW above has no subtitle, so
+  # every library-mode example written before this one agreed with the
+  # recomposition by accident. Most of the operator's library does have one.
+  #
+  # Both proved consequences get an example: the composed path the worker
+  # strips its suffix off, and touch-and-clear.
+  LIBRARY_ROW_SUB='[{"id":"1","path":"J. R. R. Tolkien/The Silmarillion: Of the Beginning of Days","title":"The Silmarillion","subtitle":"Of the Beginning of Days","authors":["J. R. R. Tolkien"],"narrators":[]}]'
+
+  # Consequence (a): the suffix must hang off the path the book actually
+  # lives at. rip::ab_worker resolves the shared work by stripping exactly
+  # " (<Edition>)" back off and reading THAT book's sidecar — so a base that
+  # drops the subtitle names a book that is not stored anywhere, the edition
+  # mints a fresh uid, and the two never group. Permanent: both then carry a
+  # non-null `work` and neither is a --backfill-work-uid candidate again.
+  It 'panel: an edition on a library row with a subtitle keeps the subtitle in the composed path'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$LIBRARY_ROW_SUB" '[["1","edition","Full Cast"]]' '' '' 'library'
+    The status should equal 0
+    The output should include 'data-field="edition"'
+    The output should include '"path":"J. R. R. Tolkien/The Silmarillion: Of the Beginning of Days (Full Cast)"'
+    The output should not include '"path":"J. R. R. Tolkien/The Silmarillion (Full Cast)"'
+  End
+
+  # Consequence (b), the dangerous one: TOUCH-AND-CLEAR. Typing one character
+  # into a library row's Edition and deleting it again must leave the row
+  # exactly as it was — still blocked as already on cantina. With the path
+  # recomposed from the bare title it came back subtitle-less, which is a
+  # path the server does not hold: the block silently cleared and the row
+  # shipped as a duplicate under a truncated name.
+  #
+  # The 'show' argument is load-bearing and so are the POSITIVE assertions:
+  # a stored row is filtered out of the markup with the chip off, so
+  # "should not include data-blocked=false" would pass against a panel that
+  # rendered nothing at all.
+  It 'panel: touching and clearing a library row Edition leaves it blocked, subtitle intact'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$LIBRARY_ROW_SUB" '[["1","edition","F"],["1","edition",""]]' '["J. R. R. Tolkien/The Silmarillion: Of the Beginning of Days"]' '' 'library' 'show'
+    The status should equal 0
+    The output should include 'data-field="edition"'
+    The output should include 'data-blocked="true"'
+    The output should include "already on cantina as J. R. R. Tolkien/The Silmarillion: Of the Beginning of Days"
+    The output should not include 'data-blocked="false"'
+    # ...and nothing is posted: the only selected row is stored, so there is
+    # no plan to start at all.
+    The output should not include '"action":"start"'
   End
 
   # A derived identity is a GUESS, and the panel has to say which kind: the
