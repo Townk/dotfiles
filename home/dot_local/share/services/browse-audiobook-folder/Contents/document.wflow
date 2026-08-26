@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>AMApplicationBuild</key>
-	<string>528</string>
+	<string>534</string>
 	<key>AMApplicationVersion</key>
 	<string>2.10</string>
 	<key>AMDocumentVersion</key>
@@ -88,7 +88,7 @@ done
 				<key>Class Name</key>
 				<string>RunShellScriptAction</string>
 				<key>InputUUID</key>
-				<string>FDDD4E78-A1B7-47AD-9AC8-B29F61AFFE24</string>
+				<string>D4810F8C-84FE-41EE-9D64-245C91940AFF</string>
 				<key>Keywords</key>
 				<array>
 					<string>Shell</string>
@@ -98,9 +98,9 @@ done
 					<string>Unix</string>
 				</array>
 				<key>OutputUUID</key>
-				<string>BA568A8B-4324-4287-B2EE-BEA5DEE8B762</string>
+				<string>7959C6A7-8A71-4444-98DC-884BDB611543</string>
 				<key>UUID</key>
-				<string>588B0DB5-2201-43F2-89DE-5966581CBE7B</string>
+				<string>B229085A-195D-4E3A-9C56-E41BA914CCCA</string>
 				<key>UnlocalizedApplications</key>
 				<array>
 					<string>Automator</string>
@@ -173,6 +173,8 @@ done
 						<string>4</string>
 					</dict>
 				</dict>
+				<key>conversionLabel</key>
+				<integer>0</integer>
 				<key>isViewVisible</key>
 				<integer>1</integer>
 				<key>location</key>
@@ -208,7 +210,7 @@ done
 		<key>presentationMode</key>
 		<integer>15</integer>
 		<key>processesInput</key>
-		<integer>0</integer>
+		<false/>
 		<key>serviceApplicationBundleID</key>
 		<string>com.apple.finder</string>
 		<key>serviceApplicationPath</key>
@@ -218,13 +220,13 @@ done
 		<key>serviceOutputTypeIdentifier</key>
 		<string>com.apple.Automator.nothing</string>
 		<key>serviceProcessesInput</key>
-		<integer>0</integer>
+		<false/>
 		<key>systemImageName</key>
-		<string>NSTouchBarDocuments</string>
+		<string>NSActionTemplate</string>
 		<key>useAutomaticInputType</key>
-		<integer>0</integer>
+		<false/>
 		<key>workflowTypeIdentifier</key>
-		<string>com.apple.Automator.quickAction</string>
+		<string>com.apple.Automator.servicesMenu</string>
 	</dict>
 </dict>
 </plist>
