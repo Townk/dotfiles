@@ -1145,6 +1145,62 @@ EOF
     The result of function wu_base_work should include '"edition":null'
   End
 
+  # `false` is the ONE value jq's `//` treats as empty besides null, so
+  # `($w.uid // "") != ""` let it through into the write branch while `0`,
+  # `12345`, `[]` and `{}` were all refused (review finding, 2026-08-26). No
+  # producer in this codebase emits it — this example is here so the refusal
+  # is total by construction rather than total for the values that happen to
+  # occur.
+  It 'work uid: a work.uid of false is non-null, and is not overwritten either'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'base bytes\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    printf '%s' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{},"work":{"uid":false},"source":{"provider":"libation"}}' \
+      > "$(wu_base_path)"
+    before=$(wu_base_sha)
+    wu_plan "Full Cast"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_base_sha should equal "$before"
+    The result of function wu_ed_uid_shape should equal "uuidv4"
+    The stderr should include "could not record the shared work uid"
+  End
+
+  # TWO EDITIONS OF ONE WORK IN A SINGLE BATCH (review finding, 2026-08-26).
+  # Uid resolution reads the BASE book from the server, and a base that is
+  # being ripped in this same batch — or, as here, that cantina simply does
+  # not hold — is not there to read, so both editions fell through to "mint
+  # fresh" and landed with DIFFERENT uids. Both then carry a non-null `work`,
+  # which makes neither a --backfill-work-uid candidate ever again, and there
+  # is no repair verb: the split is permanent short of a hand edit on the
+  # server. The worker memoizes per base path across the acquire loop.
+  wu_two_editions_share() {
+    u1=$(jq -r '.work.uid // ""' "$RIP_SANDBOX/server/audiobooks/A/B (Full Cast)/.fleet-book.json" 2>/dev/null)
+    u2=$(jq -r '.work.uid // ""' "$RIP_SANDBOX/server/audiobooks/A/B (Unabridged)/.fleet-book.json" 2>/dev/null)
+    if [ -n "$u1" ] && [ "$u1" = "$u2" ]; then wu_is_uuid4 "$u1"; else echo "full=$u1 unabridged=$u2"; fi
+  }
+  wu_two_editions_labels() {
+    jq -r '.work.edition' "$RIP_SANDBOX/server/audiobooks/A/B (Full Cast)/.fleet-book.json" 2>/dev/null
+    jq -r '.work.edition' "$RIP_SANDBOX/server/audiobooks/A/B (Unabridged)/.fleet-book.json" 2>/dev/null
+  }
+  It 'work uid: two editions of one UNSTORED work in a single batch share one uid'
+    mkdir -p "$RIP_SANDBOX/incoming/Full" "$RIP_SANDBOX/incoming/Abr"
+    printf 'full cast bytes\n' > "$RIP_SANDBOX/incoming/Full/full.m4b"
+    printf 'abridged bytes\n' > "$RIP_SANDBOX/incoming/Abr/abr.m4b"
+    jq -nc --arg f "$RIP_SANDBOX/incoming/Full/full.m4b" --arg a "$RIP_SANDBOX/incoming/Abr/abr.m4b" \
+      '{provider:"folder",items:[
+         {id:$f,path:"A/B (Full Cast)",title:"B",authors:["A"],provider:"folder",edition:"Full Cast"},
+         {id:$a,path:"A/B (Unabridged)",title:"B",authors:["A"],provider:"folder",edition:"Unabridged"}]}' \
+      > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_two_editions_share should equal "uuidv4"
+    # ...one work, two DIFFERENT edition labels. Sharing a uid must not be
+    # achieved by sharing the whole object.
+    The result of function wu_two_editions_labels should equal "Full Cast
+Unabridged"
+    The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
+  End
+
   # THE NO-EDITION CASE, on the very path that would tempt a parenthesis
   # parser: the book is titled "B (Full Cast)" and the operator set no
   # edition. Nothing may be resolved, nothing read, nothing written — the
@@ -5474,6 +5530,74 @@ JS
   # is the wrong tool for a single lookup.
 
   rsj_ssh_cmds() { cat "$RIP_SANDBOX/ssh.cmds" 2>/dev/null; }
+
+  # fake_server_ssh_logs_stdin — fake_server_ssh that also KEEPS what was fed
+  # to the remote on stdin. rip::_sidecars_write ships the relpath inside a
+  # base64 payload on stdin, so it never appears in ssh.cmds — and on APFS,
+  # which is normalization-INSENSITIVE, an NFD relpath still opens the NFC
+  # directory, so the file that lands proves nothing either. The bytes on the
+  # wire are the only place the divergence is observable, which is why this
+  # variant exists. -n is honoured exactly as ssh honours it, so the read
+  # (which passes -n) contributes nothing here and the single logged payload
+  # is the write.
+  fake_server_ssh_logs_stdin() {
+    fake_server_ssh || return 1
+    local dash_bin
+    dash_bin=$(command -v dash 2>/dev/null || true)
+    cat > "$RIP_SANDBOX/ssh" <<EOF
+#!/bin/sh
+echo 1 >> "$RIP_SANDBOX/ssh.count"
+cmd=""
+noinput=0
+for a in "\$@"; do
+  [ "\$a" = "-n" ] && noinput=1
+  cmd="\$a"
+done
+printf '%s\n' "\$cmd" >> "$RIP_SANDBOX/ssh.cmds"
+PATH="$RIP_SANDBOX/remotebin"; export PATH
+if [ "\$noinput" = 1 ]; then
+  exec "$dash_bin" -c "\$cmd" < /dev/null
+fi
+cat > "$RIP_SANDBOX/ssh.stdin"
+exec "$dash_bin" -c "\$cmd" < "$RIP_SANDBOX/ssh.stdin"
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+  }
+
+  # The base64 relpath the WRITE actually shipped — field 1 of the single
+  # payload line rip::_sidecars_write fed to the remote.
+  wire_rel_b64() { cut -f1 "$RIP_SANDBOX/ssh.stdin" 2>/dev/null | head -1; }
+
+  # THE READ NORMALIZES; THE WRITE MUST TOO (review finding, 2026-08-26).
+  # rip::_remote_sidecar_json NFC-normalizes before asking the server, but the
+  # write-back runs through rip::_sidecar_payload, whose contract is that the
+  # relpath it ships is the SERVER's own spelling. A folder-provider plan path
+  # is composed from ffprobe tags and macOS directory names with no
+  # normalization anywhere, so for a decomposed author the read used c3a9 (NFC
+  # é) while the payload carried cc81 (NFD e + U+0301): two byte sequences for
+  # one directory. On cantina the redirect lands nowhere, the operator sees
+  # "could not record the shared work uid", the edition keeps a fresh uid, and
+  # --backfill-work-uid later mints the base a DIFFERENT one — the permanent
+  # split the minted-uid design exists to prevent.
+  #
+  # An ssh-branch example DELIBERATELY: the plain-local-dir branch runs on
+  # APFS, where both spellings open the same file, so a local-dir test of this
+  # would be a test that cannot fail.
+  It 'work uid: the write-back ships the same relpath bytes the read asked for (NFC)'
+    nfc_author=$(printf 'Saint-Exup\303\251ry')
+    nfd_author=$(printf 'Saint-Exupe\314\201ry')
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$nfc_author/Le Petit Prince"
+    jq -n '{schema:1,kind:"audiobook",title:"Le Petit Prince",authors:["A"],ids:{},work:null}' \
+      > "$RIP_SANDBOX/server/audiobooks/$nfc_author/Le Petit Prince/.fleet-book.json"
+    fake_server_ssh_logs_stdin
+    want_b64=$(printf '%s/Le Petit Prince' "$nfc_author" | jq -sRr '@base64')
+    When run zsh -c "source $RIPLIB && rip::_ab_work_uid_for '$nfd_author/Le Petit Prince' >/dev/null"
+    The status should equal 0
+    # The read asked for the NFC spelling...
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should include "$nfc_author"
+    # ...and the write shipped the very same bytes, not the plan's NFD ones.
+    The result of function wire_rel_b64 should equal "$want_b64"
+  End
 
   It 'remote sidecar: reads ONE stored sidecar over ssh, with no jq on the server'
     mkbook_empty "A/B" libation

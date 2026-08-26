@@ -3380,6 +3380,14 @@ rip::_remote_sidecar_json() {
 # the value being recorded cannot be displaced by whatever was there. The
 # caller's own read-side check is a SECOND, independent guard, not this one.
 #
+# The refusal tests `!= null and != ""`, NOT `($w.uid // "") != ""`: jq's `//`
+# treats `false` as empty just as it treats null, so `"uid": false` — non-null,
+# and therefore something we must never overwrite — would fall straight through
+# the alternative form into the write branch (review finding, 2026-08-26; `0`,
+# `12345`, `[]` and `{}` are all refused correctly by both, only `false` leaks).
+# No producer in this codebase emits it; the point is that the guard is total
+# by construction rather than total for the values that happen to occur.
+#
 # ADDITIVE: the object is rebuilt from the stored one, so every other key
 # keeps its value, and any key `work` itself carried beyond uid/edition
 # survives too. `edition: null` is the anchor's honest label — the edition
@@ -3396,7 +3404,7 @@ rip::_ab_anchor_work_uid() {
   local patched
   patched="$(print -r -- "$stored" | jq -c --arg u "$uid" "$_RIP_JQ_WORK_DEF"'
       (.work | _work_obj) as $w
-      | if (($w.uid // "") != "") then empty
+      | if ($w.uid != null and $w.uid != "") then empty
         else .work = ({uid: $u, edition: null} + ($w | del(.uid))) end' 2>/dev/null)"
   # Empty means either the refusal above or a jq that raised — both are
   # "write nothing", which is the safe answer for this file.
@@ -3431,9 +3439,29 @@ rip::_ab_anchor_work_uid() {
 # field is left strictly alone — not reused, not overwritten — because a
 # value of the wrong type is a hand edit or a corruption, and guessing at
 # either would spend the one write this design allows on the wrong book.
+#
+# THE RELPATH IS NFC-NORMALIZED HERE, ONCE, so the read and the write-back use
+# THE SAME BYTES (review finding, 2026-08-26). rip::_remote_sidecar_json
+# normalizes its own argument before asking the server, but the write path runs
+# through rip::_sidecar_payload, whose contract is that the relpath it ships is
+# the SERVER's own spelling — and the caller composes this path from a plan
+# rip-provider-folder built out of ffprobe tags and macOS directory names, with
+# no normalization anywhere. For a decomposed author ("Saint-Exupéry") the read
+# then used NFC (`c3a9`) while the payload carried NFD (`cc81`): two byte
+# sequences for one directory, so cantina's redirect lands nowhere, the operator
+# sees "could not record the shared work uid", and --backfill-work-uid later
+# mints the base book a DIFFERENT uid — the permanent split the minted-uid
+# design exists to prevent. Normalizing at the entrance means both halves speak
+# the server's spelling and rip::_remote_sidecar_json's own rip::_nfc becomes a
+# no-op rather than a divergence.
+#
+# The hermetic tests could not see this on the plain-local-dir branch: APFS is
+# normalization-INSENSITIVE, so both spellings open the same file. The guard for
+# it is therefore an ssh-branch example, where the payload's base64 relpath is
+# compared against the one the remote `cat --` used.
 rip::_ab_work_uid_for() {
   setopt localoptions noerrexit nopipefail
-  local rel="${1:-}"
+  local rel; rel="$(rip::_nfc "${1:-}")"
   local stored="" rc=1
   if [[ -n "$rel" ]]; then
     stored="$(rip::_remote_sidecar_json "$rel")"; rc=$?
@@ -5563,6 +5591,24 @@ rip::ab_worker() {
   local -a landed=()
   local pre_d bdir actual primary sha
   local ed_suffix base_rel work_uid
+  # THE BATCH'S OWN work-uid memo, declared HERE with the other loop locals —
+  # never inside the loop body, where a re-run `local` prints "name=value" to
+  # stdout and corrupts the stream this worker also writes progress lines to.
+  #
+  # Why it must exist (review finding, 2026-08-26): uid resolution reads the
+  # BASE book from the SERVER, and a base book being ripped in the SAME batch
+  # is not on the server yet. Two editions of one unstored work therefore both
+  # fell through to "mint fresh" and landed with DIFFERENT uids — and because
+  # both then carry a non-null `work`, neither is ever a --backfill-work-uid
+  # candidate again, `--editions` reports two unrelated works, and there is no
+  # repair verb: a hand edit on cantina is the only way back. Design doc S4
+  # step 5's premise ("no such book is stored" means no such book exists) is
+  # simply false within one plan; this table is what makes it true again.
+  #
+  # Keyed on the base relpath, populated only for a NON-EMPTY one: an empty
+  # base_rel means "this row has no base path at all" (see below), and every
+  # such row is a different book that must get its own uid, not share one.
+  local -A batch_work_uid=()
 
   # Lazy dedupe (Task 4): the hash happens HERE, at acquire time, never in
   # `list` — `list` must stay responsive over an unbounded tree. Only a
@@ -5705,7 +5751,20 @@ rip::ab_worker() {
         base_rel="${bpath%"$ed_suffix"}"
         [[ "${base_rel##*/}" == "" ]] && base_rel=""
       fi
-      work_uid="$(rip::_ab_work_uid_for "$base_rel")"
+      # NFC on the KEY as well, for the same reason rip::_ab_work_uid_for
+      # normalizes its argument: two spellings of one directory must be ONE
+      # entry in this table, not two.
+      [[ -n "$base_rel" ]] && base_rel="$(rip::_nfc "$base_rel")"
+      # The memo (see batch_work_uid above) is consulted BEFORE the server:
+      # a second edition of a base this batch already resolved must reuse
+      # that answer whether the base is stored or not.
+      work_uid=""
+      if [[ -n "$base_rel" && -n "${batch_work_uid[$base_rel]:-}" ]]; then
+        work_uid="${batch_work_uid[$base_rel]}"
+      else
+        work_uid="$(rip::_ab_work_uid_for "$base_rel")"
+        [[ -n "$base_rel" && -n "$work_uid" ]] && batch_work_uid[$base_rel]="$work_uid"
+      fi
       if [[ -n "$work_uid" ]]; then
         # Onto THIS item's meta-index row, by path — the same targeted jq
         # patch the local-hash thread above uses on the same file. The row is
