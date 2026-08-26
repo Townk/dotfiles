@@ -970,6 +970,195 @@ EOF
     The output should equal '{"uid":"9f1c2a4e-1111-4b22-8aa0-abc123456789","edition":"Full Cast"}'
   End
 
+  # --- work: the worker resolves the uid an edition shares (Task 3) ---------
+  #
+  # An item carrying a non-empty `edition` is a DIFFERENT EDITION of a book
+  # cantina may already hold. Its `path` already carries the " (<Edition>)"
+  # suffix — the panel composes it — so the base book's path is that path with
+  # that exact suffix removed. NEVER a general parenthesis parse: a book
+  # legitimately titled "Something (Unabridged)" with no edition set must be
+  # left completely alone, which the no-edition example at the end of this
+  # section pins.
+  #
+  # The uid is resolved against the base book's stored sidecar: reused when it
+  # has one, minted and written BACK to it when it has none, minted fresh when
+  # no such book is stored (design doc S4). The write-back is the only place
+  # in this phase that touches ANOTHER book's sidecar — the file holding the
+  # only copy of that book's identity — so it must be additive and must never
+  # overwrite a uid that is already there.
+
+  wu_ed_path()   { printf '%s' "$RIP_SANDBOX/server/audiobooks/A/B (Full Cast)/.fleet-book.json"; }
+  wu_base_path() { printf '%s' "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"; }
+
+  # wu_base <uid-or-empty> — the stored BASE book, schema-shaped and pretty,
+  # carrying a work uid only when one is given. Deliberately rich (a subtitle,
+  # a real asin, companions) so "additive" has something to be additive about.
+  wu_base() {
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'base bytes\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    jq -n --arg u "$1" '{schema:1,kind:"audiobook",title:"B",subtitle:"The Sub",
+      authors:["A"],narrators:["N"],series:null,duration_s:1200,language:"english",
+      abridged:false,published:"2013-09-24T07:00:00",
+      ids:{"audible.asin":"B0BASE0001","fleet.uid":"aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"},
+      work:(if $u == "" then null else {uid:$u,edition:null} end),
+      companions:[],
+      source:{provider:"libation",provider_version:"13.7.10",acquired_utc:null,format:"m4b"}}' \
+      > "$(wu_base_path)"
+  }
+
+  # wu_plan <edition|omit> — a one-item folder plan whose path ALREADY carries
+  # the " (Full Cast)" suffix, exactly as the panel composes it.
+  wu_plan() {
+    mkdir -p "$RIP_SANDBOX/incoming/Full"
+    printf 'full cast bytes\n' > "$RIP_SANDBOX/incoming/Full/full.m4b"
+    if [ "$1" = "omit" ]; then
+      jq -nc --arg id "$RIP_SANDBOX/incoming/Full/full.m4b" \
+        '{provider:"folder",items:[{id:$id,path:"A/B (Full Cast)",title:"B",
+          authors:["A"],provider:"folder"}]}' > "$RIP_SANDBOX/plan.json"
+    else
+      jq -nc --arg id "$RIP_SANDBOX/incoming/Full/full.m4b" --arg e "$1" \
+        '{provider:"folder",items:[{id:$id,path:"A/B (Full Cast)",title:"B",
+          authors:["A"],provider:"folder",edition:$e}]}' > "$RIP_SANDBOX/plan.json"
+    fi
+  }
+
+  wu_ed_work()   { jq -c '.work' "$(wu_ed_path)" 2>/dev/null; }
+  wu_ed_uid()    { jq -r '.work.uid // ""' "$(wu_ed_path)" 2>/dev/null; }
+  wu_base_sha()  { shasum -a 256 "$(wu_base_path)" | cut -d' ' -f1; }
+  # The NON-work bytes of the base sidecar. `jq 'del(.work)'` renders both
+  # sides through one deterministic pretty-printer, so this compares the
+  # actual TEXT of everything the write-back was not allowed to touch — an
+  # assertion that merely re-read a field would pass against a rewrite that
+  # happened to preserve it.
+  wu_base_nonwork() { jq 'del(.work)' "$(wu_base_path)" 2>/dev/null; }
+  wu_base_work()    { jq -c '.work' "$(wu_base_path)" 2>/dev/null; }
+  wu_is_uuid4() {
+    printf '%s' "$1" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' \
+      && echo "uuidv4" || echo "NOT A UUIDV4: $1"
+  }
+  wu_ed_uid_shape() { wu_is_uuid4 "$(wu_ed_uid)"; }
+  # The whole point of the mint-and-write-back branch: BOTH books end up
+  # carrying the SAME uid, or the two editions never group.
+  wu_uids_shared() {
+    e=$(wu_ed_uid); b=$(jq -r '.work.uid // ""' "$(wu_base_path)" 2>/dev/null)
+    if [ -n "$e" ] && [ "$e" = "$b" ]; then wu_is_uuid4 "$e"; else echo "edition=$e base=$b"; fi
+  }
+  # Every stored file's path and content EXCEPT the new edition's own book
+  # dir — "nothing was written to any other path", proved against the whole
+  # sandbox server tree rather than against the absence of a log line.
+  wu_digest_but_edition() {
+    ( cd "$RIP_SANDBOX/server" && find . -type f | grep -v '/A/B (Full Cast)/' \
+        | LC_ALL=C sort | while IFS= read -r f; do
+            printf '%s\n' "$f"; shasum -a 256 "$f" | cut -d' ' -f1
+          done ) | shasum -a 256 | cut -d' ' -f1
+  }
+
+  It 'work uid: an edition whose base book already anchors a work REUSES that uid'
+    wu_base "9f1c2a4e-2222-4b22-8aa0-abc123456789"
+    wu_plan "Full Cast"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_ed_work should equal '{"uid":"9f1c2a4e-2222-4b22-8aa0-abc123456789","edition":"Full Cast"}'
+  End
+
+  It 'work uid: a base book with no uid is MINTED one, written back additively, and shared'
+    wu_base ""
+    wu_plan "Full Cast"
+    before=$(wu_base_nonwork)
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_uids_shared should equal "uuidv4"
+    # ...and the base book anchors the work rather than claiming the edition
+    # label, which belongs to the book that was just ripped.
+    The result of function wu_base_work should include '"edition":null'
+    # ADDITIVE: every other key of that sidecar comes back byte-identical.
+    The result of function wu_base_nonwork should equal "$before"
+  End
+
+  It 'work uid: no base book stored mints a fresh uid and writes to no other path'
+    # A bystander book, so "nothing else was written" is measured against a
+    # non-empty tree.
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/Z/Other"
+    printf 'other\n' > "$RIP_SANDBOX/server/audiobooks/Z/Other/Other.m4b"
+    wu_plan "Full Cast"
+    before=$(wu_digest_but_edition)
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_ed_uid_shape should equal "uuidv4"
+    The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
+    The result of function wu_digest_but_edition should equal "$before"
+  End
+
+  It 'work uid: an existing non-null work.uid is NEVER overwritten'
+    # Deliberately irregular formatting and a pre-existing edition label — a
+    # write that merely re-serialized to the same parsed value would still
+    # fail this, because the check is on the raw bytes.
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'base bytes\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    printf '%s' '{"schema":1,   "kind":"audiobook","title":"B","authors":["A"],"ids":{},"work":{"uid":"11111111-1111-4111-8111-111111111111","edition":"Abridged"},"source":{"provider":"libation"}}' \
+      > "$(wu_base_path)"
+    before=$(wu_base_sha)
+    wu_plan "Full Cast"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_base_sha should equal "$before"
+    The result of function wu_ed_uid should equal "11111111-1111-4111-8111-111111111111"
+  End
+
+  # The STRUCTURAL guard, in isolation. A uid of the wrong type is non-null,
+  # so it must not be overwritten — but it is not a uid either, so it must
+  # not be reused. The read-side check refuses to reuse it (it is not a
+  # string) and hands control to the write path, where the jq program's own
+  # `empty` branch is the only thing left standing between a hand-edited
+  # sidecar and a rewrite. Nothing may be written; the edition gets its own
+  # fresh uid and the operator is told the two will not group.
+  It 'work uid: a work.uid of the wrong type is neither reused nor overwritten'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'base bytes\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    printf '%s' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{},"work":{"uid":12345},"source":{"provider":"libation"}}' \
+      > "$(wu_base_path)"
+    before=$(wu_base_sha)
+    wu_plan "Full Cast"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_base_sha should equal "$before"
+    The result of function wu_ed_uid_shape should equal "uuidv4"
+    The stderr should include "could not record the shared work uid"
+  End
+
+  # `work` REALLY CAN ARRIVE AS AN ARRAY: Hammerspoon encodes an empty Lua
+  # table as `[]`, not `{}` (see _RIP_JQ_IDS_DEF for the measurement), and a
+  # sidecar written from a plan that round-tripped through the panel can
+  # carry it. `.work.uid` RAISES on an array and `[] | del(.uid)` raises too,
+  # so without the `_work_obj` coercion on BOTH sides the write-back composes
+  # nothing and the two editions silently never group. The array means "no
+  # work recorded", which is exactly the mint-and-write-back case.
+  It 'work uid: a stored "work": [] is treated as no work at all and is filled'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
+    printf 'base bytes\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
+    printf '%s' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{},"work":[],"source":{"provider":"libation"}}' \
+      > "$(wu_base_path)"
+    wu_plan "Full Cast"
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_uids_shared should equal "uuidv4"
+    The result of function wu_base_work should include '"edition":null'
+  End
+
+  # THE NO-EDITION CASE, on the very path that would tempt a parenthesis
+  # parser: the book is titled "B (Full Cast)" and the operator set no
+  # edition. Nothing may be resolved, nothing read, nothing written — the
+  # sidecar is byte-identical to what today's worker produces, `work: null`.
+  It 'work uid: an item with no edition is left exactly as it is — no parenthesis parsing'
+    wu_base "9f1c2a4e-2222-4b22-8aa0-abc123456789"
+    wu_plan omit
+    before=$(wu_base_sha)
+    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    The status should equal 0
+    The result of function wu_ed_work should equal "null"
+    The result of function wu_base_sha should equal "$before"
+  End
+
   It 'worker: one failing acquire does not abort the batch'
     printf '%s\n' '{"provider":"libation","items":[{"id":"BAD","path":"A/Bad","title":"Bad"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
     cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
@@ -5243,6 +5432,75 @@ JS
     The output should include "re-run with --apply"
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"work": null'
     The result of function ssh_calls should equal "1"
+  End
+
+  # --- rip::_remote_sidecar_json (the work-uid read path) --------------------
+  #
+  # ONE book's stored sidecar, in ONE ssh, through a server with no jq — the
+  # read rip::ab_worker makes per edition item, inside its acquire loop.
+  # rip::_server_sidecars ships the WHOLE library (~124 KB for 248 books) and
+  # is the wrong tool for a single lookup.
+
+  rsj_ssh_cmds() { cat "$RIP_SANDBOX/ssh.cmds" 2>/dev/null; }
+
+  It 'remote sidecar: reads ONE stored sidecar over ssh, with no jq on the server'
+    mkbook_empty "A/B" libation
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/B' | jq -r '.title'"
+    The status should equal 0
+    The output should equal "B"
+    The result of function ssh_calls should equal "1"
+    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+  End
+
+  It 'remote sidecar: a book with no sidecar is confirmed ABSENT, not unknown'
+    mkbook_bare "A/NoSidecar"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/NoSidecar'"
+    The status should equal 1
+    The output should equal ""
+  End
+
+  # -n IS LOAD-BEARING, the same fd-0 guard rip::_remote_test carries: without
+  # it ssh(1) drains THIS shell's stdin and forwards it to the remote, whether
+  # or not the remote command consumes it. The fake honours -n exactly as ssh
+  # does, so the sentinel survives only when the probe passed it.
+  It 'remote sidecar: the read passes ssh -n and does not eat the caller stdin'
+    mkbook_empty "A/B" libation
+    fake_server_ssh_reads_stdin
+    printf 'sentinel\n' > "$RIP_SANDBOX/in.txt"
+    When run zsh -c "source $RIPLIB
+      { rip::_remote_sidecar_json 'A/B' >/dev/null; cat; } < $RIP_SANDBOX/in.txt"
+    The status should equal 0
+    The output should equal "sentinel"
+  End
+
+  # An unreachable server must be UNKNOWN (rc 2), never "absent": the caller's
+  # only write path fires on "the base book exists and has no uid", and an
+  # absent verdict on an unread server would turn an outage into a mint that
+  # can never match what the base book already carries.
+  It 'remote sidecar: an ssh that never connects is unknown, not absent'
+    mkbook_empty "A/B" libation
+    fake_server_ssh
+    cat > "$RIP_SANDBOX/ssh" <<'EOF'
+#!/bin/sh
+exit 255
+EOF
+    chmod +x "$RIP_SANDBOX/ssh"
+    When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/B'"
+    The status should equal 2
+    The output should equal ""
+  End
+
+  # A sidecar that EXISTS but does not parse is unknown too, for the same
+  # reason with more at stake: composing a replacement over a truncated file
+  # destroys the only copy of that book's identity.
+  It 'remote sidecar: a malformed stored sidecar is unknown, never treated as readable'
+    mkbook_malformed "A/Broken"
+    fake_server_ssh
+    When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/Broken'"
+    The status should equal 2
+    The output should equal ""
   End
 
 End

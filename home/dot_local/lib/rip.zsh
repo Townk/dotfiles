@@ -715,6 +715,22 @@ _RIP_JQ_IDS_DEF='def _ids_obj: if type == "object" then . else {} end;
   def _ids_fix: if (.ids != null) and ((.ids | type) != "object")
                 then .ids = {} else . end;'
 
+# _RIP_JQ_WORK_DEF — the `work` COERCION, the exact sibling of _ids_obj above
+# and there for the same reason. `work` is an OBJECT by schema now
+# ({uid, edition}, design doc 2026-08-25 S1), and an empty one does not
+# survive a Lua round trip either: Hammerspoon encodes an empty Lua table as
+# `[]` (see _RIP_JQ_IDS_DEF for the measurement), and every reader of this
+# field subscripts it — `.work.uid` — which RAISES on an array. The raise is
+# swallowed by the `2>/dev/null` at the call site and the book it happened on
+# is dropped from whatever is asking, so an edition would silently resolve to
+# a fresh uid against a book that already anchors a work.
+#
+# Kept as its own constant rather than folded into _RIP_JQ_IDS_DEF: the two
+# are prefixed independently, and a program that reads only one should not
+# have to carry the other's definitions.
+typeset -g _RIP_JQ_WORK_DEF
+_RIP_JQ_WORK_DEF='def _work_obj: if type == "object" then . else {} end;'
+
 # _RIP_SIDECAR_JQ — the sidecar SCHEMA, as one jq program, in ONE place.
 #
 # Reads the provider row from `$r` and emits the whole `.fleet-book.json`
@@ -728,7 +744,7 @@ _RIP_JQ_IDS_DEF='def _ids_obj: if type == "object" then . else {} end;
 # A plain constant, not a cache: re-sourcing this file mid-run reassigns the
 # same text, so it needs none of the guards _RIP_AB_PROVIDER_ROWS carries.
 typeset -g _RIP_SIDECAR_JQ
-_RIP_SIDECAR_JQ="$_RIP_JQ_IDS_DEF"'
+_RIP_SIDECAR_JQ="$_RIP_JQ_IDS_DEF$_RIP_JQ_WORK_DEF"'
   {schema: 1, kind: "audiobook",
    title: ($r.title // ""),
    subtitle: ($r.subtitle // null),
@@ -741,7 +757,7 @@ _RIP_SIDECAR_JQ="$_RIP_JQ_IDS_DEF"'
    abridged: (if ($r|has("abridged")) then $r.abridged else null end),
    published: ($r.published // null),
    ids: ($r.ids | _ids_obj),
-   work: ($r.work // null),
+   work: (($r.work | _work_obj) | if . == {} then null else . end),
    companions: $companions,
    source: {provider: ($r.provider // "unknown"),
             provider_version: ($r.provider_version // null),
@@ -3257,6 +3273,183 @@ rip::ab_backfill_work_uid() {
   return 0
 }
 
+# --- the work uid an edition shares -----------------------------------------
+#
+# Two editions of one work carry the same `work.uid` (design doc
+# docs/superpowers/specs/2026-08-25-audiobook-editions-design.md, S4). The
+# panel does NOT resolve it — it holds only a set of stored paths, no identity
+# — so rip::ab_worker does, per plan item carrying a non-empty `edition`.
+
+# rip::_remote_sidecar_json <Author/Title> — the stored .fleet-book.json for
+# ONE book, on stdout, exactly as it sits on the server.
+#
+# The TRI-STATE IS THE CONTRACT, the same one rip::_remote_test carries and
+# for a sharper reason here:
+#
+#   0  read, and it parses — the JSON is on stdout
+#   1  confirmed absent — no sidecar at that path
+#   2  UNKNOWN — the server could not be asked, or what came back does not
+#      parse as JSON.
+#
+# "Unknown" must never collapse into "absent". The only caller's only WRITE
+# path fires on "the base book exists and carries no work.uid", and a book
+# reported absent because an ssh died is a book whose uid is then minted
+# fresh and can never match what it already holds; a sidecar that exists but
+# is TRUNCATED is worse still, because composing a replacement over it
+# destroys the only copy of that book's identity. Both refuse instead.
+#
+# ONE book, not the whole library: rip::_server_sidecars ships ~124 KB for 248
+# books and this runs per plan item, inside the acquire loop.
+rip::_remote_sidecar_json() {
+  setopt localoptions noerrexit nopipefail
+  # NFC, for the same reason rip::_remote_test normalizes: the server is
+  # NFC-canonical (the push's --iconv guarantees it) and this relpath is
+  # composed from a plan the panel built out of local folder names, which
+  # macOS keeps in whatever form they were created.
+  local rel; rel="$(rip::_nfc "${1:-}")"
+  [[ -n "$rel" ]] || return 1
+  local base; base="$(rip::remote_base)"
+  local raw rc=0
+  if [[ "$base" == *:* ]]; then
+    local ssh_bin="${RIP_SSH_BIN:-ssh}"
+    local host="${base%%:*}" rpath="${base#*:}"
+    local rfile="$rpath/audiobooks/$rel/.fleet-book.json"
+    # -n IS LOAD-BEARING, NEVER REMOVE IT — the whole note at
+    # rip::_remote_test applies verbatim, and this is exactly the shape that
+    # has already bitten this subsystem three times: a remote read run once
+    # per item from inside a worker loop. Without -n, ssh(1) drains THIS
+    # shell's stdin and forwards it to the remote whether or not the remote
+    # command consumes it.
+    #
+    # ${(q)}: a book title is untrusted tag data or a hand-typed string, and
+    # an apostrophe alone breaks hand-rolled quoting. BatchMode+ConnectTimeout
+    # as everywhere else in this module — a black-holed host must not hang an
+    # acquire.
+    raw="$("$ssh_bin" -n -o BatchMode=yes -o ConnectTimeout=5 \
+      "$host" "cat -- ${(q)rfile}" 2>/dev/null)" || rc=$?
+    # `cat` on a missing file exits 1 and ssh hands that status back; an ssh
+    # that never connected exits 255. Same discrimination rip::_remote_test
+    # makes between a remote `test` saying no and the check not running.
+    (( rc == 1 )) && return 1
+    (( rc != 0 )) && return 2
+  else
+    # No ':' — the hermetic tests' plain local dir.
+    local lfile="$base/audiobooks/$rel/.fleet-book.json"
+    [[ -f "$lfile" ]] || return 1
+    raw="$(cat -- "$lfile" 2>/dev/null)" || return 2
+  fi
+  [[ -n "$raw" ]] || return 2
+  print -r -- "$raw" | jq -e . >/dev/null 2>&1 || return 2
+  print -r -- "$raw"
+  return 0
+}
+
+# rip::_ab_anchor_work_uid <rel> <stored json> <uid> — record <uid> as the
+# work anchor on the sidecar of ANOTHER book, additively.
+#
+# THIS IS THE ONLY WRITE IN THIS PHASE THAT TOUCHES A BOOK NOBODY ASKED TO
+# RIP, on the operator's live server, mid-session, to the file holding the
+# only copy of that book's identity (`fleet.uid`, `local.sha256`). After
+# rip::ab_backfill_work_uid has run it should never fire at all; it exists
+# because a book can reach cantina by paths this subsystem does not own.
+#
+# THE GUARD IS STRUCTURAL, not a test the caller performs. The jq program
+# emits `empty` for a sidecar that already carries a uid, so there is no
+# payload to ship and nothing can be written — and in the branch that does
+# write, the incoming uid is `del`eted from the overlay before the merge, so
+# the value being recorded cannot be displaced by whatever was there. The
+# caller's own read-side check is a SECOND, independent guard, not this one.
+#
+# ADDITIVE: the object is rebuilt from the stored one, so every other key
+# keeps its value, and any key `work` itself carried beyond uid/edition
+# survives too. `edition: null` is the anchor's honest label — the edition
+# name belongs to the book being ripped, never to the book it shares a work
+# with.
+#
+# rc 0 only when the server REPORTED the write landed (the "ok" line
+# rip::_sidecars_write prints per book) — never merely because the write was
+# attempted, which is this module's recurring defect class.
+rip::_ab_anchor_work_uid() {
+  setopt localoptions noerrexit nopipefail
+  local rel="${1:-}" stored="${2:-}" uid="${3:-}"
+  [[ -n "$rel" && -n "$stored" && -n "$uid" ]] || return 1
+  local patched
+  patched="$(print -r -- "$stored" | jq -c --arg u "$uid" "$_RIP_JQ_WORK_DEF"'
+      (.work | _work_obj) as $w
+      | if (($w.uid // "") != "") then empty
+        else .work = ({uid: $u, edition: null} + ($w | del(.uid))) end' 2>/dev/null)"
+  # Empty means either the refusal above or a jq that raised — both are
+  # "write nothing", which is the safe answer for this file.
+  [[ -n "$patched" ]] || return 1
+  local payload; payload="$(rip::_sidecar_payload "$rel" "$patched")"
+  # Never ship a half-composed payload: the remote would write it.
+  [[ -n "$payload" && "$payload" == *$'\t'* ]] || return 1
+  local base; base="$(rip::remote_base)"
+  local out; out="$(rip::_sidecars_write "$base" "$payload")"
+  [[ "$out" == ok$'\t'* ]] || return 1
+  return 0
+}
+
+# rip::_ab_work_uid_for <base rel> — the uid of the work the book stored at
+# <base rel> belongs to. stdout: one lowercase uuid. rc 0 on success, 1 when
+# no uid could be produced at all (uuidgen failed), in which case nothing is
+# printed and the caller must leave the row's `work` alone rather than record
+# half an identity.
+#
+# Three outcomes, in the order design doc S4 states them:
+#
+#   * the base book carries a work.uid  -> REUSE it. NO WRITE ANYWHERE. Once
+#     --backfill-work-uid has been run this is the only branch that fires.
+#   * the base book exists with no uid  -> mint one, write it back to THAT
+#     sidecar (rip::_ab_anchor_work_uid), and use it.
+#   * no base book is stored, or the server could not be asked -> mint a
+#     fresh uid and write nothing. The first is legal (the operator may be
+#     importing the Full Cast edition first); the second is a refusal to
+#     touch a book we could not read.
+#
+# A uid is only REUSED when it is a non-empty STRING. Anything else in that
+# field is left strictly alone — not reused, not overwritten — because a
+# value of the wrong type is a hand edit or a corruption, and guessing at
+# either would spend the one write this design allows on the wrong book.
+rip::_ab_work_uid_for() {
+  setopt localoptions noerrexit nopipefail
+  local rel="${1:-}"
+  local stored="" rc=1
+  if [[ -n "$rel" ]]; then
+    stored="$(rip::_remote_sidecar_json "$rel")"; rc=$?
+  fi
+  local have_base=0
+  (( rc == 0 )) && [[ -n "$stored" ]] && have_base=1
+  if (( have_base )); then
+    local existing
+    # `_work_obj` before the subscript: `.work.uid` RAISES on an array (see
+    # _RIP_JQ_WORK_DEF), and the raise here would be swallowed into an empty
+    # string — which reads as "no uid" and sends us down the WRITE path on a
+    # book whose work field we could not actually read.
+    existing="$(print -r -- "$stored" | jq -r "$_RIP_JQ_WORK_DEF"'
+      (.work | _work_obj | .uid) as $u
+      | if ($u | type) == "string" then $u else "" end' 2>/dev/null)"
+    if [[ -n "$existing" ]]; then
+      print -r -- "$existing"
+      return 0
+    fi
+  fi
+  # Minted LOCALLY, one per call — the same pattern rip::ab_backfill_work_uid
+  # and --repair-sidecars Case C follow. Lowercased so two runs (or a
+  # hand-typed uid elsewhere) compare equal byte for byte.
+  local uid; uid="$(uuidgen 2>/dev/null)"; uid="${(L)uid}"
+  if [[ -z "$uid" ]]; then
+    log_warn "rip: uuidgen produced nothing — cannot resolve the work this edition belongs to"
+    return 1
+  fi
+  if (( have_base )); then
+    rip::_ab_anchor_work_uid "$rel" "$stored" "$uid" \
+      || log_warn "rip: could not record the shared work uid on \"$rel\" — this edition takes $uid, and the two will not group as one work until \"$rel\" carries the same uid (--backfill-work-uid would mint it a DIFFERENT one)"
+  fi
+  print -r -- "$uid"
+  return 0
+}
+
 # rip::_sidecars_write <base> <payload…> — write a batch of
 # already-composed sidecars, atomically, in ONE ssh.
 #
@@ -5316,20 +5509,29 @@ rip::ab_worker() {
   # every command run afterwards (jq, find, the provider bin, rsync) can
   # fail to resolve. Same bug, same fix as rip::_validate_ab_plan (Task 11).
   #
-  # FOUR fields per item, not two: `plus`/`absent` (the provider's
+  # FIVE fields per item, not two: `plus`/`absent` (the provider's
   # IsAudiblePlus / AbsentFromLastScan) are carried through so the
   # acquire-verification below can name the reason a lapsed title produced
   # nothing instead of guessing at one. Emitted as "1"/"0" rather than
   # true/false so an item whose row predates those keys reads as "0" and the
   # message falls back to the plain wording — never a cause we did not
   # establish.
-  local id bpath plus absent entry rest
-  while IFS=$'\t' read -r id bpath plus absent; do
-    [[ -n "$id$bpath" ]] && items+=("$id"$'\t'"$bpath"$'\t'"$plus"$'\t'"$absent")
+  #
+  # `edition` is the fifth and it is LAST, deliberately: TAB is IFS
+  # whitespace, so `read` collapses two adjacent tabs into ONE separator and
+  # every field after an empty one silently shifts. Every other field here is
+  # non-empty by construction for exactly that reason; edition is the one
+  # that is legitimately empty (most books have none), and in last position a
+  # `read` that finds nothing after the final tab assigns it "" — which is
+  # what it means — instead of eating a neighbour.
+  local id bpath plus absent edition entry rest
+  while IFS=$'\t' read -r id bpath plus absent edition; do
+    [[ -n "$id$bpath" ]] && items+=("$id"$'\t'"$bpath"$'\t'"$plus"$'\t'"$absent"$'\t'"$edition")
   done < <(jq -r '(.items // [])[]
                   | [(.id // ""), (.path // ""),
                      (if (.plus // false) then "1" else "0" end),
-                     (if (.absent // false) then "1" else "0" end)] | @tsv' "$plan" 2>/dev/null)
+                     (if (.absent // false) then "1" else "0" end),
+                     (.edition // "")] | @tsv' "$plan" 2>/dev/null)
 
   local total=${#items} n=0 rc=0 line pct refused=0 dup=0
   local base span; span=$(( 70 / (total > 0 ? total : 1) ))
@@ -5340,6 +5542,7 @@ rip::ab_worker() {
   local -A pre_dirs=()
   local -a landed=()
   local pre_d bdir actual primary sha
+  local ed_suffix base_rel work_uid
 
   # Lazy dedupe (Task 4): the hash happens HERE, at acquire time, never in
   # `list` — `list` must stay responsive over an unbounded tree. Only a
@@ -5383,7 +5586,8 @@ rip::ab_worker() {
   for entry in "${items[@]}"; do
     id="${entry%%$'\t'*}"; rest="${entry#*$'\t'}"
     bpath="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
-    plus="${rest%%$'\t'*}"; absent="${rest#*$'\t'}"
+    plus="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+    absent="${rest%%$'\t'*}"; edition="${rest#*$'\t'}"
     base=$(( n * span )); n=$(( n + 1 ))
     rip::ab_have "$bpath"
     case $? in
@@ -5449,6 +5653,50 @@ rip::ab_worker() {
             && mv -f -- "$index.tmp" "$index" \
             || { rm -f -- "$index.tmp"; log_warn "rip: could not record the local hash for $bpath in the meta index — its identity will not be assigned this push" }
         fi
+      fi
+    fi
+    # THE WORK THIS EDITION BELONGS TO (design doc S4). An item carrying a
+    # non-empty `edition` is a different edition of a book cantina may
+    # already hold, and the two are the same work only if they end up
+    # carrying the same `work.uid`.
+    #
+    # THE BASE PATH IS DERIVED BY REMOVING ONE EXACT SUFFIX, never by parsing
+    # parentheses. The panel composed `$bpath` as "<Author>/<Title> (<Edition>)"
+    # from these very two strings, so stripping " ($edition)" off the end is
+    # deterministic and reversible. A general parenthesis parser would mangle
+    # a book legitimately titled "Something (Unabridged)" — and that title,
+    # with no edition set, must reach the server exactly as it does today.
+    # The quotes inside ${bpath%"$ed_suffix"} make the suffix LITERAL: an
+    # edition containing a glob character would otherwise match as a pattern.
+    #
+    # Resolved AFTER the two refusals above, so a book that is already stored
+    # (by path or by bytes) never costs a server round trip — and, far more
+    # importantly, can never trigger the write-back below on a book the
+    # operator was not even ripping.
+    if [[ -n "$edition" ]]; then
+      ed_suffix=" ($edition)"
+      base_rel=""
+      # No suffix, no base path: this row was not composed by the panel (a
+      # hand-written or pre-suffix plan), so there is no book to share a work
+      # with and the honest answer is a fresh uid — never a guess at which
+      # stored book was meant. Same for a suffix that consumed the whole
+      # title, which would leave a bogus "<Author>/" to read.
+      if [[ "$bpath" == *"$ed_suffix" ]]; then
+        base_rel="${bpath%"$ed_suffix"}"
+        [[ "${base_rel##*/}" == "" ]] && base_rel=""
+      fi
+      work_uid="$(rip::_ab_work_uid_for "$base_rel")"
+      if [[ -n "$work_uid" ]]; then
+        # Onto THIS item's meta-index row, by path — the same targeted jq
+        # patch the local-hash thread above uses on the same file. The row is
+        # what rip::_book_meta_for hands the sidecar composer, and
+        # _RIP_SIDECAR_JQ emits `work: ($r.work | _work_obj)`, so this is the
+        # single point where a rip records which work it belongs to.
+        jq -c --arg p "$bpath" --arg u "$work_uid" --arg e "$edition" \
+          'if .path == $p then .work = {uid: $u, edition: $e} else . end' \
+          "$index" > "$index.tmp" \
+          && mv -f -- "$index.tmp" "$index" \
+          || { rm -f -- "$index.tmp"; log_warn "rip: could not record the work uid for $bpath in the meta index — this edition will ship without one" }
       fi
     fi
     rip::_progress "$base" "downloading — ${bpath:t}"
