@@ -46,10 +46,9 @@
 --     Library panel (ripper/library-dialog.lua): a canned row list with
 --     stub callbacks, no Libation call and nothing ever enqueued. The real
 --     panel (M.library()) is fed by rip-audiobook --library/--server-library
---     and its Start/Import presses land on enqueueLibrarySession/
---     enqueueImport below, which write a session plan and hand off to
---     rip-audiobook --session / --import — same as this harness looks,
---     minus the "nothing enqueued" part.
+--     and its Start press lands on enqueueLibrarySession below, which
+--     writes a session plan and hands off to rip-audiobook --session —
+--     same as this harness looks, minus the "nothing enqueued" part.
 --   * The volume watcher only sees mounts that happen after M.start()
 --     runs, so a disc already sitting in the drive at launch/reload needs
 --     a manual nudge: M.ripDisc() rescans /Volumes for a VIDEO_TS/ dir,
@@ -799,18 +798,6 @@ local function enqueueLibrarySession(plan)
 	enqueueVisible(RIP_AUDIOBOOK, { "--session", file }, "rip audiobook session enqueue", "Rip session failed")
 end
 
-local function enqueueImport(spec)
-	if not spec or not spec.src or spec.src == "" then
-		return
-	end
-	enqueueVisible(
-		RIP_AUDIOBOOK,
-		{ "--import", spec.src, spec.author or "", spec.title or "" },
-		"audiobook import",
-		"Audiobook import failed"
-	)
-end
-
 -- Forward declarations. The panel's fetches below are extracted out of
 -- M.library so the panel's OWN controls can re-run them without reopening
 -- it (M.library early-returns while the panel is shown — it is the entry
@@ -836,7 +823,6 @@ local fetchAudiobookRows, fetchServerSets
 -- hs.notify (Focus can swallow either alone).
 local libraryCallbacks = {
 	onStart = enqueueLibrarySession,
-	onImport = enqueueImport,
 	-- The panel's "Browse…" chip. It only ASKS: the folder picker and the
 	-- fetch live in M.browse, and the panel is left untouched until a root
 	-- actually comes back from it (the operator may cancel).
@@ -1512,14 +1498,6 @@ local previewLibraryCallbacks = {
 			"glyph:nf-md-book_music",
 			string.format("preview: would rip %d book%s", #items, (#items == 1) and "" or "s"),
 			"Frog"
-		)
-	end,
-	onImport = function(spec)
-		hs.printf(
-			"ripper.previewLibrary: import (nothing imported)  src=%s  author=%s  title=%s",
-			tostring(spec.src),
-			tostring(spec.author),
-			tostring(spec.title)
 		)
 	end,
 	onDismiss = function()

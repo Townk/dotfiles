@@ -55,15 +55,12 @@
 ---   { id, title, subtitle, authors, narrators, duration_s, series,
 ---     series_position, cover, acquired, path }
 ---
---- `callbacks`: { onStart = fun(plan), onImport = fun(spec), onBrowse = fun(),
+--- `callbacks`: { onStart = fun(plan), onBrowse = fun(),
 ---                onLibrary = fun(), onDismiss = fun() }
 ---   plan: { provider = "libation" | "folder", items = { <row>, ... } } --
 ---         the full rows for every id the operator marked Rip. `provider`
 ---         follows the SOURCE, not the payload: it is what rip::ab_worker
 ---         dispatches acquire on, so a browsed book always names `folder`.
----   spec: { src = "...", author = "...", title = "..." } -- a manual/DRM-free
----         import (rip-library.html's collapsed "Import a file you already
----         have" disclosure is that UI; this module only relays the spec).
 ---   onBrowse:  the "Browse…" chip. The caller owns the folder picker and
 ---         the fetch; this module never opens a dialog of its own.
 ---   onLibrary: the source bar's "Audible library" way back.
@@ -144,7 +141,7 @@ local webview
 local ucc
 local savedWindow -- the app window focused before the panel opened
 local isShown = false
-local callbacks = {} -- { onStart = fun(plan), onImport = fun(spec), onDismiss = fun() }
+local callbacks = {} -- { onStart = fun(plan), onDismiss = fun() }
 local closed = true -- guards onDismiss against firing twice
 
 --------------------------------------------------------------------------------
@@ -310,11 +307,6 @@ local function handle_message(body)
 		if callbacks.onStart then
 			callbacks.onStart(plan)
 		end
-	elseif action == "import" then
-		local spec = { src = body.src, author = body.author, title = body.title }
-		if callbacks.onImport then
-			callbacks.onImport(spec)
-		end
 	elseif action == "browse" then
 		-- The panel stays OPEN and unchanged here. The caller owns the
 		-- folder picker, and the operator may cancel it — a panel that had
@@ -388,7 +380,7 @@ end
 --- reasoning as rip-session.html's window.__setSession, which is also a
 --- full reset for the scanning -> titles transition.
 --- @param data table { rows = <array>, loading = <bool>, provider = "libation" }
---- @param cbs table|nil { onStart = fun(plan), onImport = fun(spec), onDismiss = fun() }
+--- @param cbs table|nil { onStart = fun(plan), onDismiss = fun() }
 function M.show(data, cbs)
 	if cbs then
 		callbacks = cbs
