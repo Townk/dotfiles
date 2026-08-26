@@ -5736,8 +5736,14 @@ if (process.argv[4] !== undefined && process.argv[4] !== '') {
 // filters a STORED row out of the markup entirely, so an example asserting
 // that a row is blocked again would have nothing to assert against.
 if (process.argv[7] === 'show') window.__setShowLibrary(true);
-for (const [id, field, value] of edits) {
-  els.rows.fire('input', Object.assign(ev(), { target: editTarget(String(id), field, value) }));
+// A 4th tuple element names the event to fire ('input', the default, or
+// 'blur') — added for task 3's on-blur author normalisation, which is
+// deliberately NOT wired to 'input' (see panel_author_events below, which
+// pins the caret-safety half of that). Every earlier caller omits it and
+// keeps firing 'input'.
+for (const edit of edits) {
+  const evt = edit[3] || 'input';
+  els.rows.fire(evt, Object.assign(ev(), { target: editTarget(String(edit[0]), edit[1], edit[2]) }));
 }
 for (const r of rows) {
   els.rows.fire('mousedown', Object.assign(ev(), { target: toggleTarget(String(r.id)) }));
@@ -6030,6 +6036,185 @@ JS
     The output should include 'class="source-name"'
     The output should not include "/nope"
     The output should not include "nothing to show"
+  End
+
+  # --- author normalisation on blur (task 3, 2026-08-26) -------------------
+  #
+  # rip::_author_display (home/dot_local/lib/rip.zsh) is the canonical DISPLAY
+  # form of an author: a single letter, a period, then immediately another
+  # letter (no space between) gets a space inserted after the period. THIS IS
+  # A SECOND IMPLEMENTATION of that exact rule, in JavaScript — the panel
+  # cannot fork a shell on every blur, on a keystroke-latency path — and the
+  # two must not drift. Every row of rip::_author_display's own table is
+  # exercised here.
+  #
+  # ON BLUR, NOT ON INPUT. Rewriting the field per keystroke would move the
+  # caret mid-word: typing "J." would become "J. " and the next character —
+  # the "K" the operator is still typing — would land in the wrong place. The
+  # existing slash-stripping IS per-keystroke and restores the caret
+  # deliberately (see the `input` listener above); author normalisation does
+  # not copy that pattern.
+  #
+  # panel_author_events fires ONE event at the author field and hands back
+  # the mutated target's OWN `.value` — not the rendered row (edits
+  # deliberately do not trigger a re-render, so the row markup would still
+  # show the pre-edit value regardless of what the handler did) and not the
+  # composed path (a bug that fired on BOTH 'input' and 'blur' would still
+  # make a path-only assertion pass). Reading the field's value back is what
+  # a naive "always run" or "never run" implementation cannot fake.
+  panel_author_events() {
+    cat > "$RIP_SANDBOX/panel-author.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', 'null');
+const els = {};
+function stub(id) {
+  const listeners = {};
+  const el = {
+    id: id, innerHTML: '', textContent: '', value: '', hidden: false,
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    setAttribute() {}, getAttribute() { return null; }, setSelectionRange() {},
+    fire(type, ev) { (listeners[type] || []).forEach((f) => f.call(el, ev)); }
+  };
+  return el;
+}
+global.document = {
+  getElementById(id) { return els[id] || (els[id] = stub(id)); },
+  addEventListener() {},
+  querySelector() { return null; }
+};
+global.window = global;
+global.webkit = { messageHandlers: { ripLibrary: { postMessage() {} } } };
+(0, eval)(src);
+
+const ev = () => ({ preventDefault() {} });
+function editTarget(id, field, value) {
+  return {
+    value: value, selectionStart: value.length, setSelectionRange() {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    getAttribute: (a) => (a === 'data-edit-row' ? id : a === 'data-field' ? field : null),
+    parentNode: null
+  };
+}
+
+const rows = JSON.parse(process.argv[2]);
+window.__setSource({ kind: 'folder', root: '/incoming' });
+// Untagged, same as panel_files above: __setRows discards a delivery whose
+// sourceKind does not match SOURCE.kind, and an untagged call lands
+// regardless — the folder source above is only there so isFiles() renders
+// the author field at all.
+window.__setRows(rows);
+
+const t = editTarget(String(rows[0].id), 'author', process.argv[3]);
+els.rows.fire(process.argv[4], Object.assign(ev(), { target: t }));
+process.stdout.write(JSON.stringify({ value: t.value }));
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-author.js" "$@"
+  }
+
+  AUTHOR_ROW='[{"id":"1","path":"A/B","title":"B","authors":["A"],"narrators":[]}]'
+
+  It 'panel: J.K. Rowling becomes J. K. Rowling on blur'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'J.K. Rowling' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"J. K. Rowling"}'
+  End
+
+  It 'panel: J.R.R. Tolkien becomes J. R. R. Tolkien on blur'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'J.R.R. Tolkien' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"J. R. R. Tolkien"}'
+  End
+
+  It 'panel: e.e. cummings becomes e. e. cummings on blur'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'e.e. cummings' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"e. e. cummings"}'
+  End
+
+  It 'panel: J.K.Rowling (no space before the second initial either) becomes J. K. Rowling on blur'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'J.K.Rowling' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"J. K. Rowling"}'
+  End
+
+  # The negative that matters: two letters before the period is an
+  # abbreviation ("Dr"), not two initials, and must NOT get a space. A greedy
+  # "space every period" rule mangles this into "Dr. Smith".
+  It 'panel: Dr.Smith is left alone on blur — two letters before the period is not an initial'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'Dr.Smith' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"Dr.Smith"}'
+  End
+
+  # The other negative: already spaced, so the rule must be idempotent about
+  # detecting "already correct" rather than counting periods.
+  It 'panel: St. Martin is left alone on blur — already spaced'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'St. Martin' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"St. Martin"}'
+  End
+
+  It 'panel: J. K. Rowling is unchanged on blur — idempotent'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'J. K. Rowling' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"J. K. Rowling"}'
+  End
+
+  It 'panel: Brandon Sanderson is unchanged on blur — no periods to touch'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'Brandon Sanderson' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"Brandon Sanderson"}'
+  End
+
+  It 'panel: an empty author stays empty on blur'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" '' 'blur'
+    The status should equal 0
+    The output should eq '{"value":""}'
+  End
+
+  # THE CARET GUARD. Firing 'input' — a mid-word keystroke, not a commit — is
+  # the event the per-keystroke slash-stripping DOES use; author
+  # normalisation must not. If this fired on 'input', typing "J." one
+  # character at a time would come back "J. " immediately, moving the caret
+  # into the middle of the word the operator is still typing.
+  It 'panel: typing "J." does NOT get rewritten on input — only blur normalises'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'J.' 'input'
+    The status should equal 0
+    The output should eq '{"value":"J."}'
+  End
+
+  # Same value, the composing event: confirms the SAME string that stayed put
+  # on input above DOES normalise once the field is committed.
+  It 'panel: "J." is left as a partial initial on input, but a fuller value normalises on blur'
+    Skip if 'node is unavailable' no_node
+    When call panel_author_events "$AUTHOR_ROW" 'J.K.' 'blur'
+    The status should equal 0
+    The output should eq '{"value":"J. K."}'
+  End
+
+  # And the composed path follows — the whole reason this lives in the panel
+  # rather than only the worker (docs/superpowers/specs/2026-08-26-audiobook-
+  # authoritative-tags-design.md §1): applyEdit recomposes <Author>/<Title>
+  # from whatever the field holds, so the canonical form has to enter through
+  # the field itself.
+  It 'panel: blurring the author field with initials rewrites the composed path too'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","author","J.K. Rowling","blur"]]'
+    The status should equal 0
+    The output should include '"path":"J. K. Rowling/Ancilary Justice"'
   End
 
   # --- library-dialog.lua under a stubbed hs (review round 3) --------------

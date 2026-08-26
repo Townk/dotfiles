@@ -897,6 +897,44 @@
       return n === '' || (n !== '.' && n !== '..' && n.indexOf('/') === -1);
     }
 
+    // authorDisplay(n) — the canonical DISPLAY form of an author name: a
+    // single letter, a period, then immediately another letter (no space
+    // between them) gets a space inserted after the period.
+    //
+    // A SECOND IMPLEMENTATION of rip::_author_display (home/dot_local/lib/
+    // rip.zsh) — this is a JavaScript copy of that exact zsh rule, not a
+    // relative of it. The two must not drift; that function's own header
+    // names this file as its counterpart. Reimplementing rather than
+    // shelling out is deliberate: this runs on every blur of the author
+    // field, a keystroke-latency path, and forking a subprocess there is not
+    // an option.
+    //
+    // Two letters before the period is an abbreviation, not two initials
+    // ("Dr.Smith" stays as-is — "Dr" is not "D" + "r"), and a period already
+    // followed by a space is already correct ("St. Martin" is untouched).
+    // Scanned character by character, exactly as the zsh version is, rather
+    // than with a single regex substitution: a naive global "letter.letter"
+    // replace would consume the letter after a period as part of the NEXT
+    // match, silently skipping every other initial in "J.K.R. Tolkien".
+    function authorDisplay(n) {
+      n = String(n == null ? '' : n);
+      var letter = /[A-Za-z]/;
+      var out = '';
+      for (var i = 0; i < n.length; i++) {
+        var c = n.charAt(i);
+        out += c;
+        if (c === '.') {
+          var prev = n.charAt(i - 1);
+          var prev2 = n.charAt(i - 2);
+          var next = n.charAt(i + 1);
+          if (letter.test(prev) && !letter.test(prev2) && letter.test(next)) {
+            out += ' ';
+          }
+        }
+      }
+      return out;
+    }
+
     // Mirrors the PER-PATH half of rip::_validate_ab_plan
     // (home/dot_local/lib/rip.zsh): split on the FIRST slash for the author
     // and the LAST for the title, run rip::_check_title\'s rule over both,
@@ -1042,6 +1080,30 @@
         // re-rendered (it would destroy the field being typed in).
         renderFooter();
       });
+
+      // Author normalisation happens HERE, on blur — never in the `input`
+      // listener above. Rewriting the field per keystroke would move the
+      // caret mid-word: typing "J." would become "J. " immediately, and the
+      // "K" the operator is still typing would land after the space instead
+      // of after the letter it belongs to. Committing a field already blurs
+      // it (Enter, ArrowUp/Down above), so this fires exactly when the
+      // operator has finished, not while they are still typing.
+      //
+      // blur does not bubble, so the delegated `input` listener's technique
+      // (attach once on #rows, let events surface from every row) needs the
+      // CAPTURE phase instead — blur fires during capture on the way down to
+      // the target, same as focus.
+      rowsEl.addEventListener('blur', function (e) {
+        var t = e.target;
+        var host = closestAttr(t, 'data-edit-row');
+        if (!host || host.getAttribute('data-field') !== 'author') return;
+        var normalized = authorDisplay(t.value);
+        if (normalized === t.value) return;
+        t.value = normalized;
+        t.classList.toggle('invalid', !titleValid(t.value));
+        applyEdit(host.getAttribute('data-edit-row'), 'author', t.value.trim());
+        renderFooter();
+      }, true);
 
       var searchTimer = null;
       document.getElementById('search').addEventListener('input', function (e) {
