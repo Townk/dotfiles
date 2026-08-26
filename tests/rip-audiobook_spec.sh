@@ -25,6 +25,14 @@ Describe 'rip audiobooks'
     # `|| log_warn` swallows it — hermetic by construction, not by
     # per-example discipline.
     export RIP_BIN_DIR="$RIP_SANDBOX/bin"
+    # The enrichment retags every staged book on the way to the push and
+    # REFUSES one whose tags cannot be written and read back. The push and
+    # session examples in this file stage six-byte text files named "*.m4b",
+    # which a real ffmpeg cannot remux — so they run against the shared fake
+    # ffmpeg/ffprobe pair. The retag section builds real media and points the
+    # seams back at the real tools.
+    . "$SHELLSPEC_PROJECT_ROOT/tests/rip_helper.sh"
+    rip_fake_ffmpeg_pair "$RIP_SANDBOX/tools"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks" "$RIP_SANDBOX/server/audiobooks" "$RIP_BIN_DIR"
     cat > "$RIP_SANDBOX/pueue" <<'EOF'
 #!/bin/sh
@@ -524,6 +532,289 @@ FAKESSH
     The line 1 should equal "J. K. Rowling"
     The line 2 should equal "J. K. Rowling"
     The line 3 should equal "J. K. Rowling"
+  End
+
+  # --- authoritative tags: the retag (design doc S2/S3) ---------------------
+  #
+  # The defect this section exists to pin: seven Harry Potter books were
+  # ripped with the operator correcting each title in the panel, and
+  # Audiobookshelf showed something else — because ABS reads the file's
+  # EMBEDDED tags and nothing in this pipeline had ever written one. Two of
+  # the seven carried album_artist absent / artist="Jim Dale" and displayed
+  # the NARRATOR as the author.
+  #
+  # The examples below run against REAL media, built here by ffmpeg: a
+  # one-second m4b (~1.9KB) with aac audio, a chapter and an attached cover
+  # picture. The retag is a REMUX, and the only honest way to know that
+  # chapters and cover art survive a remux is to remux something that has
+  # them. Where a stub appears it stubs exactly one failure — never the
+  # verification, which is the whole point of the feature.
+
+  # rt_real — the retag under test uses the REAL ffmpeg/ffprobe. setup()
+  # points RIP_FFMPEG_BIN/RIP_FFPROBE_BIN at the suite's fake pair (see
+  # tests/rip_helper.sh) so the ~50 push examples in this file that stage
+  # six-byte "m4b" text files keep working; every example in THIS section is
+  # about what the real tools actually do to real media, so it opts back in.
+  rt_real() { export RIP_FFMPEG_BIN=ffmpeg RIP_FFPROBE_BIN=ffprobe; }
+
+  # rt_fixture <dir> — a real m4b at <dir>/book.m4b, carrying the exact tag
+  # shape the defect had: an album_artist in the un-spaced initials form, an
+  # artist holding the NARRATOR, a composer, and an album/title that disagree
+  # with the path the book is about to land under.
+  rt_fixture() {
+    mkdir -p "$1"
+    printf '%s\n' ';FFMETADATA1' '[CHAPTER]' 'TIMEBASE=1/1000' 'START=0' 'END=1000' \
+      'title=Chapter One' > "$RIP_SANDBOX/chap.txt"
+    ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a aac -b:a 8k "$RIP_SANDBOX/a.m4a"
+    ffmpeg -v error -y -f lavfi -i 'color=c=red:s=16x16:d=1' -frames:v 1 "$RIP_SANDBOX/cover.jpg"
+    ffmpeg -v error -y -i "$RIP_SANDBOX/a.m4a" -i "$RIP_SANDBOX/cover.jpg" -i "$RIP_SANDBOX/chap.txt" \
+      -map 0:a -map 1:v -map_metadata 2 -map_chapters 2 \
+      -c:a copy -c:v mjpeg -disposition:v attached_pic \
+      -metadata album_artist='J.K. Rowling' -metadata artist='Jim Dale' \
+      -metadata composer='Comp Person' -metadata album='Wrong Album' \
+      -metadata title='Wrong Title' "$1/book.m4b"
+  }
+
+  # rt_probe <file> <tag> — one format tag, read back with the real ffprobe.
+  # Used only inside the `zsh -c` bodies below, never as the thing under test.
+  RT_PROBE='rt_probe() { ffprobe -v error -show_entries format_tags -of json -- "$1" 2>/dev/null | jq -r --arg k "$2" "(.format.tags // {}) | .[\$k] // \"\""; }'
+
+  # rt_stub_silent — an ffmpeg that exits 0 and writes NOTHING. THE example
+  # of this section: without the read-back verification the retag would
+  # report success here, and the book would ship with the tags it arrived
+  # with — the original defect, wearing a hat.
+  rt_stub_silent() {
+    printf '%s\n' '#!/bin/sh' 'exit 0' > "$RIP_SANDBOX/ffmpeg-silent"
+    chmod +x "$RIP_SANDBOX/ffmpeg-silent"
+    export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-silent" RIP_FFPROBE_BIN=ffprobe
+  }
+
+  # rt_stub_copy — an ffmpeg that exits 0 and writes a byte-identical COPY,
+  # i.e. the write "worked" and the tags did not take. Unlike the silent stub
+  # this one DOES produce a temp file, which is what makes the "nothing is
+  # left behind in staging" assertion below able to fail.
+  rt_stub_copy() {
+    cat > "$RIP_SANDBOX/ffmpeg-copy" <<'EOF'
+#!/bin/sh
+in=""; out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -i) in="$2"; shift ;;
+    --) shift; out="$1" ;;
+  esac
+  shift
+done
+[ -n "$in" ] && [ -n "$out" ] && cp "$in" "$out"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/ffmpeg-copy"
+    export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-copy" RIP_FFPROBE_BIN=ffprobe
+  }
+
+  It 'retag: writes album_artist, album and title, and canonicalizes the author'
+    rt_real
+    rt_fixture "$RIP_SANDBOX/b1"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::_retag_book '$RIP_SANDBOX/b1/book.m4b' 'J.K. Rowling' 'Deathly Hallows (Full Cast)' || exit 9
+      rt_probe '$RIP_SANDBOX/b1/book.m4b' album_artist
+      rt_probe '$RIP_SANDBOX/b1/book.m4b' album
+      rt_probe '$RIP_SANDBOX/b1/book.m4b' title"
+    The status should equal 0
+    The line 1 should equal "J. K. Rowling"
+    The line 2 should equal "Deathly Hallows (Full Cast)"
+    The line 3 should equal "Deathly Hallows (Full Cast)"
+  End
+
+  # "We did not write it" is NOT "it survived the remux" — a remux that
+  # dropped these two would look identical from the writing side. artist is
+  # deliberately left alone because it holds the NARRATOR in some files and
+  # the author in others, and guessing is what produced the defect; writing
+  # album_artist is what stops ABS falling back to it.
+  It 'retag: artist and composer come through the remux with their values intact'
+    rt_real
+    rt_fixture "$RIP_SANDBOX/b2"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::_retag_book '$RIP_SANDBOX/b2/book.m4b' 'J.K. Rowling' 'Deathly Hallows' || exit 9
+      rt_probe '$RIP_SANDBOX/b2/book.m4b' artist
+      rt_probe '$RIP_SANDBOX/b2/book.m4b' composer"
+    The status should equal 0
+    The line 1 should equal "Jim Dale"
+    The line 2 should equal "Comp Person"
+  End
+
+  # A remux, not a re-encode: the audio stream, the chapter list and the
+  # attached picture all have to be on the other side of it. `-map 0` alone
+  # does NOT achieve that on an m4b — the ipod muxer refuses to copy the
+  # input's own chapter text track ("Tag text incompatible with output codec
+  # id") and fails the whole write, so the input's data streams are excluded
+  # and the chapters are re-generated from -map_chapters.
+  It 'retag: the audio, the chapters and the attached cover art survive'
+    rt_real
+    rt_fixture "$RIP_SANDBOX/b3"
+    When run zsh -c "source $RIPLIB
+      rip::_retag_book '$RIP_SANDBOX/b3/book.m4b' 'J.K. Rowling' 'Deathly Hallows' || exit 9
+      ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 -- '$RIP_SANDBOX/b3/book.m4b'
+      ffprobe -v error -show_chapters -of json -- '$RIP_SANDBOX/b3/book.m4b' | jq -r '.chapters | length, (.[0].tags.title // \"\")'
+      ffprobe -v error -select_streams v -show_entries stream_disposition=attached_pic -of csv=p=0 -- '$RIP_SANDBOX/b3/book.m4b'"
+    The status should equal 0
+    The line 1 should equal "aac"
+    The line 2 should equal "1"
+    The line 3 should equal "Chapter One"
+    The line 4 should equal "1"
+  End
+
+  It 'retag: an ffmpeg that exits 0 having written nothing is REFUSED, not believed'
+    rt_real
+    rt_fixture "$RIP_SANDBOX/b4"
+    rt_stub_silent
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::_retag_book '$RIP_SANDBOX/b4/book.m4b' 'J.K. Rowling' 'Deathly Hallows'
+      print -r -- \"rc=\$?\"
+      rt_probe '$RIP_SANDBOX/b4/book.m4b' album
+      rt_probe '$RIP_SANDBOX/b4/book.m4b' album_artist"
+    The status should equal 0
+    The line 1 should equal "rc=1"
+    # the staged file is exactly as it arrived — not half-written, not partly
+    # tagged
+    The line 2 should equal "Wrong Album"
+    The line 3 should equal "J.K. Rowling"
+    The stderr should include "tags"
+  End
+
+  It 'retag: an ffmpeg that exits 0 with the tags unchanged is REFUSED, and leaves no temp behind'
+    rt_real
+    rt_fixture "$RIP_SANDBOX/b5"
+    rt_stub_copy
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::_retag_book '$RIP_SANDBOX/b5/book.m4b' 'J.K. Rowling' 'Deathly Hallows'
+      print -r -- \"rc=\$?\"
+      rt_probe '$RIP_SANDBOX/b5/book.m4b' album
+      print -r -- \"temps=\$(find '$RIP_STAGING_ROOT' -name 'retag.*' 2>/dev/null | wc -l | tr -d ' ')\""
+    The status should equal 0
+    The line 1 should equal "rc=1"
+    The line 2 should equal "Wrong Album"
+    # the stub DID write a temp (that is what makes this assertion able to
+    # fail); the refusal has to have removed it
+    The line 3 should equal "temps=0"
+    The stderr should include "tags"
+  End
+
+  It 'retag: a file that is not there at all is a failure, never a quiet success'
+    rt_real
+    When run zsh -c "source $RIPLIB && rip::_retag_book '$RIP_SANDBOX/nope.m4b' 'A' 'B'"
+    The status should equal 1
+    The stderr should include "nope.m4b"
+  End
+
+  # --- the enrichment wiring ------------------------------------------------
+  #
+  # The invariant, end to end: a book's tags say exactly what its PATH says.
+  # The book name is taken from the staged directory, not from the provider
+  # row's `.title` — those two are NOT the same string (the libation provider
+  # emits title "Steelheart" for a directory named "Steelheart: The
+  # Reckoners, Book 1"), and it is the directory that the library shows.
+
+  It 'enrich: the pushed book carries the tags its path says, edition and all'
+    rt_real
+    rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Goblet of Fire (Full Cast)"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::push_worker audiobooks >/dev/null || exit 9
+      book='$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Goblet of Fire (Full Cast)/book.m4b'
+      rt_probe \"\$book\" album_artist
+      rt_probe \"\$book\" album
+      rt_probe \"\$book\" title
+      rt_probe \"\$book\" artist"
+    The status should equal 0
+    The line 1 should equal "J. K. Rowling"
+    The line 2 should equal "Goblet of Fire (Full Cast)"
+    The line 3 should equal "Goblet of Fire (Full Cast)"
+    The line 4 should equal "Jim Dale"
+    The stderr should not include "refusing"
+  End
+
+  It 'enrich: a book whose retag cannot be verified never reaches the rsync'
+    rt_real
+    rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order of the Phoenix"
+    rt_stub_silent
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 1
+    The stderr should include "refusing to push"
+    # not on the server…
+    The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Order of the Phoenix" should not be exist
+    # …still staged, so the operator's retry has something to retry
+    The path "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order of the Phoenix/book.m4b" should be exist
+    The stdout should not include "verified on cantina"
+  End
+
+  # ONE item's failure is that ITEM's failure — the batch rule this worker
+  # already follows for a failed acquire. The two books here are named so
+  # that the refused one's relpath is a strict PREFIX of its sibling's:
+  # dropping "J.K. Rowling/Order" from the push list must not take
+  # "J.K. Rowling/Order of the Phoenix" with it.
+  It 'enrich: one book being refused does not cost its sibling — not even the sibling whose name it prefixes'
+    rt_real
+    rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order"
+    rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order of the Phoenix"
+    printf '%s\n' '#!/bin/sh' 'for a in "$@"; do case "$a" in */Order/*) exit 0 ;; esac; done' 'exec ffmpeg "$@"' \
+      > "$RIP_SANDBOX/ffmpeg-selective"
+    chmod +x "$RIP_SANDBOX/ffmpeg-selective"
+    export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-selective"
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 1
+    The stderr should include 'refusing to push "J.K. Rowling/Order"'
+    The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Order of the Phoenix/book.m4b" should be exist
+    The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Order" should not be exist
+    # the pushed one was verified and cleaned; the refused one is still here
+    The path "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order of the Phoenix" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order/book.m4b" should be exist
+    # the surviving book really did go the whole way, not just avoid the drop
+    The stdout should include "verified on cantina"
+  End
+
+  # A file staged loose at the top of the type's tree is not a shape this
+  # pipeline produces, but it is a shape a plain `rip-push audiobooks` can be
+  # handed — and it is the one where "drop this book's entries from the push
+  # list" has no <Author>/<Title> prefix to drop by. It must not become the
+  # single case where a refusal ships the book anyway.
+  It 'enrich: a book staged loose at the top of the tree is refused, not quietly shipped'
+    rt_real
+    rt_fixture "$RIP_STAGING_ROOT/audiobooks"
+    rt_stub_silent
+    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    The status should equal 1
+    The stderr should include "refusing to push"
+    The path "$RIP_SANDBOX/server/audiobooks/book.m4b" should not be exist
+    The path "$RIP_STAGING_ROOT/audiobooks/book.m4b" should be exist
+    The stdout should not include "verified on cantina"
+  End
+
+  # The load-bearing guarantee of the whole folder-import flow: the retag
+  # runs on the STAGED COPY. The operator's own file is read and never
+  # written — it is the only original there is.
+  It 'session: the operator source file is never retagged, only the staged copy'
+    rt_real
+    rt_fixture "$RIP_SANDBOX/incoming"
+    printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/book.m4b\",\"path\":\"J.K. Rowling/Chamber of Secrets\",\"title\":\"Chamber of Secrets\"}]}" > "$RIP_SANDBOX/plan.json"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::ab_worker '$RIP_SANDBOX/plan.json' >/dev/null || exit 9
+      rt_probe '$RIP_SANDBOX/incoming/book.m4b' album
+      rt_probe '$RIP_SANDBOX/incoming/book.m4b' album_artist
+      rt_probe '$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Chamber of Secrets/book.m4b' album
+      rt_probe '$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Chamber of Secrets/book.m4b' album_artist"
+    The status should equal 0
+    The line 1 should equal "Wrong Album"
+    The line 2 should equal "J.K. Rowling"
+    The line 3 should equal "Chamber of Secrets"
+    The line 4 should equal "J. K. Rowling"
+    # (the ABS remote hop's own 404 against the empty sandbox bin dir is the
+    # only thing on stderr here — see setup's RIP_BIN_DIR note)
+    The stderr should not include "refusing"
   End
 
   It 'canonical author: adopts the spelling the server already uses'

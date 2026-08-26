@@ -215,10 +215,27 @@ rip::push_worker() {
     return 0
   fi
 
+  # A book REFUSED by the enrichment (its authoritative tags could not be
+  # written and verified) has already been dropped from $listfile, so the
+  # rsync below never sees it. What is left is to make sure the push does
+  # not report success over it: `refused` survives a clean transfer of every
+  # OTHER book and turns the worker's rc non-zero at the end.
+  local refused=0
   if [[ "$type" == music ]]; then
     rip::_enrich_music "$src" "$listfile" || log_warn "rip: enrich pass had failures — pushing anyway"
   elif [[ "$type" == audiobooks ]]; then
-    rip::_enrich_audiobooks "$src" "$listfile" || log_warn "rip: enrich pass had failures — pushing anyway"
+    rip::_enrich_audiobooks "$src" "$listfile"
+    local erc=$?
+    if (( erc == 3 )); then
+      refused=1
+      if [[ ! -s "$listfile" ]]; then
+        log_error "rip: every book in this push was refused — nothing left to push, keeping local files"
+        rm -f -- "$listfile"
+        return 1
+      fi
+    elif (( erc != 0 )); then
+      log_warn "rip: enrich pass had failures — pushing anyway"
+    fi
   fi
 
   local marker; marker="$(rip::staging_root)/.work/push-$type.stamp"
@@ -268,6 +285,10 @@ rip::push_worker() {
     rip::_enrich_audiobooks_remote "$hooklist"
   fi
   [[ -n "$hooklist" ]] && rm -f -- "$hooklist"
+  if (( vrc == 0 && refused )); then
+    log_error "rip: at least one book was refused and stays staged — retry $type once its tags can be written"
+    return 1
+  fi
   return $vrc
 }
 
@@ -743,6 +764,18 @@ _RIP_JQ_WORK_DEF='def _work_obj: if type == "object" then . else {} end;'
 #
 # A plain constant, not a cache: re-sourcing this file mid-run reassigns the
 # same text, so it needs none of the guards _RIP_AB_PROVIDER_ROWS carries.
+#
+# ids["local.sha256"] MEANS THE HASH OF THE SOURCE THAT WAS IMPORTED, NOT OF
+# THE FILE SITTING BESIDE THIS SIDECAR. Say it plainly because it stopped
+# being obvious on 2026-08-26: the enrichment now rewrites every staged
+# book's authoritative tags (rip::_retag_book), which is a remux, which
+# changes the stored file's bytes — so sha256-ing the `.m4b` next to a
+# sidecar will NOT reproduce the value recorded here. That is not drift. The
+# field exists for the byte-level duplicate refusal in rip::ab_worker, which
+# hashes the operator's SOURCE file before acquiring it and compares against
+# exactly this recorded source hash, so dedupe keeps working untouched. A
+# second `stored.sha256` was considered and deliberately NOT added: nothing
+# would consume it, and an unread field is a liability, not a safety net.
 typeset -g _RIP_SIDECAR_JQ
 _RIP_SIDECAR_JQ="$_RIP_JQ_IDS_DEF$_RIP_JQ_WORK_DEF"'
   {schema: 1, kind: "audiobook",
@@ -857,6 +890,197 @@ rip::_book_sidecar() {
   return 0
 }
 
+# --- authoritative tags ------------------------------------------------------
+#
+# THE INVARIANT: a book's tags say exactly what its path says.
+#
+# What went wrong without it (2026-08-26): the operator ripped seven Harry
+# Potter books, correcting each title in the panel. The directories, the
+# filenames and all seven sidecars recorded the correction — and
+# Audiobookshelf showed something else, because ABS reads the file's EMBEDDED
+# metadata and nothing here had ever written one. The seven source files
+# disagreed with each other; the two carrying `artist=Jim Dale` displayed the
+# NARRATOR as the author. The operator's statement of the requirement: "this
+# book title is XXXXX and its author is YYYY and it belongs to the edition
+# WWWW. If the rip lands in the library with anything that is not that, it is
+# just wrong."
+#
+# Written on the STAGED COPY, after the acquire and before the push. The
+# operator's original file is never touched — that guarantee is load-bearing
+# for the folder provider (its acquire COPIES, deliberately, because the
+# local copy IS the original) and does not change here.
+
+# rip::_retag_book <file> <author> <bookname> — rewrite this audio file's
+# authoritative tags. rc 0 ONLY when the tags were written AND read back
+# correctly.
+#
+#   album_artist  the author, through rip::_author_display
+#   album         the book name
+#   title         the book name
+#   artist        LEFT ALONE
+#   composer      LEFT ALONE
+#
+# `artist` is deliberately not written: it holds the narrator in some of
+# these files and the author in others, there is no reliable narrator to
+# write, and guessing is what produced the defect. Writing `album_artist` is
+# what stops ABS falling back to `artist`.
+#
+# A REMUX, not a re-encode (-c copy): no quality loss, and cover art rides
+# along as an attached picture stream.
+#
+# TWO ffmpeg traps are pinned in the invocation below, both measured:
+#
+#   * `-map 0` ALONE DOES NOT WORK ON AN M4B. An m4b's chapters live in a
+#     text track that ffmpeg's mov demuxer exposes as a `bin_data` stream,
+#     and the ipod muxer refuses to copy it: "Tag text incompatible with
+#     output codec id '98314'", header not written, whole remux failed. The
+#     input's data streams are therefore excluded (`-map -0:d?`) and the
+#     chapters are re-generated by `-map_chapters 0` — verified to produce
+#     an output with the same stream set and the same chapter titles.
+#   * THE TEMP MUST KEEP THE REAL EXTENSION. ffmpeg picks its muxer from the
+#     OUTPUT FILENAME, so a ".part" suffix makes every invocation fail to
+#     find an output format at all (rip-provider-folder's _embedded_cover was
+#     bitten by exactly this).
+#
+# THE VERIFICATION IS THE POINT. ffmpeg's exit code is not evidence: this
+# subsystem's signature defect is success reported because control flow
+# reached a line rather than because an outcome was established (the cover
+# extraction that returned 0 for seven books it never wrote). So the three
+# tags are read BACK out of the written file with ffprobe and compared to
+# what was intended, and only a file that reads back correctly is renamed
+# into place. Verifying the TEMP, before the rename, also means a failure
+# leaves the staged book exactly as it arrived rather than half-written.
+#
+# RIP_FFMPEG_BIN / RIP_FFPROBE_BIN are the usual test seams (the
+# RIP_RSYNC_BIN / RIP_SSH_BIN idiom), defaulting to the real tools.
+rip::_retag_book() {
+  setopt localoptions noerrexit nopipefail
+  local f="$1" author="$2" bookname="$3"
+  local ffmpeg_bin="${RIP_FFMPEG_BIN:-ffmpeg}" ffprobe_bin="${RIP_FFPROBE_BIN:-ffprobe}"
+  [[ -f "$f" ]] || { log_error "rip: no such audio file to retag: $f"; return 1 }
+  # An empty author or book name is a REFUSAL, not a partial write: a book
+  # this pipeline cannot name authoritatively is exactly the book that must
+  # not land in the library carrying whatever the seller happened to embed.
+  [[ -n "$bookname" ]] || { log_error "rip: refusing to retag ${f:t} — no book name to write"; return 1 }
+  [[ -n "$author" ]] || { log_error "rip: refusing to retag ${f:t} — no author to write"; return 1 }
+  local aa; aa="$(rip::_author_display "$author")"
+  [[ -n "$aa" ]] || { log_error "rip: refusing to retag ${f:t} — the author canonicalized to nothing"; return 1 }
+
+  # The scratch write lives under .work/, never inside the book dir itself —
+  # the same rule (and the same reasoning) as rip::_book_sidecar's temp: a
+  # process killed mid-retag would otherwise leave a second, differently
+  # named .m4b sitting IN the book dir, where a LATER push's age-gated find
+  # would pick it up and ship it as part of the book. .work/ is a sibling of
+  # the type's staging dir and is never enumerated by a push.
+  local work_dir; work_dir="$(rip::staging_root)/.work"
+  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  local tmp="$work_dir/retag.$$.${f:t}"
+  rm -f -- "$tmp"
+
+  "$ffmpeg_bin" -v error -y -i "$f" -map 0 -map "-0:d?" -c copy -map_chapters 0 \
+    -metadata album_artist="$aa" -metadata album="$bookname" -metadata title="$bookname" \
+    -- "$tmp" </dev/null >/dev/null 2>&1
+  local wrc=$?
+
+  # Read the tags back out of what was actually written. jq does the whole
+  # comparison so a value containing a tab, an equals sign or a newline can
+  # never be split wrong on the way to being compared.
+  local probe
+  probe="$("$ffprobe_bin" -v error -show_entries format_tags -of json -- "$tmp" 2>/dev/null)"
+  if ! print -r -- "$probe" | jq -e --arg aa "$aa" --arg bn "$bookname" \
+       '(.format.tags // {}) as $t
+        | (($t.album_artist // "") == $aa)
+          and (($t.album // "") == $bn)
+          and (($t.title // "") == $bn)' >/dev/null 2>&1; then
+    local got
+    got="$(print -r -- "$probe" | jq -c '(.format.tags // {}) | {album_artist, album, title}' 2>/dev/null)"
+    [[ -n "$got" ]] || got='(nothing readable was written)'
+    if (( wrc == 0 )); then
+      log_error "rip: ffmpeg reported success but the tags did not take on ${f:t} — wanted album_artist=\"$aa\" album=\"$bookname\" title=\"$bookname\", read back $got"
+    else
+      log_error "rip: could not write tags to ${f:t} (ffmpeg rc=$wrc) — read back $got"
+    fi
+    rm -f -- "$tmp"
+    return 1
+  fi
+
+  mv -f -- "$tmp" "$f" || {
+    log_error "rip: could not move the retagged ${f:t} into place"
+    rm -f -- "$tmp"
+    return 1
+  }
+  return 0
+}
+
+# rip::_retag_staged_book <bookdir> <author> <bookname> — retag every audio
+# file the book dir holds. rc non-zero when ANY of them could not be written
+# and verified.
+#
+# EVERY audio file, not just the primary: a multi-part book whose part 2 kept
+# the seller's metadata is the same defect, one file down. `.aax`/`.aaxc` are
+# the ONE deliberate exclusion — a retained Audible original is still DRM
+# encrypted, ffmpeg cannot remux it without the account's activation bytes,
+# and refusing the whole book over a file that is not the book anyone plays
+# would be a regression. It is not the copy the library reads (the `.m4b`
+# beside it is), and the module's own "the audio IS the book" rule already
+# treats it as an also-ran.
+rip::_retag_staged_book() {
+  setopt localoptions noerrexit nopipefail
+  local dir="$1" author="$2" bookname="$3"
+  local f base rc=0 n=0
+  for f in "$dir"/*(N.); do
+    base="${f:t}"
+    case "${(L)base}" in
+      *.m4b|*.m4a|*.mp3|*.mp4|*.aac|*.flac|*.ogg|*.opus|*.wav) ;;
+      *) continue ;;
+    esac
+    n=$(( n + 1 ))
+    rip::_retag_book "$f" "$author" "$bookname" || rc=1
+  done
+  # No audio here at all: nothing to tag, and nothing this function can
+  # conclude about a directory that is not a book. Whether an acquire
+  # produced audio is rip::_dir_has_audio's job, and it is already asked.
+  (( n > 0 )) || return 0
+  return $rc
+}
+
+# rip::_listfile_drop <listfile> <reldir> — remove every entry under <reldir>
+# from the push list, so a refused book cannot reach the rsync.
+#
+# The list is the ONE fixed set the push, the verify and the clean all drive
+# off (see rip::push_worker), so dropping a book here is what makes "not
+# pushed" true of all three at once — it is never transferred, never
+# verified, and never deleted from staging, which is exactly what the
+# operator's retry needs to find.
+#
+# The prefix test is `"$d"/*`, and BOTH halves of that are load-bearing. $d
+# is QUOTED so its own characters stay literal — a book title is free to
+# contain `[`, `?` or `*`, and unquoted they would be read as pattern syntax
+# and match the wrong lines (or none). And the `/` before the `*` is what
+# stops a refused book taking its similarly named neighbour down with it:
+# "A/B" must not match "A/B (Full Cast)/x", which a bare prefix test would.
+rip::_listfile_drop() {
+  setopt localoptions noerrexit nopipefail
+  local lf="$1" d="$2" line
+  [[ -f "$lf" && -n "$d" ]] || return 1
+  local tmp="$lf.drop.$$"
+  : > "$tmp" || return 1
+  while IFS= read -r line; do
+    # "." is what ${rel:h} yields for a file staged at the TOP of the type's
+    # dir rather than under <Author>/<Title> — not a shape this pipeline
+    # produces, but a shape a push can be handed, and it must not be the one
+    # case where a refusal silently ships the book anyway.
+    if [[ "$d" == "." ]]; then
+      [[ "$line" != */* || "$line" == ./* ]] && continue
+    else
+      [[ "$line" == "$d"/* ]] && continue
+    fi
+    print -r -- "$line" >> "$tmp"
+  done < "$lf"
+  mv -f -- "$tmp" "$lf" || { rm -f -- "$tmp"; return 1 }
+  return 0
+}
+
 # --- audiobook enrichment --------------------------------------------------
 #
 # TWO registries, both EMPTY today, because the deletion doctrine forces the
@@ -914,7 +1138,10 @@ rip::_enrich_audiobooks() {
   (( ${#dirs} )) || return 0
 
   local RIP_ENRICH_LISTFILE="$listfile"
-  local d meta hop failed=0
+  # Declared ONCE, out here, loop variables included: a bare `local` re-run
+  # in a loop body prints "name=value" onto the stream this runs on, and
+  # this file has been bitten by that before.
+  local d meta hop failed=0 refused=0 b_author b_book
   for d in "${dirs[@]}"; do
     [[ -d "$src/$d" ]] || continue
     meta="$(rip::staging_root)/.work/book-meta.$$.json"
@@ -927,12 +1154,43 @@ rip::_enrich_audiobooks() {
       failed=1
     fi
     rm -f -- "$meta"
+    # THE AUTHORITATIVE TAGS (design doc S2). The author and the book name
+    # come from the STAGED PATH, not from the provider row, because the path
+    # is what the library shows and the invariant is that the tags say what
+    # the path says. The two are NOT the same string: the libation provider
+    # emits title "Steelheart" for a directory it names "Steelheart: The
+    # Reckoners, Book 1", and rip::_canonicalize_staged_authors may have
+    # already renamed the author directory to the spelling the server uses
+    # while the row still carries the provider's. The edition needs no
+    # special handling here for the same reason — the panel composed the
+    # path as "<Author>/<Title> (<Edition>)", so the directory name already
+    # IS "<Title> (<Edition>)".
+    b_author=""
+    b_book="${d:t}"
+    [[ "$d" == */* ]] && b_author="${d:h:t}"
+    if ! rip::_retag_staged_book "$src/$d" "$b_author" "$b_book"; then
+      # REFUSED, not warned (design doc S3, the operator's rule verbatim:
+      # "not failing on error is a recipe for drift in the long run"). The
+      # book is dropped from the push list, so it is never transferred,
+      # never verified and never deleted from staging — the retry finds it
+      # exactly where it was.
+      log_error "rip: refusing to push \"$d\" — its tags could not be written and verified"
+      rip::_listfile_drop "$listfile" "$d" \
+        || log_error "rip: could not drop \"$d\" from the push list"
+      refused=1
+      continue
+    fi
     for hop in "${RIP_AB_ENRICH_HOPS[@]}"; do
       (( $+functions[$hop] )) || { log_warn "rip: no such enrichment hop: $hop"; failed=1; continue }
       "$hop" "$src/$d" "$src/$d/.fleet-book.json" "$d" \
         || { log_warn "rip: enrichment hop failed: $hop ($d)"; failed=1 }
     done
   done
+  # rc 3 is DISTINCT from rc 1 on purpose: 1 is this pass's ordinary
+  # best-effort failure ("log and push anyway", the hop contract), while 3
+  # says a book was REFUSED and the push must report a failure even if every
+  # other book lands. See rip::push_worker, which is the only caller.
+  (( refused )) && return 3
   return $failed
 }
 

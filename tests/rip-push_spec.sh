@@ -48,6 +48,13 @@ EOF
     # shell-out 404s and the hop's own `|| log_warn` swallows it.
     export RIP_BIN_DIR="$RIP_SANDBOX/bin"
     mkdir -p "$RIP_BIN_DIR"
+    # rip::_enrich_audiobooks retags every staged book and REFUSES one whose
+    # tags cannot be written and verified; the audiobooks examples here stage
+    # text files named "*.m4b", which no real ffmpeg can remux. The shared
+    # fake pair keeps them testing what they are about. The tag behaviour
+    # itself is pinned against real media in tests/rip-audiobook_spec.sh.
+    . "$SHELLSPEC_PROJECT_ROOT/tests/rip_helper.sh"
+    rip_fake_ffmpeg_pair "$RIP_SANDBOX/tools"
     # Every pre-existing example here stages files moments before running
     # the worker, so they'd all sit inside the default 90s age gate. Disable
     # it suite-wide; the three age-gate examples below re-export the real

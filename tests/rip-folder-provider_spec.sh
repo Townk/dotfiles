@@ -14,6 +14,15 @@ Describe 'rip-provider-folder'
     # every other RIP_* seam, so it must be pointed somewhere disposable here
     # or these examples would populate the operator's real cover cache.
     export RIP_COVER_CACHE="$RIP_SANDBOX/covercache"
+    # The two session examples here push through rip::_enrich_audiobooks,
+    # which retags every staged book and REFUSES one whose tags cannot be
+    # written and verified. Their staged "m4b" files are text, so they run
+    # against the shared fake ffmpeg/ffprobe pair. NOTE the seams are
+    # rip.zsh's only: this provider binary calls ffmpeg/ffprobe by name for
+    # its own cover extraction, and mkartbook's real media still exercises
+    # the real tools there.
+    . "$SHELLSPEC_PROJECT_ROOT/tests/rip_helper.sh"
+    rip_fake_ffmpeg_pair "$RIP_SANDBOX/tools"
   }
   cleanup() { rm -rf "$RIP_SANDBOX"; }
   BeforeEach 'setup'
