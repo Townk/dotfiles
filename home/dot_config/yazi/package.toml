@@ -1,27 +1,27 @@
 [[plugin.deps]]
 use = "yazi-rs/plugins:full-border"
-rev = "efa4d79"
+rev = "c591a36"
 hash = "f281261ff04ad7ec867c3f802a50835f"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:toggle-pane"
-rev = "efa4d79"
+rev = "c591a36"
 hash = "5b2fbef7d1513ce38ff72623a071a5e"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:git"
-rev = "efa4d79"
+rev = "c591a36"
 hash = "5bb0bfab901d3601c370eafdd66edd31"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:mactag"
-rev = "efa4d79"
+rev = "c591a36"
 hash = "34e3e12060f833cc21446f23a7ced8d1"
 
 [[plugin.deps]]
 use = "ndtoan96/ouch"
-rev = "8e70ec7"
-hash = "543eb6688a3c8eebe9d8f7d1ae0603a3"
+rev = "cfe4f50"
+hash = "eff5702573b6cfba61e4ac8b1969629a"
 
 [[plugin.deps]]
 use = "Rolv-Apneseth/bypass"
@@ -30,12 +30,12 @@ hash = "3c66d95bf63fa16178e98967fbae9429"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"
-rev = "efa4d79"
+rev = "c591a36"
 hash = "45a533508a9840cc5a10cf6129f63e6a"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:types"
-rev = "efa4d79"
+rev = "c591a36"
 hash = "ff056b5acd05d915dc3a3936cb0cfd3e"
 
 [[plugin.deps]]
