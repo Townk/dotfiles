@@ -6949,6 +6949,106 @@ JS
     The output should include '"action":"dismiss"'
   End
 
+  # --- author normalisation AT BUILD TIME (2026-08-26 followup) ------------
+  #
+  # authorDisplay() above only ran on blur, so a row the operator never
+  # clicked into kept the provider's raw spelling all the way into
+  # isStored's `SERVER.has(r.path)` compare. Cantina's sweep renamed a whole
+  # shelf from "J.K. Rowling" to "J. K. Rowling"; rip-provider-folder still
+  # derives "J.K. Rowling" from the file's own tags, composes
+  # <Author>/<Title> from that raw spelling, and the panel never touched an
+  # untouched row — so a book already on cantina rendered as rippable.
+  # normalizeRow now runs authorDisplay on every author the moment the row
+  # is built (library-dialog.lua's setRows/setLibrary/boot payload), not
+  # only on blur.
+  #
+  # These rows deliberately mirror the provider's OWN composition rule
+  # (path = authors[0] + "/" + title in files mode — rip-provider-folder's
+  # cmd_list, restated in applyEdit's comment above) so an untouched row's
+  # `path` starts life already agreeing with what normalizeRow should now
+  # produce once the fix lands.
+  BUILD_ROW='[{"id":"1","path":"J.K. Rowling/Harry Potter and the Sorcerers Stone","title":"Harry Potter and the Sorcerers Stone","authors":["J.K. Rowling"],"narrators":[]}]'
+
+  It 'panel: an unedited files-mode row already composes the canonical author into its path'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$BUILD_ROW"
+    The status should equal 0
+    # the posted plan — what actually reaches rip::ab_worker...
+    The output should include '"path":"J. K. Rowling/Harry Potter and the Sorcerers Stone"'
+    The output should include '"authors":["J. K. Rowling"]'
+    # ...and the rendered field the operator would see, seeded already
+    # canonical rather than waiting for a blur that may never happen.
+    The output should include 'value="J. K. Rowling"'
+    The output should not include '"path":"J.K. Rowling/Harry Potter and the Sorcerers Stone"'
+    The output should not include 'value="J.K. Rowling"'
+  End
+
+  # THE POINT OF THE CHANGE: with the composed path now canonical, isStored's
+  # raw SERVER.has(r.path) compare actually matches the server's renamed
+  # shelf, so the row is blocked with no edit at all. 'show' is load-bearing
+  # (visible() filters a stored row out of the markup entirely with the chip
+  # off), and the negative "should not include action:start" is what a
+  # pre-fix panel — which selects and starts this row happily — fails on.
+  It 'panel: that row is blocked once the server holds the canonical path'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$BUILD_ROW" '[]' '["J. K. Rowling/Harry Potter and the Sorcerers Stone"]' '' 'folder' 'show'
+    The status should equal 0
+    The output should include 'data-blocked="true"'
+    The output should include 'already on cantina as J. K. Rowling/Harry Potter and the Sorcerers Stone'
+    The output should not include '"action":"start"'
+  End
+
+  # LIBRARY mode must NOT recompose `path` from authors[0] + title —
+  # applyEdit's own rule (comment above it, 2026-08-26 review finding): a
+  # libation row's `path` carries a subtitle `title` does not, so
+  # recomposing from the fields drops it. The author co-occurring here needs
+  # normalising (forcing this example RED before the fix, since pre-fix
+  # nothing normalises it at all) while the composed path — subtitle and
+  # raw author spelling both — must survive completely untouched.
+  LIBRARY_ROW_BUILD='[{"id":"1","path":"J.K. Rowling/Deathly Hallows: The Final Battle","title":"Deathly Hallows","subtitle":"The Final Battle","authors":["J.K. Rowling"],"narrators":[]}]'
+
+  It 'panel: a library row with a subtitle keeps its exact composed path, even though its author display normalises'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$LIBRARY_ROW_BUILD" '[]' '' '' 'library'
+    The status should equal 0
+    # unchanged: raw author spelling, subtitle intact, not recomposed from
+    # authors[0] + title (which would drop the subtitle).
+    The output should include '"path":"J.K. Rowling/Deathly Hallows: The Final Battle"'
+    The output should not include '"path":"J. K. Rowling/Deathly Hallows: The Final Battle"'
+    The output should not include '"path":"J.K. Rowling/Deathly Hallows"'
+    # ...yet the byline the operator reads shows the canonical form.
+    The output should include "J. K. Rowling"
+  End
+
+  # THE NEGATIVES a greedy build-time rule would mangle — paired with a
+  # co-author that DOES need normalising, so the example is genuinely RED
+  # before the fix (nothing normalises the second author pre-fix either) and
+  # not a vacuous pass. Files mode composes `path` from authors[0] ALONE
+  # (applyEdit's rule), so "Dr.Smith" sitting first must leave the path
+  # byte-for-byte unchanged while the co-author still canonicalises in the
+  # posted authors array.
+  DRSMITH_ROW='[{"id":"1","path":"Dr.Smith/Two Voices","title":"Two Voices","authors":["Dr.Smith","J.K. Rowling"],"narrators":[]}]'
+
+  It 'panel: Dr.Smith (two letters before the period, not an initial) stays untouched in the composed path at build time'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$DRSMITH_ROW"
+    The status should equal 0
+    The output should include '"path":"Dr.Smith/Two Voices"'
+    The output should include '"authors":["Dr.Smith","J. K. Rowling"]'
+    The output should not include '"path":"Dr. Smith/Two Voices"'
+  End
+
+  STMARTIN_ROW='[{"id":"1","path":"St. Martin/Two Voices","title":"Two Voices","authors":["St. Martin","J.K. Rowling"],"narrators":[]}]'
+
+  It 'panel: St. Martin (already spaced) stays untouched in the composed path at build time'
+    Skip if 'node is unavailable' no_node
+    When call panel_files "$STMARTIN_ROW"
+    The status should equal 0
+    The output should include '"path":"St. Martin/Two Voices"'
+    The output should include '"authors":["St. Martin","J. K. Rowling"]'
+    The output should not include '"path":"St.  Martin/Two Voices"'
+  End
+
   # --- library-dialog.lua under a stubbed hs (review round 3) --------------
   #
   # WHY THIS EXISTS. 344 green examples could not see a one-line Lua type

@@ -259,6 +259,43 @@
       // suffix hangs off that. Captured here, once, at the same place `id`
       // and the two arrays are normalized.
       out.base_path = r.path;
+
+      // Canonicalize the author's DISPLAY spelling THE MOMENT THE ROW IS
+      // BUILT — not only on blur (authorDisplay's own rule, below). Without
+      // this, a row the operator never clicked into kept the provider's raw
+      // spelling all the way into isStored's raw `SERVER.has(r.path)`
+      // compare, the composed path, and the posted plan: a sweep can rename
+      // a whole shelf on cantina from "J.K. Rowling" to "J. K. Rowling"
+      // while the folder provider goes on deriving "J.K. Rowling" from the
+      // file's own tags, and an untouched row's `path` could then never
+      // match the server's — isStored stayed false and a book already on
+      // cantina rendered as rippable (2026-08-26 followup finding).
+      //
+      // Every author is normalized for display — bylineHtml joins the whole
+      // array, and a co-author left in the raw form would be the same
+      // inconsistency this fix exists to remove — but only authors[0] drives
+      // path composition, matching applyEdit's own rule below exactly.
+      out.authors = out.authors.map(authorDisplay);
+
+      // FILES mode composes `path` FROM authors[0] + title — the identical
+      // rule applyEdit encodes (`isFiles() ? (a === '' ? t : a + '/' + t) :
+      // ...`) — so an unedited row's path has to agree with the same
+      // canonical author or the compare above can never fire. This is a
+      // faithful re-run of the provider's OWN composition rule (rip-
+      // provider-folder's cmd_list composes path = author + "/" + title the
+      // same way), so it is a no-op whenever authorDisplay changed nothing.
+      //
+      // LIBRARY mode's `path` is the provider's own composed string, which
+      // can carry a subtitle `title` does not (applyEdit's comment above:
+      // libation composes "Title: Subtitle" while `title` stays bare) — so
+      // it is never recomposed here, exactly as applyEdit never recomposes
+      // it on edit. base_path above already preserved the untouched
+      // original for both modes.
+      if (isFiles()) {
+        var a0 = out.authors.length ? String(out.authors[0] == null ? '' : out.authors[0]) : '';
+        var t0 = String(out.title == null ? '' : out.title);
+        out.path = a0 === '' ? t0 : a0 + '/' + t0;
+      }
       return out;
     }
 
