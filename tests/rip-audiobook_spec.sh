@@ -534,6 +534,39 @@ FAKESSH
     The line 3 should equal "J. K. Rowling"
   End
 
+  # THE THIRD IMPLEMENTATION of that same rule, and the reason this example
+  # exists. `--retag`'s one shared predicate (_RIP_JQ_TAGS_OK) now has to ask
+  # "is this file's `artist` already in its canonical form?" — of probe JSON,
+  # inside jq, for a whole library at a time. jq cannot call a zsh function
+  # and the sweep cannot fork one per book, so the rule is written a second
+  # time in jq as `_canon`, exactly as the panel writes it a second time in
+  # JavaScript above.
+  #
+  # The drift here would be worse than the panel's, because the two halves
+  # sit on opposite sides of a write: rip::_author_display PRODUCES the value
+  # the staged retag writes, `_canon` DECIDES whether what came back is
+  # canonical. A disagreement means a book the writer just repaired reads
+  # back as still wrong — refused, retried, refused again, forever.
+  #
+  # Row for row against rip::_author_display's own table, plus the accented
+  # names that are the obvious place for a zsh `[A-Za-z]` range and jq's
+  # Oniguruma character class to part ways.
+  It 'author display: the jq _canon the predicate uses is the same rule, row for row'
+    When run zsh -c "source $RIPLIB
+      names=('J.K. Rowling' 'J.R.R. Tolkien' 'e.e. cummings' 'A.A. Milne'
+             'Dr.Smith' 'St. Martin' 'Brandon Sanderson' '' 'J. K. Rowling'
+             'J.D. Jackson' 'Jim Dale' '.A' 'A.' 'A.B.C' 'AB.C' '1.A'
+             'J.K.Rowling' 'Ph.D. Smith' 'María J.L. Ñoño' 'É.K. Test')
+      for n in \"\${names[@]}\"; do
+        z=\$(rip::_author_display \"\$n\")
+        j=\$(jq -rn --arg s \"\$n\" \"\$_RIP_JQ_TAGS_OK\"'\$s|_canon' 2>/dev/null)
+        [[ \"\$z\" == \"\$j\" ]] || print -r -- \"DRIFT: [\$n] zsh=[\$z] jq=[\$j]\"
+      done
+      print -r -- compared"
+    The status should equal 0
+    The output should equal "compared"
+  End
+
   # --- authoritative tags: the retag (design doc S2/S3) ---------------------
   #
   # The defect this section exists to pin: seven Harry Potter books were
@@ -574,6 +607,38 @@ FAKESSH
       -metadata composer='Comp Person' -metadata album='Wrong Album' \
       -metadata title='Wrong Title' "$1/book.m4b"
   }
+
+  # rt_fixture_tags <dir> <album_artist> <artist> <composer> <album/title> —
+  # the same real m4b, with the two NEVER-REPLACED tags and the book name
+  # under the example's control. A literal `-` means the tag is not written
+  # at ALL, which is the only honest way to build the "absent stays absent"
+  # case: `-metadata artist=` would DELETE a tag rather than never create one,
+  # and the two are indistinguishable afterwards.
+  #
+  # artist/composer go in through the FFMETADATA file rather than as
+  # -metadata flags precisely so they can be omitted conditionally without
+  # assembling a command line out of a string, which would split every value
+  # containing a space (every author's name).
+  rt_fixture_tags() {
+    mkdir -p "$1"
+    { printf '%s\n' ';FFMETADATA1'
+      [ "$3" = "-" ] || printf 'artist=%s\n' "$3"
+      [ "$4" = "-" ] || printf 'composer=%s\n' "$4"
+      printf '%s\n' '[CHAPTER]' 'TIMEBASE=1/1000' 'START=0' 'END=1000' 'title=Chapter One'
+    } > "$RIP_SANDBOX/chap.txt"
+    ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a aac -b:a 8k "$RIP_SANDBOX/a.m4a"
+    ffmpeg -v error -y -f lavfi -i 'color=c=red:s=16x16:d=1' -frames:v 1 "$RIP_SANDBOX/cover.jpg"
+    ffmpeg -v error -y -i "$RIP_SANDBOX/a.m4a" -i "$RIP_SANDBOX/cover.jpg" -i "$RIP_SANDBOX/chap.txt" \
+      -map 0:a -map 1:v -map_metadata 2 -map_chapters 2 \
+      -c:a copy -c:v mjpeg -disposition:v attached_pic \
+      -metadata album_artist="$2" -metadata album="$5" -metadata title="$5" "$1/book.m4b"
+  }
+
+  # rt_has <file> <tag>... — "true"/"false" per tag, from the merged
+  # format+stream view. `has()`, not a value read: an absent tag and a tag
+  # written empty both read back as "", and this feature's promise is that an
+  # absent one is never CREATED.
+  RT_HAS='rt_has() { f="$1"; shift; ffprobe -v error -select_streams a:0 -show_entries format_tags:stream_tags -of json -- "$f" 2>/dev/null | jq -r --args "((.format.tags // {}) + (.streams[0].tags // {})) as \$t | [ \$ARGS.positional[] as \$k | (\$t | has(\$k) | tostring) ] | join(\" \")" "$@"; }'
 
   # rt_probe <file> <tag> — one tag, read back with the real ffprobe, from
   # WHERE THAT CONTAINER ACTUALLY KEEPS IT. mp4/mp3/flac put these at the
@@ -669,10 +734,12 @@ EOF
   End
 
   # "We did not write it" is NOT "it survived the remux" — a remux that
-  # dropped these two would look identical from the writing side. artist is
-  # deliberately left alone because it holds the NARRATOR in some files and
-  # the author in others, and guessing is what produced the defect; writing
-  # album_artist is what stops ABS falling back to it.
+  # dropped these two would look identical from the writing side. Neither is
+  # ever REPLACED: artist holds the NARRATOR in some files and the author in
+  # others, and guessing is what produced the defect. Both names here are
+  # already canonical (no initials to space), so the normalise-in-place pass
+  # is a no-op on them and the assertion is BY VALUE, byte for byte — which
+  # is the only way to tell "left alone" from "quietly rewritten".
   It 'retag: artist and composer come through the remux with their values intact'
     rt_real
     rt_fixture "$RIP_SANDBOX/b2"
@@ -684,6 +751,96 @@ EOF
     The status should equal 0
     The line 1 should equal "Jim Dale"
     The line 2 should equal "Comp Person"
+  End
+
+  # NORMALISED IN PLACE — the follow-up this section grew (2026-08-26, second
+  # amendment). Measured on the live library, on a book pushed twenty minutes
+  # after the first version landed: album_artist="J. K. Rowling" (ours,
+  # canonical) beside artist="J.K. Rowling" (the source file's, untouched) —
+  # and Audiobookshelf displayed the UNNORMALISED one. Writing album_artist
+  # was not sufficient; ABS reads `artist` in preference in some
+  # configurations.
+  #
+  # Still never REPLACED — `artist` holds the narrator in some of these files
+  # and the author in others, and there is no reliable narrator to write. Only
+  # the SPELLING is normalised, through the same rip::_author_display the path
+  # goes through. That distinction is the whole safety argument: normalising in
+  # place cannot introduce a name that was not already in the file. A narrator
+  # genuinely called "J.D. Jackson" becomes "J. D. Jackson", which is a
+  # correction and not a guess.
+  It 'retag: an un-spaced artist and composer are canonicalised IN PLACE, never replaced'
+    rt_real
+    rt_fixture_tags "$RIP_SANDBOX/n1" 'J. K. Rowling' 'J.D. Jackson' 'A.B. Comp' 'Wrong Title'
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::_retag_book '$RIP_SANDBOX/n1/book.m4b' 'J. K. Rowling' 'Deathly Hallows' || exit 9
+      rt_probe '$RIP_SANDBOX/n1/book.m4b' artist
+      rt_probe '$RIP_SANDBOX/n1/book.m4b' composer
+      rt_probe '$RIP_SANDBOX/n1/book.m4b' album_artist"
+    The status should equal 0
+    # the narrator is still the narrator — only the initials moved
+    The line 1 should equal "J. D. Jackson"
+    The line 2 should equal "A. B. Comp"
+    The line 3 should equal "J. K. Rowling"
+  End
+
+  # ABSENT STAYS ABSENT. A book with no `artist` must not acquire one — the
+  # only value this pipeline could invent for it is the author, which is
+  # exactly the guess that produced the original defect. has(), not a value
+  # read: a tag written empty and a tag never created both read back as "".
+  #
+  # A GUARD, not a driver: this example passes against the code as it stood
+  # before this change too (which wrote neither tag). It is here because the
+  # obvious cheap implementation — always pass -metadata artist=<canonical>
+  # — would DELETE the tag on a book that had one and never create one on a
+  # book that did not, and nothing else in this file would notice.
+  It 'retag: an absent artist or composer is never created'
+    rt_real
+    rt_fixture_tags "$RIP_SANDBOX/n2" 'J. K. Rowling' - - 'Wrong Title'
+    When run zsh -c "source $RIPLIB
+      $RT_HAS
+      rip::_retag_book '$RIP_SANDBOX/n2/book.m4b' 'J. K. Rowling' 'Deathly Hallows' || exit 9
+      rt_has '$RIP_SANDBOX/n2/book.m4b' artist composer album_artist"
+    The status should equal 0
+    The output should equal "false false true"
+  End
+
+  # THE EXAMPLE THE SWEEP CONVERGES OR DIVERGES ON. rip::_tags_match answers
+  # BOTH "is there anything to do?" and "did it take?" — one predicate, on
+  # purpose, so the skip can never be looser than the verify. Now that
+  # `artist` is normalised, that predicate must ALSO ask whether artist and
+  # composer equal their own canonical form; without it, --retag skips a book
+  # whose only fault is an un-spaced `artist`, and the operator's 258 stored
+  # books are never repaired — which is the entire point of the change.
+  #
+  # The ffmpeg seam counts its own invocations, so "was a candidate" and
+  # "did not rewrite on the second pass" are both OBSERVED. first=1 is what
+  # fails without the predicate change (the book is skipped outright);
+  # second=1 is what fails if rip::_author_display were not idempotent, or if
+  # the writer and the checker disagreed about what canonical means.
+  It 'retag: a book whose ONLY fault is an un-spaced artist is a candidate, and then converges'
+    rt_real
+    rt_fixture_tags "$RIP_SANDBOX/n3" 'J. K. Rowling' 'J.K. Rowling' - 'Deathly Hallows'
+    printf '%s\n' '#!/bin/sh' 'printf "run\n" >> "$RIP_SANDBOX/ffmpeg.count"' 'exec ffmpeg "$@"' \
+      > "$RIP_SANDBOX/ffmpeg-counting"
+    chmod +x "$RIP_SANDBOX/ffmpeg-counting"
+    : > "$RIP_SANDBOX/ffmpeg.count"
+    export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-counting"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      rip::_retag_book '$RIP_SANDBOX/n3/book.m4b' 'J. K. Rowling' 'Deathly Hallows' || exit 9
+      print -r -- \"first=\$(wc -l < '$RIP_SANDBOX/ffmpeg.count' | tr -d ' ')\"
+      rip::_retag_book '$RIP_SANDBOX/n3/book.m4b' 'J. K. Rowling' 'Deathly Hallows' || exit 9
+      print -r -- \"second=\$(wc -l < '$RIP_SANDBOX/ffmpeg.count' | tr -d ' ')\"
+      rt_probe '$RIP_SANDBOX/n3/book.m4b' artist
+      rt_probe '$RIP_SANDBOX/n3/book.m4b' album_artist
+      rt_probe '$RIP_SANDBOX/n3/book.m4b' album"
+    The status should equal 0
+    The line 1 should equal "first=1"
+    The line 2 should equal "second=1"
+    The line 3 should equal "J. K. Rowling"
+    The line 4 should equal "J. K. Rowling"
+    The line 5 should equal "Deathly Hallows"
   End
 
   # A remux, not a re-encode: the audio stream, the chapter list and the
@@ -7875,6 +8032,36 @@ EOF
     rtg_sidecar "$1" "${5:-libation}" "$rtg_ids_json"
   }
 
+  # rtg_book_tags <Author/Title> <album_artist> <album> <title> <artist> <composer>
+  # — rtg_book with the two NEVER-REPLACED tags under the example's control.
+  # A literal `-` means the tag is not written at all (see rt_fixture_tags:
+  # `-metadata artist=` deletes rather than never-creates, and afterwards the
+  # two are indistinguishable), which is why they go in through the
+  # FFMETADATA file instead of as flags.
+  rtg_book_tags() {
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+    { printf '%s\n' ';FFMETADATA1'
+      [ "$5" = "-" ] || printf 'artist=%s\n' "$5"
+      [ "$6" = "-" ] || printf 'composer=%s\n' "$6"
+      printf '%s\n' '[CHAPTER]' 'TIMEBASE=1/1000' 'START=0' 'END=1000' 'title=Chapter One'
+    } > "$RIP_SANDBOX/rtg-chap-tags.txt"
+    ffmpeg -v error -y -i "$RIP_SANDBOX/rtg-a.m4a" -i "$RIP_SANDBOX/rtg-cover.jpg" \
+      -i "$RIP_SANDBOX/rtg-chap-tags.txt" \
+      -map 0:a -map 1:v -map_metadata 2 -map_chapters 2 \
+      -c:a copy -c:v mjpeg -disposition:v attached_pic \
+      -metadata album_artist="$2" -metadata album="$3" -metadata title="$4" \
+      "$RIP_SANDBOX/server/audiobooks/$1/book.m4b"
+    rtg_sidecar "$1" libation '{}'
+  }
+
+  rtg_has() {
+    ffprobe -v error -select_streams a:0 -show_entries format_tags:stream_tags -of json -- \
+      "$RIP_SANDBOX/server/audiobooks/$1/book.m4b" 2>/dev/null \
+      | jq -r '((.format.tags // {}) + (.streams[0].tags // {})) as $t
+               | [ $t | has("artist"), has("composer") | tostring ] | join(" ")'
+  }
+  rtg_has_cd() { rtg_has "C Author/D Book"; }
+
   # rtg_tree_digest — one hash over every stored file's PATH and CONTENT. "The
   # dry run writes nothing" is only proved against the WHOLE server tree: an
   # assertion on one file, or on the absence of a log line, would pass against
@@ -7957,6 +8144,79 @@ EOF
     The result of function rtg_tags_ab should equal "A Author|B Book|B Book"
     The result of function rtg_extra_ab should equal "Jim Dale|Comp Person"
     The result of function rtg_survived_ab should equal "Chapter One|mjpeg"
+  End
+
+  # THE SWEEP'S HALF OF "normalised in place" (2026-08-26, second amendment).
+  # BOTH WRITE SITES MUST DO THE SAME THING — rip::_retag_book on the staged
+  # copy and the POSIX sh in rip::_retag_write on a stored one — or a book
+  # excluded by one and rewritten by the other never settles. The remote has
+  # no jq, so the canonical values are computed HERE and shipped base64-framed
+  # beside the album_artist/album/title it already carries.
+  It 'retag: --apply canonicalises a stored artist and composer in place, and creates neither where absent'
+    rtg_seed
+    rtg_book_tags "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title" 'J.D. Jackson' 'A.B. Comp'
+    rtg_book_tags "C Author/D Book" "Wrong" "Wrong Album" "Wrong Title" - -
+    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    The status should equal 0
+    The output should include "retagged 2 of 2 book(s)"
+    The result of function rtg_tags_ab should equal "A Author|B Book|B Book"
+    The result of function rtg_extra_ab should equal "J. D. Jackson|A. B. Comp"
+    The result of function rtg_survived_ab should equal "Chapter One|mjpeg"
+    The result of function rtg_has_cd should equal "false false"
+  End
+
+  # THE 258 BOOKS THIS CHANGE EXISTS FOR. Their album_artist/album/title
+  # already agree with their paths — the first sweep saw to that — so the ONLY
+  # fault left is an un-spaced `artist`, and before the predicate learned to
+  # ask about it every one of them was skipped. "retagged 1 of 1" is the
+  # assertion that fails without the change; "nothing to retag" alone would
+  # not, because that is exactly what the unfixed sweep printed.
+  #
+  # And then it has to STOP. The second --apply is compared by CONTENT HASH,
+  # not by the absence of a log line: a sweep that rewrote the same book on
+  # every run forever is the failure mode this project has walked into twice.
+  It 'retag: a stored book whose ONLY fault is an un-spaced artist is swept, and the sweep then converges'
+    rtg_seed
+    rtg_book_tags "A Author/B Book" "A Author" "B Book" "B Book" 'J.K. Rowling' -
+    When run zsh -c "source $RIPLIB
+      book='$RIP_SANDBOX/server/audiobooks/A Author/B Book/book.m4b'
+      rip::ab_retag --apply || exit 9
+      s1=\$(shasum -a 256 \"\$book\" | cut -d' ' -f1)
+      rip::ab_retag --apply || exit 8
+      s2=\$(shasum -a 256 \"\$book\" | cut -d' ' -f1)
+      [[ \"\$s1\" == \"\$s2\" ]] && print -r -- 'stable' || print -r -- 'REWRITTEN AGAIN'"
+    The status should equal 0
+    The output should include "retagged 1 of 1 book(s)"
+    The output should include "nothing to retag"
+    The output should include "stable"
+    The output should not include "REWRITTEN AGAIN"
+    The result of function rtg_extra_ab should equal "J. K. Rowling|"
+  End
+
+  # BOTH WRITE SITES, ON THE SAME BYTES, ASSERTED EQUAL. The staged retag
+  # (zsh, rip::_author_display) and the sweep (jq `_canon`, shipped to a
+  # POSIX sh) are two implementations of one rule writing into two copies of
+  # one file. Comparing each against a literal would let both drift together;
+  # comparing them against EACH OTHER is what catches a divergence that no
+  # amount of agreeing-with-the-spec would.
+  It 'retag: the staged retag and the sweep write the same artist and composer'
+    rtg_seed
+    rtg_book_tags "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title" 'J.R.R. Tolkien' 'e.e. cummings'
+    mkdir -p "$RIP_STAGING_ROOT/audiobooks/A Author/B Book"
+    cp "$RIP_SANDBOX/server/audiobooks/A Author/B Book/book.m4b" \
+       "$RIP_STAGING_ROOT/audiobooks/A Author/B Book/book.m4b"
+    When run zsh -c "source $RIPLIB
+      $RT_PROBE
+      export RIP_FFMPEG_BIN=ffmpeg RIP_FFPROBE_BIN=ffprobe
+      staged='$RIP_STAGING_ROOT/audiobooks/A Author/B Book/book.m4b'
+      stored='$RIP_SANDBOX/server/audiobooks/A Author/B Book/book.m4b'
+      rip::_retag_book \"\$staged\" 'A Author' 'B Book' || exit 9
+      rip::ab_retag --apply >/dev/null || exit 8
+      print -r -- \"staged=\$(rt_probe \"\$staged\" artist)|\$(rt_probe \"\$staged\" composer)\"
+      print -r -- \"stored=\$(rt_probe \"\$stored\" artist)|\$(rt_probe \"\$stored\" composer)\""
+    The status should equal 0
+    The line 1 should equal "staged=J. R. R. Tolkien|e. e. cummings"
+    The line 2 should equal "stored=J. R. R. Tolkien|e. e. cummings"
   End
 
   # BYTES, not tags. A sweep that remuxed every book and happened to write the
@@ -8128,10 +8388,14 @@ EOF
   # ships two multi-line scripts through ${(qq)} — the exact quoting the
   # "backfilled 0 of 245" failure came from. One connection per STAGE
   # (enumerate, probe, write), never one per book.
+  # The un-spaced artist and the ABSENT one both run through the dash branch
+  # here on purpose: the six-field payload, its `-` sentinel and the POSIX
+  # `set --` that assembles the conditional -metadata flags have no other
+  # example that exercises them under a genuinely POSIX shell.
   It 'retag: --apply drives a server with NO jq, in ONE ssh per stage'
     rtg_seed
-    rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title"
-    rtg_book "C Author/D Book" "Wrong" "Wrong Album" "Wrong Title"
+    rtg_book_tags "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title" 'J.K. Rowling' 'A.B. Comp'
+    rtg_book_tags "C Author/D Book" "Wrong" "Wrong Album" "Wrong Title" - -
     fake_server_ssh
     When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
@@ -8140,6 +8404,8 @@ EOF
     The result of function ssh_calls should equal "4"
     The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
     The result of function rtg_tags_ab should equal "A Author|B Book|B Book"
+    The result of function rtg_extra_ab should equal "J. K. Rowling|A. B. Comp"
+    The result of function rtg_has_cd should equal "false false"
     The result of function rtg_stray should equal "0"
   End
 

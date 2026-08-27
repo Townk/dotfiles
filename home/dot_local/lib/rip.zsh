@@ -1013,12 +1013,43 @@ rip::_book_sidecar() {
 # Written defensively against a MISSING `streams` array as well as an empty
 # one: the sweep feeds this JSON that came off another machine, where a probe
 # of an unreadable file yields `{}` rather than the shape ffprobe promises.
+#
+# `artist` AND `composer` ARE ASKED ABOUT TOO, and that is the clause the
+# library-wide sweep converges or diverges on (2026-08-26, second amendment).
+# They are never REPLACED — see rip::_retag_book's header — but their SPELLING
+# is normalised in place, so this predicate has to ask whether each already
+# equals its own canonical form. Without it, `--retag` SKIPS a book whose only
+# fault is an un-spaced `artist`, and the 258 books already on the server are
+# never repaired, which is the entire point of the change. The rule is
+# idempotent, so one pass canonicalises and the next finds nothing.
+#
+# ABSENT IS SATISFIED, not violated: `// ""` folds a missing tag to the empty
+# string, whose canonical form is itself. A book with no `artist` must not
+# acquire one — the only value this pipeline could invent is the author, which
+# is exactly the guess that produced the original defect.
+#
+# `_canon` IS A SECOND IMPLEMENTATION of rip::_author_display, in jq, and it
+# is deliberate: jq cannot call a zsh function and the sweep cannot fork one
+# per book. It sits on the opposite side of a write from the zsh one — that
+# one PRODUCES the value, this one DECIDES whether what came back is
+# canonical — so a divergence would refuse a book the writer had just
+# repaired, on every retry, forever. tests/rip-audiobook_spec.sh compares the
+# two row for row, over rip::_author_display's whole table plus the accented
+# names where a zsh `[A-Za-z]` range and Oniguruma's could part ways.
+#
+# The lookbehind and lookahead are what make a RUN of initials work in a
+# single gsub: "J.R.R." needs its middle R read both as the letter after one
+# period and as the lone letter before the next, and a regex that CONSUMED
+# those letters could not reuse them. Only the period is consumed.
 typeset -g _RIP_JQ_TAGS_OK
-_RIP_JQ_TAGS_OK='def _tags_ok($p; $aa; $bn):
+_RIP_JQ_TAGS_OK='def _canon: gsub("(?<![A-Za-z])(?<c>[A-Za-z])\\.(?=[A-Za-z])"; .c + ". ");
+def _tags_ok($p; $aa; $bn):
   ((($p.format.tags) // {}) + (((($p.streams // [])[0]).tags) // {})) as $t
   | (($t.album_artist // "") == $aa)
     and (($t.album // "") == $bn)
-    and (($t.title // "") == $bn);
+    and (($t.title // "") == $bn)
+    and ((($t.artist // "") | _canon) == ($t.artist // ""))
+    and ((($t.composer // "") | _canon) == ($t.composer // ""));
 '
 
 # rip::_tags_match_json <ffprobe-json> <album_artist> <bookname> — the
@@ -1049,8 +1080,8 @@ rip::_tags_match() {
 #   album_artist  the author, VERBATIM
 #   album         the book name
 #   title         the book name
-#   artist        LEFT ALONE
-#   composer      LEFT ALONE
+#   artist        NORMALISED IN PLACE — spelling only, never replaced
+#   composer      NORMALISED IN PLACE — spelling only, never replaced
 #
 # VERBATIM IS A CONVERGENCE REQUIREMENT, not laziness (coordinator ruling,
 # 2026-08-26). The invariant is checkable in BOTH directions, and the
@@ -1065,10 +1096,33 @@ rip::_tags_match() {
 # --canonicalize-authors repairs stored paths, after which a retag brings
 # those books' tags into line ONCE and then goes quiet.
 #
-# `artist` is deliberately not written: it holds the narrator in some of
-# these files and the author in others, there is no reliable narrator to
-# write, and guessing is what produced the defect. Writing `album_artist` is
-# what stops ABS falling back to `artist`.
+# `artist` and `composer` ARE NEVER REPLACED, and that is unchanged: they
+# hold the narrator in some of these files and the author in others, there is
+# no reliable narrator to write, and guessing is what produced the defect.
+#
+# But their SPELLING IS NORMALISED IN PLACE, through the same
+# rip::_author_display the path goes through (2026-08-26, second amendment).
+# Measured on the live library, on a book pushed twenty minutes after the
+# first version of this function landed: album_artist="J. K. Rowling" (ours,
+# canonical) beside artist="J.K. Rowling" (the source file's, untouched), and
+# Audiobookshelf displayed the UNNORMALISED one. Writing `album_artist` alone
+# is NOT sufficient — ABS reads `artist` in preference in some configurations.
+#
+# Normalising in place is safe exactly where replacement was not: it cannot
+# introduce a name that was not already in the file. "J.K. Rowling" becomes
+# "J. K. Rowling"; "Jim Dale" has no initials and is untouched; a narrator
+# genuinely called "J.D. Jackson" becomes "J. D. Jackson", which is a
+# correction rather than a guess.
+#
+# AND IT DOES NOT BREAK THE CONVERGENCE ARGUMENT ABOVE, because it is not a
+# transformation of something the PATH also spells: the rule is idempotent, so
+# a canonicalised `artist` reads back already canonical and rip::_tags_match —
+# which now asks that question too — finds nothing to do on the next pass.
+#
+# AN ABSENT TAG IS NOT CREATED. The -metadata flag is added only when the file
+# already carries a non-empty value, because the only `artist` this pipeline
+# could invent is the author, which is the guess this whole design exists to
+# stop making.
 #
 # A REMUX, not a re-encode (-c copy): no quality loss, and cover art rides
 # along as an attached picture stream.
@@ -1129,7 +1183,16 @@ rip::_retag_book() {
   # and it is the half of the convergence property that the sweep in the
   # header comment depends on: a pass that finds nothing to change must
   # leave the bytes, and the mtime, exactly where they were.
-  if rip::_tags_match "$f" "$author" "$bookname"; then
+  #
+  # ONE PROBE, TWO USES. The skip question is asked of JSON that is then kept,
+  # because the never-replaced tags have to be read out of the SAME read: a
+  # second probe would be a second chance for the file to be answering about a
+  # different state, and rip::_tags_match's whole reason for existing is that
+  # the skip and the verify cannot be allowed to disagree.
+  local js
+  js="$("$ffprobe_bin" -v error -select_streams a:0 -show_entries format_tags:stream_tags \
+      -of json -- "$f" 2>/dev/null)"
+  if rip::_tags_match_json "$js" "$author" "$bookname"; then
     return 0
   fi
 
@@ -1151,10 +1214,29 @@ rip::_retag_book() {
   # copied off the input stream. `-metadata:s:a:0` is inert for mp4 (its
   # stream tags carry only language/handler_name, and the format tags land
   # correctly), so one invocation serves every container this retags.
-  "$ffmpeg_bin" -v error -y -i "$f" ${=_RIP_RETAG_FF_MAP} \
-    -metadata album_artist="$author" -metadata album="$bookname" -metadata title="$bookname" \
-    -metadata:s:a:0 album_artist="$author" -metadata:s:a:0 album="$bookname" \
-    -metadata:s:a:0 title="$bookname" \
+  local -a mdargs=(
+    -metadata album_artist="$author" -metadata album="$bookname" -metadata title="$bookname"
+    -metadata:s:a:0 album_artist="$author" -metadata:s:a:0 album="$bookname"
+    -metadata:s:a:0 title="$bookname"
+  )
+
+  # THE NEVER-REPLACED PAIR, normalised in place. Read out of the probe above
+  # and written back through rip::_author_display — the flag is added ONLY for
+  # a tag the file already carries a non-empty value for, so an absent one is
+  # never created and an empty one is left exactly as empty as it was.
+  #
+  # An array, not a string: every value here is a person's name and contains
+  # spaces, and a command line assembled by concatenation would split them.
+  local tag cur
+  for tag in artist composer; do
+    cur="$(print -r -- "$js" | jq -r --arg k "$tag" \
+      '((.format.tags // {}) + ((.streams[0].tags) // {})) | .[$k] // ""' 2>/dev/null)"
+    [[ -n "$cur" ]] || continue
+    cur="$(rip::_author_display "$cur")"
+    mdargs+=(-metadata "$tag=$cur" -metadata:s:a:0 "$tag=$cur")
+  done
+
+  "$ffmpeg_bin" -v error -y -i "$f" ${=_RIP_RETAG_FF_MAP} "${mdargs[@]}" \
     -- "$tmp" </dev/null >/dev/null 2>&1
   local wrc=$?
 
@@ -1166,10 +1248,14 @@ rip::_retag_book() {
     local got
     got="$("$ffprobe_bin" -v error -select_streams a:0 -show_entries format_tags:stream_tags \
         -of json -- "$tmp" 2>/dev/null \
-      | jq -c '((.format.tags // {}) + (.streams[0].tags // {})) | {album_artist, album, title}' 2>/dev/null)"
+      | jq -c '((.format.tags // {}) + (.streams[0].tags // {})) | {album_artist, album, title, artist, composer}' 2>/dev/null)"
     [[ -n "$got" ]] || got='(nothing readable was written)'
+    # artist/composer are in the read-back because they can now BE the reason
+    # it failed: they are never replaced, but their spelling must come back
+    # canonical, and an operator shown three correct-looking tags and no
+    # fourth would have nothing to act on.
     if (( wrc == 0 )); then
-      log_error "rip: ffmpeg reported success but the tags did not take on ${f:t} — wanted album_artist=\"$author\" album=\"$bookname\" title=\"$bookname\", read back $got"
+      log_error "rip: ffmpeg reported success but the tags did not take on ${f:t} — wanted album_artist=\"$author\" album=\"$bookname\" title=\"$bookname\" (and artist/composer in canonical spelling), read back $got"
     else
       log_error "rip: could not write tags to ${f:t} (ffmpeg rc=$wrc) — read back $got"
     fi
@@ -3908,13 +3994,20 @@ rip::ab_backfill_work_uid() {
 #   * the EDITION needs no special handling: the panel composed the directory
 #     as "<Title> (<Edition>)", so the directory name already IS the book name
 #     the design says to write;
-#   * NO rip::_author_display here. The canonical initials form enters through
-#     the PATH (the panel normalises on blur, --canonicalize-authors repairs
+#   * NO CANONICALIZATION OF album_artist here. That form enters through the
+#     PATH (the panel normalises on blur, --canonicalize-authors repairs
 #     stored paths) and never through the tag. A sweep that wrote a
 #     TRANSFORMED author while the path kept the raw one would report a
 #     mismatch on every run and rewrite every book on the server forever — a
 #     sweep with no fixed point. Same ruling, same reason, as
 #     rip::_retag_book's header.
+#
+#     `artist`/`composer` ARE canonicalised, and that is not the same thing:
+#     no path spells them, so there is nothing for the result to disagree
+#     with, and the rule is idempotent, so the second pass finds nothing. The
+#     values are computed HERE (cantina has no jq and no zsh) by the same
+#     `_canon` the shared predicate judges with, and shipped base64-framed —
+#     see rip::_retag_write's header.
 #
 # The server's own spelling is used byte-for-byte, with no rip::_nfc pass. On
 # the staging side _nfc is REQUIRED (the tag must match what rsync --iconv
@@ -4016,7 +4109,21 @@ done'
 
 # rip::_retag_write <base> <framed line…> — remux the named files in place on
 # the server, in ONE ssh. Each input line is
-# "<b64 rel>\t<b64 filename>\t<b64 album_artist>\t<b64 bookname>".
+# "<b64 rel>\t<b64 filename>\t<b64 album_artist>\t<b64 bookname>\t<b64 artist|->\t<b64 composer|->".
+#
+# THE LAST TWO FIELDS ARE THE NEVER-REPLACED PAIR, already canonicalised
+# (2026-08-26, second amendment). cantina has no jq and no zsh, so the
+# canonical spelling is computed HERE — by the same `_canon` the shared
+# predicate checks with — and shipped, exactly as the album_artist beside it
+# is. `-` means "this file has no such tag": the remote must not CREATE one,
+# and the sentinel is a character base64 never emits, so it can never be
+# mistaken for a value. It is also why absence is spelled `-` rather than left
+# empty — `read` collapses runs of IFS whitespace, and two adjacent tabs would
+# slide the composer into the artist's field.
+#
+# BOTH WRITE SITES DO THE SAME THING, and they have to: rip::_retag_book
+# writes a STAGED copy on the way in and this writes a STORED one, and a book
+# excluded by one and rewritten by the other would never settle.
 #
 # Prints "ok<TAB><b64 rel><TAB><b64 filename><TAB><b64 ffprobe-json>" for a
 # file it wrote and moved into place, "fail<TAB><b64 rel><TAB><b64 filename>"
@@ -4062,7 +4169,7 @@ tv() {
   if [ -n "$s" ]; then printf %s "$s"; return 0; fi
   ffprobe -v error -show_entries "format_tags=$2" -of default=noprint_wrappers=1:nokey=1 -- "$1" </dev/null 2>/dev/null
 }
-while read -r br bn ba bk; do
+while read -r br bn ba bk bx bc; do
   [ -n "$br" ] || continue
   d=$(printf %s "$br" | base64 -d 2>/dev/null)
   n=$(printf %s "$bn" | base64 -d 2>/dev/null)
@@ -4073,9 +4180,26 @@ while read -r br bn ba bk; do
   if [ ! -f "$f" ]; then printf "fail\t%s\t%s\n" "$br" "$bn"; continue; fi
   t=".work/retag.$$.$n"
   rm -f -- "$t"
-  ffmpeg -v error -y -i "$f" $mf -metadata album_artist="$a" -metadata album="$k" -metadata title="$k" -metadata:s:a:0 album_artist="$a" -metadata:s:a:0 album="$k" -metadata:s:a:0 title="$k" -- "$t" </dev/null >/dev/null 2>&1
+  set -- -v error -y -i "$f" $mf -metadata album_artist="$a" -metadata album="$k" -metadata title="$k" -metadata:s:a:0 album_artist="$a" -metadata:s:a:0 album="$k" -metadata:s:a:0 title="$k"
+  x=""
+  c=""
+  if [ -n "$bx" ] && [ "$bx" != "-" ]; then
+    x=$(printf %s "$bx" | base64 -d 2>/dev/null)
+    set -- "$@" -metadata artist="$x" -metadata:s:a:0 artist="$x"
+  fi
+  if [ -n "$bc" ] && [ "$bc" != "-" ]; then
+    c=$(printf %s "$bc" | base64 -d 2>/dev/null)
+    set -- "$@" -metadata composer="$c" -metadata:s:a:0 composer="$c"
+  fi
+  ffmpeg "$@" -- "$t" </dev/null >/dev/null 2>&1
   if [ ! -s "$t" ]; then rm -f -- "$t"; printf "fail\t%s\t%s\n" "$br" "$bn"; continue; fi
-  if [ "$(tv "$t" album_artist)" = "$a" ] && [ "$(tv "$t" album)" = "$k" ] && [ "$(tv "$t" title)" = "$k" ] && mv -- "$t" "$f"; then
+  ok=1
+  [ "$(tv "$t" album_artist)" = "$a" ] || ok=0
+  [ "$(tv "$t" album)" = "$k" ] || ok=0
+  [ "$(tv "$t" title)" = "$k" ] || ok=0
+  [ -z "$x" ] || [ "$(tv "$t" artist)" = "$x" ] || ok=0
+  [ -z "$c" ] || [ "$(tv "$t" composer)" = "$c" ] || ok=0
+  if [ "$ok" = 1 ] && mv -- "$t" "$f"; then
     j=$(ffprobe -v error -select_streams a:0 -show_entries format_tags:stream_tags -of json -- "$f" </dev/null 2>/dev/null | base64 | tr -d "\n")
     printf "ok\t%s\t%s\t%s\n" "$br" "$bn" "$j"
   else
@@ -4297,17 +4421,24 @@ rip::ab_retag() {
       | (try ($c[3] | @base64d | fromjson) catch null) as $j
       | if $j == null then "unreadable\t" + $c[1] + "\t" + $c[2]
         elif _tags_ok($j; $aa; $bn) then empty
-        else "retag\t" + $c[1] + "\t" + $c[2] + "\t" + ($aa|@base64) + "\t" + ($bn|@base64)
+        else ((($j.format.tags) // {}) + (((($j.streams // [])[0]).tags) // {})) as $t
+          | "retag\t" + $c[1] + "\t" + $c[2] + "\t" + ($aa|@base64) + "\t" + ($bn|@base64)
+            + "\t" + ((($t.artist // "") | _canon) | if . == "" then "-" else @base64 end)
+            + "\t" + ((($t.composer // "") | _canon) | if . == "" then "-" else @base64 end)
         end' 2>/dev/null)"
 
+  # THE PAYLOAD CARRIES SIX FIELDS, the last two being the never-replaced
+  # pair already canonicalised by the same `_canon` the predicate above judged
+  # with, or `-` where the file has no such tag (see rip::_retag_write's
+  # header for why absence is a sentinel and not an empty field).
   local -a payloads=()
   local -A need_of=()
-  local rtype rb64rel rb64name rb64aa rb64bn
-  while IFS=$'\t' read -r rtype rb64rel rb64name rb64aa rb64bn; do
+  local rtype rb64rel rb64name rb64aa rb64bn rb64ar rb64co
+  while IFS=$'\t' read -r rtype rb64rel rb64name rb64aa rb64bn rb64ar rb64co; do
     prel="${rel_of_b64[$rb64rel]:-$rb64rel}"
     case "$rtype" in
       retag)
-        payloads+=("$rb64rel"$'\t'"$rb64name"$'\t'"$rb64aa"$'\t'"$rb64bn")
+        payloads+=("$rb64rel"$'\t'"$rb64name"$'\t'"$rb64aa"$'\t'"$rb64bn"$'\t'"${rb64ar:--}"$'\t'"${rb64co:--}")
         need_of[$prel]=$(( ${need_of[$prel]:-0} + 1 )) ;;
       unreadable)
         pname="$(jq -rn --arg b "$rb64name" '$b|@base64d' 2>/dev/null)"
@@ -5983,13 +6114,23 @@ rip::_author_norm() {
 # one's output is meant to be READ, so the punctuation and case it preserves
 # is exactly what makes it presentable.
 #
-# APPLIED TO THE PATH, NEVER TO A TAG (coordinator ruling, 2026-08-26). The
-# panel normalises the author field on blur and --canonicalize-authors
-# repairs stored author directories; rip::_retag_book then writes whatever
-# the path says, verbatim. Canonicalizing on the way into a TAG instead would
-# leave the tag disagreeing with the path, and the `--retag` sweep — which
-# compares the two — would report a mismatch on every run and rewrite every
-# book forever. See rip::_retag_book's header for the full argument.
+# APPLIED TO THE PATH, AND — SEPARATELY — IN PLACE TO artist/composer.
+#
+# NOT to `album_artist` (coordinator ruling, 2026-08-26). The panel normalises
+# the author field on blur and --canonicalize-authors repairs stored author
+# directories; rip::_retag_book then writes whatever the path says, verbatim.
+# Canonicalizing on the way into THAT tag instead would leave it disagreeing
+# with the path, and the `--retag` sweep — which compares the two — would
+# report a mismatch on every run and rewrite every book forever. See
+# rip::_retag_book's header for the full argument.
+#
+# `artist` and `composer` are a different case entirely (second amendment,
+# same day), and the difference is that NO PATH SPELLS THEM. They are
+# normalised IN PLACE — never replaced — so there is nothing for the result to
+# disagree with, and because this rule is idempotent the sweep still reaches a
+# fixed point on the first pass. Applying it there is what makes the invariant
+# visible in Audiobookshelf, which reads `artist` in preference to
+# `album_artist` in some configurations.
 #
 # The rule: a SINGLE letter, a period, then immediately another letter (no
 # space between them) gets a space inserted after the period. Two letters
