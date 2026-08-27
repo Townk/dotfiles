@@ -104,12 +104,44 @@ fn a_reachable_but_silent_bridge_fails_loudly_with_no_osc52() {
     );
 }
 
+/// §5.2's licensed downgrade at its degenerate end: since 8151f0ea a REFUSED
+/// tunnel falls back to this machine's own clipboard (6b newer-wins), and
+/// when the trusted socket is ALSO absent the paste fails loudly with both
+/// legs named — and still fabricates nothing on stdout. The happy halves of
+/// the fallback (own text printed, peer degrade with one warning) run
+/// against real daemons in `tests/clipboard-bridge_spec.sh`; this pins the
+/// shape of the total outage.
 #[test]
-fn paste_never_falls_back_and_names_the_tunnel() {
+fn a_refused_tunnel_paste_falls_back_and_a_dead_local_fails_loudly() {
     let dir = testutil::tempdir("clip-paste-down");
     let sink = dir.path().join("tty");
     let mut cmd = clip();
     cmd.arg("paste");
+    ssh_env(&mut cmd, dir.path(), refused_port(), &sink);
+    let out = cmd.output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("using this machine's own clipboard"),
+        "the downgrade is announced before the fallback dial: {stderr}"
+    );
+    assert!(
+        stderr.contains("trusted clipboard bridge is not reachable"),
+        "the failing fallback leg is named too: {stderr}"
+    );
+    assert!(out.stdout.is_empty(), "nothing fabricated on stdout");
+}
+
+/// The never-falls-back contract SURVIVES for file clips: the trusted
+/// store's current clip is a DIFFERENT clip, so falling back would
+/// materialize the wrong bytes. A refused tunnel stays a hard error for the
+/// manifest/files path, named as the tunnel, with nothing on stdout.
+#[test]
+fn a_files_paste_never_falls_back_and_names_the_tunnel() {
+    let dir = testutil::tempdir("clip-files-down");
+    let sink = dir.path().join("tty");
+    let mut cmd = clip();
+    cmd.arg("paste").arg("--manifest");
     ssh_env(&mut cmd, dir.path(), refused_port(), &sink);
     let out = cmd.output().unwrap();
     assert!(!out.status.success());
