@@ -6064,6 +6064,22 @@ rip::_canonical_author() {
   for existing in ${(f)_RIP_SERVER_AUTHORS}; do
     [[ -n "$existing" ]] || continue
     if [[ "$existing" != "$name" && "$(rip::_author_norm "$existing")" == "$want" ]]; then
+      # THE CANONICAL DISPLAY FORM BEATS THE SERVER'S RAW SPELLING (review
+      # finding F2, 2026-08-26). "The server wins" converges two arbitrary
+      # spellings, which is what this function is for — but rip::_author_norm
+      # strips punctuation, so "J.K. Rowling" and "J. K. Rowling" are the same
+      # key and the server's raw form was adopted over the panel's canonical
+      # one. With 248 books stored under the raw spelling, the panel showed
+      # "J. K. Rowling" and the library got "J.K. Rowling": spec §1's stated
+      # reason for having a panel rule at all, silently inert until
+      # --canonicalize-authors swept afterwards. Keeping the caller's spelling
+      # when it is exactly rip::_author_display of the server's still
+      # converges — the sweep moves the server to that same form — and it
+      # converges on the RIGHT one, first time, without a remux.
+      if [[ "$(rip::_author_display "$existing")" == "$name" ]]; then
+        print -r -- "$name"
+        return 0
+      fi
       print -r -- "$existing"
       return 0
     fi
@@ -6310,12 +6326,14 @@ rip::ab_retire() {
 # post-move directory instead made --apply disagree with the dry run — for a
 # refused book the directory still says the raw spelling, so a sidecar that
 # was already canonical got rewritten BACKWARDS, and the dry run had named
-# neither the file nor the change (review finding 2, 2026-08-26). The
-# consequence of the one rule is that a refused book's sidecar is moved
-# FORWARD to the canonical spelling while its directory waits for the operator
-# to resolve the collision: announced by the dry run, harmless to --retag
-# (which reads the path, not the sidecar), and already correct when the
-# directory catches up.
+# neither the file nor the change (review finding 2, 2026-08-26).
+#
+# WHETHER TO WRITE AT ALL is the third question, and the answer is: only where
+# the book actually sits under the target. A book whose `mv -n` was refused is
+# still in the raw directory, so a corrected sidecar there would name an
+# author its own directory does not have, permanently and undetectably (review
+# finding F3, 2026-08-26). --apply reports those as "left alone: <rel> did not
+# move" and never counts them.
 #
 # Renaming the folder is NOT enough for Audiobookshelf: it matches the moved
 # item by inode and updates its path, but keeps the item's STORED author, so
@@ -6498,6 +6516,23 @@ rip::ab_canonicalize_authors() {
     found=1
     (( sc_seen )) || print -r -- "sidecar author spellings to correct:"
     sc_seen=1
+    # ONLY WHERE THE BOOK ACTUALLY SITS UNDER THE TARGET (review finding F3,
+    # 2026-08-26). Under --apply these rows are post-move truth, so a book
+    # whose `mv -n` was refused still has the RAW variant as its directory
+    # while $seff is the canonical target. Writing there would leave the
+    # sidecar naming an author its own directory does not have — and
+    # PERMANENTLY: a later --apply finds sauth == seff and skips it forever,
+    # and --retag compares tags against the PATH only, so neither surfaces
+    # it. "re-spelled N of N" would be claiming a completed correction over a
+    # row it had just made internally inconsistent. Name it and move on.
+    #
+    # The dry run has no post-state to test, so it predicts a successful
+    # sweep — exactly as the directory half of this report already does — and
+    # writes nothing either way.
+    if (( apply )) && [[ "$sdir" != "$seff" ]]; then
+      print -r -- "    left alone: $srel did not move"
+      continue
+    fi
     print -r -- "    $srel: \"$sauth\" → \"$seff\""
     (( apply )) || continue
     # Composed HERE, with the local jq, and shipped as opaque base64:
@@ -6633,19 +6668,49 @@ rip::_canonicalize_one_author() {
   # exists (review finding 2, 2026-08-24) — true whether the repoint failed
   # or was never possible in the first place. It gates the DELETE. It does
   # not set the exit status.
-  local -i unrepointed=0 still_pointing=0
+  local -i unrepointed=0 still_pointing=0 mvstate=0
   for title in "${books[@]}"; do
+    # ASK WHETHER IT MOVED; DO NOT INFER IT FROM AN EXIT STATUS. This
+    # function's own header records that `mv -n` exits 0 when it REFUSES
+    # (verified 2026-08-24, BSD and GNU alike), and every line below this one
+    # then went on to describe a book that had not moved — "moved $title, but
+    # Audiobookshelf does not know this book yet" was printed for a book still
+    # sitting in the variant directory. That is this subsystem's recurring
+    # defect in a new message: a verdict reached because control got here, not
+    # because anything established it. The source's absence is the fact, and
+    # it is tested in the SAME round-trip. (Review finding F4, 2026-08-26.)
+    #
+    # 0 moved · 12 refused (a title of that name is already under the
+    # canonical spelling, so the source is still there) · anything else a real
+    # error.
     if [[ "$base" == *:* ]]; then
       local ssh_bin="${RIP_SSH_BIN:-ssh}"
       local host="${base%%:*}" rpath="${base#*:}"
       "$ssh_bin" -o BatchMode=yes -o ConnectTimeout=5 "$host" \
-        "mkdir -p ${(q)rpath}/audiobooks/${(q)canon} && mv -n -- ${(q)rpath}/audiobooks/${(q)variant}/${(q)title} ${(q)rpath}/audiobooks/${(q)canon}/" 2>/dev/null \
-        || { log_warn "rip: could not move $title"; continue }
+        "mkdir -p ${(q)rpath}/audiobooks/${(q)canon} && mv -n -- ${(q)rpath}/audiobooks/${(q)variant}/${(q)title} ${(q)rpath}/audiobooks/${(q)canon}/ && { [ ! -e ${(q)rpath}/audiobooks/${(q)variant}/${(q)title} ] || exit 12; }" 2>/dev/null
+      mvstate=$?
     else
-      mkdir -p "$base/audiobooks/$canon" 2>/dev/null
-      mv -n -- "$base/audiobooks/$variant/$title" "$base/audiobooks/$canon/" 2>/dev/null \
-        || { log_warn "rip: could not move $title"; continue }
+      mvstate=1
+      if mkdir -p "$base/audiobooks/$canon" 2>/dev/null \
+        && mv -n -- "$base/audiobooks/$variant/$title" "$base/audiobooks/$canon/" 2>/dev/null; then
+        if [[ -e "$base/audiobooks/$variant/$title" ]]; then mvstate=12; else mvstate=0; fi
+      fi
     fi
+    case $mvstate in
+      0) ;;
+      12)
+        log_warn "rip: \"$title\" is already stored under \"$canon\" — left the copy under \"$variant\" exactly where it is, nothing overwritten"
+        # Belt and braces. The rmdir probe below reports state 10 for this
+        # variant (the refused book is still a directory at depth 1), so this
+        # function returns 1 before the still_pointing branch is reached —
+        # but the author record must be kept because a book still names the
+        # variant, and that must not depend on a coincidence of the probe.
+        (( still_pointing++ ))
+        continue ;;
+      *)
+        log_warn "rip: could not move $title"
+        continue ;;
+    esac
     item="$("$RIP_BIN_DIR/rip-abs-authors" --find-item "$canon/$title" 2>/dev/null)"
     if [[ -z "$item" ]]; then
       # STILL GATES THE DELETE. --find-item matches ABS's STORED relPath, and

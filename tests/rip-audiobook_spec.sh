@@ -1075,6 +1075,35 @@ EOF
     The output should equal "J. R. R. Tolkien"
   End
 
+  # REVIEW FINDING F2 (2026-08-26). "The server wins" converges two arbitrary
+  # spellings, which is the whole point of this function — but the key is
+  # rip::_author_norm, which STRIPS punctuation, so "J.K. Rowling" and
+  # "J. K. Rowling" are the same key and the server's RAW form was adopted
+  # over the panel's canonical one. With 248 books stored under the raw
+  # spelling, the panel showed "J. K. Rowling" and the library got
+  # "J.K. Rowling" — spec §1's stated reason for having a panel rule at all,
+  # silently inert until --canonicalize-authors swept afterwards (at the cost
+  # of a remux of everything already written).
+  #
+  # It still converges: the sweep moves the server to this same form. It just
+  # converges on the RIGHT spelling, first time.
+  It 'canonical author: the caller keeps the canonical form of what the server holds raw'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows"
+    When run zsh -c "source $RIPLIB && rip::_canonical_author 'J. K. Rowling'"
+    The status should equal 0
+    The output should equal "J. K. Rowling"
+  End
+
+  # …and the direction that must NOT change: a caller holding the raw form
+  # still adopts the server's, which is what makes a re-ingest converge
+  # instead of oscillating. Only the canonical form outranks the server.
+  It 'canonical author: a raw caller spelling still adopts the server, canonical or not'
+    mkdir -p "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows"
+    When run zsh -c "source $RIPLIB && rip::_canonical_author 'J.K. Rowling'"
+    The status should equal 0
+    The output should equal "J. K. Rowling"
+  End
+
   It 'canonical author: an author the server does not know is returned unchanged'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
     When run zsh -c "source $RIPLIB && rip::_canonical_author 'Martha Wells'"
@@ -4599,6 +4628,38 @@ EOF
   # ca_snap_hallows / ca_hallows_unchanged — the same byte-level guard aimed
   # at ONE file: the sidecar of the book already sitting under the canonical
   # spelling when a same-titled variant tries to merge into it.
+  # ca_abs_bin <case-body> — an ABS double whose every verb the example
+  # dictates. The WHOLE case body is the argument, with no arm supplied here:
+  # an earlier version hardcoded `--find-item) echo item-x ;;` first, which
+  # silently SHADOWED an example's own --find-item arm (first match wins in a
+  # POSIX case) and left that example passing for the wrong reason. Nothing a
+  # fixture supplies may be quietly overridden by the fixture builder.
+  ca_abs_bin() {
+    {
+      printf '#!/bin/sh\n'
+      printf 'printf "%%s\\n" "$*" >> "%s/absbin.log"\n' "$RIP_SANDBOX"
+      printf 'case "$1" in\n%b\nesac\nexit 0\n' "$1"
+    } > "$RIP_BIN_DIR/rip-abs-authors"
+    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
+  }
+
+  # ca_snap_variant / ca_variant_unchanged — the same guard aimed at the
+  # sidecar under the RAW spelling: the file review finding 2 showed --apply
+  # rewriting backwards, and review finding F3 showed it rewriting FORWARD
+  # into a directory that never moved.
+  ca_snap_variant() {
+    cp "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json" \
+       "$RIP_SANDBOX/variant.before"
+  }
+  ca_variant_unchanged() {
+    if cmp -s "$RIP_SANDBOX/variant.before" \
+              "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json"; then
+      echo "byte-identical"
+    else
+      echo "CHANGED"
+    fi
+  }
+
   ca_snap_hallows() {
     cp "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" \
        "$RIP_SANDBOX/hallows.before"
@@ -4743,6 +4804,7 @@ EOF
     printf 'variant-copy\n' > "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/Deathly Hallows.m4b"
     printf 'canonical-copy\n' > "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b"
     ca_snap_hallows
+    ca_snap_variant
     When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
     The stderr should include "still holds books"
@@ -4751,19 +4813,57 @@ EOF
     The contents of file "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should equal "variant-copy"
     # The resident book's identity file was not written over.
     The result of function ca_hallows_unchanged should equal "byte-identical"
-    # The refused book's OWN sidecar is moved forward to the canonical
-    # spelling even though its directory is stuck — the spelling and the
-    # location are separate questions, and the dry run names this file too
-    # (review finding 2, 2026-08-26). What must never happen is the write
-    # landing on the RESIDENT book above; that is pinned by bytes, not by
-    # wording.
-    The contents of file "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
+    # The refused book's OWN sidecar is left exactly as it was: it still sits
+    # under the RAW directory, so writing the canonical spelling into it would
+    # leave the sidecar naming an author its own directory does not have —
+    # permanently, since a later --apply would then find them equal and skip
+    # it forever (review finding F3, 2026-08-26). It is named as left alone
+    # instead, and never counted.
+    The result of function ca_variant_unchanged should equal "byte-identical"
+    The contents of file "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json" should include '"J.K. Rowling"'
+    The output should include "left alone: J.K. Rowling/Deathly Hallows did not move"
+    # The refusal is described accurately. (The false "moved" CLAIM needs a
+    # downstream message to ride on, so it is pinned in its own example
+    # below, where one actually fires.)
+    The stderr should include 'is already stored under "J. K. Rowling"'
     # The book that COULD move did, sidecar and all.
     The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Goblet of Fire/Goblet of Fire.m4b" should be exist
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Goblet of Fire/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
-    The output should include "re-spelled 2 of 2"
+    # Counted: one written, and the refused one is NOT in the denominator.
+    The output should include "re-spelled 1 of 1"
     # …and the variant's Audiobookshelf author record survives, because a
     # book still points at it.
+    The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
+  End
+
+  # REVIEW FINDING F4 (2026-08-26), the same root as F3. This function's own
+  # header records that `mv -n` exits 0 when it REFUSES — and every line
+  # downstream then described a book that had not moved. With --find-item
+  # missing, the refused book got "moved Deathly Hallows, but Audiobookshelf
+  # does not know this book yet" while it sat, untouched, in the variant
+  # directory. That is this subsystem's recurring defect in a new message: a
+  # verdict reached because control got here, not because anything
+  # established it. The source's absence is now tested in the same
+  # round-trip.
+  #
+  # This is also the example that exercises the whole refusal path at once:
+  # sidecar untouched, warning accurate, author record kept.
+  It 'sweep (ssh): a refused move is never described as a move'
+    fake_server_ssh
+    ca_abs_bin '  --find-item) exit 1 ;;\n  --author-id) echo auth-x ;;'
+    ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
+    ca_book 'J. K. Rowling/Deathly Hallows' 'J. K. Rowling'
+    ca_snap_variant
+    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    The status should equal 1
+    # THE CLAIM. Nothing may say this book moved.
+    The stderr should not include "moved Deathly Hallows"
+    # What is true, said instead.
+    The stderr should include 'is already stored under "J. K. Rowling"'
+    The stderr should include "still holds books"
+    # Sidecar untouched — bytes, not wording.
+    The result of function ca_variant_unchanged should equal "byte-identical"
+    # Author record kept: a book still names it.
     The contents of file "$RIP_SANDBOX/absbin.log" should not include "--delete-author"
   End
 
@@ -4846,21 +4946,6 @@ EOF
   # together: one asserts rc 0, the other rc 1, and neither passes with the
   # other's wording.
 
-  # ca_abs_bin <case-body> — an ABS double whose every verb the example
-  # dictates. The WHOLE case body is the argument, with no arm supplied here:
-  # an earlier version hardcoded `--find-item) echo item-x ;;` first, which
-  # silently SHADOWED an example's own --find-item arm (first match wins in a
-  # POSIX case) and left that example passing for the wrong reason. Nothing a
-  # fixture supplies may be quietly overridden by the fixture builder.
-  ca_abs_bin() {
-    {
-      printf '#!/bin/sh\n'
-      printf 'printf "%%s\\n" "$*" >> "%s/absbin.log"\n' "$RIP_SANDBOX"
-      printf 'case "$1" in\n%b\nesac\nexit 0\n' "$1"
-    } > "$RIP_BIN_DIR/rip-abs-authors"
-    chmod +x "$RIP_BIN_DIR/rip-abs-authors"
-  }
-
   It 'sweep (ssh): a rename into a spelling Audiobookshelf has never seen is NOT a failure'
     fake_server_ssh
     ca_abs_bin '  --find-item) echo item-x ;;\n  --author-id) case "$2" in "J. K. Rowling") exit 1 ;; *) echo auth-x ;; esac ;;'
@@ -4939,21 +5024,6 @@ EOF
     The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should include '"authors":["J. K. Rowling","Second Author"]'
   End
-
-  # ca_snap_variant / ca_variant_unchanged — bytes of the sidecar under the RAW
-  # spelling, the file review finding 2 showed --apply rewriting backwards.
-  ca_snap_variant() {
-    cp "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json" \
-       "$RIP_SANDBOX/variant.before"
-  }
-  ca_variant_unchanged() {
-    if cmp -s "$RIP_SANDBOX/variant.before" \
-              "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows/.fleet-book.json"; then
-      echo "byte-identical"
-    else
-      echo "CHANGED"
-    fi
-  }
 
   # REVIEW FINDING 2 (2026-08-26). --apply derived the target spelling from the
   # post-move DIRECTORY, which is the canonical spelling for every book that
@@ -6759,6 +6829,124 @@ JS
     When call panel_files "$FOLDER_ROW" '[["/inc/Anncillary/Ancilary Justice","author","J.K. Rowling","blur"]]'
     The status should equal 0
     The output should include '"path":"J. K. Rowling/Ancilary Justice"'
+  End
+
+  # --- the CLICK path (review finding F1, 2026-08-26) ----------------------
+  #
+  # Every example above commits the field with an EVENT the test fires
+  # directly. The operator's ordinary gesture does not: they type into the
+  # author field and click "Start Rip". #btnStart is a <span> whose mousedown
+  # handler calls e.preventDefault(), which is what keeps the click from
+  # pulling focus out of the row list — and which also suppresses the FOCUS
+  # CHANGE, so the field never blurred, authorDisplay() never ran, and start()
+  # posted whatever the PER-KEYSTROKE `input` listener had last written: the
+  # raw spelling. This panel is the only place the canonical form can enter
+  # for an author the server has never seen.
+  #
+  # The harness models exactly that sequence — select the row, type, focus,
+  # click — and reads BOTH the field and the posted payload, because the
+  # payload is what actually reaches the worker.
+  panel_click_commit() {
+    cat > "$RIP_SANDBOX/panel-click.js" <<'JS'
+const fs = require('fs');
+const html = fs.readFileSync(process.env.PANEL_HTML, 'utf8');
+const src = html.split('<script>')[2].split('</script>')[0]
+                .replace('%%LIBRARY_JSON%%', 'null');
+const els = {};
+function stub(id) {
+  const listeners = {};
+  const el = {
+    id: id, innerHTML: '', textContent: '', value: '', hidden: false,
+    classList: { add() {}, remove() {}, toggle() {} },
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    setAttribute() {}, getAttribute() { return null; }, setSelectionRange() {},
+    fire(type, ev) { (listeners[type] || []).forEach((f) => f.call(el, ev)); }
+  };
+  return el;
+}
+global.document = {
+  activeElement: null,
+  getElementById(id) { return els[id] || (els[id] = stub(id)); },
+  addEventListener() {},
+  querySelector() { return null; }
+};
+global.window = global;
+const posted = [];
+global.webkit = { messageHandlers: { ripLibrary: { postMessage(m) { posted.push(m); } } } };
+(0, eval)(src);
+
+const ev = () => ({ preventDefault() {} });
+const rows = JSON.parse(process.argv[2]);
+const raw = process.argv[3];
+const clickId = process.argv[4];
+
+window.__setSource({ kind: 'folder', root: '/incoming' });
+window.__setRows(rows);
+
+// 1. select the row, through the panel's own delegated toggle handler.
+els.rows.fire('mousedown', Object.assign(ev(), {
+  target: { getAttribute: (a) => (a === 'data-toggle' ? String(rows[0].id) : null), parentNode: null }
+}));
+
+// 2. type into the author field — the per-keystroke `input` listener is what
+//    writes the RAW value into the model, and is the state a click interrupts.
+const t = {
+  value: raw, selectionStart: raw.length, setSelectionRange() {},
+  classList: { add() {}, remove() {}, toggle() {} },
+  getAttribute: (a) => (a === 'data-edit-row' ? String(rows[0].id) : a === 'data-field' ? 'author' : null),
+  parentNode: null
+};
+els.rows.fire('input', Object.assign(ev(), { target: t }));
+
+// 3. focus it. blur() is the real thing: it dispatches a blur event that the
+//    capture-phase listener on #rows sees, exactly as the DOM would.
+t.blur = function () {
+  document.activeElement = null;
+  els.rows.fire('blur', Object.assign(ev(), { target: t }));
+};
+document.activeElement = t;
+
+// 4. click.
+els[clickId].fire('mousedown', ev());
+process.stdout.write(JSON.stringify({ value: t.value, posted: posted }));
+JS
+    PANEL_HTML="$PANEL_HTML" node "$RIP_SANDBOX/panel-click.js" "$@"
+  }
+
+  CLICK_ROW='[{"id":"1","path":"A/B","title":"B","authors":["A"],"narrators":[]}]'
+
+  It 'panel: clicking Start Rip commits the author field, so the CANONICAL form is what gets posted'
+    Skip if 'node is unavailable' no_node
+    When call panel_click_commit "$CLICK_ROW" 'J.K. Rowling' btnStart
+    The status should equal 0
+    # The field itself was committed…
+    The output should include '"value":"J. K. Rowling"'
+    # …and — the fact that actually matters — the POSTED plan carries the
+    # canonical spelling in the composed path. "J.K. Rowling" is not a
+    # substring of "J. K. Rowling", so neither assertion can pass on an echo
+    # of the raw input.
+    The output should include '"action":"start"'
+    The output should include '"path":"J. K. Rowling/B"'
+    The output should not include '"path":"J.K. Rowling/B"'
+  End
+
+  # Same shape, same suppression: the chips preventDefault too, and every one
+  # of them re-renders — which DESTROYS the field being edited without ever
+  # blurring it, losing the normalisation just as silently as Start did.
+  It 'panel: clicking a chip commits the author field before it re-renders'
+    Skip if 'node is unavailable' no_node
+    When call panel_click_commit "$CLICK_ROW" 'J.R.R. Tolkien' chipBrowse
+    The status should equal 0
+    The output should include '"value":"J. R. R. Tolkien"'
+    The output should include '"action":"browse"'
+  End
+
+  It 'panel: clicking Not now commits the author field too — one rule, no exception to remember'
+    Skip if 'node is unavailable' no_node
+    When call panel_click_commit "$CLICK_ROW" 'e.e. cummings' btnDismiss
+    The status should equal 0
+    The output should include '"value":"e. e. cummings"'
+    The output should include '"action":"dismiss"'
   End
 
   # --- library-dialog.lua under a stubbed hs (review round 3) --------------

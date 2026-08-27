@@ -867,6 +867,34 @@
 
     function dismiss() { post({ action: 'dismiss' }); }
 
+    // commitActiveField() — blur whatever field has focus, so its `blur`
+    // listener runs BEFORE the action about to be taken reads the model.
+    //
+    // EVERY mousedown handler in this panel calls e.preventDefault(). That is
+    // what stops a click on a chip or the footer button from pulling focus
+    // out of the row list — and it also suppresses the FOCUS CHANGE, which is
+    // what a blur is. So the focused author input never blurred,
+    // authorDisplay() never ran, and start() posted the value the
+    // PER-KEYSTROKE `input` listener last wrote: the raw spelling. Type
+    // "J.K. Rowling", click Start Rip, and the raw form reaches the path, the
+    // directory and album_artist. This panel is the ONLY place the canonical
+    // form can enter for an author the server has never seen, and nothing
+    // downstream recovers it — --canonicalize-authors repairs the library
+    // afterwards, at the cost of a remux of everything already written.
+    //
+    // Called by every preventDefault'd handler, not only Start: the chips and
+    // the source switch all re-render, and a render destroys the field being
+    // edited without ever blurring it, losing the same normalisation just as
+    // silently. Dismiss is included for uniformity — one rule, no handler
+    // that has to be remembered as the exception.
+    //
+    // The keyboard commits already blur explicitly (Enter, ArrowUp/Down);
+    // the click was never considered. (Review finding F1, 2026-08-26.)
+    function commitActiveField() {
+      var el = document.activeElement;
+      if (el && typeof el.blur === 'function') el.blur();
+    }
+
     // Ask Lua to open the folder picker (ripper/init.lua's M.browse). The
     // panel posts and then does nothing: the operator may cancel the
     // picker, and a panel that had already switched itself into "scanning"
@@ -1118,6 +1146,7 @@
 
       document.getElementById('chipShowLibrary').addEventListener('mousedown', function (e) {
         e.preventDefault();
+        commitActiveField();
         SHOW_LIBRARY = !SHOW_LIBRARY;
         this.setAttribute('data-active', String(SHOW_LIBRARY));
         render();
@@ -1125,6 +1154,7 @@
 
       document.getElementById('chipBrowse').addEventListener('mousedown', function (e) {
         e.preventDefault();
+        commitActiveField();
         browse();
       });
 
@@ -1134,11 +1164,12 @@
         var el = closestAttr(e.target, 'data-source-action');
         if (!el) return;
         e.preventDefault();
+        commitActiveField();
         if (el.getAttribute('data-source-action') === 'library') toLibrary();
       });
 
-      document.getElementById('btnStart').addEventListener('mousedown', function (e) { e.preventDefault(); start(); });
-      document.getElementById('btnDismiss').addEventListener('mousedown', function (e) { e.preventDefault(); dismiss(); });
+      document.getElementById('btnStart').addEventListener('mousedown', function (e) { e.preventDefault(); commitActiveField(); start(); });
+      document.getElementById('btnDismiss').addEventListener('mousedown', function (e) { e.preventDefault(); commitActiveField(); dismiss(); });
 
       document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') { e.preventDefault(); dismiss(); return; }
