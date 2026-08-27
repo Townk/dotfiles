@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use objc2::rc::Retained;
@@ -394,11 +394,100 @@ pub fn attributed_to_text(bytes: &[u8], doc: RichDoc) -> Option<String> {
     parsed.ok().map(|s| s.string().to_string())
 }
 
+/// Whether this process may touch `NSWorkspace` yet. The workspace's
+/// LaunchServices connection is process-global and established on FIRST use:
+/// touched while the login session is still assembling, it latches the
+/// sessionless answer and `frontmostApplication` stays nil for the process's
+/// whole life — found live 2026-08-27, when a boot-time daemon start (console
+/// login 11:19, recobd 11:19:25) had silently refused every observed copy for
+/// six days as `Skip::NoGuiSession` while `clip.get` and the pasteboard reads
+/// all still worked. A FRESH process always resolves the truth (verified from
+/// shell, launchd-submitted and daemon-child lineages alike), so the gate asks
+/// one — `lsappinfo`, over its own new connection — and opens only once a
+/// real, non-loginwindow application is frontmost. Only then is NSWorkspace
+/// touched in-process, by which point the session is established and the
+/// first touch is safe.
+enum WorkspaceGate {
+    /// No live GUI session confirmed yet; probe again once the cooldown
+    /// allows.
+    Closed {
+        last_probe: Option<std::time::Instant>,
+    },
+    /// A live session was seen; NSWorkspace is safe for this process.
+    Open,
+}
+
+static WORKSPACE_GATE: Mutex<WorkspaceGate> =
+    Mutex::new(WorkspaceGate::Closed { last_probe: None });
+
+/// One probe is ~15 ms of child process — nothing against a human copy, but
+/// `ensure_current` runs on every `files.list`/`files.grant`, so a machine
+/// sitting at loginwindow must not fork per request.
+const GATE_PROBE_COOLDOWN: Duration = Duration::from_secs(5);
+
+fn workspace_ready() -> bool {
+    let mut gate = WORKSPACE_GATE.lock().unwrap();
+    match &*gate {
+        WorkspaceGate::Open => true,
+        WorkspaceGate::Closed { last_probe } => {
+            if last_probe.is_some_and(|at| at.elapsed() < GATE_PROBE_COOLDOWN) {
+                return false;
+            }
+            match probed_front_app_name() {
+                Some(name) if name != "loginwindow" => {
+                    crate::log!("gui session confirmed; frontmost attribution enabled");
+                    *gate = WorkspaceGate::Open;
+                    true
+                }
+                _ => {
+                    *gate = WorkspaceGate::Closed {
+                        last_probe: Some(std::time::Instant::now()),
+                    };
+                    false
+                }
+            }
+        }
+    }
+}
+
+/// The out-of-process session probe: `lsappinfo` resolves the frontmost
+/// application through a LaunchServices connection this process has never
+/// used, so it tells the truth a too-early in-process query cannot. `None` —
+/// no output, `[ NULL ]`, no resolvable name — means no live GUI session.
+fn probed_front_app_name() -> Option<String> {
+    use std::process::{Command, Stdio};
+    let output = Command::new("/bin/sh")
+        .args(["-c", r#"lsappinfo info -only name "$(lsappinfo front)""#])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    parse_lsappinfo_name(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// `lsappinfo info -only name` prints `"LSDisplayName"="Ghostty"` for a live
+/// application and `"LSDisplayName"=[ NULL ]` (or nothing at all) otherwise.
+fn parse_lsappinfo_name(out: &str) -> Option<String> {
+    let (_, value) = out.split_once('=')?;
+    let name = value.trim().strip_prefix('"')?.strip_suffix('"')?;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
 /// The frontmost application, from a non-GUI process (probe Q7): what
 /// `source_app`, `source_bundle_id` and the password-manager deny-list all
 /// depend on. `None` — no frontmost application, or one with no name — is the
-/// no-GUI-session case the capture pipeline refuses.
+/// no-GUI-session case the capture pipeline refuses. Gated: until an
+/// out-of-process probe confirms a live GUI session, NSWorkspace is not
+/// touched at all (see [`WorkspaceGate`]) and the answer is the same `None` a
+/// genuine sessionless machine gives.
 pub fn frontmost_app() -> Option<FrontmostApp> {
+    if !workspace_ready() {
+        return None;
+    }
     let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
     let name = app.localizedName()?.to_string();
     Some(FrontmostApp {
@@ -507,7 +596,15 @@ pub fn capture_step(
     last: isize,
     frontmost: &dyn Fn() -> Option<FrontmostApp>,
 ) -> isize {
-    capture_step_with_push(pasteboard, store, tracker, host, last, frontmost, &|_, _| {})
+    capture_step_with_push(
+        pasteboard,
+        store,
+        tracker,
+        host,
+        last,
+        frontmost,
+        &|_, _| {},
+    )
 }
 
 /// The full step: on a successfully STORED local capture, `push` fires with
@@ -544,10 +641,63 @@ pub fn capture_step_with_push(
                 push(&capture, &host);
             }
         }
-        Err(_skip) => {
-            // Refusals are silent, as the watcher's are: a sensitive clip must
-            // not be described in a log line either.
+        Err(skip) => {
+            // Refusals stay content-free, as the watcher's were: a sensitive
+            // clip must not be described in a log line. But the no-session
+            // refusal must be VISIBLE — it is the shape a wedged frontmost
+            // resolution takes, and six days of silently refused copies
+            // (2026-08-27) is what fully silent cost.
+            if skip == capture::Skip::NoGuiSession {
+                log!("capture: change {change_count} refused: no interactive gui session");
+            }
         }
     }
     change_count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lsappinfo_name_parsing_covers_live_null_and_garbage() {
+        // The two shapes `lsappinfo info -only name` actually prints
+        // (captured live 2026-08-27), plus the degenerate ones.
+        assert_eq!(
+            parse_lsappinfo_name("\"LSDisplayName\"=\"Ghostty\"\n").as_deref(),
+            Some("Ghostty")
+        );
+        assert_eq!(
+            parse_lsappinfo_name("\"LSDisplayName\"=\"Bambu Studio\"").as_deref(),
+            Some("Bambu Studio")
+        );
+        assert_eq!(parse_lsappinfo_name("\"LSDisplayName\"=[ NULL ] \n"), None);
+        assert_eq!(parse_lsappinfo_name(""), None);
+        assert_eq!(parse_lsappinfo_name("no equals sign"), None);
+        assert_eq!(parse_lsappinfo_name("\"LSDisplayName\"=\"\""), None);
+    }
+
+    #[test]
+    fn the_workspace_gate_and_the_probe_agree() {
+        // The probe consults launchservicesd from a fresh child, so it tells
+        // the truth regardless of this process's history. The gated query
+        // must agree in kind: a live session resolves a frontmost app, no
+        // session yields None WITHOUT NSWorkspace ever being touched — the
+        // touch that wedges a too-early process is exactly what the gate
+        // exists to defer.
+        match probed_front_app_name() {
+            Some(name) if name != "loginwindow" => {
+                assert!(
+                    frontmost_app().is_some(),
+                    "a live GUI session opens the gate and resolves"
+                );
+            }
+            _ => {
+                assert!(
+                    frontmost_app().is_none(),
+                    "without a live session the gate stays shut"
+                );
+            }
+        }
+    }
 }
