@@ -221,7 +221,12 @@ mod tests {
 
     #[test]
     fn rich_text_kinds_push_their_plain_representation() {
-        for kind in [TypeKind::Html, TypeKind::Rtf, TypeKind::Url, TypeKind::Mixed] {
+        for kind in [
+            TypeKind::Html,
+            TypeKind::Rtf,
+            TypeKind::Url,
+            TypeKind::Mixed,
+        ] {
             let mut capture = text_capture("from a browser");
             capture.kind = kind;
             let (args, stdin) = pointer_push_for(&capture, "laptop").expect("push");
