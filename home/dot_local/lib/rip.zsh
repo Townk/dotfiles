@@ -253,7 +253,19 @@ rip::push_worker() {
   # macOS SMB client cannot OPEN — it lists NFD but opens NFC, so Samba
   # byte-compares and 404s (live 2026-08-21: Picard ENOENT on "05 Há
   # quanto tempo.flac" through the metadata-fix share).
-  "$rsync_bin" -a --iconv=utf-8-mac,utf-8 --partial --exclude=.DS_Store --files-from="$listfile" \
+  # --chmod=Dg+rx,Fg+r because -a replays the LOCAL mode and would otherwise
+  # override the server's setgid inheritance: a staged directory that happens
+  # to be 0700 lands 0700 under /srv/media, where every media service reaches
+  # the tree through the `media` GROUP (Audiobookshelf runs as its own uid
+  # with groups=media). A group-less directory is then unenterable, so the
+  # scanner never sees the book, the item never enters the library, and the
+  # only symptom is one EACCES watcher line in the server's journal — which
+  # is how "Ready Player One" stayed invisible for five days (2026-08-28).
+  # Additive on purpose: this only ever ADDS the two bits the services need,
+  # so it cannot widen anything else or churn modes on already-pushed files.
+  # The -rcn verify below carries no -p, so it never compares modes and is
+  # unaffected by this.
+  "$rsync_bin" -a --chmod=Dg+rx,Fg+r --iconv=utf-8-mac,utf-8 --partial --exclude=.DS_Store --files-from="$listfile" \
       --info=progress2,name1 "$src/" "$dest" \
     | LC_ALL=C tr '\r' '\n' \
     | while IFS= read -r line; do

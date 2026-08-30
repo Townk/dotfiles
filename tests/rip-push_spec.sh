@@ -6,6 +6,29 @@
 # so the ABS author-enrichment remote hop can never resolve the real
 # deployed rip-abs-authors either. No ssh, no daemon.
 Describe 'rip.zsh push'
+
+  # Reports the group bits that decide whether a media service can reach a
+  # pushed path at all — "g+rx" for a traversable dir, "g+r" for a readable
+  # file, and the octal mode itself when they are missing (so a failure names
+  # the mode that broke it instead of just saying false).
+  # NB: the local is `target`, never `path` — in zsh $path is the array tied
+  # to $PATH, so `local path=...` empties command lookup inside the function
+  # and every stat here silently becomes "command not found".
+  server_mode_of() {
+    local target="$RIP_SANDBOX/server/$1" mode
+    mode=$(stat -f '%Lp' "$target" 2>/dev/null || stat -c '%a' "$target" 2>/dev/null)
+    if [ -d "$target" ]; then
+      case "$mode" in
+        *[567]?) printf 'g+rx\n' ;;
+        *) printf '%s\n' "$mode" ;;
+      esac
+    else
+      case "$mode" in
+        *[4567]?) printf 'g+r\n' ;;
+        *) printf '%s\n' "$mode" ;;
+      esac
+    fi
+  }
   RIPLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/rip.zsh"
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
@@ -468,6 +491,32 @@ EOF
     When run zsh -c "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The path "$RIP_SANDBOX/server/music/A.B. Artist/Album/01 T.flac" should be exist
+  End
+
+  # Regression guard, live 2026-08-28: "Ready Player One" was invisible in
+  # Audiobookshelf for five days because its staged directory happened to be
+  # mode 0700 and `rsync -a` replays local modes over the server's setgid
+  # inheritance. The media services reach /srv/media through the `media`
+  # GROUP (Audiobookshelf runs as uid audiobookshelf, groups=media), so a
+  # group-less directory is unreadable to them: the scanner never enters it,
+  # the item never enters the library, and the only symptom is one EACCES
+  # watcher line in the server's journal. The push must therefore guarantee
+  # group traversal no matter how tight the local mode is. Exercised through
+  # music because push_worker's transfer is ONE shared rsync call for every
+  # type, and the music path reaches it with the least staging machinery.
+  It 'push: a group-less staged directory still lands readable by the media group'
+    mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"
+    printf 'flac\n' > "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    chmod 0700 "$RIP_STAGING_ROOT/music/B/Alb"
+    chmod 0600 "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
+    When run zsh -c "source $RIPLIB && rip::push_worker music"
+    The status should equal 0
+    The path "$RIP_SANDBOX/server/music/B/Alb/01 T.flac" should be exist
+    # The assertions that actually matter: g+rx on the directory (traverse)
+    # and g+r on the file (read).
+    The value "$(server_mode_of 'music/B/Alb')" should equal "g+rx"
+    The value "$(server_mode_of 'music/B/Alb/01 T.flac')" should equal "g+r"
+    The output should include "verified"
   End
 
   It 'worker streams progress into the job sidecar'
