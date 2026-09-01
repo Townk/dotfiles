@@ -1,22 +1,62 @@
-# Route sudo's password prompt to our dialog, over SSH only.
+# Route sudo's password prompt to the right surface, decided PER INVOCATION.
 #
 # sudo consults SUDO_ASKPASS only when there is no terminal or when -A is given
 # (sudo(1), ENVIRONMENT), and inside a tmux pane there IS a terminal — just one
 # nobody may be watching, which is the whole problem. So -A has to come from
-# somewhere, and an alias is the deliberate choice over a wrapper on PATH:
-# `\sudo` and `command sudo` bypass it. That matters more than usual here,
-# because with -A there is no prompt underneath us — a broken helper means sudo
-# cannot authenticate at all (docs/askpass-design.md, "Blast radius").
+# somewhere, and this used to be `alias sudo="sudo -A"` set once per shell from
+# its SSH_* markers. That once-per-shell decision is the bug the presence
+# helper replaced (docs/superpowers/specs/2026-08-31-presence-aware-pinentry-
+# design.md): a pane born over SSH keeps its markers after the user sits back
+# down at the console, and vice versa. A function asks presence fresh each
+# time instead — and like the alias it replaces, `\sudo` and `command sudo`
+# bypass it. That escape matters more than usual here, because with -A there
+# is no prompt underneath us — a broken helper means sudo cannot authenticate
+# at all (docs/askpass-design.md, "Blast radius").
 #
-# Local sessions are left alone: at the physical keyboard PAM answers with Touch
-# ID before any password is asked for.
+# The two lanes:
+#
+#   present (touchid/gui/vnc) — plain sudo with the SSH triple SCRUBBED from
+#     its environment. The scrub is the fix, not a flourish: pam_reattach's
+#     ignore_ssh keys off exactly SSH_TTY/SSH_CONNECTION/SSH_CLIENT (measured
+#     with `strings` on the dylib), so a stale marker made it skip the
+#     namespace reattach, pam_tid failed inside tmux, and the password fell
+#     to the float while the sensor sat inches from the user's hand. Scrubbed,
+#     the reattach happens and pam_tid answers with Touch ID — no password.
+#     Over VNC the sensor is unreachable so pam_tid fails fast, and the
+#     password lands inline on the very terminal the viewer is watching.
+#
+#   remote — -A into askpass-auto, exactly the old behavior. SUDO_ASKPASS is
+#     set here rather than trusted from the environment (it is exported only
+#     by SSH-born shells — same staleness), first setter still wins.
+#
+# The fallback lane keeps the old alias's exact birth-time test, because a
+# host mid-provision (helper not yet applied) must behave as it always did.
 #
 # Gated on the compiled binary rather than on the askpass-auto symlink, which
 # chezmoi installs everywhere — see the same guard in environment.sh for what
 # that mistake costs.
-if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ] &&
-  [ -x "$HOME/.local/libexec/pinentry-ui" ]; then
-  alias sudo="sudo -A"
+if [ -x "$HOME/.local/libexec/pinentry-ui" ]; then
+  sudo() {
+    local lane=""
+    [[ -x "$HOME/.local/libexec/presence" ]] &&
+      lane="$("$HOME/.local/libexec/presence" 2>/dev/null)"
+    case "$lane" in
+      touchid | gui | vnc)
+        command env -u SSH_TTY -u SSH_CONNECTION -u SSH_CLIENT sudo "$@"
+        ;;
+      remote)
+        SUDO_ASKPASS="${SUDO_ASKPASS:-$HOME/.local/libexec/askpass-auto}" \
+          command sudo -A "$@"
+        ;;
+      *)
+        if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
+          command sudo -A "$@"
+        else
+          command sudo "$@"
+        fi
+        ;;
+    esac
+  }
 fi
 
 # Conditional alias
