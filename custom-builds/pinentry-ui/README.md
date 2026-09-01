@@ -343,17 +343,20 @@ It stays dormant until two one-time steps happen, per Mac, at the console:
    Keychain Access → Certificate Assistant → Create a Certificate… → name
    `pinentry-ui-dev`, type *Code Signing*, self-signed. `make install` signs
    with it whenever it exists (`CODESIGN_ID` overrides the name).
-2. **Grant the read.** The binary disables keychain user interaction before
-   every read — a missing grant must fail closed into the dialog, not hang a
-   consent prompt on a console nobody is watching — so the grant dialog can
-   never appear on its own. Make the grant directly: Keychain Access → login
-   keychain → the `GnuPG` password item for the key's grip → *Access
-   Control* tab → add `~/.local/libexec/pinentry-ui` to "Always allow".
-   Should the read still miss after that (OSStatus −25293 in the debug
-   trace), the item's *partition list* — the post-Sierra layer above the ACL
-   — is rejecting the self-signed identity; that is a known live-validation
-   item, and `security set-generic-password-partition-list -s GnuPG` (with
-   the appropriate `-S` partitions, keychain password required) is the knob.
+2. **Grant the read** — at the console, for the keygrip gpg-agent actually
+   asks for (the trace's `SETKEYINFO n/<grip>` line names it; a key has one
+   grip per subkey):
+
+       ~/.local/libexec/pinentry-ui --keychain-grant <keygrip>
+
+   macOS raises its consent dialog; click **Always Allow** (login keychain
+   password). This is the only way in: the normal read path disables
+   keychain interaction — a missing grant must fail closed into the dialog,
+   not hang a consent prompt on a console nobody is watching — and an ACL
+   entry added by hand in Keychain Access is not sufficient anyway, because
+   the *partition list* above the ACL only records our signing identity on
+   that interactive consent (measured: hand-granted ACL, read still refused
+   with OSStatus −25293).
 
 ## Tests
 

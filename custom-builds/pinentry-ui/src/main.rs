@@ -53,6 +53,24 @@ fn main() -> ExitCode {
             env!("CARGO_PKG_VERSION")
         ));
     }
+    // The one-time keychain consent ritual, run by a human at the console
+    // (README, "Keychain integration"). Not reachable from any password path:
+    // gpg-agent and the askpass callers never pass it.
+    if let Some(i) = args.iter().position(|a| a == "--keychain-grant") {
+        let Some(grip) = args.get(i + 1).filter(|g| !g.is_empty()) else {
+            eprintln!("usage: pinentry-ui --keychain-grant <keygrip>");
+            return ExitCode::FAILURE;
+        };
+        #[cfg(target_os = "macos")]
+        if keychain::grant(grip) {
+            println!("granted: the keychain served the entry for {grip}");
+            return ExitCode::SUCCESS;
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = grip;
+        eprintln!("no grant: the keychain did not serve the entry (see ~/.cache/pinentry-ui.trace with the marker armed)");
+        return ExitCode::FAILURE;
+    }
     if let Some(i) = args.iter().position(|a| a == "--askpass") {
         // Everything after the flag is the prompt. sudo passes one argument,
         // but a prompt with spaces reaching us unquoted must not lose half of

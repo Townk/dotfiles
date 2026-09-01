@@ -59,8 +59,33 @@ const SERVICE: &[u8] = b"GnuPG";
 /// (never the data) because "why did it prompt me" is the question every
 /// future debugging session starts with.
 pub fn lookup(keygrip: &str) -> Option<Passphrase> {
+    lookup_with_interaction(keygrip, false)
+}
+
+/// The one-time console ritual behind `--keychain-grant`. The ACL is only
+/// half of keychain access: above it sits the partition list, which names
+/// the SIGNERS allowed to use the item, and macOS only writes our signer
+/// into it on the interactive consent dialog — the very dialog `lookup`
+/// suppresses so that a remote miss fails fast instead of hanging a prompt
+/// on an unwatched console (measured: ACL granted by hand in Keychain
+/// Access, read still refused with errSecAuthFailed −25293). So the grant
+/// is the same read with interaction allowed, run by a human sitting at the
+/// machine: click "Always Allow" once and both layers are recorded for this
+/// binary's identity. The passphrase itself is fetched and immediately
+/// wiped — reporting is by outcome only.
+pub fn grant(keygrip: &str) -> bool {
+    match lookup_with_interaction(keygrip, true) {
+        Some(pass) => {
+            drop(pass); // wiped by Drop; the grant is the side effect
+            true
+        }
+        None => false,
+    }
+}
+
+fn lookup_with_interaction(keygrip: &str, interactive: bool) -> Option<Passphrase> {
     // SAFETY: takes a Boolean, returns a status; no memory changes hands.
-    unsafe { SecKeychainSetUserInteractionAllowed(0) };
+    unsafe { SecKeychainSetUserInteractionAllowed(u8::from(interactive)) };
 
     let mut len: u32 = 0;
     let mut data: *mut c_void = std::ptr::null_mut();
