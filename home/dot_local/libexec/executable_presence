@@ -1,0 +1,143 @@
+#!/bin/sh
+# presence — where is the human driving this machine, right now?
+#
+# The single source of truth for every password surface (pinentry-auto, the
+# sudo() function, system-update's preauthorize). Prints exactly one word and
+# exits 0:
+#
+#   vnc      a macOS Screen Sharing client is attached
+#   touchid  at the console, unlocked, with a reachable Touch ID sensor
+#   gui      at the console, unlocked, no sensor to touch
+#   remote   locked / headless, or the freshest human input came over SSH
+#
+# POSIX sh, absolute tool paths, no state: gpg-agent execs the dispatcher in a
+# minimal environment, and everything here is probed fresh per invocation.
+# That last property is the whole design (docs/superpowers/specs/
+# 2026-08-31-presence-aware-pinentry-design.md): the bug this replaces was
+# presence decided once at shell birth from SSH_* markers that outlive the
+# attach that set them. Nothing below reads the environment at all.
+#
+# Off a Mac there is nothing to probe — no Aqua console, no Touch ID — and
+# every session is by definition remote. Printed, not errored: a caller
+# treating Linux as remote is correct, and a caller falling back on an error
+# would be falling back for no reason.
+for u in /usr/bin/uname /bin/uname; do
+  [ -x "$u" ] && { os=$("$u" -s); break; }
+done
+if [ "${os:-}" != Darwin ]; then
+  echo remote
+  exit 0
+fi
+
+# A Screen Sharing viewer wins over everything: the console may well be
+# unlocked (the viewer unlocked it), but no sensor is reachable from the far
+# side of a VNC connection, and pinentry-touchid cancels rather than falling
+# back. $4 is the local-address column; matching the port there avoids a false
+# positive when this Mac is itself a VNC client of another host.
+if /usr/sbin/netstat -an -p tcp 2>/dev/null | /usr/bin/awk '
+  $4 ~ /\.5900$/ && $NF == "ESTABLISHED" { found = 1 }
+  END { exit found ? 0 : 1 }
+'; then
+  echo vnc
+  exit 0
+fi
+
+# Locked (or the key missing — a headless boot with no console session) means
+# nobody can be sitting there, whatever else the probes below might say.
+locked=$(/usr/sbin/ioreg -n Root -d1 -a 2>/dev/null |
+  /usr/bin/plutil -extract IOConsoleLocked raw -o - - 2>/dev/null)
+if [ "$locked" != false ]; then
+  echo remote
+  exit 0
+fi
+
+# The console is unlocked — but an unlocked console is a fact about the
+# machine, not about where the human is (leave the desk without locking, sit
+# on the sofa, ssh in from the iPad: still unlocked). The tiebreaker is input
+# recency, both sides read live per request:
+#
+#   local  — HIDIdleTime, nanoseconds since the last physical key/mouse event.
+#   remote — the youngest human SSH input: tmux clients classified by walking
+#            their pid ancestry for sshd, plus `who -u` idle for ssh logins
+#            that never attached tmux. Both are human-only by construction:
+#            agent sessions are `ssh host cmd` exec channels, which register
+#            no utmp entry and attach no tmux client, so an agent churning in
+#            a pane never looks like a person on the sofa.
+#
+# Freshest input wins; the console wins ties, because a Touch ID prompt where
+# you were sitting seconds ago is at worst a step away, while a curses prompt
+# in a pane you left is a signature that hangs until its timeout.
+local_idle=$(/usr/sbin/ioreg -c IOHIDSystem 2>/dev/null |
+  /usr/bin/awk -F' = ' '/"HIDIdleTime"/ { printf "%d", $2 / 1000000000; exit }')
+remote_idle=""
+
+# $1 = pid of a tmux client; ancestry through sshd means the attach came over
+# the wire. Bounded walk — a reparented orphan must not loop this forever.
+client_is_ssh() {
+  pid=$1 depth=0
+  while [ "${pid:-0}" -gt 1 ] && [ "$depth" -lt 20 ]; do
+    case $(/bin/ps -o comm= -p "$pid" 2>/dev/null) in
+      *sshd*) return 0 ;;
+      '') return 1 ;;
+    esac
+    pid=$(/bin/ps -o ppid= -p "$pid" 2>/dev/null | /usr/bin/tr -d ' ')
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
+keep_youngest() { # $1 = an idle age in seconds
+  case "$1" in
+    '' | *[!0-9]*) return ;;
+  esac
+  if [ -z "$remote_idle" ] || [ "$1" -lt "$remote_idle" ]; then
+    remote_idle=$1
+  fi
+}
+
+for t in /opt/homebrew/bin/tmux /usr/local/bin/tmux /usr/bin/tmux; do
+  [ -x "$t" ] || continue
+  now=$(/bin/date +%s)
+  for client in $("$t" list-clients -F '#{client_activity}/#{client_pid}' 2>/dev/null); do
+    activity=${client%/*}
+    cpid=${client#*/}
+    client_is_ssh "$cpid" && keep_youngest $((now - activity))
+  done
+  break
+done
+
+# `who -u` idle is minute-grained and read from the pty's atime, which moves
+# on input, not on output — a process streaming into an idle ssh session does
+# not make that session look driven. Only lines with a remote host qualify;
+# local terminal windows are already counted by HIDIdleTime.
+for idle in $(/usr/bin/who -u 2>/dev/null |
+  /usr/bin/awk '$NF ~ /^\(/ { print $(NF - 2) }'); do
+  case "$idle" in
+    .) keep_youngest 0 ;;
+    old) ;;
+    [0-9][0-9]:[0-9][0-9])
+      # ${h#0}: a zero-padded hour is octal to $(( )) — "08" errors out.
+      h=${idle%%:*} m=${idle#*:}
+      keep_youngest $(( ${h#0} * 3600 + ${m#0} * 60 )) ;;
+  esac
+done
+
+# An unreadable HID clock counts as "local input unknown", and unknown loses
+# to any remote input at all: a curses prompt near a present user is a small
+# annoyance, a Touch ID prompt at an empty desk hangs until its timeout.
+if [ -n "$remote_idle" ] && { [ -z "$local_idle" ] || [ "$remote_idle" -lt "$local_idle" ]; }; then
+  echo remote
+  exit 0
+fi
+
+# At the console. Touch ID if a sensor is reachable right now: the Magic
+# Keyboard rides the KVM, so switching desks unplugs it — `hidutil list` is a
+# live reachability probe, not a capability flag. AppleBiometricSensor is the
+# built-in sensor on a laptop, which no KVM can take away.
+if /usr/bin/hidutil list 2>/dev/null | /usr/bin/grep -q "Touch ID" ||
+  /usr/sbin/ioreg -rc AppleBiometricSensor 2>/dev/null | /usr/bin/grep -q .; then
+  echo touchid
+else
+  echo gui
+fi
+exit 0

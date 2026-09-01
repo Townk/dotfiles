@@ -10,37 +10,39 @@
 # in a minimal, non-interactive environment, and all it does is branch and exec
 # another binary — there is nothing here that warrants a shell dependency.
 #
-# Three ways this Mac is driven, three different pinentries:
+# Four ways this Mac is being driven, decided PER REQUEST by the `presence`
+# helper (same directory), four different pinentries:
 #
-#   SSH      -> pinentry-ui       prompt on the session tty, or a mux float
-#                                 when that tty belongs to an AI agent pane
-#   VNC      -> pinentry-ui       the terminal being viewed, and pinentry-ui
-#                                 hands over to pinentry-mac when there is none
-#   physical -> pinentry-touchid  Touch ID (own fallback to pinentry-mac)
+#   touchid -> pinentry-touchid  at the console with a reachable sensor
+#                                (own fallback to pinentry-mac)
+#   gui     -> pinentry-mac      at the console, no sensor to touch
+#   vnc     -> pinentry-ui       the terminal being viewed, and pinentry-ui
+#                                hands over to pinentry-mac when there is none
+#   remote  -> pinentry-ui       prompt on the session tty, or a mux float
+#                                when that tty belongs to an AI agent pane
 #
-# Only the first of those exists off a Mac, which is why the tail is gated on
-# Darwin rather than split into a second script. A headless Linux host has no
-# Aqua session to view and no Touch ID, so every request goes to pinentry-ui
-# with the stock curses pinentry underneath it. The missing GUI rung there is
-# not an omission: a machine with no desktop has nowhere to draw one, so a
-# request with no terminal fails exactly as it did before any of this existed.
+# Per request is the design, not a nicety (docs/superpowers/specs/
+# 2026-08-31-presence-aware-pinentry-design.md): the previous dispatcher
+# trusted $PINENTRY_USER_DATA, which the shell exports ONCE at birth from its
+# SSH_* markers — and a tmux pane outlives the attach that created it. A pane
+# born over SSH kept steering to the mux float while the user sat at the very
+# keyboard whose Touch ID sensor was plugged in and waiting. So on a Mac with
+# the helper installed, USE_CURSES is not consulted at all; presence probes
+# the machine fresh (console lock state, input recency, VNC connections,
+# sensor reachability) each time a password is asked for.
 #
-# SSH is detected client-side: interactive shells export USE_CURSES=1 when
-# remote (see dot_config/zsh/environment.sh) and gpg forwards $PINENTRY_USER_DATA
-# through the agent to us. It must be done there, not here, because gpg-agent's
-# environment has no SSH_CONNECTION to test. pinentry-touchid also does NOT honor
-# USE_CURSES (jorgelbg/pinentry-touchid#26), so this branch must come first.
+# The USE_CURSES ladder below the presence block is not dead code; it is two
+# live paths. Off a Mac there is nothing to probe — the helper prints `remote`
+# unconditionally there, and the ladder's non-Darwin branch reaches the same
+# pinentry-ui anyway. And on a Mac where the helper is missing or answers
+# nonsense (a freshly provisioned host mid-apply, a broken probe), falling
+# through to the ladder is the blast-radius rule: the host behaves exactly as
+# it did before presence existed, and signing never has a new way to fail.
 #
-# VNC vs. physical is decided here, because at the shell level a Screen Sharing
-# session is indistinguishable from sitting at the machine — both are the console
-# user in the same Aqua session — and because the state can change (connect /
-# disconnect) independently of any shell. The one thing a VNC viewer has that a
-# person at the keyboard does not is a live inbound connection on the Screen
-# Sharing port, so we probe for that fresh on every invocation. It matters
-# because Touch ID cannot be satisfied by a remote viewer (no reachable sensor);
-# pinentry-touchid then returns "Operation cancelled" instead of falling back, so
-# VNC has to be routed to the pinentry-mac GUI, which renders on the very desktop
-# the viewer is looking at.
+# Why Touch ID cannot serve the vnc lane: no sensor is reachable from the far
+# side of a Screen Sharing connection, and pinentry-touchid returns
+# "Operation cancelled" instead of falling back — so that lane goes to a GUI
+# drawn on the very desktop the viewer is looking at.
 
 # The askpass personality, reached when invoked through the `askpass-auto`
 # symlink. sudo, ssh and git ask for a password the crude way — prompt in
@@ -91,10 +93,48 @@ viewing_over_vnc() {
   '
 }
 
-# The curses lane splits again inside pinentry-ui: an SSH session driven by a
-# human gets the prompt in the pane they are looking at, but one driven by an
-# AI coding agent gets it in a tmux float, because the agent's pty is a screen
-# nobody is watching (docs/pinentry-ui-design.md).
+# `uname` by absolute path, both of them, for the same reason every other tool
+# here is absolute: gpg-agent's PATH is not a login shell's, and a bare `uname`
+# that fails to run would leave this empty — sending a Mac down the branch that
+# skips Touch ID. Debian merged /bin into /usr/bin, older systems did not.
+for u in /usr/bin/uname /bin/uname; do
+  [ -x "$u" ] && { os=$("$u" -s); break; }
+done
+
+# The presence lanes (see the header). Each lane keeps a fall-through under
+# it, because every binary here is optional on some host: pinentry-ui is
+# compiled by hand, pinentry-touchid and pinentry-mac come from Homebrew. An
+# answer this case does not recognise — including an empty one from a helper
+# that failed — falls out of the case and down to the ladder below.
+if [ "${os:-Darwin}" = Darwin ] && [ -x "$HOME/.local/libexec/presence" ]; then
+  case "$("$HOME/.local/libexec/presence" 2>/dev/null)" in
+    touchid)
+      [ -x /opt/homebrew/bin/pinentry-touchid ] &&
+        exec /opt/homebrew/bin/pinentry-touchid "$@"
+      exec /opt/homebrew/bin/pinentry-mac "$@"
+      ;;
+    gui)
+      exec /opt/homebrew/bin/pinentry-mac "$@"
+      ;;
+    vnc)
+      [ -x "$HOME/.local/libexec/pinentry-ui" ] &&
+        exec "$HOME/.local/libexec/pinentry-ui" "$@"
+      exec /opt/homebrew/bin/pinentry-mac "$@"
+      ;;
+    remote)
+      [ -x "$HOME/.local/libexec/pinentry-ui" ] &&
+        exec "$HOME/.local/libexec/pinentry-ui" "$@"
+      exec_stock "$@"
+      ;;
+  esac
+fi
+
+# The legacy ladder — reached off a Mac, and on a Mac only when the presence
+# helper is missing or broken. The curses lane splits again inside
+# pinentry-ui: an SSH session driven by a human gets the prompt in the pane
+# they are looking at, but one driven by an AI coding agent gets it in a tmux
+# float, because the agent's pty is a screen nobody is watching
+# (docs/pinentry-ui-design.md).
 #
 # The guard is what makes a staged rollout safe, and it is not a formality: the
 # apply hook that builds pinentry-ui is soft by design — no toolchain, or a
@@ -113,14 +153,6 @@ esac
 # Everything below decides between macOS surfaces. Off a Mac there is only one
 # surface, and pinentry-ui already knows what to do with it: draw in the
 # terminal when there is one, fail when there is not.
-#
-# `uname` by absolute path, both of them, for the same reason every other tool
-# here is absolute: gpg-agent's PATH is not a login shell's, and a bare `uname`
-# that fails to run would leave this empty — sending a Mac down the branch that
-# skips Touch ID. Debian merged /bin into /usr/bin, older systems did not.
-for u in /usr/bin/uname /bin/uname; do
-  [ -x "$u" ] && { os=$("$u" -s); break; }
-done
 if [ "${os:-Darwin}" != Darwin ]; then
   [ -x "$HOME/.local/libexec/pinentry-ui" ] &&
     exec "$HOME/.local/libexec/pinentry-ui" "$@"

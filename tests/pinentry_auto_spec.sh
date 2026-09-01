@@ -77,6 +77,104 @@ EOS
   End
 End
 
+# The presence-aware lanes (docs/superpowers/specs/2026-08-31-presence-aware-
+# pinentry-design.md). The `presence` helper is a separate executable resolved
+# under $HOME exactly like pinentry-ui, and that is what finally makes the VNC
+# and Touch ID branches testable — the helper is stubbed to answer a chosen
+# way, and the lane it selects is asserted from the xtrace, which prints the
+# exec line whether or not the binary behind it exists on the machine running
+# the suite. Feeding only BYE means a lane whose real pinentry IS present
+# (touchid, mac) answers the greeting and exits without ever raising a prompt.
+#
+# Skipped off macOS: the presence block is gated on a real `uname`, and the
+# only way to reach it from Linux would be an override that exists solely for
+# this file — the same reasoning the header gives for the non-Darwin lane.
+Describe 'pinentry-auto presence dispatch'
+  PA="home/dot_local/libexec/executable_pinentry-auto"
+
+  Skip if "the presence lanes are gated on Darwin" [ "$(uname -s)" != Darwin ]
+
+  setup() {
+    PA_HOME=$(mktemp -d)
+    mkdir -p "$PA_HOME/.local/libexec"
+  }
+  cleanup() { rm -rf "$PA_HOME"; unset PA_HOME; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  install_ui() {
+    cat >"$PA_HOME/.local/libexec/pinentry-ui" <<'EOS'
+#!/bin/sh
+echo "UI ARGS:$*"
+EOS
+    chmod +x "$PA_HOME/.local/libexec/pinentry-ui"
+  }
+
+  presence_says() {
+    printf '#!/bin/sh\necho %s\n' "$1" >"$PA_HOME/.local/libexec/presence"
+    chmod +x "$PA_HOME/.local/libexec/presence"
+  }
+
+  dispatch() { printf 'BYE\n' | env HOME="$PA_HOME" PINENTRY_USER_DATA="$1" sh "$PA" "${@:2}"; }
+
+  # The lane, read from the trace: `sh -x` prints the exec line before the
+  # exec happens, so the assertion holds even where the target binary is not
+  # installed. What the real binary then exits with is that machine's business
+  # (touchid answers BYE and exits 255 on EOF; a missing one is 127), so the
+  # status is discarded rather than asserted.
+  traced() { printf 'BYE\n' | env HOME="$PA_HOME" PINENTRY_USER_DATA="$1" sh -x "$PA" "${@:2}" 2>&1 >/dev/null || :; }
+
+  # THE regression this whole design exists for: a pane born over SSH keeps
+  # USE_CURSES forever, and the dispatcher used to trust it over the fact that
+  # the user is sitting right there.
+  It 'ignores a stale USE_CURSES marker when presence says touchid'
+    presence_says touchid
+    When call traced "USE_CURSES=1"
+    The output should include "exec /opt/homebrew/bin/pinentry-touchid"
+  End
+
+  It 'sends a sitting session with no sensor to pinentry-mac'
+    presence_says gui
+    When call traced "USE_CURSES=1"
+    The output should include "exec /opt/homebrew/bin/pinentry-mac"
+  End
+
+  It 'keeps a genuinely remote session on pinentry-ui'
+    presence_says remote
+    install_ui
+    When call dispatch ""
+    The output should include "UI ARGS:"
+    The status should be success
+  End
+
+  It 'routes a VNC viewer to pinentry-ui'
+    presence_says vnc
+    install_ui
+    When call dispatch ""
+    The output should include "UI ARGS:"
+    The status should be success
+  End
+
+  It 'still signs on the remote lane when the binary is not built'
+    presence_says remote
+    When call dispatch ""
+    The output should include "closing connection"
+    The status should be success
+  End
+
+  # The blast-radius rule: a helper that answers nonsense (or nothing) must
+  # leave the host exactly where it was before the helper existed — on the
+  # legacy USE_CURSES ladder.
+  It 'falls back to the legacy ladder when the helper is broken'
+    printf '#!/bin/sh\nexit 1\n' >"$PA_HOME/.local/libexec/presence"
+    chmod +x "$PA_HOME/.local/libexec/presence"
+    install_ui
+    When call dispatch "USE_CURSES=1"
+    The output should include "UI ARGS:"
+    The status should be success
+  End
+End
+
 # The second personality. Invoked through the `askpass-auto` symlink it serves
 # sudo, ssh and git instead of gpg-agent: prompt in argv, secret on stdout,
 # non-zero for no answer (docs/askpass-design.md).
