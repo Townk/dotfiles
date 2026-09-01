@@ -336,7 +336,16 @@ Every miss — no entry, locked keychain, no grant — falls closed into the
 dialog. `src/keychain.rs` carries the design; the gates live in `assuan.rs`
 where the tests can reach them.
 
-It stays dormant until two one-time steps happen, per Mac, at the console:
+`system-pinentry-setup` (invoked by `system-update` after apply, or run by
+hand) converges all of the below unattended-but-present: it creates and
+trusts the identity, signs the binary, and runs the consent ritual for every
+keygrip whose item exists — so a rebuilt machine needs one run and a couple
+of clicks, not this section. It is also the self-healing for a measured
+caveat: macOS records the consent against the binary's content hash, not
+its signing identity, so every rebuild of pinentry-ui invalidates the
+grants — and the next console `system-update` simply re-offers one click
+per grip. What follows is the mechanism, and the manual path when you need
+it:
 
 1. **Create the signing identity.** Keychain grants stick to a code-signing
    identity, and an ad-hoc-signed rebuild changes identity every build.

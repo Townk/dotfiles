@@ -577,6 +577,16 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
   fi
 fi
 
+# Converge the pinentry signing/keychain stack now that apply has (re)built
+# the binary. Runs in the foreground, never behind a spinner: its whole job
+# is raising the occasional consent dialog a human must click, and it gates
+# itself on presence and no-ops in seconds once a machine is converged. Soft
+# like everything else — a skipped or failed setup only means prompts instead
+# of silence.
+if command -v system-pinentry-setup >/dev/null 2>&1; then
+  system-pinentry-setup || log_warn "pinentry setup incomplete — run system-pinentry-setup at the console"
+fi
+
 # Homebrew-less hosts (e.g. the Linux dev-shell profile) have no brew /
 # Brewfile pipeline. Converge the package ecosystems rendered for this
 # host and reconcile services (systemd worker), then skip the

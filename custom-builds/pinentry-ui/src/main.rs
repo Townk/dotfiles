@@ -53,22 +53,36 @@ fn main() -> ExitCode {
             env!("CARGO_PKG_VERSION")
         ));
     }
-    // The one-time keychain consent ritual, run by a human at the console
-    // (README, "Keychain integration"). Not reachable from any password path:
-    // gpg-agent and the askpass callers never pass it.
-    if let Some(i) = args.iter().position(|a| a == "--keychain-grant") {
+    // The one-time keychain consent ritual, run by a human at the console,
+    // and its silent probe (README, "Keychain integration"). `--keychain-check`
+    // is the same read the real password path performs — interaction off,
+    // outcome only, never the data — so a setup script can ask "would a
+    // signature be served right now?" without raising anything; that is what
+    // makes the whole ritual idempotent. Neither flag is reachable from any
+    // password path: gpg-agent and the askpass callers never pass them.
+    for (flag, interactive) in [("--keychain-grant", true), ("--keychain-check", false)] {
+        let Some(i) = args.iter().position(|a| a == flag) else {
+            continue;
+        };
         let Some(grip) = args.get(i + 1).filter(|g| !g.is_empty()) else {
-            eprintln!("usage: pinentry-ui --keychain-grant <keygrip>");
+            eprintln!("usage: pinentry-ui {flag} <keygrip>");
             return ExitCode::FAILURE;
         };
         #[cfg(target_os = "macos")]
-        if keychain::grant(grip) {
-            println!("granted: the keychain served the entry for {grip}");
-            return ExitCode::SUCCESS;
+        {
+            let served = if interactive {
+                keychain::grant(grip)
+            } else {
+                keychain::lookup(grip).is_some()
+            };
+            if served {
+                println!("served: the keychain answered for {grip}");
+                return ExitCode::SUCCESS;
+            }
         }
         #[cfg(not(target_os = "macos"))]
-        let _ = grip;
-        eprintln!("no grant: the keychain did not serve the entry (see ~/.cache/pinentry-ui.trace with the marker armed)");
+        let _ = (grip, interactive);
+        eprintln!("not served: the keychain did not answer for {grip} (arm ~/.cache/pinentry-ui.trace for the OSStatus)");
         return ExitCode::FAILURE;
     }
     if let Some(i) = args.iter().position(|a| a == "--askpass") {

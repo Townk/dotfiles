@@ -1,0 +1,140 @@
+#!/usr/bin/env zsh
+# system-pinentry-setup — converge the signing/keychain half of the password
+# stack, so a freshly bootstrapped (or freshly wiped) Mac comes back to
+# "Touch ID everywhere, keychain-served GPG" from one run instead of a README
+# ritual. Invoked by system-update after `chezmoi apply` (which builds the
+# pinentry-ui binary), and runnable standalone at any console.
+#
+# Everything here is IDEMPOTENT and SOFT. Each step probes before it acts,
+# a missing prerequisite downgrades to a logged skip, and the worst possible
+# outcome is the stack's documented dormant state: prompts still appear,
+# passwords still work, nothing hangs. The steps, in dependency order:
+#
+#   identity   a self-signed `pinentry-ui-dev` code-signing certificate,
+#              created via openssl + `security import` and trusted for code
+#              signing in the SYSTEM domain (`add-trusted-cert -d`, one sudo —
+#              Touch ID via PAM, or already cached under system-update). The
+#              user-domain variant was rejected: it raises a GUI auth prompt
+#              that cannot be scripted past.
+#   signature  the installed binary re-signed with that identity whenever its
+#              Authority does not already say so. Keychain grants stick to the
+#              signer, and an ad-hoc signature changes every build — this is
+#              what makes a grant survive rebuilds.
+#   grants     for every secret-key keygrip gpg knows: if the GnuPG keychain
+#              item exists but the interaction-free read misses, run the
+#              `--keychain-grant` consent ritual (macOS records the partition
+#              list ONLY on its own interactive dialog — a hand-made ACL entry
+#              is not enough; measured, OSStatus -25293). One Always Allow
+#              click per key, once per machine, ever.
+#
+# What this deliberately does NOT do: create the GnuPG keychain item. The
+# passphrase has no source in this repo; the item is born from one console
+# signature through pinentry-mac ("Save in Keychain"), and the grip that
+# lacks one is named in the log so that is a 30-second errand, not a hunt.
+#
+# Gated on presence (touchid/gui/vnc): the consent and codesign dialogs need
+# a human looking at the console, and a headless or SSH run must never hang
+# on a sheet nobody can see. The grant itself is additionally bounded by
+# `timeout`, because presence says "someone is around", not "someone is
+# staring at this exact dialog".
+
+set -u
+source "$HOME/.local/lib/common.zsh"
+
+readonly IDENTITY="${CODESIGN_ID:-pinentry-ui-dev}"
+readonly UI="$HOME/.local/libexec/pinentry-ui"
+readonly PRESENCE="$HOME/.local/libexec/presence"
+readonly LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+
+# Off a Mac there is no Touch ID, no keychain and no codesign — the entire
+# subject of this script does not exist.
+[[ "$(uname -s)" == Darwin ]] || exit 0
+
+lane=""
+[[ -x "$PRESENCE" ]] && lane="$("$PRESENCE" 2>/dev/null)"
+case "$lane" in
+  touchid | gui | vnc) ;;
+  *)
+    log_info "pinentry: nobody at the console — skipping setup (prompts still work; keychain serving stays dormant)"
+    exit 0
+    ;;
+esac
+
+if [[ ! -x "$UI" ]]; then
+  log_warn "pinentry: pinentry-ui not built — skipping setup (chezmoi apply builds it once a Rust toolchain exists)"
+  exit 0
+fi
+
+# --- identity ---------------------------------------------------------------
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
+  log_info "pinentry: creating the '$IDENTITY' signing identity (one sudo)..."
+  tmp="$(mktemp -d)" || exit 0
+  chmod 700 "$tmp"
+  {
+    # A leaf that vouches only for itself: no CA bit, code-signing EKU only,
+    # ten years so this is not an annual errand. The p12 passphrase exists
+    # because `security import` demands one; it protects a file that lives
+    # for milliseconds inside a 0700 tmpdir.
+    p12pass="$(head -c 16 /dev/urandom | xxd -p)"
+    openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+      -subj "/CN=$IDENTITY" \
+      -addext "basicConstraints=critical,CA:FALSE" \
+      -addext "keyUsage=critical,digitalSignature" \
+      -addext "extendedKeyUsage=critical,codeSigning" \
+      -keyout "$tmp/key.pem" -out "$tmp/cert.pem" 2>/dev/null &&
+      openssl pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" \
+        -out "$tmp/id.p12" -passout "pass:$p12pass" 2>/dev/null &&
+      # -T /usr/bin/codesign: let codesign use the private key without a
+      # per-use consent prompt — scoped to that one binary, not `-A`'s
+      # everyone.
+      security import "$tmp/id.p12" -k "$LOGIN_KEYCHAIN" -P "$p12pass" \
+        -T /usr/bin/codesign >/dev/null &&
+      # The SSH triple is scrubbed for the same reason sudo() scrubs it: a
+      # stale marker makes pam_reattach skip and costs the Touch ID answer.
+      env -u SSH_TTY -u SSH_CONNECTION -u SSH_CLIENT sudo \
+        security add-trusted-cert -d -r trustRoot -p codeSign \
+        -k /Library/Keychains/System.keychain "$tmp/cert.pem"
+  } || log_warn "pinentry: could not create the signing identity — keychain serving stays dormant"
+  rm -rf "$tmp"
+fi
+
+# --- signature --------------------------------------------------------------
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
+  if ! codesign -dvv "$UI" 2>&1 | grep -q "Authority=$IDENTITY"; then
+    if codesign --force --sign "$IDENTITY" "$UI" 2>/dev/null; then
+      log_info "pinentry: signed pinentry-ui with $IDENTITY"
+    else
+      log_warn "pinentry: signing failed — keychain serving stays dormant"
+    fi
+  fi
+fi
+
+# --- grants -----------------------------------------------------------------
+# The grant does not survive a rebuild: macOS records the consent against
+# the binary's content hash, not its signing identity (measured — a grant
+# validated end-to-end went stale the moment the binary was rebuilt with the
+# SAME identity). So this loop is not only first-boot provisioning; it is
+# the self-healing that re-offers one click per grip after every pinentry-ui
+# source change, which is exactly why it runs from system-update.
+command -v gpg >/dev/null 2>&1 || exit 0
+pending=0
+for grip in ${(f)"$(gpg --list-secret-keys --with-colons --with-keygrip 2>/dev/null |
+  awk -F: '$1 == "grp" { print $10 }' | sort -u)"}; do
+  [[ -n "$grip" ]] || continue
+  if ! security find-generic-password -s GnuPG -a "$grip" >/dev/null 2>&1; then
+    log_info "pinentry: no stored passphrase for grip ${grip:0:8}… — sign once at the console (pinentry-mac, Save in Keychain), then re-run"
+    continue
+  fi
+  "$UI" --keychain-check "$grip" >/dev/null 2>&1 && continue
+  log_info "pinentry: keychain consent for grip ${grip:0:8}… — click Always Allow on the dialog"
+  if ! timeout 120 "$UI" --keychain-grant "$grip" >/dev/null 2>&1; then
+    log_warn "pinentry: grant for ${grip:0:8}… not completed — re-run system-pinentry-setup at the console"
+    ((pending += 1))
+  fi
+done
+
+if ((pending)); then
+  log_warn "pinentry: $pending grant(s) pending — cold-cache GPG will prompt until the dialog is answered"
+else
+  log_ok "pinentry: signing + keychain stack converged"
+fi
