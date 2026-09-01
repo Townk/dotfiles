@@ -312,6 +312,7 @@ the file holds its length and not its bytes.
 | `src/theme.rs` | colours from the generated palette |
 | `src/icons.rs` | the requester's glyph from the generated tab-icon table |
 | `src/assuan.rs` | the protocol: the line loop, the state buffer, the fourteen verbs |
+| `src/keychain.rs` | the macOS keychain read: the stored GPG passphrase, served instead of asked for |
 | `src/debug.rs` | the optional trace, and the rule that it never holds a passphrase |
 | `src/keyinfo.rs` | gpg's description parsed into the key tree, verbatim when it does not fit |
 | `src/requester.rs` | which pane asked, what it is running, and whether anyone is looking |
@@ -323,6 +324,36 @@ the file holds its length and not its bytes.
 | `tests/dialog_pty.rs` | the dialog driven through a real pty |
 | `tests/assuan_pipe.rs` | the protocol driven through pipes, as gpg-agent does |
 | `tests/askpass.rs` | the askpass lane driven the way sudo drives it |
+
+## Keychain integration
+
+On macOS a `GETPIN` is answered from the keychain when gpg-agent permits an
+external password cache and names a keygrip — the entry pinentry-mac writes
+when a passphrase is saved at the console (service `GnuPG`, account = the
+keygrip). A cold-cache signature over SSH, or in an agent pane's float, then
+completes silently instead of asking for a passphrase that is already stored.
+Every miss — no entry, locked keychain, no grant — falls closed into the
+dialog. `src/keychain.rs` carries the design; the gates live in `assuan.rs`
+where the tests can reach them.
+
+It stays dormant until two one-time steps happen, per Mac, at the console:
+
+1. **Create the signing identity.** Keychain grants stick to a code-signing
+   identity, and an ad-hoc-signed rebuild changes identity every build.
+   Keychain Access → Certificate Assistant → Create a Certificate… → name
+   `pinentry-ui-dev`, type *Code Signing*, self-signed. `make install` signs
+   with it whenever it exists (`CODESIGN_ID` overrides the name).
+2. **Grant the read.** The binary disables keychain user interaction before
+   every read — a missing grant must fail closed into the dialog, not hang a
+   consent prompt on a console nobody is watching — so the grant dialog can
+   never appear on its own. Make the grant directly: Keychain Access → login
+   keychain → the `GnuPG` password item for the key's grip → *Access
+   Control* tab → add `~/.local/libexec/pinentry-ui` to "Always allow".
+   Should the read still miss after that (OSStatus −25293 in the debug
+   trace), the item's *partition list* — the post-Sierra layer above the ACL
+   — is rejecting the self-signed identity; that is a known live-validation
+   item, and `security set-generic-password-partition-list -s GnuPG` (with
+   the appropriate `-S` partitions, keychain password required) is the knob.
 
 ## Tests
 

@@ -118,6 +118,15 @@ impl assuan::Prompt for Ui {
             Err(e) => Answer::Failed(assuan::err_no_dialog(&e.to_string())),
         }
     }
+
+    // The macOS keychain, behind the gates `serve` enforces (agent
+    // permission, keygrip, no pending error, once per connection). Off macOS
+    // the trait's default None keeps every request on the dialog path — there
+    // is no store to read.
+    #[cfg(target_os = "macos")]
+    fn stored(&mut self, keygrip: &str) -> Option<crate::secret::Passphrase> {
+        crate::keychain::lookup(keygrip)
+    }
 }
 
 /// gpg's `SETPROMPT` is the title, because it is the one element that is

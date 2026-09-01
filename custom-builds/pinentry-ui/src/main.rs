@@ -26,6 +26,8 @@ mod float;
 mod gui;
 mod hardening;
 mod icons;
+#[cfg(target_os = "macos")]
+mod keychain;
 mod keyinfo;
 mod prompt;
 mod requester;

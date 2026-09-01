@@ -41,6 +41,13 @@ pub struct Session {
     pub cancel: Option<String>,
     pub ttyname: Option<String>,
     pub ttytype: Option<String>,
+    /// The keygrip from `SETKEYINFO n/<grip>` — the name under which an
+    /// external password store files this key's passphrase (the macOS
+    /// keychain entry pinentry-mac writes: service "GnuPG", account = grip).
+    pub keyinfo: Option<String>,
+    /// gpg-agent's `OPTION allow-external-password-cache`. Its absence is the
+    /// agent's policy against answering from a store, not an omission.
+    pub external_cache: bool,
     /// Seconds the dialog may sit unanswered, from `SETTIMEOUT`. This carries
     /// `pinentry-timeout` out of gpg-agent's config, and honouring it is what
     /// lets an unanswered prompt fail and release the agent's global entry lock
@@ -82,6 +89,14 @@ pub enum Handover {
 /// the whole reason the Assuan half is the machine-checkable one.
 pub trait Prompt {
     fn ask(&mut self, session: &Session) -> Answer;
+
+    /// A passphrase the key's owner already stored somewhere this pinentry
+    /// can read — the macOS keychain, in practice. Consulted before any
+    /// dialog, only under the gates `serve` enforces. The default is the
+    /// non-macOS answer and the test default alike: there is no store.
+    fn stored(&mut self, _keygrip: &str) -> Option<Passphrase> {
+        None
+    }
 }
 
 /// What `serve` decided to do with the conversation.
@@ -106,6 +121,7 @@ pub fn serve<R: BufRead, W: Write, P: Prompt>(
     prompt: &mut P,
 ) -> std::io::Result<Served> {
     let mut s = Session::default();
+    let mut store_answered = false;
     writeln!(
         out,
         "OK Pleased to meet you, process {}",
@@ -145,17 +161,30 @@ pub fn serve<R: BufRead, W: Write, P: Prompt>(
                 match rest.split_once('=') {
                     Some(("ttyname", v)) => s.ttyname = Some(decode(v)),
                     Some(("ttytype", v)) => s.ttytype = Some(decode(v)),
+                    None if rest.trim() == "allow-external-password-cache" => {
+                        s.external_cache = true
+                    }
                     _ => {}
                 }
                 s.replay.push(line.to_string());
             }
             // The keygrip, offered so a pinentry can find the passphrase in an
-            // external password manager. We do not use one, so it is accepted
-            // and ignored — but it must be *accepted*. gpg-agent sends it
-            // before every single GETPIN, so leaving it to the catch-all below
-            // handed every real signature straight to pinentry-curses, on the
-            // unwatched tty this program exists to avoid.
-            "SETKEYINFO" => s.replay.push(line.to_string()),
+            // external password manager — which, since the keychain
+            // integration, we are. Only the `n/` (normal key) form names a
+            // cacheable entry; `--clear` and the smartcard forms leave the
+            // grip empty, and with it the store unconsulted. It must be
+            // *accepted* regardless: gpg-agent sends it before every single
+            // GETPIN, and leaving it to the catch-all below once handed every
+            // real signature straight to pinentry-curses, on the unwatched
+            // tty this program exists to avoid.
+            "SETKEYINFO" => {
+                s.keyinfo = rest
+                    .trim()
+                    .strip_prefix("n/")
+                    .filter(|g| !g.is_empty())
+                    .map(str::to_string);
+                s.replay.push(line.to_string());
+            }
             "SETTIMEOUT" => {
                 // 0 is pinentry's "wait forever".
                 s.timeout = rest.trim().parse::<u64>().ok().filter(|n| *n > 0);
@@ -175,6 +204,12 @@ pub fn serve<R: BufRead, W: Write, P: Prompt>(
                 s.error = None;
                 s.ok = None;
                 s.cancel = None;
+                // The keygrip goes with the text: gpg-agent re-sends
+                // SETKEYINFO per prompt, and a grip leaking across RESET
+                // could answer a prompt for a different key from the wrong
+                // keychain entry. `external_cache` stays — it is an OPTION,
+                // scoped to the connection like the terminal is.
+                s.keyinfo = None;
                 s.replay
                     .retain(|l| l.starts_with("OPTION ") || l.starts_with("SETTIMEOUT"));
             }
@@ -201,7 +236,28 @@ pub fn serve<R: BufRead, W: Write, P: Prompt>(
                 continue;
             }
             "GETPIN" => {
-                match prompt.ask(&s) {
+                // The store is consulted before any dialog, under four gates:
+                // the agent allowed it, a keygrip names the entry, no
+                // SETERROR is pending (a stored passphrase the agent just
+                // rejected must not be served again), and at most once per
+                // connection — a retry without an intervening SETERROR should
+                // not happen, and if it does, looping the store's answer
+                // would be worse than drawing the dialog.
+                let stored = match &s.keyinfo {
+                    Some(grip) if s.external_cache && s.error.is_none() && !store_answered => {
+                        store_answered = true;
+                        prompt.stored(grip)
+                    }
+                    _ => None,
+                };
+                let answer = match stored {
+                    Some(pass) => {
+                        crate::debug::log(format_args!("answered from the external store"));
+                        Answer::Pin(pass)
+                    }
+                    None => prompt.ask(&s),
+                };
+                match answer {
                     // The kind of answer, never the answer.
                     Answer::Pin(pass) => {
                         crate::debug::log(format_args!(
@@ -565,6 +621,115 @@ BYE
             }
             _ => panic!("should have handed over"),
         }
+    }
+
+    /// A store that always has the passphrase, and counts what actually got
+    /// consulted — the seam the keychain integration hangs off.
+    struct Vault {
+        grips: Vec<String>,
+        asks: usize,
+    }
+    impl Vault {
+        fn new() -> Self {
+            Vault {
+                grips: vec![],
+                asks: 0,
+            }
+        }
+    }
+    impl Prompt for Vault {
+        fn ask(&mut self, _s: &Session) -> Answer {
+            self.asks += 1;
+            Answer::Cancelled
+        }
+        fn stored(&mut self, keygrip: &str) -> Option<Passphrase> {
+            self.grips.push(keygrip.to_string());
+            let mut p = Passphrase::new();
+            for b in b"hunter2" {
+                p.push(*b);
+            }
+            Some(p)
+        }
+    }
+
+    /// The happy path of the whole integration: agent permission plus a
+    /// keygrip means the stored passphrase goes out as data, and no dialog is
+    /// ever drawn.
+    #[test]
+    fn a_stored_passphrase_is_served_without_a_dialog() {
+        let mut vault = Vault::new();
+        let (lines, _) = converse(
+            "OPTION allow-external-password-cache\nSETKEYINFO n/AAAA\nGETPIN\n",
+            &mut vault,
+        );
+        assert_eq!(lines[3], "D hunter2", "got {lines:#?}");
+        assert_eq!(lines[4], "OK");
+        assert_eq!(vault.asks, 0, "no dialog may have been drawn");
+        assert_eq!(vault.grips, vec!["AAAA".to_string()]);
+    }
+
+    /// SETERROR means the agent just rejected an answer. Serving the store
+    /// again would loop the same wrong passphrase forever; the human gets the
+    /// prompt instead.
+    #[test]
+    fn a_pending_error_bypasses_the_store() {
+        let mut vault = Vault::new();
+        converse(
+            "OPTION allow-external-password-cache\nSETKEYINFO n/AAAA\nSETERROR Bad\nGETPIN\n",
+            &mut vault,
+        );
+        assert_eq!(vault.asks, 1);
+        assert!(vault.grips.is_empty(), "the store must not be consulted");
+    }
+
+    /// `allow-external-password-cache` is gpg-agent's permission switch, and
+    /// its absence is a policy, not an omission.
+    #[test]
+    fn without_the_agents_permission_the_store_is_never_consulted() {
+        let mut vault = Vault::new();
+        converse("SETKEYINFO n/AAAA\nGETPIN\n", &mut vault);
+        assert_eq!(vault.asks, 1);
+        assert!(vault.grips.is_empty());
+    }
+
+    /// No keygrip, nothing to look up — `--clear` and plain absence alike.
+    #[test]
+    fn without_a_keygrip_the_store_is_never_consulted() {
+        let mut vault = Vault::new();
+        converse(
+            "OPTION allow-external-password-cache\nSETKEYINFO --clear\nGETPIN\n",
+            &mut vault,
+        );
+        converse("OPTION allow-external-password-cache\nGETPIN\n", &mut vault);
+        assert_eq!(vault.asks, 2);
+        assert!(vault.grips.is_empty());
+    }
+
+    /// One serve per connection. A second GETPIN without an intervening
+    /// SETERROR should not happen, but if it does, answering from the store
+    /// again could loop — the dialog is the safe side.
+    #[test]
+    fn the_store_answers_at_most_once_per_connection() {
+        let mut vault = Vault::new();
+        converse(
+            "OPTION allow-external-password-cache\nSETKEYINFO n/AAAA\nGETPIN\nGETPIN\n",
+            &mut vault,
+        );
+        assert_eq!(vault.grips.len(), 1);
+        assert_eq!(vault.asks, 1, "the second GETPIN must reach the human");
+    }
+
+    /// RESET is the boundary between prompts; a keygrip must not leak across
+    /// it onto a prompt for some other key.
+    #[test]
+    fn reset_forgets_the_keygrip() {
+        let mut vault = Vault::new();
+        converse(
+            "OPTION allow-external-password-cache\nSETKEYINFO n/AAAA\nRESET\nGETPIN\n",
+            &mut vault,
+        );
+        assert_eq!(vault.asks, 1);
+        assert!(vault.grips.is_empty());
     }
 
     #[test]
