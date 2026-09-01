@@ -1,21 +1,21 @@
 [[plugin.deps]]
 use = "yazi-rs/plugins:full-border"
-rev = "c591a36"
+rev = "d402b3c"
 hash = "f281261ff04ad7ec867c3f802a50835f"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:toggle-pane"
-rev = "c591a36"
+rev = "d402b3c"
 hash = "5b2fbef7d1513ce38ff72623a071a5e"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:git"
-rev = "c591a36"
+rev = "d402b3c"
 hash = "5bb0bfab901d3601c370eafdd66edd31"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:mactag"
-rev = "c591a36"
+rev = "d402b3c"
 hash = "34e3e12060f833cc21446f23a7ced8d1"
 
 [[plugin.deps]]
@@ -30,13 +30,13 @@ hash = "3c66d95bf63fa16178e98967fbae9429"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:piper"
-rev = "c591a36"
+rev = "d402b3c"
 hash = "45a533508a9840cc5a10cf6129f63e6a"
 
 [[plugin.deps]]
 use = "yazi-rs/plugins:types"
-rev = "c591a36"
-hash = "ff056b5acd05d915dc3a3936cb0cfd3e"
+rev = "d402b3c"
+hash = "d368d5a6a72657e1c0e7ee7340dcea8c"
 
 [[plugin.deps]]
 use = "DaBuddhalint/smart-switch"
