@@ -63,19 +63,22 @@ workspaces:
             - printf '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPress any key to close the pane'
             - sleep 5
 
+      # A small floating modal rather than a bottom split: the script narrates
+      # one reset prompt and one spinner, and a 40% split of the build tab was
+      # mostly empty around it. `qmk-flash` resolves the
+      # firmware directory itself (config.toml, then the built-in default), so
+      # no cwd and no venv: it flashes through picotool, not the qmk CLI.
       - id: qmk-flash-right
         name: QMK Flash Right
         icon: "󱊟 "
-        direction: down
-        size: 40%
+        direction: floating
+        size: 55% x 40%
         optional: true
         action:
           type: Run
           label: Flash the Svalboard Lightly right half firmware
-          cwd: ~/Projects/platforms/keyboards/qmk-config
-          python_venv: auto
           args:
-            - qmk flash -kb svalboard/trackball/pmw3389/right -km townk
+            - qmk-flash right
 {{ end }}
 {{ if $hasWeztermPlugins }}
   - id: wezterm-plugins
