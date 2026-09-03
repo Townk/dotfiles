@@ -200,6 +200,12 @@ cask 'musicbrainz-picard'           # Tag editor for after-the-fact fixes over
 # makemkv/xld casks above, this one is healthy — no Gatekeeper deprecation.
 # It also ships LibationCli (headless), the seam an automated push would use.
 cask 'libation'                     # Audible -> M4B, chapters preserved
+
+# Ebooks — bindery (~/Projects/apps/calibre/bindery) makes the KEPUB it pushes
+# to cantina's `books` (CWA) so the Kobo gets the normalized book on its first
+# sync instead of CWA's stale conversion. Go binary, bottled, no runtime deps
+# (no Python, no Go at runtime), which is why it lives here and not in mise.
+brew 'kepubify'                     # EPUB -> KEPUB for Kobo eReaders
 {{- end }}
 
 cask '1password'                    # Password manager
