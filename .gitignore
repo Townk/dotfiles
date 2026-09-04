@@ -75,3 +75,5 @@ assets/blink-shell/chezmoi-system.js
 report/
 *:.config/
 *:.local/
+
+.omo
