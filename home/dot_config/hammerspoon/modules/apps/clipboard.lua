@@ -43,7 +43,12 @@ function M.defineSelection()
 
   hs.timer.doAfter(0.2, function()
     local selectedText = hs.pasteboard.getContents()
-    hs.pasteboard.setContents(oldClipboard)
+    -- Restore only when there was something to restore: getContents() returns
+    -- nil for non-text clipboards (an image, a file clip), and setContents(nil)
+    -- CLEARS the pasteboard — the lookup would wipe the user's last copy.
+    if oldClipboard ~= nil then
+      hs.pasteboard.setContents(oldClipboard)
+    end
     if selectedText and selectedText ~= "" then
       hs.execute("echo '" .. selectedText .. "' | /usr/bin/shortcuts run 'Word LookUp'")
     else

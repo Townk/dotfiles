@@ -887,27 +887,16 @@ config.bypass_mouse_reporting_modifiers = "CTRL"
 -- defaults: when the mux has mouse reporting on, WezTerm forwards them
 -- automatically, and when it's off (scrollback, bare shell) the defaults give
 -- native text selection plus the CTRL+drag selection escape hatch.
+--
+-- There is deliberately no middle-click binding here. Middle-click paste is
+-- owned by Hammerspoon's `apps/middle-click-paste.lua`, whose event tap
+-- consumes the click before WezTerm sees it and pastes the newest clip from
+-- the recob history store (typing shell-quoted paths for file clips) — so any
+-- binding here would be unreachable. The OS-level handler also fixes Ghostty,
+-- where no binding could work: under mux mouse capture Ghostty reports the
+-- click to the mux before its own paste code runs, and in a bare shell it
+-- pastes its internal selection clipboard instead of the system one.
 config.mouse_bindings = {
-	-- Middle-click pastes the system clipboard (select-to-copy fills it: pbcopy
-	-- locally, OSC 52 → WezTerm from a remote Zellij over ssh). Injects the bytes
-	-- into the focused pane, so it works through ssh too.
-	--
-	-- Zellij keeps SGR mouse reporting on, so WezTerm normally forwards the
-	-- middle-click straight to Zellij and never matches this assignment. The
-	-- `mouse_reporting = true` entry is what lets the paste fire while the app is
-	-- capturing the mouse; the second entry covers panes where reporting is off
-	-- (bare shell, scrollback). See https://wezterm.org/config/mouse.html.
-	{
-		event = { Down = { streak = 1, button = "Middle" } },
-		mods = "NONE",
-		mouse_reporting = true,
-		action = wezterm.action.PasteFrom("Clipboard"),
-	},
-	{
-		event = { Down = { streak = 1, button = "Middle" } },
-		mods = "NONE",
-		action = wezterm.action.PasteFrom("Clipboard"),
-	},
 	-- CMD+click opens the URL under the cursor. Same Zellij problem as the paste
 	-- above: with mouse reporting on, the click goes to Zellij and WezTerm never
 	-- sees it, so opening a link otherwise needs the SHIFT bypass. The
