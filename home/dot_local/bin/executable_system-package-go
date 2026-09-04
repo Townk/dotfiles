@@ -10,6 +10,18 @@ set -eu -o pipefail
 
 source "$HOME/.local/lib/system-package-common.zsh"
 
+# Drop an inherited GOROOT. mise exports one pinned to the version active
+# when the parent shell loaded, and after `mise upgrade` + `mise prune` that
+# directory is gone. Calls through the mise shim survive (the shim re-exports
+# the env per invocation), but do_sync deliberately invokes the toolchain
+# binary directly via "$(go env GOROOT)/bin/go" — skipping the shim — so an
+# inherited GOROOT outvotes the binary and every install fails with
+# "go: cannot find GOROOT directory". With GOROOT unset, go derives its root
+# from the resolved executable: always the toolchain actually in use. The
+# worker's source of truth is already "the go on PATH" (the line above
+# re-derives GOROOT from it), so a deliberate custom GOROOT loses nothing.
+unset GOROOT
+
 GOFILE="$PKG_DIR/Gofile"
 
 go_bin_dir() {

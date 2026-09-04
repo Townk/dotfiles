@@ -200,3 +200,74 @@ SH
     The stderr should include 'still not pinentry-mac'
   End
 End
+
+# refresh_mise_env: the shell that launches system-update exported mise's
+# version-pinned toolchain vars (GOROOT/GOBIN, JAVA_HOME, KOTLIN_HOME, …) at
+# prompt time. When `mise upgrade` + `mise prune` then replaces a toolchain
+# mid-run, those inherited values point at DELETED install dirs, and children
+# that read them directly (the Go worker runs "$GOROOT/bin/go" without the
+# shim that would re-resolve the env) die with "go: cannot find GOROOT
+# directory". The helper evals `mise hook-env` — the same re-sync
+# `mise activate` runs at every prompt — so the rest of the run sees the
+# versions that actually exist.
+Describe 'system-update: refresh_mise_env re-syncs the inherited toolchain env'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-update"
+
+  setup_mise_env() {
+    MSTAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/mise-env.XXXXXX")"
+    mkdir -p "$MSTAGE/home/.local" "$MSTAGE/bin" "$MSTAGE/emptybin"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$MSTAGE/home/.local/lib"
+    # Stub mise: hook-env re-exports GOROOT at the NEW toolchain and drops
+    # the var of a removed tool — the two moves that matter.
+    cat >"$MSTAGE/bin/mise" <<'SH'
+#!/bin/sh
+[ "$1" = "hook-env" ] || exit 1
+printf 'export GOROOT=%s\nunset STALE_TOOL_HOME\n' "$MISE_STUB_NEWROOT"
+SH
+    chmod +x "$MSTAGE/bin/mise"
+    export MISE_STUB_NEWROOT="$MSTAGE/go-1.27.1"
+    export SCRIPT_PATH="$SCRIPT"
+  }
+  cleanup_mise_env() { rm -rf "$MSTAGE"; unset MISE_STUB_NEWROOT MSTAGE; }
+  BeforeEach 'setup_mise_env'
+  AfterEach 'cleanup_mise_env'
+
+  run_refresh() {
+    HOME="$MSTAGE/home" PATH="$MSTAGE/bin:$PATH" \
+      GOROOT="/pruned/go/1.27.0" STALE_TOOL_HOME="/pruned/tool" \
+      zsh -f -c '
+        set --
+        export SYSTEM_UPDATE_NO_RUN=1
+        source "$SCRIPT_PATH"
+        refresh_mise_env
+        print -r -- "GOROOT=${GOROOT:-<unset>}"
+        print -r -- "STALE_TOOL_HOME=${STALE_TOOL_HOME:-<unset>}"
+      '
+  }
+
+  run_refresh_without_mise() {
+    # A PATH with no mise on it: the guard must no-op and leave the env alone.
+    HOME="$MSTAGE/home" PATH="$MSTAGE/emptybin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      GOROOT="/kept/go" \
+      zsh -f -c '
+        set --
+        export SYSTEM_UPDATE_NO_RUN=1
+        source "$SCRIPT_PATH"
+        refresh_mise_env
+        print -r -- "GOROOT=${GOROOT:-<unset>}"
+      '
+  }
+
+  It 're-exports current toolchain vars and unsets removed ones'
+    When call run_refresh
+    The status should be success
+    The stdout should include "GOROOT=$MISE_STUB_NEWROOT"
+    The stdout should include "STALE_TOOL_HOME=<unset>"
+  End
+
+  It 'is a no-op when mise is not installed'
+    When call run_refresh_without_mise
+    The status should be success
+    The stdout should include "GOROOT=/kept/go"
+  End
+End

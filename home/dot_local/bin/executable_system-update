@@ -313,6 +313,22 @@ repair_mise_rust_legacy_links() {
   ((repaired == 0)) || log_warn "Removed stale mise Rust link(s); reinstalling Rust with current XDG paths."
 }
 
+# Re-sync mise-managed environment after `mise upgrade` + `mise prune`. The
+# shell that launched this run exported version-pinned values at prompt time
+# (GOROOT/GOBIN, JAVA_HOME, KOTLIN_HOME, LUA_INIT, RUSTUP_TOOLCHAIN, plus
+# install-dir PATH entries), and the converge step may have just deleted the
+# dirs those point at. Children that read them directly then die against a
+# pruned toolchain — e.g. the Go package worker invokes "$GOROOT/bin/go"
+# WITHOUT the shim that would re-resolve the env per invocation, so an
+# inherited GOROOT pointing into the pruned go install fails every install
+# with "go: cannot find GOROOT directory". hook-env is the same re-sync
+# `mise activate` performs at every prompt: export the versions that exist
+# NOW, unset what no longer does, and drop pruned dirs from PATH.
+refresh_mise_env() {
+  command -v mise >/dev/null 2>&1 || return 0
+  eval "$(mise hook-env -s zsh 2>/dev/null)" || true
+}
+
 # Re-point the gpgconf pinentry backend at pinentry-mac. `brew upgrade pinentry`
 # reverts the `pinentry` → pinentry-mac symlink to pinentry-curses independently
 # of any chezmoi-managed source, silently degrading the Touch ID / GUI unlock. We
@@ -603,6 +619,7 @@ if ! command -v brew >/dev/null 2>&1; then
     spin::streamed "mise: converging toolchains" \
       zsh -c 'mise install && mise upgrade && mise prune -y' \
       || log_warn "mise sync had failures"
+    refresh_mise_env
     step_report "$mise_before" snapshot_mise tool
   fi
   if command -v system-package >/dev/null 2>&1; then
@@ -666,6 +683,7 @@ if command -v mise >/dev/null 2>&1; then
   spin::streamed "mise: installing declared tools" mise install || log_warn "mise install had failures"
   spin::streamed "mise: upgrading tools" mise upgrade || log_warn "mise upgrade had failures"
   spin::streamed "mise: pruning old installs" mise prune -y || log_warn "mise prune had failures"
+  refresh_mise_env
   step_report "$mise_before" snapshot_mise tool
 fi
 
