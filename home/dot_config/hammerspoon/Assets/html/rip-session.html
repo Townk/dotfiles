@@ -274,8 +274,11 @@
     function policyFor(kind) {
       return kind === 'Blu-ray' ? 'remux' : kind === 'DVD' ? 'encode' : '';
     }
+    // MakeMKV's own size column is binary gigabytes labelled "GB" (86.8 GB
+    // == 93.2e9 bytes); this total sums those same rows, so it must use the
+    // same unit or it will not add up to what the operator sees per-row.
     function fmtGB(bytes) {
-      return (bytes / 1e9).toFixed(1) + ' GB';
+      return (bytes / 1073741824).toFixed(1) + ' GB';
     }
 
     function renderHeader() {
