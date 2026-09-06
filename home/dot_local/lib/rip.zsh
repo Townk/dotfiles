@@ -37,6 +37,13 @@ RIP_JOB_ICON="${RIP_JOB_ICON:-glyph:nf-md-disc}"
 # time.
 RIP_BIN_DIR="${RIP_BIN_DIR:-$HOME/.local/bin}"
 
+# MakeMKV hides titles shorter than its minimum (default 120 s), which on a
+# Blu-ray hides most deleted scenes. 30 s keeps those and drops the menu
+# stubs. INVARIANT: MakeMKV renumbers titles when this changes, so the SAME
+# value goes to every makemkvcon call — scan and rips alike. A seam for
+# tests, never a per-call knob.
+RIP_MAKEMKV_MINLENGTH="${RIP_MAKEMKV_MINLENGTH:-30}"
+
 rip::staging_root() { print -r -- "${RIP_STAGING_ROOT:-$HOME/Depot/Rips}"; }
 rip::remote_base()  { print -r -- "${RIP_REMOTE_BASE:-media@cantina:/srv/media}"; }
 
@@ -2275,7 +2282,7 @@ rip::disc_worker() {
   # with parameter expansion — no pipe-into-read chain (see the note that
   # used to sit here: each stage of such a chain is its own subshell in zsh).
   local scan best_idx kind
-  scan="$("$mkc" -r info disc:0 2>/dev/null | awk -F'[:,"]' '
+  scan="$("$mkc" -r --minlength="$RIP_MAKEMKV_MINLENGTH" info disc:0 2>/dev/null | awk -F'[:,"]' '
     /^TINFO:[0-9]+,9,0,/ {
       idx = $2
       secs = ($6 + 0) * 3600 + ($7 + 0) * 60 + ($8 + 0)
@@ -2316,7 +2323,7 @@ rip::disc_worker() {
   # `*PRGV:*` instead of an anchored `PRGV:*` so that garbage prefix can
   # never suppress the first real progress update.
   local -a pty_wrap=(${=RIP_PTY_WRAP-script -q -F /dev/null})
-  "${pty_wrap[@]}" "$mkc" -r --progress=-same mkv disc:0 "$best_idx" "$rip_dir" 2>&1 \
+  "${pty_wrap[@]}" "$mkc" -r --minlength="$RIP_MAKEMKV_MINLENGTH" --progress=-same mkv disc:0 "$best_idx" "$rip_dir" 2>&1 \
     | LC_ALL=C tr -d '\r' \
     | while IFS= read -r line; do
         case "$line" in
@@ -2627,7 +2634,7 @@ rip::extra_enqueue() {
 # rip::session_scan — `makemkvcon -r info disc:0`, reduced to one JSON line
 # per title for the panel, led by a disc-kind line when MakeMKV reported one:
 #   {"kind":"Blu-ray"}
-#   {"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088}
+#   {"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088,"source":"00001.mpls","segments":"1"}
 #
 # The kind line comes from CINFO:1 ("Blu-ray disc" / "DVD disc" / …, the same
 # ap_ItemAttributeId table CINFO/TINFO/SINFO all share) and is only ever
@@ -2638,10 +2645,13 @@ rip::extra_enqueue() {
 #
 # TINFO attributes (MakeMKV's ap_ItemAttributeId enum, the same table the disc
 # worker's own `attr 9 = duration` parse rests on): 9 = duration "H:MM:SS",
-# 10 = human size string ("6.9 GB"), 11 = size in bytes. Only those three are
-# read; every other attribute on the line (2 = name, 27 = source filename, …)
-# is ignored, and a title with no duration at all is not a row the panel can
-# show, so it is dropped.
+# 10 = human size string ("6.9 GB"), 11 = size in bytes, 16 = source playlist
+# or clip filename ("00001.mpls"), 26 = segment map ("1" or "643,644" for a
+# multi-segment title). 16 and 26 feed the Blu-ray pre-fill's structure layer
+# (a later task groups titles that share a source file/segment set); every
+# other attribute on the line (2 = name, 27 = MakeMKV's own output filename,
+# …) is still ignored, and a title with no duration at all is not a row the
+# panel can show, so it is dropped.
 #
 # The parse is a single-pass awk over `TINFO:<idx>,<attr>,<code>,"<value>"`,
 # splitting on POSITION (three commas, then the quoted tail) rather than on a
@@ -2667,7 +2677,7 @@ rip::session_scan() {
   local mkc="${RIP_MAKEMKVCON_BIN:-/Applications/MakeMKV.app/Contents/MacOS/makemkvcon}"
   local -a pty_wrap=(${=RIP_PTY_WRAP-script -q -F /dev/null})
   local rows
-  rows="$("${pty_wrap[@]}" "$mkc" -r info disc:0 2>/dev/null \
+  rows="$("${pty_wrap[@]}" "$mkc" -r --minlength="$RIP_MAKEMKV_MINLENGTH" info disc:0 2>/dev/null \
     | LC_ALL=C tr -d '\r' \
     | awk '
       {
@@ -2709,6 +2719,8 @@ rip::session_scan() {
           if (!(idx in seen)) { order[n++] = idx; seen[idx] = 1 }
         } else if (attr == "10") size[idx] = val
         else if (attr == "11") bytes[idx] = val
+        else if (attr == "16") src[idx] = val
+        else if (attr == "26") seg[idx] = val
       }
       END {
         if (kind != "") printf "K\t%s\n", kind
@@ -2724,25 +2736,28 @@ rip::session_scan() {
           if (m == 3) secs = t[1] * 3600 + t[2] * 60 + t[3]
           else if (m == 2) secs = t[1] * 60 + t[2]
           else secs = t[1] + 0
-          printf "%s\t%s\t%s\t%s\t%s\n", k, d, secs, s, b
+          sf = (k in src) ? src[k] : ""; gsub(/[^0-9A-Za-z._-]/, "", sf)
+          sg = (k in seg) ? seg[k] : ""; gsub(/[^0-9,]/, "", sg)
+          printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", k, d, secs, s, b, sf, sg
         }
       }
     ')"
-  local idx dur secs size bytes n=0
+  local idx dur secs size bytes src seg n=0
   local kind_line=""
   local -a title_lines=()
-  while IFS=$'\t' read -r idx dur secs size bytes; do
+  while IFS=$'\t' read -r idx dur secs size bytes src seg; do
     if [[ "$idx" == K ]]; then
       # kind is one of two literals produced by the awk above — safe to print
       # raw. Buffered, not printed here: nothing may reach stdout until the
       # title count is confirmed below, or a kind-but-no-titles disc would
-      # leak a kind line ahead of the rc-1 failure.
+      # leak a kind line ahead of the rc-1 failure. (The K row carries only
+      # two fields; `read` leaves src/seg empty — harmless, unused below.)
       kind_line=$(printf '{"kind":"%s"}' "$dur")
       continue
     fi
     [[ "$idx" == <-> ]] || continue
-    title_lines+=("$(printf '{"no":%d,"duration":"%s","seconds":%d,"size":"%s","bytes":%d}' \
-      "$idx" "$dur" "$secs" "$size" "$bytes")")
+    title_lines+=("$(printf '{"no":%d,"duration":"%s","seconds":%d,"size":"%s","bytes":%d,"source":"%s","segments":"%s"}' \
+      "$idx" "$dur" "$secs" "$size" "$bytes" "$src" "$seg")")
     n=$(( n + 1 ))
   done <<< "$rows"
   (( n > 0 )) || { log_error "rip: disc scan found no titles"; return 1 }
@@ -3056,7 +3071,7 @@ rip::session_worker() {
     # `LC_ALL=C tr -d '\r'` for the pty's ONLCR translation and for byte
     # safety, and an unanchored *PRGV:* match so the pty's own echo/erase
     # bytes on the first line cannot suppress the first update.
-    "${pty_wrap[@]}" "$mkc" -r --progress=-same mkv disc:0 "${item_no[i]}" "$sess_dir" 2>&1 \
+    "${pty_wrap[@]}" "$mkc" -r --minlength="$RIP_MAKEMKV_MINLENGTH" --progress=-same mkv disc:0 "${item_no[i]}" "$sess_dir" 2>&1 \
       | LC_ALL=C tr -d '\r' \
       | while IFS= read -r line; do
           case "$line" in

@@ -45,6 +45,7 @@ EOF
 case "$*" in
   *info*)
     [ -n "${RIP_FAKE_INFO_EMPTY:-}" ] && exit 1
+    printf '%s\n' "$*" >> "${RIP_FAKE_INFO_LOG:-/dev/null}"
     # Disc kind, as MakeMKV reports it (CINFO attr 1; the code number is
     # irrelevant to the parse, only the string is read). `none` models a
     # disc that reports no kind at all.
@@ -61,13 +62,19 @@ case "$*" in
     echo 'TINFO:0,9,0,"0:00:38"'
     echo 'TINFO:0,10,0,"58.0 MB"'
     echo 'TINFO:0,11,0,"60817408"'
+    echo 'TINFO:0,16,0,"00003.mpls"'
+    echo 'TINFO:0,26,0,"3"'
     echo 'TINFO:0,27,0,"title_t00.mkv"'
     echo 'TINFO:1,9,0,"2:08:59"'
     echo 'TINFO:1,10,0,"6.9 GB"'
     echo 'TINFO:1,11,0,"7408345088"'
+    echo 'TINFO:1,16,0,"00001.mpls"'
+    echo 'TINFO:1,26,0,"1"'
     echo 'TINFO:2,9,0,"0:26:14"'
     echo 'TINFO:2,10,0,"1.1 GB"'
     echo 'TINFO:2,11,0,"1181116006"'
+    echo 'TINFO:2,16,0,"00002.mpls"'
+    echo 'TINFO:2,26,0,"2"'
     ;;
   *mkv*)
     dir=""; prev=""; no=""
@@ -222,9 +229,9 @@ EOF
     When run zsh "$RIPBIN" --scan
     The status should equal 0
     The line 1 of output should equal '{"kind":"DVD"}'
-    The line 2 of output should equal '{"no":0,"duration":"0:00:38","seconds":38,"size":"58.0 MB","bytes":60817408}'
-    The line 3 of output should equal '{"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088}'
-    The line 4 of output should equal '{"no":2,"duration":"0:26:14","seconds":1574,"size":"1.1 GB","bytes":1181116006}'
+    The line 2 of output should equal '{"no":0,"duration":"0:00:38","seconds":38,"size":"58.0 MB","bytes":60817408,"source":"00003.mpls","segments":"3"}'
+    The line 3 of output should equal '{"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088,"source":"00001.mpls","segments":"1"}'
+    The line 4 of output should equal '{"no":2,"duration":"0:26:14","seconds":1574,"size":"1.1 GB","bytes":1181116006,"source":"00002.mpls","segments":"2"}'
     # The NAME attribute ("Trailer, Theatrical") and the source filename are
     # not title rows and must never leak into the stream.
     The output should not include "Theatrical"
@@ -260,6 +267,36 @@ EOF
     The status should equal 1
     The stderr should include "no titles"
     The output should equal ""
+  End
+
+  It '--scan asks MakeMKV for every title of 30 s or more'
+    export RIP_FAKE_INFO_LOG="$RIP_SANDBOX/info.log"; : > "$RIP_FAKE_INFO_LOG"
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The contents of file "$RIP_FAKE_INFO_LOG" should include "--minlength=30 "
+  End
+
+  It 'session worker rips with the SAME minimum title length the scan used'
+    export JOB_ID="job-session-minlen"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
+    write_plan <<'EOF'
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
+EOF
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 0
+    The output should include "verified"
+    The contents of file "$RIP_FAKE_MKC_LOG" should include "--minlength=30 "
+  End
+
+  It 'auto flow scans and rips with the same minimum title length'
+    export JOB_ID="job-disc-minlen"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_INFO_LOG="$RIP_SANDBOX/info.log"; : > "$RIP_FAKE_INFO_LOG"
+    export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
+    export RIP_MAKEMKV_MINLENGTH=45
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
+    The status should equal 0
+    The contents of file "$RIP_FAKE_INFO_LOG" should include "--minlength=45 "
+    The contents of file "$RIP_FAKE_MKC_LOG" should include "--minlength=45 "
   End
 
   It '--scan runs makemkvcon under the pty wrap seam'
