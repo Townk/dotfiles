@@ -37,6 +37,16 @@ RIP_JOB_ICON="${RIP_JOB_ICON:-glyph:nf-md-disc}"
 # time.
 RIP_BIN_DIR="${RIP_BIN_DIR:-$HOME/.local/bin}"
 
+# RIP_LIBEXEC_DIR — where provider and helper executables live (moved up
+# here from its former home beside the provider seam below so every
+# config default resolves at source time, in one place).
+RIP_LIBEXEC_DIR="${RIP_LIBEXEC_DIR:-$HOME/.local/libexec}"
+
+# The Blu-ray pre-fill harvester (spec 2026-09-06): structure + menu names
+# for the session panel. A seam for tests; the harvest may fail, the scan
+# may not (see rip::session_scan).
+RIP_BD_MENU_BIN="${RIP_BD_MENU_BIN:-$RIP_LIBEXEC_DIR/rip-bd-menu}"
+
 # MakeMKV hides titles shorter than its minimum (default 120 s), which on a
 # Blu-ray hides most deleted scenes. 30 s keeps those and drops the menu
 # stubs. INVARIANT: MakeMKV renumbers titles when this changes, so the SAME
@@ -2380,25 +2390,36 @@ rip::disc_enqueue() {
 
 # --- extra: one DVD extra, encoded DIRECT from the disc ---------------------
 
-# rip::_dvd_volume — the mounted DVD's mount point: the first /Volumes/*
-# entry holding a VIDEO_TS dir (the ripper module's own disc-detection
-# test, mirrored here so rip-extra recognizes the same discs it does).
-# RIP_DVD_VOLUME is the seam: set, it's used directly (still required to
-# hold a VIDEO_TS dir — the hermetic tests build a real one under a sandbox
-# dir, so this stays a faithful stand-in rather than a rubber stamp),
-# bypassing the /Volumes scan entirely. Prints the volume path; empty + rc
-# 1 when nothing matches.
-rip::_dvd_volume() {
-  if [[ -n "${RIP_DVD_VOLUME:-}" ]]; then
-    [[ -d "$RIP_DVD_VOLUME/VIDEO_TS" ]] || return 1
-    print -r -- "$RIP_DVD_VOLUME"
+# rip::_volume_with <marker-dir> <override> — the mount point of the first
+# /Volumes/* carrying <marker-dir>, or <override> when it is non-empty (a
+# test seam; still required to carry the marker). DVDs mount with VIDEO_TS/,
+# Blu-rays with BDMV/; both lookups are this one function.
+rip::_volume_with() {
+  local marker="$1" override="$2" vol
+  if [[ -n "$override" ]]; then
+    [[ -d "$override/$marker" ]] || return 1
+    print -r -- "$override"
     return 0
   fi
-  local vol
   for vol in /Volumes/*(N); do
-    [[ -d "$vol/VIDEO_TS" ]] && { print -r -- "$vol"; return 0 }
+    [[ -d "$vol/$marker" ]] && { print -r -- "$vol"; return 0 }
   done
   return 1
+}
+
+# rip::_dvd_volume — the mounted DVD's mount point (the ripper module's own
+# disc-detection test, mirrored here so rip-extra recognizes the same discs
+# it does). RIP_DVD_VOLUME is the seam. Delegates to rip::_volume_with.
+rip::_dvd_volume() {
+  rip::_volume_with VIDEO_TS "${RIP_DVD_VOLUME:-}"
+}
+
+# rip::_bd_volume — the mounted Blu-ray's mount point: the first /Volumes/*
+# carrying a BDMV/ directory. RIP_BD_VOLUME is the seam, exactly as
+# RIP_DVD_VOLUME is for DVDs (set, it is used directly, still required to
+# hold a BDMV/).
+rip::_bd_volume() {
+  rip::_volume_with BDMV "${RIP_BD_VOLUME:-}"
 }
 
 # rip::_hb_dvd <hb_bin> <args…> — run HandBrakeCLI directly against the
@@ -2634,7 +2655,8 @@ rip::extra_enqueue() {
 # rip::session_scan — `makemkvcon -r info disc:0`, reduced to one JSON line
 # per title for the panel, led by a disc-kind line when MakeMKV reported one:
 #   {"kind":"Blu-ray"}
-#   {"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088,"source":"00001.mpls","segments":"1"}
+#   {"candidates":["Making Of","Trailer"]}
+#   {"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088,"source":"00001.mpls","segments":"1","suggest":{"role":"extra","name":"Making Of","why":"menu"}}
 #
 # The kind line comes from CINFO:1 ("Blu-ray disc" / "DVD disc" / …, the same
 # ap_ItemAttributeId table CINFO/TINFO/SINFO all share) and is only ever
@@ -2643,12 +2665,21 @@ rip::extra_enqueue() {
 # until titles are confirmed present (see below) — a disc with a kind but no
 # readable titles must still fail with empty stdout.
 #
+# On a Blu-ray only, the rows then go through the pre-fill harvest
+# (rip::_bd_volume + $RIP_BD_MENU_BIN, spec 2026-09-06): a `{"candidates":[…]}`
+# line (only when the helper returns a non-empty list) followed by the rows,
+# each with a `"suggest"` key merged in where the helper named one for that
+# title's `no`. The harvest is allowed to degrade — no mounted BDMV volume,
+# no helper, a non-zero exit, a 60 s timeout, or unparseable JSON all fall
+# back to the bare rows plus one log_warn on stderr — but it may never fail
+# the scan itself.
+#
 # TINFO attributes (MakeMKV's ap_ItemAttributeId enum, the same table the disc
 # worker's own `attr 9 = duration` parse rests on): 9 = duration "H:MM:SS",
 # 10 = human size string ("6.9 GB"), 11 = size in bytes, 16 = source playlist
 # or clip filename ("00001.mpls"), 26 = segment map ("1" or "643,644" for a
 # multi-segment title). 16 and 26 feed the Blu-ray pre-fill's structure layer
-# (a later task groups titles that share a source file/segment set); every
+# (rip-bd-menu groups titles that share a source file/segment set); every
 # other attribute on the line (2 = name, 27 = MakeMKV's own output filename,
 # …) is still ignored, and a title with no duration at all is not a row the
 # panel can show, so it is dropped.
@@ -2763,6 +2794,27 @@ rip::session_scan() {
   (( n > 0 )) || { log_error "rip: disc scan found no titles"; return 1 }
   [[ -n "$kind_line" ]] && print -r -- "$kind_line"
   local line
+  if [[ "$kind_line" == *Blu-ray* ]]; then
+    # PRE-FILL HARVEST (spec 2026-09-06): structure + menu names from the
+    # mounted disc's BD-J assets, merged onto the rows. Every failure here
+    # is a warning and bare rows — the harvest can degrade, the scan cannot
+    # fail because of it. The helper reads files under BDMV/JAR only; it
+    # never touches the drive through MakeMKV.
+    local vol harvest
+    if vol="$(rip::_bd_volume)" && [[ -x "$RIP_BD_MENU_BIN" ]] \
+       && harvest="$(print -rl -- "${title_lines[@]}" | timeout 60 "$RIP_BD_MENU_BIN" "$vol" 2>/dev/null)" \
+       && [[ -n "$harvest" ]] && jq -e . <<< "$harvest" >/dev/null 2>&1; then
+      local cands
+      cands="$(jq -c '.candidates // [] | select(length > 0) | {candidates: .}' <<< "$harvest")"
+      [[ -n "$cands" ]] && print -r -- "$cands"
+      for line in "${title_lines[@]}"; do
+        jq -c --argjson h "$harvest" \
+          '. as $r | ($h.suggest[($r.no|tostring)]) as $s | if $s then $r + {suggest: $s} else $r end' <<< "$line"
+      done
+      return 0
+    fi
+    log_warn "rip: Blu-ray pre-fill harvest unavailable (no BDMV volume, helper missing or failed) — rows without suggestions"
+  fi
   for line in "${title_lines[@]}"; do print -r -- "$line"; done
   return 0
 }
@@ -3213,7 +3265,6 @@ rip::session_worker() {
 # of acquire is provider-blind, which is what lets a second store (a
 # DRM-free seller, or the `manual` importer) arrive as a new file rather
 # than a rewrite of this one.
-RIP_LIBEXEC_DIR="${RIP_LIBEXEC_DIR:-$HOME/.local/libexec}"
 
 # rip::ab_provider_bin [name] — absolute path to the named provider's
 # executable (default: $RIP_AB_PROVIDER, else "libation"). Chezmoi's source

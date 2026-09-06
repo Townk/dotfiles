@@ -244,6 +244,65 @@ EOF
     The status should equal 0
     The line 1 of output should equal '{"kind":"Blu-ray"}'
     The line 2 of output should include '"no":0'
+    # No RIP_BD_VOLUME/RIP_BD_MENU_BIN fixture in this example — the
+    # pre-fill harvest degrades (no BDMV volume mounted) and warns.
+    The stderr should include "harvest"
+  End
+
+  # The pre-fill harvest: a fake helper answers with suggestions for the
+  # fake's three titles; the scan merges them and leads with the candidates.
+  bd_fixture() {
+    export RIP_BD_VOLUME="$RIP_SANDBOX/bd"; mkdir -p "$RIP_BD_VOLUME/BDMV"
+    export RIP_FAKE_BDM_LOG="$RIP_SANDBOX/bdm.log"; : > "$RIP_FAKE_BDM_LOG"
+    cat > "$RIP_SANDBOX/rip-bd-menu" <<'EOF'
+#!/bin/sh
+printf 'argv=%s\n' "$*" >> "${RIP_FAKE_BDM_LOG:-/dev/null}"
+cat >> "${RIP_FAKE_BDM_LOG:-/dev/null}"
+[ -n "${RIP_FAKE_BDM_RC:-}" ] && exit "$RIP_FAKE_BDM_RC"
+printf '%s\n' '{"suggest":{"0":{"role":"skip","name":"","why":"unmapped"},"2":{"role":"extra","name":"Making Of","why":"menu"}},"candidates":["Making Of","Trailer"]}'
+EOF
+    chmod +x "$RIP_SANDBOX/rip-bd-menu"; export RIP_BD_MENU_BIN="$RIP_SANDBOX/rip-bd-menu"
+  }
+
+  It '--scan on a Blu-ray runs the harvester with the volume and the rows, and merges its answer'
+    export RIP_FAKE_DISC_KIND=bluray; bd_fixture
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The line 1 of output should equal '{"kind":"Blu-ray"}'
+    The line 2 of output should equal '{"candidates":["Making Of","Trailer"]}'
+    The line 3 of output should include '"no":0,'
+    The line 3 of output should include '"suggest":{"role":"skip","name":"","why":"unmapped"}'
+    The line 4 of output should not include '"suggest"'
+    The line 5 of output should include '"suggest":{"role":"extra","name":"Making Of","why":"menu"}'
+    The contents of file "$RIP_FAKE_BDM_LOG" should include "argv=$RIP_SANDBOX/bd"
+    The contents of file "$RIP_FAKE_BDM_LOG" should include '"source":"00002.mpls","segments":"2"'
+  End
+
+  It '--scan on a Blu-ray degrades to bare rows when the harvester fails'
+    export RIP_FAKE_DISC_KIND=bluray; bd_fixture; export RIP_FAKE_BDM_RC=3
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The line 1 of output should equal '{"kind":"Blu-ray"}'
+    The line 2 of output should include '"no":0,'
+    The output should not include '"suggest"'
+    The output should not include '"candidates"'
+    The stderr should include "harvest"
+  End
+
+  It '--scan on a Blu-ray with no mounted BDMV volume degrades the same way'
+    export RIP_FAKE_DISC_KIND=bluray; bd_fixture; rm -rf "$RIP_BD_VOLUME"
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The output should not include '"candidates"'
+    The stderr should include "harvest"
+  End
+
+  It '--scan on a DVD never runs the harvester'
+    bd_fixture
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The output should not include '"candidates"'
+    The contents of file "$RIP_FAKE_BDM_LOG" should equal ""
   End
 
   It '--scan omits the kind line when MakeMKV reports none (the panel keeps its folder label)'
