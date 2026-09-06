@@ -2256,8 +2256,9 @@ rip::pipeline_enqueue() {
 # picks the LONGEST title (the movie heuristic; MakeMKV GUI → intermediate/
 # is the fallback for discs where that guess is wrong), rips it losslessly
 # into .work/autorip/ (unwatched, unpushed — same invariant as the encode
-# temp), then chains the pipeline stages under the 40–100 band. The drive
-# is free the moment the rip stage ends.
+# temp), then either chains the pipeline (DVD: encode → push) or publishes
+# the rip as-is and pushes (Blu-ray: remux). The drive is free the moment
+# the rip stage ends.
 rip::disc_worker() {
   setopt localoptions noerrexit nopipefail
   rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
@@ -2267,21 +2268,28 @@ rip::disc_worker() {
   local rip_dir; rip_dir="$(rip::staging_root)/.work/autorip"
   rm -rf -- "$rip_dir" && mkdir -p "$rip_dir"
 
-  # Longest title: TINFO:<idx>,9,0,"H:MM:SS" is the duration attribute.
-  # Single-pass awk (not a pipe-into-`read` chain — that shape runs each
-  # stage in its own subshell in zsh, which is a known footgun for getting
-  # a scalar back out): split on `:`, `,`, `"` so the quoted "H:MM:SS"
-  # duration and the leading TINFO:<idx>,9,0, header share one delimiter
-  # set, then track the max in END and print just the winning index.
-  local best_idx
-  best_idx="$("$mkc" -r info disc:0 2>/dev/null | awk -F'[:,"]' '
+  # Longest title AND the disc kind, one pass. `-F'[:,"]'` splits the quoted
+  # "H:MM:SS" duration into fields; the CINFO kind string has no colon or
+  # comma, so it lands whole in $5 ('CINFO:1,6209,"Blu-ray disc"' → fields
+  # CINFO 1 6209 "" Blu-ray disc). Printed as "<idx>\t<kind>" and split
+  # with parameter expansion — no pipe-into-read chain (see the note that
+  # used to sit here: each stage of such a chain is its own subshell in zsh).
+  local scan best_idx kind
+  scan="$("$mkc" -r info disc:0 2>/dev/null | awk -F'[:,"]' '
     /^TINFO:[0-9]+,9,0,/ {
       idx = $2
       secs = ($6 + 0) * 3600 + ($7 + 0) * 60 + ($8 + 0)
       if (best_idx == "" || secs > best_secs) { best_secs = secs; best_idx = idx }
     }
-    END { print best_idx }
+    /^CINFO:1,/ {
+      lv = tolower($5)
+      if (index(lv, "blu-ray") > 0) kind = "Blu-ray"
+      else if (index(lv, "dvd") > 0 && index(lv, "hd dvd") == 0) kind = "DVD"
+    }
+    END { print best_idx "\t" kind }
   ')"
+  best_idx="${scan%%$'\t'*}"
+  kind="${scan#*$'\t'}"
   [[ -n "$best_idx" ]] || { log_error "rip: disc scan found no titles"; rm -rf -- "$rip_dir"; return 1 }
 
   rip::_progress 0 "ripping disc — $title"
@@ -2328,8 +2336,24 @@ rip::disc_worker() {
     return $(( rc ? rc : 1 ))
   fi
 
-  RIP_PROGRESS_BASE=40 RIP_PROGRESS_SPAN=60 rip::pipeline_worker "${ripped[1]}" "$title"
-  rc=$?
+  if [[ "$kind" == Blu-ray ]]; then
+    # REMUX (operator rule, 2026-09-05): the ripped title is the published
+    # file. Publish by rename, then push — the same push the pipeline
+    # worker's encode would have handed off to. An unknown kind (no CINFO)
+    # takes the DVD path below, exactly as before this branch existed.
+    RIP_PROGRESS_BASE=40 RIP_PROGRESS_SPAN=5 rip::_progress 0 "publishing — $title"
+    print -r -- "rip: publishing movies/$title/$title.mkv"
+    if rip::_publish_file "${ripped[1]}" "movies/$title/$title.mkv"; then
+      RIP_PUSH_MIN_AGE_S=0 RIP_PROGRESS_BASE=45 RIP_PROGRESS_SPAN=55 rip::push_worker movies
+      rc=$?
+    else
+      log_error "rip: could not publish movies/$title/$title.mkv — nothing kept (the rip is cheap to redo)"
+      rc=1
+    fi
+  else
+    RIP_PROGRESS_BASE=40 RIP_PROGRESS_SPAN=60 rip::pipeline_worker "${ripped[1]}" "$title"
+    rc=$?
+  fi
   # pipeline success already rm'd the input; sweep the dir either way
   # (failure keeps the encode-stage rules; the RIP itself is cheap to redo
   # from the disc, so autorip debris never outlives the job)
@@ -3014,7 +3038,7 @@ rip::session_worker() {
   # inside a loop leaks the previous iteration's values as stdout garbage
   # (live-caught in rip::_enrich_music, 2026-08-20 — same rule, same file).
   local i rc base span line rest cur total produced f
-  local src rel out out_dir remote_rc pct failed=0 published=0 push_rc=0
+  local src rel remote_rc pct failed=0 published=0 push_rc=0
   local -a fresh=()
 
   #--- RIP phase (0–50) ------------------------------------------------------
@@ -3132,9 +3156,7 @@ rip::session_worker() {
       failed=1
       continue
     fi
-    out="$(rip::staging_root)/$rel"
-    out_dir="${out:h}"
-    if ! { mkdir -p "$out_dir" && mv -f -- "$out_tmp" "$out" }; then
+    if ! rip::_publish_file "$out_tmp" "$rel"; then
       rm -f -- "$out_tmp"
       log_error "rip: could not publish $rel — item dropped, session continues"
       failed=1

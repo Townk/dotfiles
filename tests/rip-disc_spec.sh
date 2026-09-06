@@ -156,6 +156,19 @@ EOF
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)" should not be exist
   End
 
+  It 'auto flow: a Blu-ray publishes the longest title as ripped — no encode'
+    export JOB_ID="job-disc-bd"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_DISC_KIND=bluray
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'Project Hail Mary (2026)'"
+    The status should equal 0
+    The output should include "publishing"
+    The output should include "verified"
+    The contents of file "$RIP_SANDBOX/server/movies/Project Hail Mary (2026)/Project Hail Mary (2026).mkv" should equal "ripped-1"
+    The contents of file "$RIP_FAKE_HB_LOG" should be blank
+    The path "$RIP_STAGING_ROOT/.work/autorip" should not be exist
+    The path "$RIP_STAGING_ROOT/movies/Project Hail Mary (2026)" should not be exist
+  End
+
   It 'rip failure keeps nothing and propagates rc'
     export RIP_FAKE_MKV_RC=5
     When run zsh -c "source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
