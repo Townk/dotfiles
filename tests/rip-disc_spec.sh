@@ -307,6 +307,47 @@ EOF
     The stderr should include "harvest"
   End
 
+  # MERGE SAFETY (spec §Scan): a harvest that PARSES but has the wrong shape
+  # must degrade like any other failure. Both of these pass `jq -e .`; only
+  # the one-shot merge's row count catches them, and the row count is what
+  # stands between a misbehaving helper and a scan that exits 0 with no
+  # title rows at all.
+  bd_fixture_says() {
+    cat > "$RIP_SANDBOX/rip-bd-menu-variant" <<EOF
+#!/bin/sh
+cat > /dev/null
+$1
+EOF
+    chmod +x "$RIP_SANDBOX/rip-bd-menu-variant"
+    export RIP_BD_MENU_BIN="$RIP_SANDBOX/rip-bd-menu-variant"
+  }
+
+  It "--scan degrades to bare rows when the harvester prints two JSON documents"
+    export RIP_FAKE_DISC_KIND=bluray; bd_fixture
+    bd_fixture_says "printf '%s\n' '{\"suggest\":{\"0\":{\"role\":\"skip\",\"name\":\"\",\"why\":\"unmapped\"}},\"candidates\":[\"Making Of\"]}' '{\"debug\":true}'"
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The output should not include '"suggest"'
+    The output should not include '"candidates"'
+    The output should include '"no":0,'
+    The output should include '"no":1,'
+    The output should include '"no":2,'
+    The stderr should include "harvest"
+  End
+
+  It "--scan degrades to bare rows when the harvester's suggest is not an object"
+    export RIP_FAKE_DISC_KIND=bluray; bd_fixture
+    bd_fixture_says "printf '%s\n' '{\"suggest\":\"x\",\"candidates\":[\"A\"]}'"
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The output should not include '"suggest"'
+    The output should not include '"candidates"'
+    The output should include '"no":0,'
+    The output should include '"no":1,'
+    The output should include '"no":2,'
+    The stderr should include "harvest"
+  End
+
   It '--scan on a DVD never runs the harvester'
     bd_fixture
     When run zsh "$RIPBIN" --scan

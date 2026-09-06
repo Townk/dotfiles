@@ -140,15 +140,15 @@ local searchTask -- in-flight rip-tmdb-search hs.task (anchors it against GC)
 -- Payload normalization
 --------------------------------------------------------------------------------
 
--- Shape whatever the caller passed into exactly the five keys the client
+-- Shape whatever the caller passed into exactly the seven keys the client
 -- reads, with no nils (an absent key would simply vanish from the JSON and
 -- leave the client reading undefined).
 --
 -- One asymmetry worth naming rather than papering over: hs.json.encode has
 -- no way to distinguish an empty Lua LIST from an empty Lua MAP, and emits
 -- "{}" for both — so `titles = {}` reaches JS as an object, not an array.
--- That is why every list the client receives (titles, library, and the
--- search results below) is read through its own Array.isArray guard
+-- That is why every list the client receives (titles, library, candidates,
+-- and the search results below) is read through its own Array.isArray guard
 -- (rip-session.html's arr()); there is no producer-side fix available.
 local function session_payload(data)
 	data = data or {}

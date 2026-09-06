@@ -2692,7 +2692,8 @@ rip::extra_enqueue() {
 #
 # Everything that reaches the JSON is numeric or structural AND is scrubbed to
 # a safe character class right here in awk (duration → digits and colons, size
-# → alphanumerics, dot and space, bytes → digits or 0), so the printf below
+# → alphanumerics, dot and space, bytes → digits or 0, source → alphanumerics,
+# dot, underscore, hyphen; segments → digits and commas), so the printf below
 # cannot be handed a quote or a backslash to escape. That is the whole reason
 # this emits JSON with printf instead of shelling out to jq.
 #
@@ -2800,20 +2801,35 @@ rip::session_scan() {
     # is a warning and bare rows — the harvest can degrade, the scan cannot
     # fail because of it. The helper reads files under BDMV/JAR only; it
     # never touches the drive through MakeMKV.
+    #
+    # MERGE SAFETY (spec §Scan, final review 2026-09-06): the merge is ONE
+    # jq over ALL rows, and its output is used only when it came back with
+    # exactly as many lines as there are rows. `jq -e .` stays the first,
+    # cheap check, but parsing is not enough: a harvest that is valid JSON
+    # with the WRONG SHAPE — a stray second document on the helper's
+    # stdout, or a `suggest` that is not an object — would otherwise cost
+    # us the rows themselves, and a scan that exits 0 with no title rows is
+    # the one failure mode the panel cannot survive. The row count catches
+    # that shape and degrades it exactly like a missing helper: one warn,
+    # bare rows.
     local vol harvest
     if vol="$(rip::_bd_volume)" && [[ -x "$RIP_BD_MENU_BIN" ]] \
        && harvest="$(print -rl -- "${title_lines[@]}" | timeout 60 "$RIP_BD_MENU_BIN" "$vol" 2>/dev/null)" \
        && [[ -n "$harvest" ]] && jq -e . <<< "$harvest" >/dev/null 2>&1; then
-      local cands
-      cands="$(jq -c '.candidates // [] | select(length > 0) | {candidates: .}' <<< "$harvest")"
-      [[ -n "$cands" ]] && print -r -- "$cands"
-      for line in "${title_lines[@]}"; do
-        jq -c --argjson h "$harvest" \
-          '. as $r | ($h.suggest[($r.no|tostring)]) as $s | if $s then $r + {suggest: $s} else $r end' <<< "$line"
-      done
-      return 0
+      local merged
+      merged="$(print -rl -- "${title_lines[@]}" | jq -c --argjson h "$harvest" \
+        '. as $r | ($h.suggest[($r.no|tostring)]) as $s
+         | if ($s|type) == "object" then $r + {suggest: $s} else $r end' 2>/dev/null)"
+      if [[ -n "$merged" && "$(print -r -- "$merged" | wc -l | tr -d ' ')" == "${#title_lines}" ]]; then
+        local cands
+        cands="$(jq -c '.candidates // [] | select(length > 0) | {candidates: .}' <<< "$harvest" 2>/dev/null)"
+        [[ -n "$cands" ]] && print -r -- "$cands"
+        print -r -- "$merged"
+        return 0
+      fi
+      # fall through to the warn + bare rows below
     fi
-    log_warn "rip: Blu-ray pre-fill harvest unavailable (no BDMV volume, helper missing or failed) — rows without suggestions"
+    log_warn "rip: Blu-ray pre-fill harvest unavailable (no BDMV volume, helper missing, failed, or an unusable harvest) — rows without suggestions"
   fi
   for line in "${title_lines[@]}"; do print -r -- "$line"; done
   return 0

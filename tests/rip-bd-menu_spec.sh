@@ -48,7 +48,7 @@ printf '%s\n' "$*" >> "${FAKE_TESS_LOG:-/dev/null}"
 case "$1" in
   *eng_composite_1.png) printf 'SCENE\nSELECTIONS\n\nDISC\nMENU\n\nAUDIO\n\nSPECIAL\nFEATURES\n\nPLAY\n' ;;
   *eng_composite_2.png) printf 'COMMENTARY BY\nDIRECTORS PHIL LORD\nAND CHRISTOPHER MILLER\n\nOFF\n\nI THINK I'"'"'M HANDLING THINGS\nPRETTY AWESOME\n\nFRANÇAIS\n\nESPAÑOL\n\nSUBTITLES\n\nENGLISH (FOR THE DEAF AND HARD OF HEARING)\n\nYOU SLEEP, I WATCH\n\nDAY 1 FOOD PASTE\n\nDELETED SCENES\n\nPLAY ALL\n\nEARTH'"'"'S FAVORITE ERIDIAN\n\nHOW TO PUT ON A SPACESUIT\n' ;;
-  *eng_composite_3.png) printf 'HOW TO PUT ON A SPACESUIT\n\nMAYBE WE'"'"'RE COUSINS\n\nPLAY ALL\n\nENGLISH\n\nENGLISH DESCRIPTIVE AUDIO\n\nNEDERLANDS\n' ;;
+  *eng_composite_3.png) printf 'HOW TO PUT ON A SPACESUIT\n\nMAYBE WE'"'"'RE COUSINS\n\nTHE MAKING OF\n\nPLAY ALL\n\nENGLISH\n\nENGLISH DESCRIPTIVE AUDIO\n\nNEDERLANDS\n' ;;
   *) printf '' ;;
 esac
 exit 0
@@ -101,13 +101,21 @@ EOF
 
   It 'lists candidates in OCR order, blocks joined, UI words dropped, title-cased'
     When call run_helper '.candidates | join(" | ")'
-    The output should equal "I Think I'm Handling Things Pretty Awesome | You Sleep, I Watch | Day 1 Food Paste | Earth's Favorite Eridian | How to Put On a Spacesuit | Maybe We're Cousins | I Think I'm Handling Things | Pretty Awesome"
+    The output should equal "I Think I'm Handling Things Pretty Awesome | You Sleep, I Watch | Day 1 Food Paste | Earth's Favorite Eridian | How to Put On a Spacesuit | Maybe We're Cousins | The Making Of | I Think I'm Handling Things | Pretty Awesome"
+  End
+
+  # A label that ENDS on a small word ends on it deliberately: "The Making
+  # of" reads as a truncation, so title_case lowercases small words in the
+  # middle only (final review, 2026-09-06).
+  It 'never lowercases the last word: THE MAKING OF -> The Making Of'
+    When call run_helper '.candidates | index("The Making Of") != null'
+    The output should equal "true"
   End
 
   It 'only OCRs the requested language and the common sheets'
     export FAKE_TESS_LOG="$S/tess.log"; : > "$FAKE_TESS_LOG"
     When call run_helper '.candidates | length'
-    The output should equal "8"
+    The output should equal "9"
     The contents of file "$FAKE_TESS_LOG" should include "eng_composite_2.png"
     The contents of file "$FAKE_TESS_LOG" should include "common_composite_1.png"
     The contents of file "$FAKE_TESS_LOG" should not include "fra_composite"
@@ -158,7 +166,7 @@ EOF
   It 'harvests OCR independent of slugs: no resources xml, no jar, sprite sheets present'
     rm -f "$D/00001/resources_eng.xml" "$D/00000.jar"
     When call run_helper '[(.candidates|length), (.suggest|[.[].why]|unique|join(","))] | join(" ")'
-    The output should equal "8 part,playall,twin"
+    The output should equal "9 part,playall,twin"
   End
 
   It 'has no twin, no play-all and no feature suggestion when nothing shares segments'

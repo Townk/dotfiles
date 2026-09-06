@@ -140,7 +140,10 @@
         // disc cannot know what the server holds.
         if (sg && role !== 'feature' && !t.inLibrary && (sg.role === 'extra' || sg.role === 'skip')) {
           role = sg.role;
-          name = typeof sg.name === 'string' ? sg.name : '';
+          // Through the SAME slash-stripping the typed path applies: an OCR
+          // string like "24/7" would otherwise land in the field and block
+          // Start on a name the operator never typed.
+          name = typeof sg.name === 'string' ? String(sg.name).replace(/\//g, '') : '';
           why = String(sg.why || '');
         }
         rows.push({
@@ -211,13 +214,23 @@
           return '<div class="detail"><div class="have">' + SVG_CHECK_SM
             + '<span>already in your library &mdash; ' + esc(r.inLibrary) + '</span></div></div>';
         }
+        // The structural/harvest skips are DIM (.meta), not green: green is
+        // the library colour ("the server already has this"), and a row the
+        // disc itself skipped is a different fact entirely.
         if (r.why === 'playall') {
-          return '<div class="detail"><div class="have">'
+          return '<div class="detail"><div class="meta">'
             + '<span>play-all of the scenes listed as extras &mdash; skipped</span></div></div>';
         }
         if (r.why === 'twin') {
-          return '<div class="detail"><div class="have">'
+          return '<div class="detail"><div class="meta">'
             + '<span>same content as the feature &mdash; skipped</span></div></div>';
+        }
+        // A wall of Skips from a misread harvest must be VISIBLE (spec
+        // §Panel): every unmapped row says so, so the operator can flip it
+        // or name it from the DISC MENU dropdown instead of wondering.
+        if (r.why === 'unmapped') {
+          return '<div class="detail"><div class="meta">'
+            + '<span>not in the disc menu &mdash; skipped</span></div></div>';
         }
         return '';
       }
@@ -874,12 +887,17 @@
       });
 
       // Delegated `focusin` (bubbles, unlike `focus`): opens the DISC MENU
-      // picker as soon as the operator lands in an extra's name field.
+      // picker when the operator lands in an EMPTY extra's name field only.
+      // A pre-filled name is exactly the case that needs no picker, and
+      // auto-opening on every row hijacked the panel's arrow keys and Enter
+      // (final review, 2026-09-06). Backspace or typing still brings it up —
+      // that is the `input` listener above, unchanged.
       rowsEl.addEventListener('focusin', function (e) {
         var t = e.target;
         var idxAttr = t.getAttribute && t.getAttribute('data-name');
         if (idxAttr == null) return;
-        openMenu(parseInt(idxAttr, 10), t.value);
+        var r = rows[parseInt(idxAttr, 10)];
+        if (r && r.name === '') openMenu(parseInt(idxAttr, 10), '');
       });
 
       // Delegated `focusout`: close the menu picker once focus leaves both
@@ -926,7 +944,10 @@
       if (dd.mode) {
         if (e.key === 'ArrowDown') { e.preventDefault(); dd.idx = Math.min(dd.items.length - 1, dd.idx + 1); renderDropdown(); return; }
         if (e.key === 'ArrowUp') { e.preventDefault(); dd.idx = Math.max(0, dd.idx - 1); renderDropdown(); return; }
-        if (e.key === 'Enter') { e.preventDefault(); pickResult(); return; }
+        // An OPEN but EMPTY disc menu (nothing matched the typed text) must
+        // not swallow Enter into a no-op — it falls through to the panel's
+        // normal Enter, which commits the field.
+        if (e.key === 'Enter' && !(dd.mode === 'menu' && dd.items.length === 0)) { e.preventDefault(); pickResult(); return; }
         if (e.key === 'Escape') { e.preventDefault(); closeDropdown(); return; }
         // anything else falls through to normal typing
       }

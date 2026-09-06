@@ -188,10 +188,19 @@ def slug_words(slug):
 
 
 def title_case(s):
+    """Title-case a menu string; small words lowercase in the MIDDLE only.
+
+    Neither the first nor the LAST word is ever lowercased: a label that
+    ends on a small word ends on it deliberately, and "The Making of"
+    reads as a sentence someone cut short. "THE MAKING OF" -> "The Making
+    Of" (final review, 2026-09-06).
+    """
+    words = s.split()
+    last = len(words) - 1
     out = []
-    for i, w in enumerate(s.split()):
+    for i, w in enumerate(words):
         lw = w.lower()
-        if i > 0 and lw in SMALL:
+        if 0 < i < last and lw in SMALL:
             out.append(lw)
         elif w.isupper() or w.islower():
             out.append(w[:1].upper() + w[1:].lower())
@@ -267,8 +276,11 @@ def ocr_candidates(jar_dir, lang):
     ok = True
     for png in pngs:
         try:
+            # 15 s PER SHEET, not 60: the scan gives the WHOLE harvest a 60 s
+            # budget, and a disc carries several sprite sheets — one stuck
+            # sheet must not consume the budget the rest of them need.
             res = subprocess.run([tess, png, "-", "--psm", "11", "-l", lang],
-                                 capture_output=True, text=True, timeout=60)
+                                 capture_output=True, text=True, timeout=15)
         except (OSError, subprocess.TimeoutExpired) as e:
             warn("tesseract failed on %s: %s" % (png, e))
             ok = False
