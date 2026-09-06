@@ -1,0 +1,350 @@
+#!/usr/bin/env python3
+"""rip-bd-menu — the Blu-ray session pre-fill harvester.
+
+Reads the scan's title rows (JSONL on stdin: no, seconds, source, segments)
+and the mounted disc's BD-J menu assets under <volume>/BDMV/JAR/, and prints
+ONE JSON object the scan merges into its output:
+
+  {"suggest": {"<no>": {"role": "extra"|"skip", "name": "...", "why": "..."}},
+   "candidates": ["...", ...]}
+
+Two independent layers (spec 2026-09-06-rip-bluray-prefill-design.md):
+  structure — from the rows alone: the feature's raw m2ts twin, play-all
+              playlists and their parts;
+  names     — button slugs (resources_<lang>.xml) ordered by the jar's
+              SF_nn[_DS_mm]_<Slug>_onKeyPressed handler names, matched to
+              tesseract's reading of the menu sprite sheets.
+Every layer degrades on its own: no JAR dir → structure only; tesseract
+failing → slug-rendered names. Only unreadable stdin is an error (rc 2).
+Never touches the drive through MakeMKV; reads files under BDMV/JAR only.
+"""
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import zipfile
+
+STOP_SLUGS = re.compile(
+    r"^(audio|subtitles?|chaphighlight|chTxt\d+|sceneselections?|specialfeatures"
+    r"|DeletedScenes|CommentaryBy|PlayAll|Play|DiscMenu|Off|Resume|Setup"
+    r"|english|francais|french|espanol|spanish|nederlands|dutch|deutsch|german"
+    r"|italiano|italian|portugues|portuguese|japanese|korean|chinese)$",
+    re.I,
+)
+STOP_TEXT = re.compile(
+    r"^(play|play all|audio|subtitles?|scene selections?|disc menu|special features"
+    r"|deleted scenes|off|resume|set ?up|english.*|fran[cç]ais.*|espa[nñ]ol.*"
+    r"|nederlands.*|deutsch.*|italiano.*|portugu[eê]s.*|commentary by.*)$",
+    re.I,
+)
+SMALL = {"a", "an", "the", "of", "to", "in", "and", "or", "for", "at", "by"}
+LANG2 = {"eng": "en", "fra": "fr", "fre": "fr", "spa": "es", "deu": "de", "ger": "de",
+         "ita": "it", "nld": "nl", "dut": "nl", "por": "pt", "jpn": "ja"}
+
+
+def warn(msg):
+    print("rip-bd-menu: " + msg, file=sys.stderr)
+
+
+def read_rows():
+    rows = []
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            raise SystemExit(_fail("rows: not JSON: " + line[:60]))
+        if "no" not in obj:
+            continue
+        segs = [s for s in str(obj.get("segments", "")).split(",") if s]
+        rows.append({
+            "no": int(obj["no"]),
+            "seconds": int(obj.get("seconds") or 0),
+            "source": str(obj.get("source", "")),
+            "segments": segs,
+        })
+    return rows
+
+
+def _fail(msg):
+    warn(msg)
+    return 2
+
+
+def source_number(row):
+    m = re.match(r"(\d+)", row["source"])
+    return int(m.group(1)) if m else 10**9
+
+
+# --- structure ---------------------------------------------------------------
+
+def structure(rows):
+    """Return (feature, suggest, playall_parts, standalone).
+
+    suggest holds twin / playall / part entries (names empty); playall_parts is
+    the ordered list of part rows across every play-all (play-alls by source
+    number); standalone is every other non-feature row, by source number.
+    """
+    suggest = {}
+    mpls = [r for r in rows if r["source"].lower().endswith(".mpls")]
+    pool = mpls if mpls else rows
+    feature = max(pool, key=lambda r: (r["seconds"], -r["no"])) if pool else None
+
+    mpls_segs = {tuple(r["segments"]): r for r in mpls if r["segments"]}
+    twins = set()
+    for r in rows:
+        if r is feature or not r["source"].lower().endswith(".m2ts"):
+            continue
+        key = tuple(r["segments"])
+        if key and key in mpls_segs and mpls_segs[key] is not r:
+            suggest[r["no"]] = {"role": "skip", "name": "", "why": "twin"}
+            twins.add(r["no"])
+
+    single = {}
+    for r in rows:
+        if r is feature or r["no"] in twins:
+            continue
+        if len(r["segments"]) == 1:
+            single.setdefault(r["segments"][0], r)
+
+    playalls = []
+    parts_all = []
+    part_nos = set()
+    for r in sorted(rows, key=source_number):
+        if r is feature or r["no"] in twins or len(r["segments"]) < 2:
+            continue
+        if all(s in single and single[s] is not r for s in r["segments"]):
+            playalls.append(r)
+            suggest[r["no"]] = {"role": "skip", "name": "", "why": "playall"}
+            for s in r["segments"]:
+                p = single[s]
+                if p["no"] not in part_nos:
+                    parts_all.append(p)
+                    part_nos.add(p["no"])
+                    suggest[p["no"]] = {"role": "extra", "name": "", "why": "part"}
+
+    playall_nos = {r["no"] for r in playalls}
+    standalone = [r for r in rows
+                  if r is not feature and r["no"] not in twins
+                  and r["no"] not in playall_nos and r["no"] not in part_nos]
+    # Special features are authored as a contiguous playlist block (spec
+    # rule 8): order the standalone titles by distance from the play-all
+    # group's playlist range, so the featurette beside the scenes (00719
+    # next to 00714–00720) outranks pre-menu trailers at 00149 / 01213.
+    group_nums = [source_number(r) for r in playalls + parts_all]
+    if group_nums:
+        lo, hi = min(group_nums), max(group_nums)
+
+        def dist(r):
+            n = source_number(r)
+            return 0 if lo <= n <= hi else min(abs(n - lo), abs(n - hi))
+        standalone.sort(key=lambda r: (dist(r), source_number(r)))
+    else:
+        standalone.sort(key=source_number)
+    return feature, suggest, parts_all, standalone
+
+
+# --- names -------------------------------------------------------------------
+
+def slug_tokens(slug):
+    return [t.lower() for t in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+", slug)]
+
+
+def slug_words(slug):
+    return " ".join(t.capitalize() for t in slug_tokens(slug))
+
+
+def title_case(s):
+    out = []
+    for i, w in enumerate(s.split()):
+        lw = w.lower()
+        if i > 0 and lw in SMALL:
+            out.append(lw)
+        elif w.isupper() or w.islower():
+            out.append(w[:1].upper() + w[1:].lower())
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
+def button_slugs(jar_dir, lang):
+    lang2 = LANG2.get(lang, lang[:2])
+    slugs = []
+    for xml in sorted(glob.glob(os.path.join(jar_dir, "*", "resources_%s.xml" % lang))):
+        try:
+            text = open(xml, encoding="utf-8", errors="replace").read()
+        except OSError as e:
+            warn("cannot read %s: %s" % (xml, e))
+            continue
+        for slug in re.findall(r"\b%s_button_([A-Za-z0-9]+)_[ans](?:_|\")" % re.escape(lang2), text):
+            if STOP_SLUGS.match(slug):
+                continue
+            if slug.lower() not in [s.lower() for s in slugs]:
+                slugs.append(slug)
+    return slugs
+
+
+def handler_order(jar_dir):
+    """[(sf, ds_or_None, slug)] sorted by (sf, ds), from every jar's bytes."""
+    found = {}
+    for jar in sorted(glob.glob(os.path.join(jar_dir, "*.jar"))):
+        try:
+            with zipfile.ZipFile(jar) as z:
+                for name in z.namelist():
+                    try:
+                        data = z.read(name)
+                    except Exception:
+                        continue
+                    for sf, ds, slug in re.findall(rb"SF_(\d+)(?:_DS_(\d+))?_([A-Za-z0-9]+)_onKeyPressed", data):
+                        key = slug.decode().lower()
+                        entry = (int(sf), int(ds) if ds else None, slug.decode())
+                        found.setdefault(key, entry)
+        except (zipfile.BadZipFile, OSError) as e:
+            warn("cannot read %s: %s" % (jar, e))
+    return sorted(found.values(), key=lambda e: (e[0], -1 if e[1] is None else e[1]))
+
+
+def ordered_slugs(jar_dir, lang):
+    buttons = button_slugs(jar_dir, lang)
+    handlers = handler_order(jar_dir)
+    seen = set()
+    ordered = []  # (slug, is_ds)
+    for sf, ds, slug in handlers:
+        if slug.lower() in seen or STOP_SLUGS.match(slug):
+            continue
+        seen.add(slug.lower())
+        ordered.append((slug, ds is not None))
+    for slug in buttons:
+        if slug.lower() in seen:
+            continue
+        seen.add(slug.lower())
+        ordered.append((slug, False))
+    return ordered
+
+
+def ocr_candidates(jar_dir, lang):
+    """(candidates, ok). Blocks first, then single lines; stoplist applied."""
+    tess = os.environ.get("RIP_TESSERACT_BIN", "tesseract")
+    pngs = sorted(glob.glob(os.path.join(jar_dir, "*", "%s_composite_*.png" % lang))) \
+        + sorted(glob.glob(os.path.join(jar_dir, "*", "common_composite_*.png")))
+    blocks, lines = [], []
+    ok = True
+    for png in pngs:
+        try:
+            res = subprocess.run([tess, png, "-", "--psm", "11", "-l", lang],
+                                 capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            warn("tesseract failed on %s: %s" % (png, e))
+            ok = False
+            break
+        if res.returncode != 0:
+            warn("tesseract rc %d on %s" % (res.returncode, png))
+            ok = False
+            break
+        block = []
+        for raw in res.stdout.split("\n") + [""]:
+            line = re.sub(r"\s+", " ", raw).strip()
+            if line:
+                block.append(line)
+            elif block:
+                joined = " ".join(block)
+                # Blocks first; the single lines of a WRAPPED label second,
+                # and only when the block itself survived the stoplist —
+                # "SCENE"/"SELECTIONS" or "DIRECTORS PHIL LORD" must never
+                # become candidates on their own (spec rule 6).
+                if len(joined) >= 3 and not STOP_TEXT.match(joined):
+                    blocks.append(joined)
+                    if len(block) > 1:
+                        lines.extend(block)
+                block = []
+    if not ok:
+        return [], False
+    out, seen = [], set()
+    for entry in blocks + lines:
+        if len(entry) < 3 or STOP_TEXT.match(entry):
+            continue
+        key = entry.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(title_case(entry))
+    return out, True
+
+
+def letters(s):
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def match_names(slugs, candidates):
+    """[(slug, is_ds, name, why)] — each candidate consumed at most once."""
+    free = list(candidates)
+    out = []
+    for slug, is_ds in slugs:
+        toks = slug_tokens(slug)
+        best, best_score = None, 0
+        for cand in free:
+            body = letters(cand)
+            score = sum(1 for t in toks if t in body)
+            if score > best_score:
+                best, best_score = cand, score
+        if best is not None and best_score >= 1:
+            free.remove(best)
+            out.append((slug, is_ds, best, "menu"))
+        else:
+            out.append((slug, is_ds, slug_words(slug), "slug"))
+    return out
+
+
+# --- main --------------------------------------------------------------------
+
+def main():
+    if len(sys.argv) != 2:
+        return _fail("usage: rip-bd-menu <volume> < rows.jsonl")
+    volume = sys.argv[1]
+    try:
+        rows = read_rows()
+    except SystemExit as e:
+        return e.code
+    if not rows:
+        return _fail("rows: nothing on stdin")
+
+    feature, suggest, parts, standalone = structure(rows)
+
+    jar_dir = os.path.join(volume, "BDMV", "JAR")
+    candidates, names = [], []
+    if os.path.isdir(jar_dir):
+        slugs = ordered_slugs(jar_dir, os.environ.get("RIP_BD_MENU_LANG", "eng"))
+        if slugs:
+            candidates, _ok = ocr_candidates(jar_dir, os.environ.get("RIP_BD_MENU_LANG", "eng"))
+            names = match_names(slugs, candidates)
+    else:
+        warn("no BDMV/JAR under %s — structure only" % volume)
+
+    mapped = 0
+    if names:
+        ds_names = [n for n in names if n[1]]
+        sf_names = [n for n in names if not n[1]]
+        for row, (slug, _ds, name, why) in zip(parts, ds_names):
+            suggest[row["no"]] = {"role": "extra", "name": name, "why": why}
+            mapped += 1
+        for row, (slug, _ds, name, why) in zip(standalone, sf_names):
+            suggest[row["no"]] = {"role": "extra", "name": name, "why": why}
+            mapped += 1
+    if mapped > 0:
+        for r in rows:
+            if r is feature or r["no"] in suggest:
+                continue
+            suggest[r["no"]] = {"role": "skip", "name": "", "why": "unmapped"}
+        # parts the DS list did not cover keep role extra, name "" (why part)
+
+    print(json.dumps({"suggest": {str(k): v for k, v in sorted(suggest.items())},
+                      "candidates": candidates}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
