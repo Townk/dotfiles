@@ -20,19 +20,20 @@
 --     stamps). It is deliberately unwatched and never pushed; startup
 --     just clears whatever a killed job stranded there.
 --   * Disc insert: an hs.fs.volume watcher classifies the new volume —
---     a VIDEO_TS/ dir means a DVD, an .aiff track means an audio CD
---     (opened in XLD, which owns the rest of that flow; nothing else here
---     touches audio discs).
---   * A DVD opens the Rip Session Review panel (ripper/session-dialog.lua)
---     already scanning, so the panel IS the consent surface: every title
---     on the disc becomes a row the operator marks Feature / Extra / Skip
---     and names, Esc means "Not now" (remembered per volume path until it
---     unmounts, so nothing loops on a disc left in the drive), and Start
---     produces ONE plan that becomes one `rip-disc --session` job. The
---     disc itself is never touched by Lua: `rip-disc --scan` reads the
---     titles, `rip-disc --library` lists the movies an extra can attach to,
---     `rip-disc --have` answers the auto-extras question, and makemkvcon
---     plus the rest of the chain live in rip.zsh.
+--     a VIDEO_TS/ dir means a DVD, a BDMV/ dir means a Blu-ray, an .aiff
+--     track means an audio CD (opened in XLD, which owns the rest of that
+--     flow; nothing else here touches audio discs).
+--   * A DVD or Blu-ray opens the Rip Session Review panel
+--     (ripper/session-dialog.lua) already scanning, so the panel IS the
+--     consent surface: every title on the disc becomes a row the operator
+--     marks Feature / Extra / Skip and names, Esc means "Not now"
+--     (remembered per volume path until it unmounts, so nothing loops on a
+--     disc left in the drive), and Start produces ONE plan that becomes one
+--     `rip-disc --session` job. The disc itself is never touched by Lua:
+--     `rip-disc --scan` reads the titles, `rip-disc --library` lists the
+--     movies an extra can attach to, `rip-disc --have` answers the
+--     auto-extras question, and makemkvcon plus the rest of the chain live
+--     in rip.zsh.
 --     Spec: docs/superpowers/specs/2026-08-20-rip-session-review-design.md.
 --   * The old consent alert + TMDB hs.chooser (tmdbNameAndRip,
 --     plainTitlePrompt, tmdbChoices, labelToQuery) are still here but no
@@ -51,8 +52,12 @@
 --     same as this harness looks, minus the "nothing enqueued" part.
 --   * The volume watcher only sees mounts that happen after M.start()
 --     runs, so a disc already sitting in the drive at launch/reload needs
---     a manual nudge: M.ripDisc() rescans /Volumes for a VIDEO_TS/ dir,
---     clears its declined flag, and reopens the panel on a fresh scan.
+--     a manual nudge: M.ripDisc() rescans /Volumes for a VIDEO_TS/ or
+--     BDMV/ dir, clears its declined flag, and reopens the panel on a
+--     fresh scan.
+--   * Policy rides on the plan's `kind` (DVD encodes, Blu-ray remuxes —
+--     spec 2026-09-05-rip-bluray-remux-design.md); Lua never decides it,
+--     only carries it.
 
 local M = {}
 
@@ -499,6 +504,13 @@ local sessionCallbacks = {
 	end,
 
 	onStart = function(plan)
+		-- The policy the worker applies (DVD encodes, Blu-ray remuxes) rides
+		-- on the plan. No fallback here: a plan without a kind is refused by
+		-- `rip-disc --session` with a stderr line, which the failure pairing
+		-- below already surfaces — better than silently encoding a UHD.
+		if sessionState then
+			plan.kind = sessionState.kind
+		end
 		local path = planTempPath()
 		local fh = io.open(path, "w")
 		if not fh then
@@ -608,6 +620,9 @@ local function runSessionScan(state)
 			local ok, obj = pcall(hs.json.decode, line)
 			if ok and type(obj) == "table" and obj.no ~= nil then
 				titles[#titles + 1] = obj
+			elseif ok and type(obj) == "table" and type(obj.kind) == "string" and obj.kind ~= "" then
+				-- The scan is authoritative over the folder-derived label.
+				state.kind = obj.kind
 			end
 		end
 		log.f("disc scan: %d title(s) on %s", #titles, state.volume)
@@ -674,11 +689,27 @@ local function runLibraryFetch(state)
 	thisTask:start()
 end
 
+-- The disc kind a mounted volume's layout announces: a DVD carries
+-- VIDEO_TS/, a Blu-ray (1080p or UHD alike) BDMV/. This is the PROVISIONAL
+-- label — the panel shows it the instant the disc mounts, 30–60 s before a
+-- UHD scan returns — and the scan's own kind line (rip-disc --scan, from
+-- MakeMKV's CINFO) overrides it when it lands. nil for anything else
+-- (audio CDs, data discs, USB sticks), which is the "not a video disc"
+-- answer considerVolume and M.ripDisc both key on.
+local function discKind(vol)
+	if hs.fs.attributes(vol .. "/VIDEO_TS", "mode") == "directory" then
+		return "DVD"
+	elseif hs.fs.attributes(vol .. "/BDMV", "mode") == "directory" then
+		return "Blu-ray"
+	end
+	return nil
+end
+
 -- Open the panel in its scanning state, then ask the disc and the server in
 -- parallel; each answer re-renders the panel in place (renderSession).
-local function startSession(vol)
+local function startSession(vol, kind)
 	sessionVolume = vol
-	sessionState = { volume = volLabel(vol), kind = "DVD", scanning = true }
+	sessionState = { volume = volLabel(vol), kind = kind, scanning = true }
 	session.show(sessionState, sessionCallbacks)
 	runSessionScan(sessionState)
 	runLibraryFetch(sessionState)
@@ -688,8 +719,9 @@ local function considerVolume(vol)
 	if declinedVolumes[vol] then
 		return
 	end
-	if hs.fs.attributes(vol .. "/VIDEO_TS", "mode") == "directory" then
-		startSession(vol)
+	local kind = discKind(vol)
+	if kind then
+		startSession(vol, kind)
 		return
 	end
 	-- audio CD: macOS mounts them as cddafs with .aiff track files
@@ -708,8 +740,8 @@ end
 -- Manual re-trigger for a disc that was already in the drive before
 -- M.start() armed the volume watcher (hs.fs.volume only sees mounts that
 -- happen after it starts) — and the re-offer for a disc the operator said
--- "Not now" to. Scans /Volumes for a VIDEO_TS dir, clears its declined flag,
--- and reopens the session panel on a fresh scan.
+-- "Not now" to. Scans /Volumes for a VIDEO_TS/ or BDMV/ dir, clears its
+-- declined flag, and reopens the session panel on a fresh scan.
 function M.ripDisc()
 	local iter, dir = hs.fs.dir("/Volumes")
 	if not iter then
@@ -718,14 +750,14 @@ function M.ripDisc()
 	for name in iter, dir do
 		if name ~= "." and name ~= ".." then
 			local vol = "/Volumes/" .. name
-			if hs.fs.attributes(vol .. "/VIDEO_TS", "mode") == "directory" then
+			if discKind(vol) then
 				declinedVolumes[vol] = nil
 				considerVolume(vol)
 				return
 			end
 		end
 	end
-	hs.alert.show("No DVD volume found")
+	hs.alert.show("No disc volume found")
 end
 
 --------------------------------------------------------------------------------
@@ -1263,6 +1295,27 @@ local function previewData(name)
 			},
 			library = u2Library,
 		}
+	elseif name == "bluray" then
+		-- The first UHD (PROJECT_HAIL_MARY, 2026-09-05), titles exactly as
+		-- MakeMKV listed them: the feature, its m2ts twin (same length —
+		-- defaults to Extra, the operator Skips it), two short extras, four
+		-- sub-3-minute stubs. Exercises the "Blu-ray · remux" header and the
+		-- footer's size total.
+		return {
+			volume = "PROJECT_HAIL_MARY",
+			kind = "Blu-ray",
+			titles = {
+				{ no = 0, duration = "2:36:31", seconds = 9391, size = "86.8 GB", bytes = 93200000000 },
+				{ no = 1, duration = "0:02:05", seconds = 125, size = "782.5 MB", bytes = 820000000 },
+				{ no = 2, duration = "0:02:05", seconds = 125, size = "779.7 MB", bytes = 817000000 },
+				{ no = 3, duration = "0:09:58", seconds = 598, size = "1.3 GB", bytes = 1400000000 },
+				{ no = 4, duration = "2:36:31", seconds = 9391, size = "86.8 GB", bytes = 93200000000 },
+				{ no = 5, duration = "0:07:53", seconds = 473, size = "1.0 GB", bytes = 1070000000 },
+				{ no = 6, duration = "0:02:20", seconds = 140, size = "321.9 MB", bytes = 337000000 },
+				{ no = 7, duration = "0:02:20", seconds = 140, size = "322.6 MB", bytes = 338000000 },
+			},
+			library = u2Library,
+		}
 	end
 	-- Main mockup (default): feature + two extras + one sub-2-minute title
 	-- that defaults to Skip.
@@ -1321,7 +1374,7 @@ local previewCallbacks = {
 
 --- Open the Rip Session Review panel on a fixture. Mode B validation only:
 --- no disc is read and no job is ever enqueued.
---- @param name string|nil "u2" (default) | "single" | "extras" | "scanning"
+--- @param name string|nil "u2" (default) | "single" | "extras" | "bluray" | "scanning"
 function M.preview(name)
 	name = name or "u2"
 
@@ -1356,8 +1409,8 @@ function M.preview(name)
 		return
 	end
 
-	if name ~= "u2" and name ~= "single" and name ~= "extras" then
-		hs.printf("ripper.preview: unknown fixture %q (u2 | single | extras | scanning)", tostring(name))
+	if name ~= "u2" and name ~= "single" and name ~= "extras" and name ~= "bluray" then
+		hs.printf("ripper.preview: unknown fixture %q (u2 | single | extras | bluray | scanning)", tostring(name))
 		return
 	end
 	session.show(previewData(name), previewCallbacks)
