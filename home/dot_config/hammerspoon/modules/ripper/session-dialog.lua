@@ -25,8 +25,10 @@
 ---   { volume = "U2_360_ROSE_BOWL", kind = "DVD", scanning = false,
 ---     scanFailed = false,
 ---     titles = { { no = 0, duration = "1:58:12", seconds = 7092,
----                  size = "6.9 GB", inLibrary = nil|"Movie (Year)" }, ... },
----     library = { { title = "Movie", year = 1970 }, ... } }
+---                  size = "6.9 GB", inLibrary = nil|"Movie (Year)",
+---                  suggest = { role, name, why } }, ... },
+---     library = { { title = "Movie", year = 1970 }, ... },
+---     candidates = { "…", … } }
 ---
 --- `callbacks`: { onStart = fun(plan), onPick = fun(movie), onDismiss = fun() };
 --- `plan`:
@@ -161,6 +163,9 @@ local function session_payload(data)
 		scanFailed = data.scanFailed and true or false,
 		titles = data.titles or {},
 		library = data.library or {},
+		-- Blu-ray pre-fill: the harvest's menu strings (may be absent → {}).
+		-- Same empty-list caveat as titles/library: read through arr() in JS.
+		candidates = data.candidates or {},
 	}
 end
 

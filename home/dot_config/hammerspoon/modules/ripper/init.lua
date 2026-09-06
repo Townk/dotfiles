@@ -58,6 +58,10 @@
 --   * Policy rides on the plan's `kind` (DVD encodes, Blu-ray remuxes —
 --     spec 2026-09-05-rip-bluray-remux-design.md); Lua never decides it,
 --     only carries it.
+--   * Blu-ray pre-fill: the scan's rows may carry `suggest` and the scan
+--     may emit a `candidates` list; both are carried to the page untouched
+--     (spec 2026-09-06-rip-bluray-prefill-design.md). Lua never decides a
+--     role.
 
 local M = {}
 
@@ -623,6 +627,11 @@ local function runSessionScan(state)
 			elseif ok and type(obj) == "table" and type(obj.kind) == "string" and obj.kind ~= "" then
 				-- The scan is authoritative over the folder-derived label.
 				state.kind = obj.kind
+			elseif ok and type(obj) == "table" and type(obj.candidates) == "table" then
+				-- Blu-ray pre-fill (spec 2026-09-06): every menu string the
+				-- harvest read, for the extra-name dropdown. Rows carry their
+				-- own `suggest`; nothing here interprets either — the page does.
+				state.candidates = obj.candidates
 			end
 		end
 		log.f("disc scan: %d title(s) on %s", #titles, state.volume)
@@ -1297,22 +1306,28 @@ local function previewData(name)
 		}
 	elseif name == "bluray" then
 		-- The first UHD (PROJECT_HAIL_MARY, 2026-09-05), titles exactly as
-		-- MakeMKV listed them: the feature, its m2ts twin (same length —
-		-- defaults to Extra, the operator Skips it), two short extras, four
-		-- sub-3-minute stubs. Exercises the "Blu-ray · remux" header and the
-		-- footer's size total.
+		-- the pre-fill harvest reads this disc (spec 2026-09-06): the twin
+		-- and the play-all skipped, the five scenes and the featurette
+		-- named in menu order, the two pre-menu trailers skipped.
 		return {
 			volume = "PROJECT_HAIL_MARY",
 			kind = "Blu-ray",
 			titles = {
-				{ no = 0, duration = "2:36:31", seconds = 9391, size = "86.8 GB", bytes = 93200000000 },
-				{ no = 1, duration = "0:02:05", seconds = 125, size = "782.5 MB", bytes = 820000000 },
-				{ no = 2, duration = "0:02:05", seconds = 125, size = "779.7 MB", bytes = 817000000 },
-				{ no = 3, duration = "0:09:58", seconds = 598, size = "1.3 GB", bytes = 1400000000 },
-				{ no = 4, duration = "2:36:31", seconds = 9391, size = "86.8 GB", bytes = 93200000000 },
-				{ no = 5, duration = "0:07:53", seconds = 473, size = "1.0 GB", bytes = 1070000000 },
-				{ no = 6, duration = "0:02:20", seconds = 140, size = "321.9 MB", bytes = 337000000 },
-				{ no = 7, duration = "0:02:20", seconds = 140, size = "322.6 MB", bytes = 338000000 },
+				{ no = 0, duration = "2:36:31", seconds = 9391, size = "86.8 GB", bytes = 93200000000, source = "01199.mpls", segments = "589" },
+				{ no = 1, duration = "0:02:05", seconds = 125, size = "782.5 MB", bytes = 820000000, source = "00149.mpls", segments = "174,175", suggest = { role = "skip", name = "", why = "unmapped" } },
+				{ no = 2, duration = "0:02:05", seconds = 125, size = "779.7 MB", bytes = 817000000, source = "01213.mpls", segments = "600,601", suggest = { role = "skip", name = "", why = "unmapped" } },
+				{ no = 3, duration = "0:09:58", seconds = 598, size = "1.3 GB", bytes = 1400000000, source = "00720.mpls", segments = "643,644,645,646,647", suggest = { role = "skip", name = "", why = "playall" } },
+				{ no = 4, duration = "2:36:31", seconds = 9391, size = "86.8 GB", bytes = 93200000000, source = "00589.m2ts", segments = "589", suggest = { role = "skip", name = "", why = "twin" } },
+				{ no = 5, duration = "0:07:53", seconds = 473, size = "1.0 GB", bytes = 1070000000, source = "00719.mpls", segments = "648", suggest = { role = "extra", name = "Earth's Favorite Eridian", why = "menu" } },
+				{ no = 6, duration = "0:02:20", seconds = 140, size = "321.9 MB", bytes = 337000000, source = "00715.mpls", segments = "644", suggest = { role = "extra", name = "I Think I'm Handling Things Pretty Awesome", why = "menu" } },
+				{ no = 7, duration = "0:02:20", seconds = 140, size = "322.6 MB", bytes = 338000000, source = "00717.mpls", segments = "646", suggest = { role = "extra", name = "You Sleep, I Watch", why = "menu" } },
+				{ no = 8, duration = "0:01:39", seconds = 99, size = "230.0 MB", bytes = 241000000, source = "00714.mpls", segments = "643", suggest = { role = "extra", name = "Day 1 Food Paste", why = "menu" } },
+				{ no = 9, duration = "0:01:49", seconds = 109, size = "250.0 MB", bytes = 262000000, source = "00716.mpls", segments = "645", suggest = { role = "extra", name = "How to Put On a Spacesuit", why = "menu" } },
+				{ no = 10, duration = "0:01:47", seconds = 107, size = "246.0 MB", bytes = 258000000, source = "00718.mpls", segments = "647", suggest = { role = "extra", name = "Maybe We're Cousins", why = "menu" } },
+			},
+			candidates = {
+				"I Think I'm Handling Things Pretty Awesome", "You Sleep, I Watch", "Day 1 Food Paste",
+				"Earth's Favorite Eridian", "How to Put On a Spacesuit", "Maybe We're Cousins",
 			},
 			library = u2Library,
 		}
