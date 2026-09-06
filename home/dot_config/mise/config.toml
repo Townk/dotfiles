@@ -44,6 +44,12 @@ croc = "11.2.1"
 just = "latest"
 ninja = "latest"
 uv = "latest"
+# dictgen (pgaskin/dictutil) builds Kobo custom dictionaries for bindery's
+# X-Ray renderer. No brew formula exists; the release ships a single Go
+# binary, so mise's ubi backend fetches it straight from GitHub. The darwin
+# asset is Intel-only ("darwin-64bit") and runs under Rosetta; pinned because
+# the dicthtml index format is what the device firmware parses.
+"ubi:pgaskin/dictutil" = { version = "v0.3.2", exe = "dictgen", matching = "darwin-64bit" }
 
 # Note on `luajit`: NeoVim links against LuaJIT (not Lua 5.1), so we still
 # need a luajit runtime on the system. The available mise plugin
