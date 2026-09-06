@@ -18,6 +18,15 @@ Describe 'rip.zsh disc'
     # help staying line-buffered, and shellspec's own sandboxing has no
     # reason to fight a real `script` invocation on every run.
     export RIP_PTY_WRAP=""
+    # A real disc may be mounted in the drive while this suite runs (it has
+    # been, live). Every Blu-ray-kind scan example must fail the pre-fill
+    # harvest's volume/helper lookups deterministically rather than falling
+    # through to rip::_bd_volume's /Volumes/* glob or the deployed
+    # ~/.local/libexec/rip-bd-menu — neither may ever be reached from a spec.
+    # Both paths point at sandbox locations that do not exist; bd_fixture
+    # overrides both when an example actually wants the harvest to run.
+    export RIP_BD_VOLUME="$RIP_SANDBOX/no-bd"
+    export RIP_BD_MENU_BIN="$RIP_SANDBOX/no-rip-bd-menu"
     mkdir -p "$RIP_STAGING_ROOT/movies" "$RIP_SANDBOX/server/movies"
     cat > "$RIP_SANDBOX/pueue" <<'EOF'
 #!/bin/sh
@@ -244,8 +253,9 @@ EOF
     The status should equal 0
     The line 1 of output should equal '{"kind":"Blu-ray"}'
     The line 2 of output should include '"no":0'
-    # No RIP_BD_VOLUME/RIP_BD_MENU_BIN fixture in this example — the
-    # pre-fill harvest degrades (no BDMV volume mounted) and warns.
+    # No bd_fixture in this example — setup()'s no-op RIP_BD_VOLUME/
+    # RIP_BD_MENU_BIN defaults make the pre-fill harvest degrade
+    # deterministically (no BDMV volume found) and warn.
     The stderr should include "harvest"
   End
 
