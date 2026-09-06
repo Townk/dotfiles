@@ -8,14 +8,16 @@ ONE JSON object the scan merges into its output:
   {"suggest": {"<no>": {"role": "extra"|"skip", "name": "...", "why": "..."}},
    "candidates": ["...", ...]}
 
-Two independent layers (spec 2026-09-06-rip-bluray-prefill-design.md):
+Two independent layers (spec 2026-09-06-rip-bluray-prefill-design.md, with
+its "Live-pass amendments" section):
   structure — from the rows alone: the feature's raw m2ts twin, play-all
               playlists and their parts;
-  names     — button slugs (resources_<lang>.xml) ordered by the jar's
-              SF_nn[_DS_mm]_<Slug>_onKeyPressed handler names, matched to
-              tesseract's reading of the menu sprite sheets.
-Every layer degrades on its own: no JAR dir → structure only; tesseract
-failing → slug-rendered names. Only unreadable stdin is an error (rc 2).
+  names     — the jar's SF_nn[_DS_mm]_<Slug>_onKeyPressed handler names,
+              matched to the menu LABELS read by tesseract from each
+              button's own crop of the resources_<lang>.xml sprite atlas.
+Every layer degrades on its own: no JAR dir → structure only; no atlas
+regions (or no ImageMagick) → whole-sheet OCR; tesseract failing →
+slug-rendered names. Only unreadable stdin is an error (rc 2).
 Never touches the drive through MakeMKV; reads files under BDMV/JAR only.
 """
 import glob
@@ -24,11 +26,15 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 STOP_SLUGS = re.compile(
     r"^(audio|subtitles?|chaphighlight|chTxt\d+|sceneselections?|specialfeatures"
     r"|DeletedScenes|CommentaryBy|PlayAll|Play|DiscMenu|Off|Resume|Setup"
+    # the live disc's setup buttons: setaudio01..NN, setsubtitle01..NN,
+    # setsuboff — atlas regions like any other button, never a title's name
+    r"|setaudio\d*|setsubtitles?\d*|setsuboff"
     r"|english|francais|french|espanol|spanish|nederlands|dutch|deutsch|german"
     r"|italiano|italian|portugues|portuguese|japanese|korean|chinese)$",
     re.I,
@@ -162,19 +168,26 @@ def structure(rows):
     # (00719 next to 00714–00720) outranks pre-menu trailers at 00149 /
     # 01213, and a disc with several special-features menus measures each
     # standalone title against whichever group it actually sits beside.
-    ranges = []
+    standalone.sort(key=lambda r: (group_distance(r, group_ranges(groups)),
+                                   source_number(r)))
+    return feature, suggest, groups, standalone
+
+
+def group_ranges(groups):
+    """[(lo, hi)] — each play-all group's min..max playlist source number."""
+    out = []
     for pr, parts in groups:
         nums = [source_number(pr)] + [source_number(p) for p in parts]
-        ranges.append((min(nums), max(nums)))
+        out.append((min(nums), max(nums)))
+    return out
 
-    def dist(r):
-        if not ranges:
-            return 0
-        n = source_number(r)
-        return min(0 if lo <= n <= hi else min(abs(n - lo), abs(n - hi))
-                    for lo, hi in ranges)
-    standalone.sort(key=lambda r: (dist(r), source_number(r)))
-    return feature, suggest, groups, standalone
+
+def group_distance(row, ranges):
+    if not ranges:
+        return 0
+    n = source_number(row)
+    return min(0 if lo <= n <= hi else min(abs(n - lo), abs(n - hi))
+               for lo, hi in ranges)
 
 
 # --- names -------------------------------------------------------------------
@@ -209,21 +222,121 @@ def title_case(s):
     return " ".join(out)
 
 
-def button_slugs(jar_dir, lang):
+TAG = re.compile(r"<\s*(composite|image)\b([^>]*)>", re.I)
+ATTR = re.compile(r"([A-Za-z_][\w:.-]*)\s*=\s*\"([^\"]*)\"")
+
+
+def atlas_regions(jar_dir, lang):
+    """[(slug, sheet_png, (x, y, w, h))] in XML order, one region per slug.
+
+    resources_<lang>.xml is a sprite ATLAS (live pass, 2026-09-06): a
+    <composite name="X"> block lists the <image> regions of X.png in the same
+    directory. `_n` (normal) is the clean reading; `_a` (activated) and `_s`
+    (selected) are the glow variants and only stand in when `_n` is absent.
+    A disc whose XML carries no regions returns [] and the caller falls back
+    to whole-sheet OCR.
+    """
     lang2 = LANG2.get(lang, lang[:2])
-    slugs = []
+    name_re = re.compile(r"^%s_button_([A-Za-z0-9]+)_([ans])(?:_|$)" % re.escape(lang2))
+    order, best = [], {}
     for xml in sorted(glob.glob(os.path.join(jar_dir, "*", "resources_%s.xml" % lang))):
         try:
             text = open(xml, encoding="utf-8", errors="replace").read()
         except OSError as e:
             warn("cannot read %s: %s" % (xml, e))
             continue
-        for slug in re.findall(r"\b%s_button_([A-Za-z0-9]+)_[ans](?:_|\")" % re.escape(lang2), text):
+        sheet = None
+        for tag in TAG.finditer(text):
+            attrs = dict(ATTR.findall(tag.group(2)))
+            if tag.group(1).lower() == "composite":
+                sheet = attrs.get("name")
+                continue
+            m = name_re.match(attrs.get("name", ""))
+            if not m or not sheet:
+                continue
+            try:
+                box = tuple(int(attrs[k]) for k in ("x", "y", "width", "height"))
+            except (KeyError, ValueError):
+                continue
+            key, rank = m.group(1).lower(), "nas".index(m.group(2))
+            if key in best:
+                if rank >= best[key][0]:
+                    continue
+            else:
+                order.append(key)
+            best[key] = (rank, m.group(1),
+                         os.path.join(os.path.dirname(xml), sheet + ".png"), box)
+    return [(best[k][1], best[k][2], best[k][3]) for k in order]
+
+
+def clean_label(text):
+    """Tidy one button's OCR reading: `|` is an I, `1FOOD` is two words."""
+    s = " ".join("I" if t == "|" else t for t in text.split())
+    s = re.sub(r"(\d)([A-Za-z]{2,})", r"\1 \2", s)
+    return title_case(s)
+
+
+def atlas_labels(jar_dir, lang):
+    """({slug: label}, candidates, used_atlas) — OCR of each button's crop.
+
+    Whole-sheet OCR of these atlases is unusable (light glow text on grey,
+    three states side by side: tesseract read nothing or merged neighbours),
+    so every non-stoplisted button is cropped out of its sheet with
+    ImageMagick and read alone. used_atlas is False — the caller then runs
+    the whole-sheet fallback — when the XML has no regions at all, or when
+    ImageMagick is missing and every crop therefore failed.
+    """
+    regions = atlas_regions(jar_dir, lang)
+    if not regions:
+        return {}, [], False
+    magick = os.environ.get("RIP_MAGICK_BIN", "magick")
+    tess = os.environ.get("RIP_TESSERACT_BIN", "tesseract")
+    labels, candidates, seen, cropped = {}, [], set(), 0
+    with tempfile.TemporaryDirectory() as tmp:
+        for slug, sheet, (x, y, w, h) in regions:
             if STOP_SLUGS.match(slug):
                 continue
-            if slug.lower() not in [s.lower() for s in slugs]:
-                slugs.append(slug)
-    return slugs
+            out = os.path.join(tmp, "%s.png" % slug)
+            try:
+                # Flatten the transparent glow onto black, grey it, blow it up
+                # and normalise: the live pass' recipe for making a 65 px-tall
+                # menu label legible to tesseract. 15 s PER CROP, so one stuck
+                # button cannot eat the scan's whole 60 s harvest budget.
+                res = subprocess.run(
+                    [magick, sheet, "-crop", "%dx%d+%d+%d" % (w, h, x, y),
+                     "+repage", "-background", "black", "-flatten",
+                     "-colorspace", "Gray", "-resize", "300%", "-normalize", out],
+                    capture_output=True, text=True, timeout=15)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                warn("magick failed on %s: %s" % (slug, e))
+                continue
+            if res.returncode != 0:
+                warn("magick rc %d on %s" % (res.returncode, slug))
+                continue
+            cropped += 1
+            try:
+                res = subprocess.run([tess, out, "-", "-l", lang, "--psm", "6"],
+                                     capture_output=True, text=True, timeout=15)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                warn("tesseract failed on %s: %s" % (slug, e))
+                continue
+            if res.returncode != 0:
+                warn("tesseract rc %d on %s" % (res.returncode, slug))
+                continue
+            label = clean_label(res.stdout)
+            if not label:
+                continue
+            # The label map keeps every button it read (that is what handler
+            # slugs are matched against); the DROPDOWN drops the UI words.
+            labels[slug] = label
+            key = label.lower()
+            if len(label) >= 3 and not STOP_TEXT.match(label) and key not in seen:
+                seen.add(key)
+                candidates.append(label)
+    if not cropped:
+        warn("no atlas crop succeeded — falling back to whole-sheet OCR")
+        return {}, [], False
+    return labels, candidates, True
 
 
 def handler_order(jar_dir):
@@ -246,24 +359,21 @@ def handler_order(jar_dir):
     return sorted(found.values(), key=lambda e: (e[0], -1 if e[1] is None else e[1]))
 
 
-def ordered_slugs(jar_dir, lang):
-    """[(slug, sf_or_None, ds_or_None)] in handler order, buttons-without-a-
-    handler appended last in XML order (spec rule 5); sf/ds carried through
-    so callers can group DS-numbered slugs by their SF menu (spec rule 8)."""
-    buttons = button_slugs(jar_dir, lang)
-    handlers = handler_order(jar_dir)
-    seen = set()
-    ordered = []
-    for sf, ds, slug in handlers:
+def mappable_slugs(jar_dir):
+    """[(slug, sf, ds)] — ONLY the jar's handler slugs, in (SF, DS) order.
+
+    Live-pass amendment: button slugs are the label's FIRST words (`day1`,
+    `howto`, `thinkim`) while handler slugs are its distinctive LAST words
+    (`FoodPaste`, `PutOnSpacesuit`) — they do not coincide, and an XML-only
+    slug maps to no title at all (it was naming menu stubs after audio-setup
+    buttons). Buttons contribute LABELS; handlers contribute the mapping.
+    """
+    seen, ordered = set(), []
+    for sf, ds, slug in handler_order(jar_dir):
         if slug.lower() in seen or STOP_SLUGS.match(slug):
             continue
         seen.add(slug.lower())
         ordered.append((slug, sf, ds))
-    for slug in buttons:
-        if slug.lower() in seen:
-            continue
-        seen.add(slug.lower())
-        ordered.append((slug, None, None))
     return ordered
 
 
@@ -368,23 +478,29 @@ def main():
     lang = os.environ.get("RIP_BD_MENU_LANG", "eng")
     candidates, names = [], []
     if os.path.isdir(jar_dir):
-        slugs = ordered_slugs(jar_dir, lang)
-        # OCR runs whenever JAR/ exists, independent of whether any slug was
-        # found; slugs are matched only once that OCR call happened, so
-        # candidates (possibly empty, e.g. tesseract failed) still yield
-        # slug-rendered fallback names rather than being skipped outright
-        # (spec: layers are independent in both directions).
-        candidates, _ = ocr_candidates(jar_dir, lang)
+        # Names run whenever JAR/ exists, independent of whether any handler
+        # was found, and handlers are matched even when the label harvest came
+        # back empty (tesseract failed) — they then keep their slug-rendered
+        # fallback name (spec: the layers are independent in both directions).
+        labels, candidates, used_atlas = atlas_labels(jar_dir, lang)
+        if used_atlas:
+            texts = list(labels.values())
+        else:
+            candidates, _ = ocr_candidates(jar_dir, lang)
+            texts = list(candidates)
+        slugs = mappable_slugs(jar_dir)
         if slugs:
-            names = match_names(slugs, candidates)
+            names = match_names(slugs, texts)
     else:
         warn("no BDMV/JAR under %s — structure only" % volume)
 
     mapped = 0
     if names:
-        # DS-numbered names group by their SF menu (spec rule 8): the i-th
-        # DS group maps onto the i-th play-all's parts (both already ordered
-        # — groups by source number, each group's DS slugs by ds number).
+        # DS-numbered names group by their SF menu; each group claims a
+        # play-all BY PART COUNT (live-pass amendment): at minlength 30
+        # MakeMKV also lists two-segment trailer playlists that are
+        # structurally indistinguishable from a deleted-scenes play-all, so
+        # position alone mapped the scene names onto a trailer.
         ds_group_map, ds_group_order = {}, []
         sf_names = []
         for _slug, sf, ds, name, why in names:
@@ -395,13 +511,38 @@ def main():
                 ds_group_map[sf] = []
                 ds_group_order.append(sf)
             ds_group_map[sf].append((name, why))
-        ds_groups = [ds_group_map[sf] for sf in ds_group_order]
 
-        for (_playall_row, parts), ds_group in zip(groups, ds_groups):
-            for row, (name, why) in zip(parts, ds_group):
+        free = list(range(len(groups)))  # group indices, already in source order
+        claimed = []
+        for sf in ds_group_order:
+            ds_group = ds_group_map[sf]
+            if not free:
+                break
+            k = len(ds_group)
+            exact = [g for g in free if len(groups[g][1]) == k]
+            g = exact[0] if exact else min(free, key=lambda i: abs(len(groups[i][1]) - k))
+            free.remove(g)
+            claimed.append((g, ds_group))
+
+        for g, ds_group in claimed:
+            for row, (name, why) in zip(groups[g][1], ds_group):
                 suggest[row["no"]] = {"role": "extra", "name": name, "why": why}
                 mapped += 1
-        for row, (name, why) in zip(standalone, sf_names):
+        # A play-all no DS group claimed is not a menu entry at all: skip it,
+        # and skip its parts as segments of a skipped playlist.
+        for g in free:
+            playall_row, parts = groups[g]
+            suggest[playall_row["no"]] = {"role": "skip", "name": "", "why": "unmapped"}
+            for row in parts:
+                suggest[row["no"]] = {"role": "skip", "name": "", "why": "segment"}
+
+        # Standalone targets are >= 60 s (live-pass amendment): the menu-stub
+        # playlists (30-51 s, 3-4 tiny segments) must never take a name. They
+        # rank by distance from the nearest MATCHED group's playlist range.
+        ranges = group_ranges([groups[g] for g, _ in claimed] or groups)
+        targets = sorted((r for r in standalone if r["seconds"] >= 60),
+                         key=lambda r: (group_distance(r, ranges), source_number(r)))
+        for row, (name, why) in zip(targets, sf_names):
             suggest[row["no"]] = {"role": "extra", "name": name, "why": why}
             mapped += 1
     if mapped > 0:

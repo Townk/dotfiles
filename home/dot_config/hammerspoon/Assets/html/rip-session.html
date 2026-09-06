@@ -232,6 +232,13 @@
           return '<div class="detail"><div class="meta">'
             + '<span>not in the disc menu &mdash; skipped</span></div></div>';
         }
+        // A segment of a playlist that was itself skipped as unmapped (a
+        // trailer, not a deleted scene): it follows its play-all, so the
+        // operator sees WHY it is not an extra like the scenes above it.
+        if (r.why === 'segment') {
+          return '<div class="detail"><div class="meta">'
+            + '<span>segment of a skipped playlist &mdash; skipped</span></div></div>';
+        }
         return '';
       }
       if (r.role === 'feature') {
