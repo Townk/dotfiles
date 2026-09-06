@@ -5,14 +5,16 @@
 #   SESSION (the Rip Session Review panel, ripper/session-dialog.lua): the
 #   panel scans the disc, the operator marks every title Feature / Extra /
 #   Skip and names them, and the resulting plan becomes one job that rips,
-#   encodes, publishes and pushes the whole disc.
+#   then encodes (DVD) or publishes as ripped (Blu-ray), and pushes the
+#   whole disc.
 #
 #   AUTO (UX v2, unchanged): makemkvcon rips the longest title into
-#   .work/autorip, then the pipeline encodes, pushes, verifies, and cleans.
+#   .work/autorip, then the DVD path encodes, pushes, verifies, and
+#   cleans; a Blu-ray publishes the rip as-is and pushes.
 #
 #   rip-disc "<Title (Year)>"           auto: enqueue
 #   rip-disc --worker "<title>"         auto: internal, the job body
-#   rip-disc --scan                     session: one JSON line per disc title
+#   rip-disc --scan                     session: a leading {"kind":…} line, then one JSON line per disc title
 #   rip-disc --have "<Movie (Year)>"    session: 0 have / 1 absent / 2 unknown
 #   rip-disc --library                  session: the server's movies, one per line
 #   rip-disc --session <plan.json>      session: enqueue the plan

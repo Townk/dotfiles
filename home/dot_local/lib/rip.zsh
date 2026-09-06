@@ -2221,7 +2221,7 @@ rip::pipeline_worker() {
   # Publish it: same filesystem, so the rename is atomic — movies/<Title>/
   # springs into existence already holding a whole file, never a growing
   # one. This is the moment the encode becomes visible to `rip-push movies`.
-  if ! { mkdir -p "$out_dir" && mv -f -- "$out_tmp" "$out" }; then
+  if ! rip::_publish_file "$out_tmp" "movies/$title/$title.mkv"; then
     rm -f -- "$out_tmp"
     rmdir -- "$out_dir" 2>/dev/null || :
     log_error "rip: could not publish the encode to $out — intermediate kept: $input"
@@ -2347,7 +2347,7 @@ rip::disc_worker() {
       RIP_PUSH_MIN_AGE_S=0 RIP_PROGRESS_BASE=45 RIP_PROGRESS_SPAN=55 rip::push_worker movies
       rc=$?
     else
-      log_error "rip: could not publish movies/$title/$title.mkv — nothing kept (the rip is cheap to redo)"
+      log_error "rip: could not publish movies/$title/$title.mkv — nothing kept (re-run rip-disc; the disc must be re-read)"
       rc=1
     fi
   else
@@ -2577,7 +2577,7 @@ rip::extra_worker() {
   local out_dir out
   out_dir="$(rip::staging_root)/movies/$movie/extras"
   out="$out_dir/$name.mkv"
-  if ! { mkdir -p "$out_dir" && mv -f -- "$out_tmp" "$out" }; then
+  if ! rip::_publish_file "$out_tmp" "$relpath"; then
     rm -f -- "$out_tmp"
     rmdir -- "$out_dir" 2>/dev/null || :
     log_error "rip: could not publish the extra to $out"

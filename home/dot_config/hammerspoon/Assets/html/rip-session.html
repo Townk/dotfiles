@@ -360,8 +360,8 @@
       var parts = [];
       if (st.feature) parts.push('1 movie');
       if (st.extras.length) parts.push(st.extras.length + ' extra' + (st.extras.length === 1 ? '' : 's'));
-      var policy = policyFor(SESSION.kind) || 'encode';
-      var tail = '&rarr; rip, ' + policy + ' &amp; push';
+      var policy = policyFor(SESSION.kind);
+      var tail = policy ? ('&rarr; rip, ' + policy + ' &amp; push') : '&rarr; rip &amp; push';
       if (policy === 'remux') {
         // A remux ships the ripped bytes as-is: this total is the operator's
         // only pre-Start view of an 80+ GB commitment.
