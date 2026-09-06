@@ -53,6 +53,10 @@ case "$*" in
       none) ;;
       *) echo 'CINFO:1,6206,"DVD disc"' ;;
     esac
+    # A disc that answers with a kind but no readable titles at all (as
+    # opposed to RIP_FAKE_INFO_EMPTY, which fails the call outright): the
+    # kind line must not leak to stdout ahead of the rc-1 failure.
+    [ -n "${RIP_FAKE_INFO_NO_TITLES:-}" ] && exit 0
     echo 'TINFO:0,2,0,"Trailer, Theatrical"'
     echo 'TINFO:0,9,0,"0:00:38"'
     echo 'TINFO:0,10,0,"58.0 MB"'
@@ -235,6 +239,14 @@ EOF
     When run zsh "$RIPBIN" --scan
     The status should equal 1
     The stderr should include "no titles"
+  End
+
+  It '--scan reports rc 1 and empty stdout when a disc has a kind but no titles'
+    export RIP_FAKE_INFO_NO_TITLES=1
+    When run zsh "$RIPBIN" --scan
+    The status should equal 1
+    The stderr should include "no titles"
+    The output should equal ""
   End
 
   It '--scan runs makemkvcon under the pty wrap seam'

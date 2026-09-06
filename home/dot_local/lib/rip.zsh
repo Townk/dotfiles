@@ -2605,10 +2605,12 @@ rip::extra_enqueue() {
 #   {"kind":"Blu-ray"}
 #   {"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088}
 #
-# The kind line comes from CINFO:1 ("Blu-ray disc" / "DVD disc" / …, MakeMKV's
-# ap_AlbumInfoId enum) and is only ever "Blu-ray" or "DVD" — no CINFO:1, or one
-# that names neither, and the line is omitted entirely, leaving the panel's
-# folder-derived label alone.
+# The kind line comes from CINFO:1 ("Blu-ray disc" / "DVD disc" / …, the same
+# ap_ItemAttributeId table CINFO/TINFO/SINFO all share) and is only ever
+# "Blu-ray" or "DVD" — no CINFO:1, or one that names neither, and the line is
+# omitted entirely, leaving the panel's folder-derived label alone. Held back
+# until titles are confirmed present (see below) — a disc with a kind but no
+# readable titles must still fail with empty stdout.
 #
 # TINFO attributes (MakeMKV's ap_ItemAttributeId enum, the same table the disc
 # worker's own `attr 9 = duration` parse rests on): 9 = duration "H:MM:SS",
@@ -2703,18 +2705,26 @@ rip::session_scan() {
       }
     ')"
   local idx dur secs size bytes n=0
+  local kind_line=""
+  local -a title_lines=()
   while IFS=$'\t' read -r idx dur secs size bytes; do
     if [[ "$idx" == K ]]; then
-      # kind is one of two literals produced by the awk above — safe to print raw
-      printf '{"kind":"%s"}\n' "$dur"
+      # kind is one of two literals produced by the awk above — safe to print
+      # raw. Buffered, not printed here: nothing may reach stdout until the
+      # title count is confirmed below, or a kind-but-no-titles disc would
+      # leak a kind line ahead of the rc-1 failure.
+      kind_line=$(printf '{"kind":"%s"}' "$dur")
       continue
     fi
     [[ "$idx" == <-> ]] || continue
-    printf '{"no":%d,"duration":"%s","seconds":%d,"size":"%s","bytes":%d}\n' \
-      "$idx" "$dur" "$secs" "$size" "$bytes"
+    title_lines+=("$(printf '{"no":%d,"duration":"%s","seconds":%d,"size":"%s","bytes":%d}' \
+      "$idx" "$dur" "$secs" "$size" "$bytes")")
     n=$(( n + 1 ))
   done <<< "$rows"
   (( n > 0 )) || { log_error "rip: disc scan found no titles"; return 1 }
+  [[ -n "$kind_line" ]] && print -r -- "$kind_line"
+  local line
+  for line in "${title_lines[@]}"; do print -r -- "$line"; done
   return 0
 }
 
