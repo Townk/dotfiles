@@ -70,6 +70,7 @@
     // array alone.
     var rows = [];
     var library = [];
+    var candidates = [];
     var focusIdx = 0;
 
     // The attach target new/unset extras inherit. Set by the FIRST library
@@ -77,8 +78,9 @@
     // precedence over it whenever a Feature row exists (attachFor below).
     var defaultAttach = null;
 
-    // Dropdown: one shared element serving both the TMDB typeahead and the
-    // library picker. mode is 'tmdb' | 'lib' | null (closed).
+    // Dropdown: one shared element serving the TMDB typeahead, the library
+    // picker, and the DISC MENU picker. mode is 'tmdb' | 'lib' | 'menu' | null
+    // (closed).
     var dd = { mode: null, row: -1, items: [], idx: 0, anchor: null };
 
     // TMDB search: 250ms debounce, min 2 chars, monotonic seq. The seq
@@ -112,6 +114,7 @@
     // already on the server, only its bonus content is missing).
     function initRows(session) {
       library = arr(session && session.library);
+      candidates = arr(session && session.candidates);
       rows = [];
       defaultAttach = null;
       var titles = arr(session && session.titles);
@@ -127,6 +130,16 @@
         else if (j === longest) role = 'feature';
         else if ((Number(t.seconds) || 0) < 120) role = 'skip';
         else role = 'extra';
+        var name = '';
+        var sg = t.suggest && typeof t.suggest === 'object' ? t.suggest : null;
+        // Blu-ray pre-fill (spec 2026-09-06): the scan's suggestion wins
+        // over the duration heuristics — it is the disc's own structure and
+        // menu, and it is still just a default the operator edits. The
+        // feature row is never suggested, so the longest-title rule stands.
+        if (sg && role !== 'feature' && (sg.role === 'extra' || sg.role === 'skip')) {
+          role = sg.role;
+          name = typeof sg.name === 'string' ? sg.name : '';
+        }
         rows.push({
           no: Number(t.no),
           duration: t.duration || '',
@@ -137,7 +150,8 @@
           role: role,
           movie: null,     // {title, name, year, poster} once picked
           query: '',       // the feature row's live search text
-          name: '',        // an extra's name
+          name: name,      // an extra's name
+          why: sg ? String(sg.why || '') : '',
           attachTo: null   // an extra's explicit library pick
         });
       }
@@ -190,9 +204,19 @@
 
     function detailHtml(r, i) {
       if (r.role === 'skip') {
-        if (!r.inLibrary) return '';
-        return '<div class="detail"><div class="have">' + SVG_CHECK_SM
-          + '<span>already in your library &mdash; ' + esc(r.inLibrary) + '</span></div></div>';
+        if (r.inLibrary) {
+          return '<div class="detail"><div class="have">' + SVG_CHECK_SM
+            + '<span>already in your library &mdash; ' + esc(r.inLibrary) + '</span></div></div>';
+        }
+        if (r.why === 'playall') {
+          return '<div class="detail"><div class="have">'
+            + '<span>play-all of the scenes listed as extras &mdash; skipped</span></div></div>';
+        }
+        if (r.why === 'twin') {
+          return '<div class="detail"><div class="have">'
+            + '<span>same content as the feature &mdash; skipped</span></div></div>';
+        }
+        return '';
       }
       if (r.role === 'feature') {
         if (r.movie) {
@@ -387,6 +411,8 @@
         html = hint('&uarr;&darr;', 'Result') + hint('&crarr;', 'Pick movie') + hint('esc', 'Close search');
       } else if (dd.mode === 'lib') {
         html = hint('&uarr;&darr;', 'Movie') + hint('&crarr;', 'Attach') + hint('esc', 'Close');
+      } else if (dd.mode === 'menu') {
+        html = hint('&uarr;&darr;', 'Menu entry') + hint('&crarr;', 'Use name') + hint('esc', 'Close');
       } else {
         html = hint('&crarr;', 'Start rip') + hint('esc', 'Not now')
           + hint('&uarr;&darr;', 'Row')
@@ -518,13 +544,14 @@
       var el = dropdownEl();
       var html = '';
       if (dd.mode === 'lib') html += '<div class="lib-hint">YOUR LIBRARY</div>';
+      else if (dd.mode === 'menu') html += '<div class="lib-hint">DISC MENU</div>';
       if (dd.items.length === 0) {
         html += '<div class="dropdown-empty">' + esc(dd.emptyText || 'no matches') + '</div>';
       }
       for (var i = 0; i < dd.items.length; i++) {
         var it = dd.items[i];
         var sel = (i === dd.idx) ? ' selected' : '';
-        if (dd.mode === 'lib') {
+        if (dd.mode === 'lib' || dd.mode === 'menu') {
           html += '<div class="result lib' + sel + '" data-res="' + i + '">' + SVG_FILM_LG
             + '<span class="r-title">' + esc(it.name) + '</span>'
             + (it.year ? '<span class="meta">' + esc(it.year) + '</span>' : '')
@@ -556,7 +583,7 @@
       var pr = document.getElementById('panel').getBoundingClientRect();
       var ar = anchor.getBoundingClientRect();
       var left = Math.max(8, ar.left - pr.left);
-      if (dd.mode === 'lib') {
+      if (dd.mode === 'lib' || dd.mode === 'menu') {
         el.style.width = '290px';
         left = Math.min(left, pr.width - 290 - 8);
       } else {
@@ -587,6 +614,30 @@
       renderHints();
     }
 
+    // DISC MENU picker (Blu-ray pre-fill): every menu string the harvest
+    // read, on an extra's name field. Opens on focus when candidates exist,
+    // filters as the operator types, Enter/click fills the field. The
+    // typeahead's shape, minus the round trip: the list is already here.
+    function openMenu(i, filter) {
+      if (candidates.length === 0) return;
+      var anchor = document.querySelector('.name-input[data-name="' + i + '"]');
+      if (!anchor) return;
+      var q = String(filter || '').trim().toLowerCase();
+      var items = [];
+      for (var k = 0; k < candidates.length; k++) {
+        var c = String(candidates[k]);
+        if (!q || c.toLowerCase().indexOf(q) !== -1) items.push({ name: c, title: c });
+      }
+      dd.mode = 'menu';
+      dd.row = i;
+      dd.anchor = anchor;
+      dd.emptyText = 'no menu entry matches';
+      dd.items = items;
+      dd.idx = 0;
+      renderDropdown();
+      renderHints();
+    }
+
     function pickResult() {
       var it = dd.items[dd.idx];
       if (!it) return;
@@ -599,6 +650,13 @@
           if (!defaultAttach) defaultAttach = it.title;
           focusIdx = dd.row;
         }
+        closeDropdown(true);
+        render();
+        return;
+      }
+      if (dd.mode === 'menu') {
+        var m = rows[dd.row];
+        if (m) { m.name = it.name; focusIdx = dd.row; }
         closeDropdown(true);
         render();
         return;
@@ -807,8 +865,27 @@
           t.setSelectionRange(caret, caret);
         }
         r.name = t.value;
+        if (candidates.length) openMenu(parseInt(idxAttr, 10), t.value);
         t.classList.toggle('invalid', r.name !== '' && !nameValid(r.name));
         renderFooter();
+      });
+
+      // Delegated `focusin` (bubbles, unlike `focus`): opens the DISC MENU
+      // picker as soon as the operator lands in an extra's name field.
+      rowsEl.addEventListener('focusin', function (e) {
+        var t = e.target;
+        var idxAttr = t.getAttribute && t.getAttribute('data-name');
+        if (idxAttr == null) return;
+        openMenu(parseInt(idxAttr, 10), t.value);
+      });
+
+      // Delegated `focusout`: close the menu picker once focus leaves both
+      // the field and the dropdown itself (a click on a result moves focus
+      // into the dropdown momentarily before pickResult runs).
+      rowsEl.addEventListener('focusout', function (e) {
+        setTimeout(function () {
+          if (dd.mode === 'menu' && !dropdownEl().contains(document.activeElement)) closeDropdown();
+        }, 0);
       });
 
       dropdownEl().addEventListener('mousedown', function (e) {
