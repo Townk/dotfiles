@@ -38,6 +38,7 @@ EOF
     (cd "$S" && zip -q -j "$D/00000.jar" handlers.txt)
     : > "$D/00001/eng_composite_1.png"; : > "$D/00001/eng_composite_2.png"; : > "$D/00001/eng_composite_3.png"
     : > "$D/00001/fra_composite_1.png"
+    : > "$D/00001/common_composite_1.png"
     # fake tesseract: prints tesseract-shaped text (blocks separated by blank
     # lines, a wrapped label inside one block) per sprite sheet
     cat > "$S/tesseract" <<'EOF'
@@ -108,6 +109,7 @@ EOF
     When call run_helper '.candidates | length'
     The output should equal "8"
     The contents of file "$FAKE_TESS_LOG" should include "eng_composite_2.png"
+    The contents of file "$FAKE_TESS_LOG" should include "common_composite_1.png"
     The contents of file "$FAKE_TESS_LOG" should not include "fra_composite"
   End
 
@@ -135,8 +137,37 @@ EOF
 
   It 'exits 2 on unreadable rows'
     printf 'not json\n' > "$S/rows.jsonl"
-    When run python3 "$HELPER" "$S/disc"
+    When run sh -c "python3 '$HELPER' '$S/disc' < '$S/rows.jsonl'"
     The status should equal 2
-    The stderr should include "rows"
+    The stderr should include "not JSON"
+  End
+
+  It 'exits 2 on empty stdin'
+    When run sh -c "python3 '$HELPER' '$S/disc' < /dev/null"
+    The status should equal 2
+    The stderr should include "nothing on stdin"
+  End
+
+  It 'exits 2 on a non-numeric row field'
+    printf '%s\n' '{"no":"x","seconds":10,"source":"00001.mpls","segments":"1"}' > "$S/rows.jsonl"
+    When run sh -c "python3 '$HELPER' '$S/disc' < '$S/rows.jsonl'"
+    The status should equal 2
+    The stderr should include "not a number"
+  End
+
+  It 'harvests OCR independent of slugs: no resources xml, no jar, sprite sheets present'
+    rm -f "$D/00001/resources_eng.xml" "$D/00000.jar"
+    When call run_helper '[(.candidates|length), (.suggest|[.[].why]|unique|join(","))] | join(" ")'
+    The output should equal "8 part,playall,twin"
+  End
+
+  It 'has no twin, no play-all and no feature suggestion when nothing shares segments'
+    rm -rf "$D"
+    printf '%s\n' '{"no":0,"seconds":9000,"source":"00589.m2ts","segments":"589"}' \
+      '{"no":1,"seconds":300,"source":"00149.mpls","segments":"149"}' \
+      '{"no":2,"seconds":250,"source":"00150.mpls","segments":"150"}' > "$S/rows.jsonl"
+    When call run_helper '.suggest | length'
+    The output should equal "0"
+    The stderr should include "no BDMV/JAR"
   End
 End
