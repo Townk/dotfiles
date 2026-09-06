@@ -2601,8 +2601,14 @@ rip::extra_enqueue() {
 # standalone manual tool and is never mixed into this flow.
 
 # rip::session_scan — `makemkvcon -r info disc:0`, reduced to one JSON line
-# per title for the panel:
+# per title for the panel, led by a disc-kind line when MakeMKV reported one:
+#   {"kind":"Blu-ray"}
 #   {"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088}
+#
+# The kind line comes from CINFO:1 ("Blu-ray disc" / "DVD disc" / …, MakeMKV's
+# ap_AlbumInfoId enum) and is only ever "Blu-ray" or "DVD" — no CINFO:1, or one
+# that names neither, and the line is omitted entirely, leaving the panel's
+# folder-derived label alone.
 #
 # TINFO attributes (MakeMKV's ap_ItemAttributeId enum, the same table the disc
 # worker's own `attr 9 = duration` parse rests on): 9 = duration "H:MM:SS",
@@ -2639,6 +2645,24 @@ rip::session_scan() {
     | LC_ALL=C tr -d '\r' \
     | awk '
       {
+        # Disc kind: CINFO:1,<code>,"<kind>" — "Blu-ray disc" observed live
+        # on the first UHD (2026-09-05), "DVD disc" expected on a DVD. Only
+        # the string is read, never the code; anything else leaves kind
+        # empty and no kind line is emitted (the panel keeps the label it
+        # derived from the mount'"'"'s folder layout).
+        c1 = index($0, "CINFO:1,")
+        if (c1 > 0) {
+          v = substr($0, c1 + 8)
+          c = index(v, ","); if (c > 0) v = substr(v, c + 1)
+          if (substr(v, 1, 1) == "\"") {
+            v = substr(v, 2)
+            q = index(v, "\""); if (q > 0) v = substr(v, 1, q - 1)
+          }
+          lv = tolower(v)
+          if (index(lv, "blu-ray") > 0) kind = "Blu-ray"
+          else if (index(lv, "dvd") > 0 && index(lv, "hd dvd") == 0) kind = "DVD"
+          next
+        }
         p = index($0, "TINFO:")
         if (p == 0) next
         rest = substr($0, p + 6)
@@ -2661,6 +2685,7 @@ rip::session_scan() {
         else if (attr == "11") bytes[idx] = val
       }
       END {
+        if (kind != "") printf "K\t%s\n", kind
         for (i = 0; i < n; i++) {
           k = order[i]
           d = dur[k]; gsub(/[^0-9:]/, "", d)
@@ -2679,6 +2704,11 @@ rip::session_scan() {
     ')"
   local idx dur secs size bytes n=0
   while IFS=$'\t' read -r idx dur secs size bytes; do
+    if [[ "$idx" == K ]]; then
+      # kind is one of two literals produced by the awk above — safe to print raw
+      printf '{"kind":"%s"}\n' "$dur"
+      continue
+    fi
     [[ "$idx" == <-> ]] || continue
     printf '{"no":%d,"duration":"%s","seconds":%d,"size":"%s","bytes":%d}\n' \
       "$idx" "$dur" "$secs" "$size" "$bytes"

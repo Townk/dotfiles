@@ -45,6 +45,14 @@ EOF
 case "$*" in
   *info*)
     [ -n "${RIP_FAKE_INFO_EMPTY:-}" ] && exit 1
+    # Disc kind, as MakeMKV reports it (CINFO attr 1; the code number is
+    # irrelevant to the parse, only the string is read). `none` models a
+    # disc that reports no kind at all.
+    case "${RIP_FAKE_DISC_KIND:-dvd}" in
+      bluray) echo 'CINFO:1,6209,"Blu-ray disc"' ;;
+      none) ;;
+      *) echo 'CINFO:1,6206,"DVD disc"' ;;
+    esac
     echo 'TINFO:0,2,0,"Trailer, Theatrical"'
     echo 'TINFO:0,9,0,"0:00:38"'
     echo 'TINFO:0,10,0,"58.0 MB"'
@@ -193,16 +201,33 @@ EOF
 
   # --- --scan: the panel's row data ----------------------------------------
 
-  It '--scan emits one JSON line per title with duration, seconds, size, bytes'
+  It '--scan leads with the disc kind, then one JSON line per title'
     When run zsh "$RIPBIN" --scan
     The status should equal 0
-    The line 1 of output should equal '{"no":0,"duration":"0:00:38","seconds":38,"size":"58.0 MB","bytes":60817408}'
-    The line 2 of output should equal '{"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088}'
-    The line 3 of output should equal '{"no":2,"duration":"0:26:14","seconds":1574,"size":"1.1 GB","bytes":1181116006}'
+    The line 1 of output should equal '{"kind":"DVD"}'
+    The line 2 of output should equal '{"no":0,"duration":"0:00:38","seconds":38,"size":"58.0 MB","bytes":60817408}'
+    The line 3 of output should equal '{"no":1,"duration":"2:08:59","seconds":7739,"size":"6.9 GB","bytes":7408345088}'
+    The line 4 of output should equal '{"no":2,"duration":"0:26:14","seconds":1574,"size":"1.1 GB","bytes":1181116006}'
     # The NAME attribute ("Trailer, Theatrical") and the source filename are
     # not title rows and must never leak into the stream.
     The output should not include "Theatrical"
     The output should not include "title_t00"
+  End
+
+  It '--scan reports a Blu-ray as Blu-ray'
+    export RIP_FAKE_DISC_KIND=bluray
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The line 1 of output should equal '{"kind":"Blu-ray"}'
+    The line 2 of output should include '"no":0'
+  End
+
+  It '--scan omits the kind line when MakeMKV reports none (the panel keeps its folder label)'
+    export RIP_FAKE_DISC_KIND=none
+    When run zsh "$RIPBIN" --scan
+    The status should equal 0
+    The line 1 of output should include '"no":0'
+    The output should not include '"kind"'
   End
 
   It '--scan reports rc 1 when the drive holds no readable titles'
