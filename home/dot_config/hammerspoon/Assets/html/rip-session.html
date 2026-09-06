@@ -131,14 +131,17 @@
         else if ((Number(t.seconds) || 0) < 120) role = 'skip';
         else role = 'extra';
         var name = '';
+        var why = '';
         var sg = t.suggest && typeof t.suggest === 'object' ? t.suggest : null;
         // Blu-ray pre-fill (spec 2026-09-06): the scan's suggestion wins
         // over the duration heuristics — it is the disc's own structure and
         // menu, and it is still just a default the operator edits. The
-        // feature row is never suggested, so the longest-title rule stands.
-        if (sg && role !== 'feature' && (sg.role === 'extra' || sg.role === 'skip')) {
+        // feature row and an in-library row are never suggested over — the
+        // disc cannot know what the server holds.
+        if (sg && role !== 'feature' && !t.inLibrary && (sg.role === 'extra' || sg.role === 'skip')) {
           role = sg.role;
           name = typeof sg.name === 'string' ? sg.name : '';
+          why = String(sg.why || '');
         }
         rows.push({
           no: Number(t.no),
@@ -151,7 +154,7 @@
           movie: null,     // {title, name, year, poster} once picked
           query: '',       // the feature row's live search text
           name: name,      // an extra's name
-          why: sg ? String(sg.why || '') : '',
+          why: why,
           attachTo: null   // an extra's explicit library pick
         });
       }
@@ -880,8 +883,11 @@
       });
 
       // Delegated `focusout`: close the menu picker once focus leaves both
-      // the field and the dropdown itself (a click on a result moves focus
-      // into the dropdown momentarily before pickResult runs).
+      // the field and the dropdown itself. The setTimeout lets the new focus
+      // target land before checking it — a click on a result never reaches
+      // here (the dropdown's mousedown preventDefault keeps focus in the
+      // field), but Tab-away, or a click on dropdown padding where nothing
+      // ran preventDefault, both do.
       rowsEl.addEventListener('focusout', function (e) {
         setTimeout(function () {
           if (dd.mode === 'menu' && !dropdownEl().contains(document.activeElement)) closeDropdown();
