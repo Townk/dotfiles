@@ -273,6 +273,7 @@ EOF
     export RIP_FAKE_INFO_LOG="$RIP_SANDBOX/info.log"; : > "$RIP_FAKE_INFO_LOG"
     When run zsh "$RIPBIN" --scan
     The status should equal 0
+    The line 1 of output should equal '{"kind":"DVD"}'
     The contents of file "$RIP_FAKE_INFO_LOG" should include "--minlength=30 "
   End
 
@@ -295,6 +296,7 @@ EOF
     export RIP_MAKEMKV_MINLENGTH=45
     When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
     The status should equal 0
+    The output should include "verified"
     The contents of file "$RIP_FAKE_INFO_LOG" should include "--minlength=45 "
     The contents of file "$RIP_FAKE_MKC_LOG" should include "--minlength=45 "
   End
