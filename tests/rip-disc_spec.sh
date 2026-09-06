@@ -349,7 +349,7 @@ EOF
     export JOB_ID="job-session-1"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
     write_plan <<'EOF'
-{"volume":"U2_360_ROSE_BOWL",
+{"volume":"U2_360_ROSE_BOWL","kind":"DVD",
  "feature":{"no":1,"movie":"U2 360 at the Rose Bowl (2010)"},
  "extras":[{"no":2,"name":"Squaring the Circle","attachTo":"U2 360 at the Rose Bowl (2010)"},
            {"no":0,"name":"Trailer","attachTo":"U2 360 at the Rose Bowl (2010)"}],
@@ -378,7 +378,7 @@ EOF
     export JOB_ID="job-session-2"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
     write_plan <<'EOF'
-{"volume":"ELVIS_TTWII",
+{"volume":"ELVIS_TTWII","kind":"DVD",
  "feature":null,
  "extras":[{"no":2,"name":"Rehearsals","attachTo":"Elvis TTWII (1970)"}],
  "skipped":[1]}
@@ -397,7 +397,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/movies/U2 (2010)/extras"
     printf 'already-there' > "$RIP_SANDBOX/server/movies/U2 (2010)/extras/Trailer.mkv"
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},
  "extras":[{"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
  "skipped":[]}
 EOF
@@ -410,11 +410,63 @@ EOF
     The contents of file "$RIP_SANDBOX/server/movies/U2 (2010)/extras/Trailer.mkv" should equal "already-there"
   End
 
+  It 'session worker: a Blu-ray plan publishes the rips as-is — HandBrake never runs'
+    export JOB_ID="job-session-bd"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
+    write_plan <<'EOF'
+{"volume":"PROJECT_HAIL_MARY","kind":"Blu-ray",
+ "feature":{"no":1,"movie":"Project Hail Mary (2026)"},
+ "extras":[{"no":2,"name":"Making Of","attachTo":"Project Hail Mary (2026)"}],
+ "skipped":[0]}
+EOF
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 0
+    The output should include "publishing"
+    The output should include "verified"
+    # the bytes MakeMKV wrote are the bytes that landed — no encode in between
+    The contents of file "$RIP_SANDBOX/server/movies/Project Hail Mary (2026)/Project Hail Mary (2026).mkv" should equal "ripped-1"
+    The contents of file "$RIP_SANDBOX/server/movies/Project Hail Mary (2026)/extras/Making Of.mkv" should equal "ripped-2"
+    The contents of file "$RIP_FAKE_HB_LOG" should be blank
+    The contents of file "$RIP_FAKE_MKC_LOG" should not include "mkv disc:0 0 "
+    The path "$RIP_STAGING_ROOT/movies/Project Hail Mary (2026)" should not be exist
+    The path "$RIP_STAGING_ROOT/.work/session" should not be exist
+    The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include " 100 "
+  End
+
+  It 'session worker: a Blu-ray item the server already has is never published'
+    export JOB_ID="job-session-bd-have"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    mkdir -p "$RIP_SANDBOX/server/movies/PHM (2026)"
+    printf 'already-there' > "$RIP_SANDBOX/server/movies/PHM (2026)/PHM (2026).mkv"
+    write_plan <<'EOF'
+{"volume":"PHM","kind":"Blu-ray","feature":{"no":1,"movie":"PHM (2026)"},
+ "extras":[{"no":2,"name":"Trailer","attachTo":"PHM (2026)"}],"skipped":[]}
+EOF
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 0
+    The output should include "server already has"
+    The contents of file "$RIP_SANDBOX/server/movies/PHM (2026)/PHM (2026).mkv" should equal "already-there"
+    The contents of file "$RIP_SANDBOX/server/movies/PHM (2026)/extras/Trailer.mkv" should equal "ripped-2"
+    The contents of file "$RIP_FAKE_HB_LOG" should be blank
+  End
+
+  It 'session worker: a plan without a kind is refused before the disc is touched'
+    export JOB_ID="job-session-nokind"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
+    write_plan <<'EOF'
+{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
+EOF
+    When run zsh -c "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 2
+    The stderr should include "kind"
+    The contents of file "$RIP_FAKE_MKC_LOG" should be blank
+    The path "$RIP_SANDBOX/plan.json" should not be exist
+  End
+
   It 'session worker: one item failing to encode never strands the others'
     export JOB_ID="job-session-4"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     export RIP_FAKE_HB_FAIL_INPUT="title-2.mkv"
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},
  "extras":[{"no":2,"name":"Squaring the Circle","attachTo":"U2 (2010)"},
            {"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
  "skipped":[]}
@@ -438,7 +490,7 @@ EOF
     export JOB_ID="job-session-pushfail"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     export RIP_FAKE_RSYNC_RC=23
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
     When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 23
@@ -452,7 +504,7 @@ EOF
   It 'session worker removes the queued plan file it was handed'
     export JOB_ID="job-session-planrm"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
     When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
@@ -466,7 +518,7 @@ EOF
     export JOB_ID="job-session-5"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     export RIP_FAKE_MKV_FAIL_TITLE=2
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},
  "extras":[{"no":2,"name":"Squaring the Circle","attachTo":"U2 (2010)"}],
  "skipped":[]}
 EOF
@@ -485,7 +537,7 @@ EOF
   It 'session worker writes the progress sidecar without a pre-loaded job.zsh'
     export JOB_ID="job-session-prodcomp"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
     When run zsh -c "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
@@ -501,7 +553,7 @@ EOF
     chmod +x "$RIP_SANDBOX/ptywrap"
     export RIP_PTY_WRAP="$RIP_SANDBOX/ptywrap"
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
     When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
@@ -514,7 +566,7 @@ EOF
 
   It '--session rejects a feature movie carrying a slash and enqueues nothing'
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"Face/Off (1997)"},"extras":[],"skipped":[]}
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"Face/Off (1997)"},"extras":[],"skipped":[]}
 EOF
     When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
     The status should equal 2
@@ -524,12 +576,22 @@ EOF
 
   It '--session rejects an extra name of ".." and enqueues nothing'
     write_plan <<'EOF'
-{"volume":"U2","feature":null,
+{"volume":"U2","kind":"DVD","feature":null,
  "extras":[{"no":2,"name":"..","attachTo":"U2 (2010)"}],"skipped":[]}
 EOF
     When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include ".."
+    The path "$JOB_FAKE_LOG" should not be exist
+  End
+
+  It '--session rejects an unknown disc kind and enqueues nothing'
+    write_plan <<'EOF'
+{"volume":"X","kind":"HD DVD","feature":{"no":1,"movie":"X (2001)"},"extras":[],"skipped":[]}
+EOF
+    When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
+    The status should equal 2
+    The stderr should include "kind"
     The path "$JOB_FAKE_LOG" should not be exist
   End
 
@@ -540,7 +602,7 @@ EOF
   # does the plan validator, because a plan is a file that outlives the panel.
   It '--session rejects two extras composing the same file and enqueues nothing'
     write_plan <<'EOF'
-{"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},
  "extras":[{"no":2,"name":"Trailer","attachTo":"U2 (2010)"},
            {"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
  "skipped":[]}
@@ -554,7 +616,7 @@ EOF
   It 'session worker: duplicate extras are refused before the disc is touched'
     export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
     write_plan <<'EOF'
-{"volume":"U2","feature":null,
+{"volume":"U2","kind":"DVD","feature":null,
  "extras":[{"no":2,"name":"Trailer","attachTo":"U2 (2010)"},
            {"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
  "skipped":[]}
@@ -572,7 +634,7 @@ EOF
     titles() { cat "$JOB_STATE_ROOT"/*/meta.json 2>/dev/null; }
     staged() { cat "$RIP_STAGING_ROOT"/.work/session-plans/session-*.json 2>/dev/null; }
     write_plan <<'EOF'
-{"volume":"U2_360_ROSE_BOWL",
+{"volume":"U2_360_ROSE_BOWL","kind":"DVD",
  "feature":{"no":1,"movie":"U2 360 at the Rose Bowl (2010)"},
  "extras":[{"no":2,"name":"Squaring the Circle","attachTo":"U2 360 at the Rose Bowl (2010)"}],
  "skipped":[3]}
@@ -596,7 +658,7 @@ EOF
   It '--session falls back to the volume name when the plan has no feature'
     titles() { cat "$JOB_STATE_ROOT"/*/meta.json 2>/dev/null; }
     write_plan <<'EOF'
-{"volume":"ELVIS_TTWII","feature":null,
+{"volume":"ELVIS_TTWII","kind":"DVD","feature":null,
  "extras":[{"no":2,"name":"Rehearsals","attachTo":"Elvis TTWII (1970)"}],"skipped":[]}
 EOF
     When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"

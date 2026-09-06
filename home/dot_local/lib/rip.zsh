@@ -2815,6 +2815,16 @@ rip::_validate_plan() {
   setopt localoptions noerrexit nopipefail
   local plan="$1"
   jq -e . "$plan" >/dev/null 2>&1 || { log_error "rip: session plan is not valid JSON: $plan"; return 2 }
+  # The disc kind decides the policy the worker applies (DVD encodes,
+  # Blu-ray remuxes — operator rule, 2026-09-05). The panel is the only
+  # producer, so this is a schema check, not a compatibility shim: no kind
+  # is as wrong as a bad one.
+  local kind
+  kind="$(jq -r '.kind // empty' "$plan")"
+  case "$kind" in
+    DVD | Blu-ray) ;;
+    *) log_error "rip: session plan kind must be DVD or Blu-ray, got: ${kind:-<missing>}"; return 2 ;;
+  esac
   local feat_movie feat_no no name attach rel n=0
   # Every relpath this plan would compose, so a COLLISION can be caught here
   # rather than discovered as a missing rip. Two extras sharing a name and an
@@ -2899,10 +2909,12 @@ rip::session_enqueue() {
 #
 #   0–50   RIP     makemkvcon rips each selected title into .work/session/.
 #                  The drive is free the moment this phase ends.
-#   50–85  ENCODE  HandBrake encodes each ripped file (RIP_HB_ARGS, from FILE
-#                  — the pipeline worker's path) and publishes it by atomic
-#                  rename: feature → movies/<Movie>/<Movie>.mkv, extra →
-#                  movies/<attachTo>/extras/<Name>.mkv.
+#   50–85  ENCODE  DVD: HandBrake encodes each ripped file (RIP_HB_ARGS, from
+#                  FILE — the pipeline worker's path) and publishes it by
+#                  atomic rename: feature → movies/<Movie>/<Movie>.mkv, extra
+#                  → movies/<attachTo>/extras/<Name>.mkv. Blu-ray: each
+#                  ripped file is published as-is by rename (remux) — the
+#                  band is spent in an instant.
 #   85–100 PUSH    one rip::push_worker movies for the whole session.
 #
 # Each band is split evenly across the session's items, so a four-title
@@ -2926,6 +2938,20 @@ rip::session_enqueue() {
 #     only unlinks plain files in .work and skips directories entirely, so
 #     "the next Hammerspoon start will clear it" was never true of this
 #     directory (review finding, 2026-08-20).
+
+# rip::_publish_file <src> <rel> — publish a finished file at
+# $(rip::staging_root)/<rel> by rename. Same filesystem as .work, so this
+# is atomic and instant: movies/ receives a whole file or nothing, the
+# kill-safety argument every encode publish here already rests on. Used
+# for Blu-ray remux items (the ripped title IS the published file) by both
+# the session worker and the auto flow.
+rip::_publish_file() {
+  local src="$1" rel="$2" out out_dir
+  out="$(rip::staging_root)/$rel"
+  out_dir="${out:h}"
+  mkdir -p -- "$out_dir" && mv -f -- "$src" "$out"
+}
+
 rip::session_worker() {
   setopt localoptions noerrexit nopipefail
   rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
@@ -2960,6 +2986,8 @@ rip::session_worker() {
     item_rel+=("movies/$attach/extras/$name.mkv")
     item_label+=("$attach — $name")
   done < <(rip::_plan_extras "$plan")
+  local kind
+  kind="$(jq -r '.kind' "$plan")"
   rm -f -- "$plan" # read in full: see the note above rip::_validate_plan's call
   local n=${#item_no}
   (( n > 0 )) || { log_error "rip: session plan selects nothing"; return 2 }
@@ -3057,6 +3085,23 @@ rip::session_worker() {
     remote_rc=$?
     if (( remote_rc == 0 )); then
       print -r -- "rip: server already has $rel — skipping this item"
+      continue
+    fi
+    if [[ "$kind" == Blu-ray ]]; then
+      # REMUX: the ripped title is the published file. No HandBrake, no
+      # temp — a rename into place (rip::_publish_file). Same per-item
+      # failure rule as an encode: log, drop the item, keep going.
+      print -r -- "rip: publishing $rel"
+      RIP_PROGRESS_BASE=$base RIP_PROGRESS_SPAN=$span \
+        rip::_progress 0 "publishing — ${item_label[i]}"
+      if ! rip::_publish_file "$src" "$rel"; then
+        log_error "rip: could not publish $rel — item dropped, session continues"
+        failed=1
+        continue
+      fi
+      published=$(( published + 1 ))
+      RIP_PROGRESS_BASE=$base RIP_PROGRESS_SPAN=$span \
+        rip::_progress 100 "publishing — ${item_label[i]}"
       continue
     fi
     rm -f -- "$out_tmp"
