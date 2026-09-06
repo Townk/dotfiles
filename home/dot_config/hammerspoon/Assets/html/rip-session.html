@@ -132,6 +132,7 @@
           duration: t.duration || '',
           seconds: Number(t.seconds) || 0,
           size: t.size || '',
+          bytes: Number(t.bytes) || 0,
           inLibrary: t.inLibrary || null,
           role: role,
           movie: null,     // {title, name, year, poster} once picked
@@ -267,11 +268,25 @@
       el.innerHTML = html;
     }
 
+    // The pipeline's policy is a pure function of the disc kind (operator
+    // rule, 2026-09-05): DVDs are encoded, Blu-rays are published as ripped.
+    // Shown in the header so the operator sees it BEFORE pressing Start.
+    function policyFor(kind) {
+      return kind === 'Blu-ray' ? 'remux' : kind === 'DVD' ? 'encode' : '';
+    }
+    function fmtGB(bytes) {
+      return (bytes / 1e9).toFixed(1) + ' GB';
+    }
+
     function renderHeader() {
       document.getElementById('vol').textContent = SESSION.volume || '';
       var n = rows.length;
       var bits = [];
-      if (SESSION.kind) bits.push(SESSION.kind);
+      if (SESSION.kind) {
+        bits.push(SESSION.kind);
+        var pol = policyFor(SESSION.kind);
+        if (pol) bits.push(pol);
+      }
       bits.push(SESSION.scanning ? 'reading…'
         : SESSION.scanFailed ? 'unreadable'
         : (n + ' title' + (n === 1 ? '' : 's')));
@@ -342,7 +357,16 @@
       var parts = [];
       if (st.feature) parts.push('1 movie');
       if (st.extras.length) parts.push(st.extras.length + ' extra' + (st.extras.length === 1 ? '' : 's'));
-      var tail = '&rarr; rip, encode &amp; push';
+      var policy = policyFor(SESSION.kind) || 'encode';
+      var tail = '&rarr; rip, ' + policy + ' &amp; push';
+      if (policy === 'remux') {
+        // A remux ships the ripped bytes as-is: this total is the operator's
+        // only pre-Start view of an 80+ GB commitment.
+        var total = 0;
+        if (st.feature) total += st.feature.bytes || 0;
+        for (var b = 0; b < st.extras.length; b++) total += st.extras[b].bytes || 0;
+        if (total > 0) tail += ' &middot; ' + esc(fmtGB(total));
+      }
       if (!st.feature && st.libSkips > 0 && st.skipped.length === st.libSkips) {
         tail += ' &middot; feature already on the server';
       } else if (st.skipped.length) {
