@@ -46,6 +46,9 @@ STOP_TEXT = re.compile(
     re.I,
 )
 SMALL = {"a", "an", "the", "of", "to", "in", "and", "or", "for", "at", "by"}
+# One button's whole budget is CROP_TIMEOUT + READ_TIMEOUT = 15 s (see
+# atlas_labels); the scan gives the entire harvest 60 s.
+CROP_TIMEOUT, READ_TIMEOUT = 10, 5
 LANG2 = {"eng": "en", "fra": "fr", "fre": "fr", "spa": "es", "deu": "de", "ger": "de",
          "ita": "it", "nld": "nl", "dut": "nl", "por": "pt", "jpn": "ja"}
 
@@ -222,7 +225,7 @@ def title_case(s):
     return " ".join(out)
 
 
-TAG = re.compile(r"<\s*(composite|image)\b([^>]*)>", re.I)
+TAG = re.compile(r"<\s*(/?)\s*(composite|image)\b([^>]*)>", re.I)
 ATTR = re.compile(r"([A-Za-z_][\w:.-]*)\s*=\s*\"([^\"]*)\"")
 
 
@@ -247,9 +250,11 @@ def atlas_regions(jar_dir, lang):
             continue
         sheet = None
         for tag in TAG.finditer(text):
-            attrs = dict(ATTR.findall(tag.group(2)))
-            if tag.group(1).lower() == "composite":
-                sheet = attrs.get("name")
+            closing, kind, attrs = tag.group(1), tag.group(2).lower(), dict(ATTR.findall(tag.group(3)))
+            if kind == "composite":
+                # </composite> ends the block: an <image> that follows it
+                # belongs to no sheet and must not inherit the previous one.
+                sheet = None if closing else attrs.get("name")
                 continue
             m = name_re.match(attrs.get("name", ""))
             if not m or not sheet:
@@ -257,6 +262,10 @@ def atlas_regions(jar_dir, lang):
             try:
                 box = tuple(int(attrs[k]) for k in ("x", "y", "width", "height"))
             except (KeyError, ValueError):
+                continue
+            # ImageMagick reads -crop 0x0+X+Y as "the rest of the sheet", so a
+            # degenerate region would OCR the whole atlas under one slug's name.
+            if box[2] <= 0 or box[3] <= 0:
                 continue
             key, rank = m.group(1).lower(), "nas".index(m.group(2))
             if key in best:
@@ -300,13 +309,15 @@ def atlas_labels(jar_dir, lang):
             try:
                 # Flatten the transparent glow onto black, grey it, blow it up
                 # and normalise: the live pass' recipe for making a 65 px-tall
-                # menu label legible to tesseract. 15 s PER CROP, so one stuck
-                # button cannot eat the scan's whole 60 s harvest budget.
+                # menu label legible to tesseract. The 15 s budget is PER CROP
+                # and SPLIT across the pair (10 s + 5 s), so a disc with twelve
+                # buttons cannot spend 24 stuck seconds on one of them and eat
+                # the scan's whole 60 s harvest budget.
                 res = subprocess.run(
                     [magick, sheet, "-crop", "%dx%d+%d+%d" % (w, h, x, y),
                      "+repage", "-background", "black", "-flatten",
                      "-colorspace", "Gray", "-resize", "300%", "-normalize", out],
-                    capture_output=True, text=True, timeout=15)
+                    capture_output=True, text=True, timeout=CROP_TIMEOUT)
             except (OSError, subprocess.TimeoutExpired) as e:
                 warn("magick failed on %s: %s" % (slug, e))
                 continue
@@ -316,7 +327,8 @@ def atlas_labels(jar_dir, lang):
             cropped += 1
             try:
                 res = subprocess.run([tess, out, "-", "-l", lang, "--psm", "6"],
-                                     capture_output=True, text=True, timeout=15)
+                                     capture_output=True, text=True,
+                                     timeout=READ_TIMEOUT)
             except (OSError, subprocess.TimeoutExpired) as e:
                 warn("tesseract failed on %s: %s" % (slug, e))
                 continue
@@ -482,15 +494,15 @@ def main():
         # was found, and handlers are matched even when the label harvest came
         # back empty (tesseract failed) — they then keep their slug-rendered
         # fallback name (spec: the layers are independent in both directions).
-        labels, candidates, used_atlas = atlas_labels(jar_dir, lang)
-        if used_atlas:
-            texts = list(labels.values())
-        else:
+        _labels, candidates, used_atlas = atlas_labels(jar_dir, lang)
+        if not used_atlas:
             candidates, _ = ocr_candidates(jar_dir, lang)
-            texts = list(candidates)
         slugs = mappable_slugs(jar_dir)
         if slugs:
-            names = match_names(slugs, texts)
+            # Handlers score against the SAME stoplist-filtered list the
+            # dropdown offers: a string the operator could never pick must
+            # never be assigned to a title behind their back either.
+            names = match_names(slugs, candidates)
     else:
         warn("no BDMV/JAR under %s — structure only" % volume)
 
@@ -528,14 +540,6 @@ def main():
             for row, (name, why) in zip(groups[g][1], ds_group):
                 suggest[row["no"]] = {"role": "extra", "name": name, "why": why}
                 mapped += 1
-        # A play-all no DS group claimed is not a menu entry at all: skip it,
-        # and skip its parts as segments of a skipped playlist.
-        for g in free:
-            playall_row, parts = groups[g]
-            suggest[playall_row["no"]] = {"role": "skip", "name": "", "why": "unmapped"}
-            for row in parts:
-                suggest[row["no"]] = {"role": "skip", "name": "", "why": "segment"}
-
         # Standalone targets are >= 60 s (live-pass amendment): the menu-stub
         # playlists (30-51 s, 3-4 tiny segments) must never take a name. They
         # rank by distance from the nearest MATCHED group's playlist range.
@@ -545,6 +549,20 @@ def main():
         for row, (name, why) in zip(targets, sf_names):
             suggest[row["no"]] = {"role": "extra", "name": name, "why": why}
             mapped += 1
+
+        # A play-all no DS group claimed is not a menu entry at all: skip it,
+        # and skip its parts as segments of a skipped playlist. UNDER THE
+        # CONSERVATISM GATE (review fix, 2026-09-06): on a disc whose handlers
+        # carry no DS numbers at all, every play-all is "unclaimed", and
+        # sweeping unconditionally would bury every deleted scene under Skip
+        # with nothing named. With mapped == 0 the structure-only behaviour
+        # stands: play-alls {skip, playall}, parts {extra, "", part}.
+        if mapped > 0:
+            for g in free:
+                playall_row, parts = groups[g]
+                suggest[playall_row["no"]] = {"role": "skip", "name": "", "why": "unmapped"}
+                for row in parts:
+                    suggest[row["no"]] = {"role": "skip", "name": "", "why": "segment"}
     if mapped > 0:
         for r in rows:
             if r is feature or r["no"] in suggest:

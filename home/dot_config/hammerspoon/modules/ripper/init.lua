@@ -1308,7 +1308,11 @@ local function previewData(name)
 		-- The first UHD (PROJECT_HAIL_MARY, 2026-09-05), titles exactly as
 		-- the pre-fill harvest reads this disc (spec 2026-09-06): the twin
 		-- and the play-all skipped, the five scenes and the featurette
-		-- named in menu order, the two pre-menu trailers skipped.
+		-- named in menu order, the two pre-menu trailers skipped along with
+		-- one of their own segments ("segment of a skipped playlist").
+		-- "Tm" in title 6 is not a typo: it is what tesseract reads off the
+		-- button's crop for "I'M", and the fixture shows what the panel
+		-- actually opens with.
 		return {
 			volume = "PROJECT_HAIL_MARY",
 			kind = "Blu-ray",
@@ -1319,14 +1323,15 @@ local function previewData(name)
 				{ no = 3, duration = "0:09:58", seconds = 598, size = "1.3 GB", bytes = 1400000000, source = "00720.mpls", segments = "643,644,645,646,647", suggest = { role = "skip", name = "", why = "playall" } },
 				{ no = 4, duration = "2:36:31", seconds = 9391, size = "86.8 GB", bytes = 93200000000, source = "00589.m2ts", segments = "589", suggest = { role = "skip", name = "", why = "twin" } },
 				{ no = 5, duration = "0:07:53", seconds = 473, size = "1.0 GB", bytes = 1070000000, source = "00719.mpls", segments = "648", suggest = { role = "extra", name = "Earth's Favorite Eridian", why = "menu" } },
-				{ no = 6, duration = "0:02:20", seconds = 140, size = "321.9 MB", bytes = 337000000, source = "00715.mpls", segments = "644", suggest = { role = "extra", name = "I Think I'm Handling Things Pretty Awesome", why = "menu" } },
+				{ no = 6, duration = "0:02:20", seconds = 140, size = "321.9 MB", bytes = 337000000, source = "00715.mpls", segments = "644", suggest = { role = "extra", name = "I Think Tm Handling Things Pretty Awesome", why = "menu" } },
 				{ no = 7, duration = "0:02:20", seconds = 140, size = "322.6 MB", bytes = 338000000, source = "00717.mpls", segments = "646", suggest = { role = "extra", name = "You Sleep, I Watch", why = "menu" } },
 				{ no = 8, duration = "0:01:39", seconds = 99, size = "230.0 MB", bytes = 241000000, source = "00714.mpls", segments = "643", suggest = { role = "extra", name = "Day 1 Food Paste", why = "menu" } },
 				{ no = 9, duration = "0:01:49", seconds = 109, size = "250.0 MB", bytes = 262000000, source = "00716.mpls", segments = "645", suggest = { role = "extra", name = "How to Put On a Spacesuit", why = "menu" } },
 				{ no = 10, duration = "0:01:47", seconds = 107, size = "246.0 MB", bytes = 258000000, source = "00718.mpls", segments = "647", suggest = { role = "extra", name = "Maybe We're Cousins", why = "menu" } },
+				{ no = 13, duration = "0:01:02", seconds = 62, size = "180.0 MB", bytes = 189000000, source = "00600.m2ts", segments = "600", suggest = { role = "skip", name = "", why = "segment" } },
 			},
 			candidates = {
-				"I Think I'm Handling Things Pretty Awesome", "You Sleep, I Watch", "Day 1 Food Paste",
+				"I Think Tm Handling Things Pretty Awesome", "You Sleep, I Watch", "Day 1 Food Paste",
 				"Earth's Favorite Eridian", "How to Put On a Spacesuit", "Maybe We're Cousins",
 			},
 			library = u2Library,

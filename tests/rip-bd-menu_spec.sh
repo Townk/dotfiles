@@ -242,7 +242,11 @@ cp "$src" "$out"
 EOF
       chmod +x "$S/magick"; export RIP_MAGICK_BIN="$S/magick"
       # fake tesseract: the readings the real one produced from these crops,
-      # keyed on the crop's filename (<slug>.png); anything else is silent
+      # keyed on the crop's filename (<slug>.png); anything else is silent.
+      # The stoplisted buttons (playall, deletedscenes, commentaryby, audio,
+      # play, setaudio03) deliberately have NO branch: they must never be
+      # cropped, so a reading for them could only ever be dead code.
+      # `makingof` is used by the >= 60 s floor example below.
       cat > "$S/tesseract" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${FAKE_TESS_LOG:-/dev/null}"
@@ -253,12 +257,7 @@ case "$1" in
   *yousleep.png) printf 'YOU SLEEP, | WATCH\n' ;;
   *maybewere.png) printf 'MAYBE WE'"'"'RE COUSINS\n' ;;
   *earthsfavorite.png) printf 'EARTH'"'"'S FAVORITE ERIDIAN\n' ;;
-  *deletedscenes.png) printf 'DELETED SCENES\n' ;;
-  *playall.png) printf 'PLAY ALL\n' ;;
-  *commentaryby.png) printf 'COMMENTARY BY DIRECTORS PHIL LORD AND CHRISTOPHER MILLER\n' ;;
-  *setaudio03.png) printf 'FRANCAIS CANADIEN\n' ;;
-  *audio.png) printf 'AUDIO\n' ;;
-  *play.png) printf 'PLAY\n' ;;
+  *makingof.png) printf 'THE MAKING OF\n' ;;
   *) printf '' ;;
 esac
 exit 0
@@ -357,8 +356,9 @@ EOF
       export FAKE_MAGICK_LOG="$S/magick.log"; : > "$FAKE_MAGICK_LOG"
       When call run_helper '.candidates | length'
       The output should equal "6"
-      The contents of file "$FAKE_MAGICK_LOG" should include "-crop 408x65+0+826"
-      The contents of file "$FAKE_MAGICK_LOG" should include "eng_composite_2.png"
+      # the ORDERED fragment: the sheet is the input, the crop geometry is
+      # applied to it, and +repage follows so the crop's origin is dropped
+      The contents of file "$FAKE_MAGICK_LOG" should include "eng_composite_2.png -crop 408x65+0+826 +repage"
       The contents of file "$FAKE_MAGICK_LOG" should not include "playall.png"
       The contents of file "$FAKE_MAGICK_LOG" should not include "setaudio03.png"
     End
@@ -385,6 +385,75 @@ EOF
       When call run_helper '[.suggest["16"].name, .suggest["16"].why] | join(" ")'
       The output should equal "Food Paste slug"
       The stderr should include "magick"
+    End
+
+    # The conservatism rule outranks the play-all sweep (review fix,
+    # 2026-09-06): a disc whose handlers carry no DS numbers claims no
+    # play-all, and sweeping unconditionally would bury every deleted scene
+    # under Skip with nothing named. Nothing mapped -> structure-only.
+    only_sf_handler() {
+      printf '%s\n' 'SF_02_EarthsEridian_onKeyPressed' > "$S/handlers.txt"
+      rm -f "$D/00000.jar"; (cd "$S" && zip -q -j "$D/00000.jar" handlers.txt)
+      # drop the only >= 60 s standalone below the floor so nothing maps
+      sed 's/"no":15,"seconds":473/"no":15,"seconds":50/' "$S/rows.jsonl" > "$S/r2"
+      mv "$S/r2" "$S/rows.jsonl"
+    }
+
+    It 'keeps the play-all and its parts intact when no name mapped at all'
+      only_sf_handler
+      When call run_helper '[.suggest["8"].why, (.suggest["16"]|"\(.role) \(.why)"), (.suggest["20"]|"\(.role) \(.why)")] | join(" | ")'
+      The output should equal "playall | extra part | extra part"
+    End
+
+    It 'never marks a segment skip when no name mapped at all'
+      only_sf_handler
+      When call run_helper '[.suggest[].why] | unique | join(",")'
+      The output should equal "part,playall,twin"
+    End
+
+    # The >= 60 s floor, with a SECOND standalone name in play: only row 15
+    # (473 s) is eligible, so the second name has nowhere to go rather than
+    # landing on the 51 s menu stub at 00011.
+    second_sf_handler() {
+      printf '%s\n' 'SF_01_DS_00_PlayAll_onKeyPressed' 'SF_01_DS_01_FoodPaste_onKeyPressed' \
+        'SF_01_DS_02_HandlingThings_onKeyPressed' 'SF_01_DS_03_PutOnSpacesuit_onKeyPressed' \
+        'SF_01_DS_04_YouSleep_onKeyPressed' 'SF_01_DS_05_WereCousins_onKeyPressed' \
+        'SF_02_EarthsEridian_onKeyPressed' 'SF_03_MakingOf_onKeyPressed' > "$S/handlers.txt"
+      rm -f "$D/00000.jar"; (cd "$S" && zip -q -j "$D/00000.jar" handlers.txt)
+      grep -v '</resources>' "$D/00001/resources_eng.xml" > "$S/x.xml"
+      {
+        printf '  <composite name="eng_composite_4">\n'
+        printf '    <image name="en_button_makingof_n_bt2020_hdr" x="10" y="20" width="300" height="65" hasTransparency="1" />\n'
+        printf '  </composite>\n</resources>\n'
+      } >> "$S/x.xml"
+      mv "$S/x.xml" "$D/00001/resources_eng.xml"
+      printf 'PNG\n' > "$D/00001/eng_composite_4.png"
+    }
+
+    # Without the floor the second name lands on a menu stub: 01072 (30 s) is
+    # nearest the scenes' range, 00011 (51 s) next. Both must stay unmapped
+    # and the label must appear on NO row — only in the dropdown.
+    It 'offers the second label but never puts it on a sub-60 s title'
+      second_sf_handler
+      When call run_helper '[(.candidates|index("The Making Of") != null), .suggest["0"].why, .suggest["3"].why, ([.suggest[].name]|index("The Making Of") == null)] | map(tostring) | join(" ")'
+      The output should equal "true unmapped unmapped true"
+    End
+
+    It 'still gives the one eligible standalone the first SF name'
+      second_sf_handler
+      When call run_helper '.suggest["15"].name'
+      The output should equal "Earth's Favorite Eridian"
+    End
+
+    # No play-all has five parts, so the five-name DS group takes the CLOSEST
+    # one and its names zip onto however many parts that play-all has.
+    It 'falls back to the closest part count when no play-all has exactly k'
+      printf '%s\n' '{"no":0,"seconds":9000,"source":"01199.mpls","segments":"589"}' \
+        '{"no":1,"seconds":250,"source":"00149.mpls","segments":"174,175"}' \
+        '{"no":2,"seconds":120,"source":"00174.m2ts","segments":"174"}' \
+        '{"no":3,"seconds":130,"source":"00175.m2ts","segments":"175"}' > "$S/rows.jsonl"
+      When call run_helper '[.suggest["1"].why, .suggest["2"].name, .suggest["3"].name] | join(" | ")'
+      The output should equal "playall | Day 1 Food Paste | I Think Tm Handling Things Pretty Awesome"
     End
   End
 End
