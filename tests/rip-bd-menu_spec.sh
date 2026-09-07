@@ -363,6 +363,18 @@ EOF
       The contents of file "$FAKE_MAGICK_LOG" should not include "setaudio03.png"
     End
 
+    # The first deployed atlas harvest wedged the UDF mount reading the same
+    # sheet a dozen times straight off the optical drive (live-pass
+    # amendment, spec 2026-09-06): the helper now copies BDMV/JAR to scratch
+    # once and crops only from the copy.
+    It 'reads the disc'\''s JAR directory once: every magick crop reads the scratch copy, never the mount'
+      export FAKE_MAGICK_LOG="$S/magick.log"; : > "$FAKE_MAGICK_LOG"
+      When call run_helper '.candidates | length'
+      The output should equal "6"
+      The contents of file "$FAKE_MAGICK_LOG" should not include "$S/disc/BDMV/JAR"
+      The contents of file "$FAKE_MAGICK_LOG" should include "/JAR/"
+    End
+
     # `|` is tesseract reading the I of "I WATCH"; "1FOOD" is the digit of
     # "DAY 1" glued to the word after it.
     It 'cleans a standalone | to I and splits a digit glued to a word'

@@ -24,6 +24,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -490,19 +491,33 @@ def main():
     lang = os.environ.get("RIP_BD_MENU_LANG", "eng")
     candidates, names = [], []
     if os.path.isdir(jar_dir):
-        # Names run whenever JAR/ exists, independent of whether any handler
-        # was found, and handlers are matched even when the label harvest came
-        # back empty (tesseract failed) — they then keep their slug-rendered
-        # fallback name (spec: the layers are independent in both directions).
-        _labels, candidates, used_atlas = atlas_labels(jar_dir, lang)
-        if not used_atlas:
-            candidates, _ = ocr_candidates(jar_dir, lang)
-        slugs = mappable_slugs(jar_dir)
-        if slugs:
-            # Handlers score against the SAME stoplist-filtered list the
-            # dropdown offers: a string the operator could never pick must
-            # never be assigned to a title behind their back either.
-            names = match_names(slugs, candidates)
+        with tempfile.TemporaryDirectory() as run_tmp:
+            # Optical drives tolerate one sequential read, not a dozen
+            # re-reads of the same sprite sheet by magick: the first deployed
+            # atlas harvest wedged the UDF mount for five hours in
+            # uninterruptible disk wait (live-pass amendment, spec
+            # 2026-09-06). Copy BDMV/JAR to scratch ONCE and do every
+            # downstream read/crop from the copy, never the mount again.
+            try:
+                jar_copy = os.path.join(run_tmp, "JAR")
+                shutil.copytree(jar_dir, jar_copy)
+                jar_dir = jar_copy
+            except (OSError, shutil.Error) as e:
+                warn("cannot copy BDMV/JAR to scratch (%s) — reading the mount directly" % e)
+
+            # Names run whenever JAR/ exists, independent of whether any handler
+            # was found, and handlers are matched even when the label harvest came
+            # back empty (tesseract failed) — they then keep their slug-rendered
+            # fallback name (spec: the layers are independent in both directions).
+            _labels, candidates, used_atlas = atlas_labels(jar_dir, lang)
+            if not used_atlas:
+                candidates, _ = ocr_candidates(jar_dir, lang)
+            slugs = mappable_slugs(jar_dir)
+            if slugs:
+                # Handlers score against the SAME stoplist-filtered list the
+                # dropdown offers: a string the operator could never pick must
+                # never be assigned to a title behind their back either.
+                names = match_names(slugs, candidates)
     else:
         warn("no BDMV/JAR under %s — structure only" % volume)
 
