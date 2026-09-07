@@ -47,6 +47,12 @@ RIP_LIBEXEC_DIR="${RIP_LIBEXEC_DIR:-$HOME/.local/libexec}"
 # may not (see rip::session_scan).
 RIP_BD_MENU_BIN="${RIP_BD_MENU_BIN:-$RIP_LIBEXEC_DIR/rip-bd-menu}"
 
+# MakeMKV stamps every ripped title with the DISC's name (verified live
+# 2026-09-06: every Project Hail Mary extra carried title="Project Hail
+# Mary"), and Jellyfin/Infuse show that tag over the filename for extras.
+# The Blu-ray publish step rewrites it with mkvpropedit — a seam for tests.
+RIP_MKVPROPEDIT_BIN="${RIP_MKVPROPEDIT_BIN:-mkvpropedit}"
+
 # MakeMKV hides titles shorter than its minimum (default 120 s), which on a
 # Blu-ray hides most deleted scenes. 30 s keeps those and drops the menu
 # stubs. INVARIANT: MakeMKV renumbers titles when this changes, so the SAME
@@ -2360,6 +2366,7 @@ rip::disc_worker() {
     # takes the DVD path below, exactly as before this branch existed.
     RIP_PROGRESS_BASE=40 RIP_PROGRESS_SPAN=5 rip::_progress 0 "publishing — $title"
     print -r -- "rip: publishing movies/$title/$title.mkv"
+    rip::_set_mkv_title "${ripped[1]}" "$title"
     if rip::_publish_file "${ripped[1]}" "movies/$title/$title.mkv"; then
       RIP_PUSH_MIN_AGE_S=0 RIP_PROGRESS_BASE=45 RIP_PROGRESS_SPAN=55 rip::push_worker movies
       rc=$?
@@ -3046,6 +3053,26 @@ rip::session_enqueue() {
 #     "the next Hammerspoon start will clear it" was never true of this
 #     directory (review finding, 2026-08-20).
 
+# rip::_set_mkv_title <file> <title> — stamp the MKV's segment title with the
+# name the file is published under. MakeMKV writes the DISC name there and
+# Jellyfin/Infuse show that over the filename for extras (live 2026-09-06:
+# every Project Hail Mary extra displayed as "Project Hail Mary").
+# mkvpropedit edits the header in place — no rewrite of the video. Best
+# effort: a missing tool or a failure warns and the publish goes ahead (the
+# name is still right on disk; the tag can be fixed on cantina later).
+# LANG=C.UTF-8: mkvpropedit aborts on the bare C locale.
+rip::_set_mkv_title() {
+  local file="$1" title="$2"
+  if ! command -v "$RIP_MKVPROPEDIT_BIN" >/dev/null 2>&1; then
+    log_warn "rip: mkvpropedit not found — MKV title tag left as MakeMKV wrote it (${file:t})"
+    return 0
+  fi
+  if ! LANG=C.UTF-8 LC_ALL=C.UTF-8 "$RIP_MKVPROPEDIT_BIN" "$file" --edit info --set "title=$title" >/dev/null 2>&1; then
+    log_warn "rip: could not set the MKV title tag on ${file:t} — left as MakeMKV wrote it"
+  fi
+  return 0
+}
+
 # rip::_publish_file <src> <rel> — publish a finished file at
 # $(rip::staging_root)/<rel> by rename. Same filesystem as .work, so this
 # is atomic and instant: movies/ receives a whole file or nothing, the
@@ -3122,6 +3149,7 @@ rip::session_worker() {
   # (live-caught in rip::_enrich_music, 2026-08-20 — same rule, same file).
   local i rc base span line rest cur total produced f
   local src rel remote_rc pct failed=0 published=0 push_rc=0
+  local pub_title
   local -a fresh=()
 
   #--- RIP phase (0–50) ------------------------------------------------------
@@ -3201,6 +3229,8 @@ rip::session_worker() {
       print -r -- "rip: publishing $rel"
       RIP_PROGRESS_BASE=$base RIP_PROGRESS_SPAN=$span \
         rip::_progress 0 "publishing — ${item_label[i]}"
+      pub_title="${${rel:t}%.mkv}"
+      rip::_set_mkv_title "$src" "$pub_title"
       if ! rip::_publish_file "$src" "$rel"; then
         log_error "rip: could not publish $rel — item dropped, session continues"
         failed=1

@@ -155,6 +155,16 @@ done < "$lf"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/rsync"; export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    # fake mkvpropedit: logs every invocation's args so an example can assert
+    # the title tag it was asked to set (or that it was never called at all,
+    # on the DVD path).
+    export RIP_FAKE_MKVPROPEDIT_LOG="$RIP_SANDBOX/mkvpropedit.log"; : > "$RIP_FAKE_MKVPROPEDIT_LOG"
+    cat > "$RIP_SANDBOX/mkvpropedit" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${RIP_FAKE_MKVPROPEDIT_LOG:-/dev/null}"
+exit 0
+EOF
+    chmod +x "$RIP_SANDBOX/mkvpropedit"; export RIP_MKVPROPEDIT_BIN="$RIP_SANDBOX/mkvpropedit"
   }
 
   # A session plan on disk, as Hammerspoon's hs.json.encode would write it.
@@ -181,6 +191,7 @@ EOF
     The output should include "verified"
     The contents of file "$RIP_SANDBOX/server/movies/Project Hail Mary (2026)/Project Hail Mary (2026).mkv" should equal "ripped-1"
     The contents of file "$RIP_FAKE_HB_LOG" should be blank
+    The contents of file "$RIP_FAKE_MKVPROPEDIT_LOG" should include "--edit info --set title=Project Hail Mary (2026)"
     The path "$RIP_STAGING_ROOT/.work/autorip" should not be exist
     The path "$RIP_STAGING_ROOT/movies/Project Hail Mary (2026)" should not be exist
   End
@@ -531,6 +542,8 @@ EOF
     # HandBrake encoded from the renamed session files, never MakeMKV's names
     The contents of file "$RIP_FAKE_HB_LOG" should include "title-1.mkv"
     The contents of file "$RIP_FAKE_HB_LOG" should not include "makemkv_t"
+    # DVD path: HandBrake writes new files with no MakeMKV title tag to fix
+    The contents of file "$RIP_FAKE_MKVPROPEDIT_LOG" should be blank
     The path "$RIP_STAGING_ROOT/movies/U2 360 at the Rose Bowl (2010)" should not be exist
     The path "$RIP_STAGING_ROOT/.work/session" should not be exist
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include " 100 "
@@ -589,10 +602,28 @@ EOF
     The contents of file "$RIP_SANDBOX/server/movies/Project Hail Mary (2026)/Project Hail Mary (2026).mkv" should equal "ripped-1"
     The contents of file "$RIP_SANDBOX/server/movies/Project Hail Mary (2026)/extras/Making Of.mkv" should equal "ripped-2"
     The contents of file "$RIP_FAKE_HB_LOG" should be blank
+    The contents of file "$RIP_FAKE_MKVPROPEDIT_LOG" should include "--edit info --set title=Project Hail Mary (2026)"
+    The contents of file "$RIP_FAKE_MKVPROPEDIT_LOG" should include "--set title=Making Of"
     The contents of file "$RIP_FAKE_MKC_LOG" should not include "mkv disc:0 0 "
     The path "$RIP_STAGING_ROOT/movies/Project Hail Mary (2026)" should not be exist
     The path "$RIP_STAGING_ROOT/.work/session" should not be exist
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include " 100 "
+  End
+
+  It 'session worker: a missing mkvpropedit warns and still publishes a Blu-ray item'
+    export JOB_ID="job-session-bd-no-mkvpropedit"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_MKVPROPEDIT_BIN="$RIP_SANDBOX/no-mkvpropedit"
+    write_plan <<'EOF'
+{"volume":"PROJECT_HAIL_MARY","kind":"Blu-ray",
+ "feature":{"no":1,"movie":"Project Hail Mary (2026)"},
+ "extras":[],
+ "skipped":[0,2]}
+EOF
+    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 0
+    The output should include "verified"
+    The stderr should include "mkvpropedit"
+    The contents of file "$RIP_SANDBOX/server/movies/Project Hail Mary (2026)/Project Hail Mary (2026).mkv" should equal "ripped-1"
   End
 
   It 'session worker: a Blu-ray item the server already has is never published'
