@@ -11,11 +11,15 @@
 # passwords still work, nothing hangs. The steps, in dependency order:
 #
 #   identity   a self-signed `pinentry-ui-dev` code-signing certificate,
-#              created via openssl + `security import` and trusted for code
-#              signing in the SYSTEM domain (`add-trusted-cert -d`, one sudo —
-#              Touch ID via PAM, or already cached under system-update). The
-#              user-domain variant was rejected: it raises a GUI auth prompt
-#              that cannot be scripted past.
+#              created via openssl + `security import` into the login
+#              keychain. No sudo, so it cannot be the step an absent human
+#              blocks.
+#   trust      that certificate trusted for code signing in the SYSTEM domain
+#              (`add-trusted-cert -d`, one sudo — Touch ID via PAM, or already
+#              cached under system-update). The user-domain variant was
+#              rejected: it raises a GUI auth prompt that cannot be scripted
+#              past. Separate from the minting above because an unanswered
+#              sudo must leave the certificate reusable, not orphaned.
 #   signature  the installed binary re-signed with that identity whenever its
 #              Authority does not already say so. Keychain grants stick to the
 #              signer, and an ad-hoc signature changes every build — this is
@@ -68,9 +72,18 @@ if [[ ! -x "$UI" ]]; then
   exit 0
 fi
 
+# cert_exists / cert_trusted — `-v` restricts the listing to identities macOS
+# already trusts, so the two are NOT interchangeable: an identity whose import
+# succeeded but whose trust step did not (the sudo failed, or nobody was there
+# to answer it) exists without being trusted. Minting and trusting therefore
+# need separate guards; gating both on `-v` mints a fresh key on every run and
+# leaves the untrusted ones behind in the login keychain.
+cert_exists() { security find-identity -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; }
+cert_trusted() { security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; }
+
 # --- identity ---------------------------------------------------------------
-if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
-  log_info "pinentry: creating the '$IDENTITY' signing identity (one sudo)..."
+if ! cert_exists; then
+  log_info "pinentry: creating the '$IDENTITY' signing identity..."
   tmp="$(mktemp -d)" || exit 0
   chmod 700 "$tmp"
   {
@@ -96,18 +109,33 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY
       # per-use consent prompt — scoped to that one binary, not `-A`'s
       # everyone.
       security import "$tmp/id.p12" -k "$LOGIN_KEYCHAIN" -P "$p12pass" \
-        -T /usr/bin/codesign >/dev/null &&
+        -T /usr/bin/codesign >/dev/null
+  } || log_warn "pinentry: could not create the signing identity — keychain serving stays dormant"
+  rm -rf "$tmp"
+fi
+
+# --- trust ------------------------------------------------------------------
+# Split from the minting above so an unanswered sudo costs only this step. The
+# cert is read back out of the keychain rather than kept from the block above:
+# that is what lets a later run finish a half-provisioned identity instead of
+# starting over with a new key.
+if cert_exists && ! cert_trusted; then
+  log_info "pinentry: trusting the '$IDENTITY' signing identity (one sudo)..."
+  tmp="$(mktemp -d)" || exit 0
+  chmod 700 "$tmp"
+  {
+    security find-certificate -c "$IDENTITY" -p "$LOGIN_KEYCHAIN" >"$tmp/cert.pem" &&
       # The SSH triple is scrubbed for the same reason sudo() scrubs it: a
       # stale marker makes pam_reattach skip and costs the Touch ID answer.
       env -u SSH_TTY -u SSH_CONNECTION -u SSH_CLIENT sudo \
         security add-trusted-cert -d -r trustRoot -p codeSign \
         -k /Library/Keychains/System.keychain "$tmp/cert.pem"
-  } || log_warn "pinentry: could not create the signing identity — keychain serving stays dormant"
+  } || log_warn "pinentry: could not trust the signing identity — keychain serving stays dormant"
   rm -rf "$tmp"
 fi
 
 # --- signature --------------------------------------------------------------
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
+if cert_trusted; then
   if ! codesign -dvv "$UI" 2>&1 | grep -q "Authority=$IDENTITY"; then
     if codesign --force --sign "$IDENTITY" "$UI" 2>/dev/null; then
       log_info "pinentry: signed pinentry-ui with $IDENTITY"
@@ -126,9 +154,16 @@ fi
 # source change, which is exactly why it runs from system-update.
 command -v gpg >/dev/null 2>&1 || exit 0
 pending=0
+# Keys stored with no passphrase at all — the agent's keyinfo protection field
+# reads `C` for clear, `P` for protected. gpg never raises a pinentry for a
+# clear key, so nothing can ever be saved for it and the reminder below would
+# ask forever for something that does not exist. An agent that will not answer
+# leaves this empty, which filters nothing and restores the previous behaviour.
+typeset -a unprotected
+unprotected=(${(f)"$(gpg-connect-agent 'keyinfo --list' /bye 2>/dev/null |
+  awk '$1 == "S" && $8 == "C" { print $3 }')"})
 # Only keys that can actually sign: a disabled key (D in the capability field)
-# and an encryption-only subkey never reach pinentry, so their keychain items
-# would never be born and the reminder below would never stop being printed.
+# and an encryption-only subkey never reach pinentry either.
 # Lowercase s is this key's own sign capability; uppercase is the keyring-wide
 # aggregate carried on the primary, which says nothing about the subkey.
 for grip in ${(f)"$(gpg --list-secret-keys --with-colons --with-keygrip 2>/dev/null |
@@ -138,6 +173,9 @@ for grip in ${(f)"$(gpg --list-secret-keys --with-colons --with-keygrip 2>/dev/n
     $1 == "grp" && signing && !disabled { print $10 }
   ' | sort -u)"}; do
   [[ -n "$grip" ]] || continue
+  # `:-` is load-bearing under `set -u`: a reverse subscript that matches
+  # nothing is an unset parameter reference, which would abort the script.
+  [[ -n "${unprotected[(r)$grip]:-}" ]] && continue
   if ! security find-generic-password -s GnuPG -a "$grip" >/dev/null 2>&1; then
     log_info "pinentry: no stored passphrase for grip ${grip:0:8}… — sign once at the console (pinentry-mac, Save in Keychain), then re-run"
     continue
@@ -150,7 +188,9 @@ for grip in ${(f)"$(gpg --list-secret-keys --with-colons --with-keygrip 2>/dev/n
   fi
 done
 
-if ((pending)); then
+if ! cert_trusted; then
+  log_warn "pinentry: no trusted '$IDENTITY' identity — keychain serving stays dormant; re-run at the console to finish it"
+elif ((pending)); then
   log_warn "pinentry: $pending grant(s) pending — cold-cache GPG will prompt until the dialog is answered"
 else
   log_ok "pinentry: signing + keychain stack converged"
