@@ -38,7 +38,10 @@ state_dir="${XDG_STATE_HOME:-{{ .chezmoi.homeDir }}/.local/state}/chezmoi"
 completion_marker="$state_dir/gpg-import.ok"
 expected_key_spec='Personal - Thiago Alves (D36D4260)|0|disabled|0
 Personal - Thiago Alves (F403C88D)|6|disabled|0
-Personal - Thiago Alves (CA995D91)|6|enabled|1'
+Personal - Thiago Alves (CA995D91)|6|enabled|1
+{{- if eq .profile "work" }}
+Work - Thiago Alves (3FE3CB93)|6|enabled|1
+{{- end }}'
 
 # GPG ownertrust levels for `gpg --import-ownertrust`.
 NONE=0
@@ -214,6 +217,14 @@ import_gpg_document() {
 import_gpg_document "Personal - Thiago Alves (D36D4260)" "$NONE" "disabled" 0
 import_gpg_document "Personal - Thiago Alves (F403C88D)" "$ULTIMATE" "disabled" 0
 import_gpg_document "Personal - Thiago Alves (CA995D91)" "$ULTIMATE" "enabled" 1
+{{- if eq .profile "work" }}
+# Work signing key, work profile only — the identity that work.config's
+# user.signingKey selects. A headless dev-shell signs through the forwarded
+# gpg-agent, but that only supplies the PRIVATE operation: gpg enumerates
+# candidate keys from the LOCAL public keyring, so such a box still needs this
+# public key imported. This script is darwin-gated and cannot do it there.
+import_gpg_document "Work - Thiago Alves (3FE3CB93)" "$ULTIMATE" "enabled" 1
+{{- end }}
 
 if [ "$GPG_IMPORT_DEFERRED" -ne 0 ]; then
   rm -f "$completion_marker" 2>/dev/null || true

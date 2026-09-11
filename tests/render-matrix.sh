@@ -66,6 +66,7 @@ TEMPLATES=(
   dot_profile.tmpl
   .chezmoiscripts/run_once_after_10-setup-bootstrap-tools.sh.tmpl
   .chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl
+  .chezmoiscripts/run_after_25-setup-gpg-key.sh.tmpl
   .chezmoiscripts/run_after_35-install-dev-shell-sudo-tool-links.sh.tmpl
   .chezmoiscripts/run_onchange_after_36-setup-gpg-agent-forwarding.sh.tmpl
   .chezmoiscripts/run_onchange_after_37-setup-clipboard-bridge.sh.tmpl
