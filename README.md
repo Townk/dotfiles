@@ -272,14 +272,16 @@ Committed artifacts identify a machine only by an **opaque slot id** (e.g.
 endpoints and the alias↔slot map live only in the loose, unmanaged layer. See
 `.cursor/rules/no-company-info.mdc` and the `pre-commit` leak guard.
 
-**On a fresh clone, arm the guard — it is inert until you do.** The hook lives
-in `.githooks/pre-commit` (tracked, holds no identifiers) but reads its patterns
-from `.leak-patterns` (gitignored, holds the real ones), and `core.hooksPath` is
+**On a fresh clone, arm the guard — it is inert until you do.** Two hooks live
+in `.githooks/` (tracked, holding no identifiers): `pre-commit` scans staged
+added lines, staged file names and the author identity, and `commit-msg` scans
+the message, which the first cannot see. Both read their patterns from
+`.leak-patterns` (gitignored, holds the real ones), and `core.hooksPath` is
 local config:
 
 ```sh
-git config core.hooksPath .githooks     # otherwise git never runs the hook
-$EDITOR .leak-patterns                  # otherwise the hook warns and passes
+git config core.hooksPath .githooks     # arms both; otherwise git runs neither
+$EDITOR .leak-patterns                  # otherwise they warn and pass
 ```
 
 Both were once missing at the same time, which let a work account path reach a

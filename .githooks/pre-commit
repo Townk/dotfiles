@@ -29,8 +29,9 @@
 #
 #   git config core.hooksPath .githooks
 #
-# KNOWN GAP: a pre-commit hook cannot see the commit message, and the policy
-# covers messages too. A commit-msg hook is the missing half.
+# A pre-commit hook cannot see the commit message — git has not collected it
+# yet — and the policy covers messages too. That half lives in `commit-msg`,
+# alongside this file; `core.hooksPath` arms both at once.
 
 emulate -L zsh
 setopt pipefail

@@ -1,0 +1,81 @@
+#!/usr/bin/env zsh
+# Company-info leak guard, message half. THIS REPO IS PUBLIC and history is
+# permanent.
+#
+# Scans the COMMIT MESSAGE against the same pattern list as pre-commit and
+# refuses the commit on a match. It exists because a pre-commit hook cannot see
+# the message — git has not collected it yet when pre-commit runs — while the
+# policy in .cursor/rules/no-company-info.mdc covers messages explicitly. That
+# gap was recorded as known in pre-commit's own header; this closes it.
+#
+# A message is a likelier carrier than the diff it describes. Explaining WHY a
+# change was made is where an internal hostname, a ticket id or a project
+# codename gets typed, long after the code itself was written in neutral terms.
+#
+# Tracked for the same reason as pre-commit and with the same split: this file
+# holds no identifiers, `.leak-patterns` holds the real strings and is
+# gitignored. See pre-commit's header for the 2026-08-06 incident that made
+# tracking them a requirement rather than tidiness.
+#
+# A fresh clone needs the same one command, which enables both hooks at once:
+#
+#   git config core.hooksPath .githooks
+
+emulate -L zsh
+setopt pipefail
+
+msgfile=$1
+[[ -n "$msgfile" && -r "$msgfile" ]] || exit 0
+
+repo_root=$(git rev-parse --show-toplevel) || exit 1
+patterns="$repo_root/.leak-patterns"
+
+if [[ ! -r "$patterns" ]]; then
+  print -ru2 -- "commit-msg: WARNING — $patterns is missing, so the message leak"
+  print -ru2 -- "commit-msg: guard is doing NOTHING. This repo is public. Recreate it"
+  print -ru2 -- "commit-msg: before committing anything that might carry work identifiers."
+  exit 0
+fi
+
+# The WHOLE file, nothing stripped. Both of the tempting "that is not really
+# the message" cuts are false negatives under the way commits are actually made
+# here, and a false negative is the one failure this guard cannot survive:
+#
+#   * Comment lines are kept, because `git commit -F` and `-m` clean with
+#     `whitespace`, not `strip` — a `#` line lands verbatim in the permanent
+#     message.
+#   * The scissors tail is kept, because scissors cleanup is likewise not
+#     applied unless `commit.cleanup=scissors` is in force.
+#
+# Both measured against this git rather than assumed, and `-F` is how every
+# scripted commit in this repo is written.
+#
+# The cost lands on interactive commits, where git DOES strip comments and
+# `--verbose` DOES discard the diff, so both get scanned for nothing. That is
+# almost no new exposure: pre-commit already scans that same diff and the same
+# staged paths, so anything matching there has blocked the commit already. The
+# one genuinely new catch is the branch name in git's help text — which is not
+# committed, but also has no business being a work identifier near this repo.
+msg=$(cat "$msgfile")
+
+[[ -n "${msg//[[:space:]]/}" ]] || exit 0
+
+typeset -a hits
+while IFS= read -r pat || [[ -n "$pat" ]]; do
+  [[ -z "$pat" || "$pat" == \#* ]] && continue
+  if print -r -- "$msg" | grep -iEq -- "$pat"; then
+    hits+=("$pat")
+  fi
+done < "$patterns"
+
+if (( $#hits )); then
+  print -ru2 -- "commit-msg: the commit message matches work/company leak patterns:"
+  for pat in $hits; do print -ru2 -- "  - $pat"; done
+  print -ru2 -- ""
+  print -ru2 -- "Reword the message. Describe the change in neutral terms — the reason"
+  print -ru2 -- "can be recorded in the loose/unmanaged layer. Do not bypass with"
+  print -ru2 -- "--no-verify without explicit thought: a leak here is permanent."
+  exit 1
+fi
+
+exit 0
