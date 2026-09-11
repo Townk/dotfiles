@@ -6,8 +6,8 @@
 # exits 0:
 #
 #   vnc      a macOS Screen Sharing client is attached
-#   touchid  at the console, unlocked, with a reachable Touch ID sensor
-#   gui      at the console, unlocked, no sensor to touch
+#   touchid  at the console, unlocked, with a sensor that can authenticate
+#   gui      at the console, unlocked, nothing touchable that works
 #   remote   locked / headless, or the freshest human input came over SSH
 #
 # POSIX sh, absolute tool paths, no state: gpg-agent execs the dispatcher in a
@@ -130,12 +130,22 @@ if [ -n "$remote_idle" ] && { [ -z "$local_idle" ] || [ "$remote_idle" -lt "$loc
   exit 0
 fi
 
-# At the console. Touch ID if a sensor is reachable right now: the Magic
-# Keyboard rides the KVM, so switching desks unplugs it — `hidutil list` is a
-# live reachability probe, not a capability flag. AppleBiometricSensor is the
-# built-in sensor on a laptop, which no KVM can take away.
-if /usr/bin/hidutil list 2>/dev/null | /usr/bin/grep -q "Touch ID" ||
-  /usr/sbin/ioreg -rc AppleBiometricSensor 2>/dev/null | /usr/bin/grep -q .; then
+# At the console. Touch ID only if a sensor can AUTHENTICATE right now, which
+# is a different question from whether one is attached — and the one that
+# matters. Enumeration answered the wrong one: a wedged external button still
+# appears in `hidutil list`, and a laptop's built-in sensor stays in the IO
+# registry behind a closed lid (measured 2026-09-11, clamshell + a Touch ID
+# button that needed replugging; `bioutil -r` said enrolled the whole time).
+# Both cases answered `touchid`, and the user landed in pinentry-mac anyway via
+# pinentry-touchid's own fallback — a password box where a fingerprint was
+# promised, indistinguishable from a bug.
+#
+# The helper asks LocalAuthentication, which tracked that outage exactly. Found
+# next to this script rather than under $HOME to keep the promise made above:
+# nothing here reads the environment. Absent or unbuilt, the answer is `gui` —
+# the surface that always works, and never a lane that cannot deliver.
+touchid_probe="$(/usr/bin/dirname "$0")/touchid-available"
+if [ -x "$touchid_probe" ] && "$touchid_probe"; then
   echo touchid
 else
   echo gui

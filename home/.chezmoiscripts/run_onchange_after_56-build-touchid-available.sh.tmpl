@@ -1,0 +1,67 @@
+{{- /*
+  touchid-available — rebuild presence's biometric capability probe when its
+  source changes.
+
+  presence used to decide its `touchid` lane by enumerating devices, which
+  answers "is a sensor attached" rather than "can it authenticate". The probe
+  this hook builds asks LocalAuthentication instead; the source carries the
+  measurement that motivated it.
+
+  Soft, for the same reason pinentry-ui's hook is soft: a missing Swift
+  toolchain or a compile error must not fail the whole apply. presence treats an
+  absent probe as "not usable" and answers `gui`, so the worst outcome is a
+  password box where a fingerprint would have been — never a host that cannot
+  authenticate at all.
+
+  Darwin only. LocalAuthentication is a macOS framework, and presence answers
+  `remote` unconditionally off a Mac, so no other OS reaches the lane.
+*/ -}}
+{{- $wt := .chezmoi.workingTree -}}
+#!/usr/bin/env bash
+# touchid-available — rebuild-on-change hook.
+{{- if eq .chezmoi.os "darwin" }}
+#   touchid-available.swift : {{ include "../custom-builds/touchid-available/touchid-available.swift" | sha256sum }}
+#
+# To rebuild manually:
+#   /usr/bin/swiftc -O -o ~/.local/libexec/touchid-available \
+#     ~/.local/share/chezmoi/custom-builds/touchid-available/touchid-available.swift
+{{- end }}
+
+set -euo pipefail
+
+{{- if ne .chezmoi.os "darwin" }}
+# No LocalAuthentication off a Mac, and presence never reaches the lane there.
+exit 0
+{{- end }}
+
+SRC="{{ $wt }}/custom-builds/touchid-available/touchid-available.swift"
+OUT="$HOME/.local/libexec/touchid-available"
+
+if [ ! -f "$SRC" ]; then
+  echo "[touchid-available] source missing at $SRC — skipping." >&2
+  exit 0
+fi
+
+# `--version` rather than a -x test: /usr/bin/swiftc is a stub that exists even
+# with no Xcode or Command Line Tools behind it, and only fails when run.
+if ! /usr/bin/swiftc --version >/dev/null 2>&1; then
+  echo "[touchid-available] no Swift toolchain — skipping. presence will answer" >&2
+  echo "[touchid-available] 'gui' rather than 'touchid'; install the Xcode CLT to enable." >&2
+  exit 0
+fi
+
+mkdir -p "$HOME/.local/libexec"
+echo "[touchid-available] building → $OUT"
+# Built aside and moved into place: presence runs this binary on every password
+# request, so a half-written file at that path would be answered by the `-x`
+# test and then fail to exec. The move is atomic within one filesystem.
+tmp="$(mktemp "${TMPDIR:-/tmp}/touchid-available.XXXXXX")"
+if /usr/bin/swiftc -O -o "$tmp" "$SRC" 2>&1; then
+  chmod 0755 "$tmp"
+  mv -f "$tmp" "$OUT"
+else
+  rm -f "$tmp"
+  echo "[touchid-available] build failed; leaving any installed binary alone" >&2
+fi
+
+# vim:ft=sh
