@@ -45,6 +45,9 @@ readonly IDENTITY="${CODESIGN_ID:-pinentry-ui-dev}"
 readonly UI="$HOME/.local/libexec/pinentry-ui"
 readonly PRESENCE="$HOME/.local/libexec/presence"
 readonly LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+# Apple's LibreSSL by absolute path, never whatever `openssl` leads PATH:
+# Homebrew's openssl is in the Brewfile and shadows this one.
+readonly OPENSSL=/usr/bin/openssl
 
 # Off a Mac there is no Touch ID, no keychain and no codesign — the entire
 # subject of this script does not exist.
@@ -76,13 +79,18 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY
     # because `security import` demands one; it protects a file that lives
     # for milliseconds inside a 0700 tmpdir.
     p12pass="$(head -c 16 /dev/urandom | xxd -p)"
-    openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+    $OPENSSL req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
       -subj "/CN=$IDENTITY" \
       -addext "basicConstraints=critical,CA:FALSE" \
       -addext "keyUsage=critical,digitalSignature" \
       -addext "extendedKeyUsage=critical,codeSigning" \
       -keyout "$tmp/key.pem" -out "$tmp/cert.pem" 2>/dev/null &&
-      openssl pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" \
+      # SecKeychainItemImport reads only the legacy PKCS#12 encodings. An
+      # OpenSSL 3 default export (AES-256-CBC bags, HMAC-SHA256 MAC) fails
+      # its MAC check and is reported as a wrong password; these three flags
+      # are honoured by both LibreSSL and OpenSSL 3, unlike `-legacy`.
+      $OPENSSL pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" \
+        -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
         -out "$tmp/id.p12" -passout "pass:$p12pass" 2>/dev/null &&
       # -T /usr/bin/codesign: let codesign use the private key without a
       # per-use consent prompt — scoped to that one binary, not `-A`'s
@@ -118,8 +126,17 @@ fi
 # source change, which is exactly why it runs from system-update.
 command -v gpg >/dev/null 2>&1 || exit 0
 pending=0
+# Only keys that can actually sign: a disabled key (D in the capability field)
+# and an encryption-only subkey never reach pinentry, so their keychain items
+# would never be born and the reminder below would never stop being printed.
+# Lowercase s is this key's own sign capability; uppercase is the keyring-wide
+# aggregate carried on the primary, which says nothing about the subkey.
 for grip in ${(f)"$(gpg --list-secret-keys --with-colons --with-keygrip 2>/dev/null |
-  awk -F: '$1 == "grp" { print $10 }' | sort -u)"}; do
+  awk -F: '
+    $1 == "sec" { disabled = ($12 ~ /D/); signing = ($12 ~ /s/); next }
+    $1 == "ssb" { signing = ($12 ~ /s/); next }
+    $1 == "grp" && signing && !disabled { print $10 }
+  ' | sort -u)"}; do
   [[ -n "$grip" ]] || continue
   if ! security find-generic-password -s GnuPG -a "$grip" >/dev/null 2>&1; then
     log_info "pinentry: no stored passphrase for grip ${grip:0:8}… — sign once at the console (pinentry-mac, Save in Keychain), then re-run"
