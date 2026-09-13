@@ -414,16 +414,18 @@ End
 Describe 'system-onboard: server profile validation'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
 
-  setup() { export SCRIPT_PATH="$SCRIPT"; }
+  setup() { export SCRIPT_PATH="$SCRIPT" SRC_HOME="$SHELLSPEC_PROJECT_ROOT/home" LIB_PATH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh"; }
   BeforeEach 'setup'
 
   # run_validate <profile> [kind] — remote-onboarding arg validation; prints
-  # the resolved kind on success.
+  # the resolved kind on success. SECRETS_SRC_DIR feeds the traits lookup
+  # (main() sets it via sec::repo_paths; the harness never runs main).
   run_validate() {
     zsh -f -c '
-      export SYSTEM_ONBOARD_NO_RUN=1
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
       source "$SCRIPT_PATH"
-      ALIAS=box HOSTNAME=box.local PROFILE="$1" KIND="${2:-}" LOCAL=0 PREPARE=""
+      SECRETS_SRC_DIR="$SRC_HOME"
+      ALIAS=box HOSTNAME=box.local PROFILE="$1" KIND="${2:-}" LOCAL=0 PREPARE="" LOGIN_USER=""
       validate_inputs
       print -r -- "kind=$KIND"
     ' _ "$@"
@@ -453,13 +455,21 @@ Describe 'system-onboard: server profile validation'
 
   It 'refuses --local for the server profile (operator-onboarded over SSH)'
     When call zsh -f -c '
-      export SYSTEM_ONBOARD_NO_RUN=1
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
       source "$SCRIPT_PATH"
-      chezmoi() { print "profile: server" }   # stub: this machine claims server
-      ALIAS="" HOSTNAME="" PROFILE=server KIND="" LOCAL=1 PREPARE=""
+      SECRETS_SRC_DIR="$SRC_HOME"
+      # stub: `chezmoi data` says this machine is server; every other chezmoi
+      # call (the traits lookup) runs the real binary.
+      chezmoi() { if [[ "$1" == data ]]; then print "profile: server"; else command chezmoi "$@"; fi }
+      ALIAS="" HOSTNAME="" PROFILE=server KIND="" LOCAL=1 PREPARE="" LOGIN_USER=""
       validate_inputs
     ' _
     The status should be failure
     The stderr should include "human-only"
+  End
+
+  It 'has no profile-name case for kind: a headless answer from the helper is enough'
+    When call grep -nE 'dev-shell \| server\) KIND' "$SCRIPT"
+    The status should be failure
   End
 End
