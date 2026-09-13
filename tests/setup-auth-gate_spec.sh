@@ -219,6 +219,7 @@ STUB
     It 'asks profile-traits.tmpl for the kind'
       When call grep -F 'includeTemplate "profile-traits.tmpl"' "$SETUP"
       The status should be success
+      The output should include 'includeTemplate "profile-traits.tmpl"'
     End
   End
 End
