@@ -626,18 +626,51 @@ reconcile_peer_hostname() {
   fi
 }
 
-# --- step 4: remote basics ---------------------------------------------------
+# --- step 4: remote basics + bootstrap ---------------------------------------
+# The tools a target needs before onboarding can continue: chezmoi (init +
+# apply), mise (the headless toolbox, sops/age), zsh (the login shell every
+# rendered config assumes). A headless target missing any of them gets the
+# operator's CHECKED-OUT .setup.sh streamed over the session (bash -s), so it
+# bootstraps with the exact version being committed — no raw-URL drift, no
+# prior push needed. Under the pipe there is no TTY, which is the branch the
+# headless path is built for. A human target keeps the refusal: its bootstrap
+# needs a person for the Xcode / 1Password gates.
+readonly BOOTSTRAP_TOOLS='chezmoi mise zsh'
+
+# remote_missing_tools — prints the BOOTSTRAP_TOOLS the target cannot resolve
+# on the normalized remote PATH (space-separated, possibly empty).
+remote_missing_tools() {
+  rexec "for t in $BOOTSTRAP_TOOLS; do command -v \"\$t\" >/dev/null 2>&1 || printf '%s ' \"\$t\"; done"
+}
+
 reconcile_remote_basics() {
   if ((DRY_RUN)); then
-    log_info "[dry-run] would ensure XDG dirs and chezmoi on $ALIAS"
+    if [[ "$KIND" == headless ]]; then
+      log_info "[dry-run] would ensure XDG dirs on $ALIAS, probe for $BOOTSTRAP_TOOLS, and stream .setup.sh --profile $PROFILE if any is missing"
+    else
+      log_info "[dry-run] would ensure XDG dirs on $ALIAS and refuse if $BOOTSTRAP_TOOLS are missing (human: run .setup.sh --profile $PROFILE there)"
+    fi
     return 0
   fi
   rexec 'mkdir -p ~/.config ~/.cache ~/.local/bin ~/.local/share ~/.local/state' ||
     die "failed to create XDG dirs on $ALIAS"
-  if ! rexec 'command -v chezmoi >/dev/null 2>&1'; then
-    die "chezmoi is not installed on $ALIAS. Install it there (see README bootstrap) and rerun."
+  local missing
+  missing="$(remote_missing_tools)" || die "could not probe $ALIAS for bootstrap tools"
+  missing="${missing% }"
+  if [[ -n "$missing" ]]; then
+    if [[ "$KIND" == headless ]]; then
+      log_info "bootstrapping $ALIAS (missing: $missing) — streaming .setup.sh --profile $PROFILE …"
+      rexec "bash -s -- --profile $PROFILE" <"$REPO_ROOT/.setup.sh" ||
+        die "remote bootstrap failed on $ALIAS (see the .setup.sh output above)"
+      missing="$(remote_missing_tools)" || die "could not re-probe $ALIAS after bootstrap"
+      missing="${missing% }"
+      [[ -z "$missing" ]] ||
+        die "bootstrap left $ALIAS without: $missing"
+    else
+      die "$ALIAS is missing: $missing. A human machine bootstraps itself — run '.setup.sh --profile $PROFILE' there (README § Bootstrap), then rerun."
+    fi
   fi
-  log_ok "remote XDG dirs + chezmoi present"
+  log_ok "remote XDG dirs + bootstrap tools present"
 }
 
 # --- step 5: age identity (headless) ----------------------------------------

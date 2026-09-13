@@ -566,3 +566,72 @@ Describe 'system-onboard: --user validation'
     The stderr should include "--user is not used with --local"
   End
 End
+
+# Auto-bootstrap: a headless target missing chezmoi/mise/zsh gets the
+# operator's checked-out .setup.sh streamed over the session; a human target
+# keeps the refusal (its bootstrap needs a person at the keyboard). rexec is
+# stubbed: the tool probe answers "all missing" until the stream ran.
+Describe 'system-onboard: reconcile_remote_basics (auto-bootstrap)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+  LIB_PATH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh"
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/onboard-boot.XXXXXX")"
+    printf '#!/bin/bash\necho SETUP_BODY\n' >"$WORK/.setup.sh"
+    export SCRIPT_PATH="$SCRIPT" LIB_PATH WORK
+  }
+  BeforeEach 'setup'
+
+  # run_basics <kind> <missing 0|1> — DRY_RUN off; REPO_ROOT is $WORK.
+  run_basics() {
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      ALIAS=box PROFILE=server KIND="$1" DRY_RUN=0 REPO_ROOT="$WORK"
+      MARK="$WORK/streamed"
+      (( $2 )) || : >"$MARK"
+      rexec() {
+        case "$*" in
+          *"for t in"*) [[ -e "$MARK" ]] || print "chezmoi mise zsh " ;;
+          *"bash -s"*)  print "STREAM: $*"; cat >"$WORK/stdin.txt"; : >"$MARK" ;;
+        esac
+        return 0
+      }
+      reconcile_remote_basics
+    ' _ "$@"
+  }
+
+  It 'streams .setup.sh with the profile when a headless target lacks the tools'
+    When call run_basics headless 1
+    The status should be success
+    The output should include "STREAM: bash -s -- --profile server"
+    The output should include "bootstrap tools present"
+    The contents of file "$WORK/stdin.txt" should include "SETUP_BODY"
+  End
+
+  It 'does not stream when every tool is present'
+    When call run_basics headless 0
+    The status should be success
+    The output should not include "STREAM:"
+  End
+
+  It 'refuses a human target that lacks the tools, pointing at .setup.sh'
+    When call run_basics human 1
+    The status should be failure
+    The stderr should include ".setup.sh --profile server"
+  End
+
+  It 'reports the intent under --dry-run without touching the remote'
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      ALIAS=box PROFILE=server KIND=headless DRY_RUN=1 REPO_ROOT="$WORK"
+      rexec() { print "MUST_NOT_RUN"; return 1 }
+      reconcile_remote_basics
+    ' _
+    The status should be success
+    The output should include "[dry-run]"
+    The output should include ".setup.sh --profile server"
+    The output should not include "MUST_NOT_RUN"
+  End
+End
