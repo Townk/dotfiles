@@ -33,7 +33,8 @@ failures=()
 
 # Run a privileged command: directly when already root (a server is
 # administered as root, usually without sudo), via sudo otherwise. Same three
-# lines as .setup.sh — a run-script cannot source the bootstrap.
+# lines as .setup.sh (POSIX `[ ]` here, bash `[[ ]]` there) — a run-script
+# cannot source the bootstrap.
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
 }

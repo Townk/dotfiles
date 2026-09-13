@@ -643,6 +643,18 @@ remote_missing_tools() {
   rexec "for t in $BOOTSTRAP_TOOLS; do command -v \"\$t\" >/dev/null 2>&1 || printf '%s ' \"\$t\"; done"
 }
 
+# known_bootstrap_tools <raw> — echoes only the whitespace-separated tokens of
+# <raw> that are one of BOOTSTRAP_TOOLS (space-separated), dropping everything
+# else. rexec's stdout is whatever the target's login/interactive shell prints
+# before our command runs (motd, a package-manager nag, an rc-file echo); an
+# unfiltered read would let that noise masquerade as a phantom missing tool.
+known_bootstrap_tools() {
+  local word
+  for word in ${=1}; do
+    [[ " $BOOTSTRAP_TOOLS " == *" $word "* ]] && printf '%s ' "$word"
+  done
+}
+
 reconcile_remote_basics() {
   if ((DRY_RUN)); then
     if [[ "$KIND" == headless ]]; then
@@ -656,6 +668,7 @@ reconcile_remote_basics() {
     die "failed to create XDG dirs on $ALIAS"
   local missing
   missing="$(remote_missing_tools)" || die "could not probe $ALIAS for bootstrap tools"
+  missing="$(known_bootstrap_tools "$missing")"
   missing="${missing% }"
   if [[ -n "$missing" ]]; then
     if [[ "$KIND" == headless ]]; then
@@ -663,11 +676,12 @@ reconcile_remote_basics() {
       rexec "bash -s -- --profile $PROFILE" <"$REPO_ROOT/.setup.sh" ||
         die "remote bootstrap failed on $ALIAS (see the .setup.sh output above)"
       missing="$(remote_missing_tools)" || die "could not re-probe $ALIAS after bootstrap"
+      missing="$(known_bootstrap_tools "$missing")"
       missing="${missing% }"
       [[ -z "$missing" ]] ||
         die "bootstrap left $ALIAS without: $missing"
     else
-      die "$ALIAS is missing: $missing. A human machine bootstraps itself — run '.setup.sh --profile $PROFILE' there (README § Bootstrap), then rerun."
+      die "$ALIAS is missing: $missing. A human machine bootstraps itself — run '.setup.sh --profile $PROFILE' there (README § Bootstrap a fresh machine), then rerun."
     fi
   fi
   log_ok "remote XDG dirs + bootstrap tools present"

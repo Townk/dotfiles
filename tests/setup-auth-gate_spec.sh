@@ -211,9 +211,20 @@ STUB
   End
 
   Describe 'source guards'
-    It 'never names a profile: the kind is asked of the repo'
-      When call grep -nE '"(personal|work|dev-shell|server)"' "$SETUP"
+    It 'never names dev-shell or server: the kind is asked of the repo, not tabulated here'
+      When call grep -nE 'dev-shell|server' "$SETUP"
       The status should be failure
+    End
+
+    It 'names personal only on the two documented macOS no-TTY default lines'
+      # The export and the echo right after it — the spec-sanctioned macOS
+      # `curl | bash` default when there is no --profile and no TTY. Any
+      # other count means either a regression (a profile name leaked into
+      # prose again) or a legitimate new sanctioned line that this guard
+      # must be updated to expect.
+      When call grep -cw personal "$SETUP"
+      The status should be success
+      The output should equal '2'
     End
 
     It 'asks profile-traits.tmpl for the kind'

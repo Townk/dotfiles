@@ -14,8 +14,8 @@ set -eufo pipefail
 #       headless: stop here and hand over to an operator's `system-onboard`,
 #                 which renders the secrets fragment and runs the first apply.
 #
-# Profile names never appear in this file: `--profile` is passed through to
-# chezmoi's init template, and the kind comes from
+# The only profile name in this file is the documented macOS no-TTY default
+# below; the profile→kind mapping is never tabulated here — kind comes from
 # .chezmoitemplates/profile-traits.tmpl, which FAILS on an unknown profile —
 # so a typo dies at the lookup, before any lifecycle step.
 #
@@ -26,8 +26,8 @@ set -eufo pipefail
 # --- arguments ---------------------------------------------------------------
 # --profile <p> | --profile=<p>  → CHEZMOI_PROFILE=<p> (chezmoi init skips
 # its prompt). Anything else is an error. With no flag: Darwin keeps the
-# documented `curl | bash` default (prompt on a TTY, personal without one);
-# Linux refuses without a TTY — a server must be explicit.
+# documented `curl | bash` default (prompt on a TTY, the macOS default below
+# without one); Linux refuses without a TTY — a headless host must be explicit.
 OS="$(uname -s)"
 PROFILE=""
 while (($#)); do
@@ -57,8 +57,8 @@ if [[ -n "$PROFILE" ]]; then
   echo "🎯  Profile: $PROFILE (from --profile)"
 elif [[ ! -t 0 ]]; then
   if [[ "$OS" == Darwin ]]; then
-    # No TTY for an interactive prompt; default to personal so a
-    # `curl … | bash` invocation doesn't fail on an unanswerable prompt.
+    # No TTY for an interactive prompt; default below so a `curl … | bash`
+    # invocation doesn't fail on an unanswerable prompt.
     export CHEZMOI_PROFILE=personal
     echo "🎯  Profile: personal (default; no --profile and no TTY)"
   else
@@ -200,15 +200,17 @@ fi
 HEADLESS="$(chezmoi execute-template \
   '{{ (includeTemplate "profile-traits.tmpl" . | fromJson).headless }}')" || {
   echo "❌  Could not resolve this profile's traits (unknown profile?)." >&2
+  echo "    Re-run with a valid --profile <name>; until then every chezmoi" >&2
+  echo "    command on this machine will fail the render." >&2
   exit 1
 }
-RESOLVED_PROFILE="$(chezmoi execute-template '{{ .profile }}')"
 
 if [[ "$HEADLESS" == true ]]; then
   # --- lifecycle: headless ---------------------------------------------------
   # Secrets and the first apply are operator-driven: the first `mise install`
   # must run with the GitHub token live, and only the operator's onboard can
   # render that fragment on a headless box.
+  RESOLVED_PROFILE="$(chezmoi execute-template '{{ .profile }}')"
   cat <<EOF
 ℹ️  Headless profile ($RESOLVED_PROFILE): this machine is bootstrapped
     (chezmoi, mise, zsh, source clone). Secrets and the first apply are

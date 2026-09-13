@@ -524,6 +524,8 @@ Describe 'system-onboard: write_ssh_conf (--user)'
     # write_ssh_conf preserves the front matter and re-renders from Host down.
     printf '%s\n' '# ---' '# alias: box' '# prepare: theme' '# user: bad user' '# ---' \
       'Host box' '    HostName box.example' >"$conf"
+    # 2>/dev/null: the invalid front-matter value trips a log_warn we don't
+    # assert on here — only that the unsafe value never reaches the render.
     run_write_as "" "$conf" box box.example 0 2>/dev/null
     When call grep -i '^    User ' "$conf"
     The status should be failure
@@ -619,6 +621,30 @@ Describe 'system-onboard: reconcile_remote_basics (auto-bootstrap)'
     When call run_basics human 1
     The status should be failure
     The stderr should include ".setup.sh --profile server"
+  End
+
+  It 'filters shell-rc noise out of the probe, keeping only real tool names'
+    # rexec's stdout is whatever the target's shell prints before our command
+    # runs (motd, an apt nag, an rc-file echo). Only "chezmoi" here is one of
+    # BOOTSTRAP_TOOLS; the noise must never surface as a phantom missing tool.
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      ALIAS=box PROFILE=server KIND=headless DRY_RUN=0 REPO_ROOT="$WORK"
+      MARK="$WORK/streamed"
+      rexec() {
+        case "$*" in
+          *"for t in"*) [[ -e "$MARK" ]] || print "Message of the day: updates available chezmoi " ;;
+          *"bash -s"*)  print "STREAM: $*"; cat >"$WORK/stdin.txt"; : >"$MARK" ;;
+        esac
+        return 0
+      }
+      reconcile_remote_basics
+    ' _
+    The status should be success
+    The output should include "(missing: chezmoi)"
+    The output should not include "Message"
+    The output should not include "updates"
   End
 
   It 'reports the intent under --dry-run without touching the remote'
