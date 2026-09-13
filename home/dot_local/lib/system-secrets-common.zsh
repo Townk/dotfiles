@@ -214,6 +214,35 @@ sec::gen_del() {
 SEC_PROFILES=(personal work dev-shell server)
 sec::valid_profile() { (( ${SEC_PROFILES[(Ie)$1]} )); }
 
+# sec::profile_is_headless <profile> — exit 0 when the repo's traits helper
+# says the profile is headless, 1 when human. Asks
+# .chezmoitemplates/profile-traits.tmpl through a throwaway chezmoi config
+# (the same shape tests/render-matrix.sh builds) so no script re-tabulates
+# the profile→kind map; SEC_PROFILES stays the enumeration for usage text
+# and validation only. An unknown profile makes the helper FAIL the render,
+# which surfaces here as a die (fail-closed, same as at apply time).
+sec::profile_is_headless() {
+  local profile="$1" tmp out rc
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/sec-traits.XXXXXX")" || die "mktemp failed"
+  mkdir -p "$tmp/dest"
+  {
+    print -r -- '[data]'
+    print -r -- "    profile = \"$profile\""
+    print -r -- '    secretsSlot = ""'
+    print -r -- '    [data.pi]'
+    print -r -- '        [data.pi.devExtensions]'
+    print -r -- '            pi-cockpit = ""'
+    print -r -- '            pi-plannotator-bridge = ""'
+  } >"$tmp/chezmoi.toml"
+  out="$(chezmoi --config "$tmp/chezmoi.toml" --source "$SECRETS_SRC_DIR" \
+    --destination "$tmp/dest" execute-template \
+    '{{ (includeTemplate "profile-traits.tmpl" . | fromJson).headless }}' 2>&1)"
+  rc=$?
+  rm -rf "$tmp"
+  (( rc == 0 )) || die "cannot resolve traits for profile '$profile': $out"
+  [[ "$out" == true ]]
+}
+
 # ---------------------------------------------------------------------------
 # Interactive prompt helpers (prompt::required / ::default / ::secret /
 # ::choice / ::confirm) live in the shared prompt-common.zsh module.

@@ -440,4 +440,29 @@ INNER
       The status should be failure
     End
   End
+
+  # Kind comes from the repo's traits helper, never from a table in a script.
+  # SECRETS_SRC_DIR normally comes from sec::repo_paths; point it at the repo.
+  Describe 'sec::profile_is_headless'
+    setup_src() { SECRETS_SRC_DIR="$SHELLSPEC_PROJECT_ROOT/home"; }
+    BeforeEach 'setup_src'
+
+    Parameters
+      personal  1
+      work      1
+      dev-shell 0
+      server    0
+    End
+
+    It "answers headless for $1 with exit $2"
+      When call sec::profile_is_headless "$1"
+      The status should equal "$2"
+    End
+
+    It 'dies on a profile the traits helper does not know (fail-closed)'
+      When run sec::profile_is_headless laptop
+      The status should be failure
+      The stderr should include "laptop"
+    End
+  End
 End
