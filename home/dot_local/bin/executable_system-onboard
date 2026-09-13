@@ -842,7 +842,7 @@ converge_remote() {
 
   if [[ "$KIND" == headless ]]; then
     log_info "ensuring decrypt toolchain (sops, age) on $ALIAS …"
-    rexec "chezmoi apply --force ~/.config/mise/conf.d/dev-shell.toml" ||
+    rexec "chezmoi apply --force ~/.config/mise/conf.d/headless-linux.toml" ||
       log_warn "could not pre-apply mise toolbox config on $ALIAS"
     rexec "command -v mise >/dev/null 2>&1 && mise install sops age -y" ||
       log_warn "could not install sops/age via mise on $ALIAS — decrypt will fail until 'mise install' runs there"

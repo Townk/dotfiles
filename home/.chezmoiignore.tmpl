@@ -101,23 +101,24 @@ Library/**
 .profile
 {{- end }}
 {{ if not $headlessLinux -}}
-{{/* Headless-Linux stack (dev-shell + server): SSH-ergonomics units and the
-     mise+apt provisioning path. gpg-agent is forwarded TO these boxes over
-     SSH; the clipboard bridge store serves the laptop→remote mirror. */}}
+{{/* Headless-Linux stack (dev-shell + server): SSH-ergonomics units, the
+     mise toolbox conf, and the mise+apt provisioning path. gpg-agent is
+     forwarded TO these boxes over SSH; the clipboard bridge store serves
+     the laptop→remote mirror. */}}
 .config/systemd/user/gpg-forward-socketdir.service
 .config/systemd/user/clipboard-bridge.socket
 .config/systemd/user/clipboard-bridge.service
 .config/systemd/user/clipboard-bridge-trusted.socket
 .local/libexec/gpg-agent-forward-provision
+.config/mise/conf.d/headless-linux.toml
 .chezmoiscripts/*-setup-gpg-agent-forwarding.sh
 .chezmoiscripts/*-setup-dev-shell-tools.sh
 .chezmoiscripts/*-setup-clipboard-bridge.sh
 .chezmoiscripts/*-install-dev-shell-sudo-tool-links.sh
 {{- end }}
 {{ if not (and (eq .chezmoi.os "linux") $traits.ephemeral) -}}
-{{/* Ephemeral (dev-shell) only: the snap ecosystem, the mise 403-workaround
-     conf, and the state prune that compensates ignore-vs-remove gaps. */}}
-.config/mise/conf.d/dev-shell.toml
+{{/* Ephemeral (dev-shell) only: the snap ecosystem, and the state prune
+     that compensates ignore-vs-remove gaps. */}}
 .config/packages/Snapfile
 .chezmoiscripts/*-install-snaps.sh
 .chezmoiscripts/*-prune-dev-shell-state.sh

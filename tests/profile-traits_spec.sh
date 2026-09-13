@@ -161,6 +161,19 @@ Describe '.chezmoiignore profile gating'
     The output should include ".cursor"
     The output should not include ".local/bin/system-backup"
   End
+
+  It 'server on Linux: the mise toolbox conf is deployed (not ignored)'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call ignored_for server
+    The status should be success
+    The output should not include ".config/mise/conf.d/headless-linux.toml"
+  End
+
+  It 'personal: the mise toolbox conf is ignored (Brewfile owns the tools there)'
+    When call ignored_for personal
+    The status should be success
+    The output should include ".config/mise/conf.d/headless-linux.toml"
+  End
 End
 
 Describe 'template gates for the server profile'
@@ -206,6 +219,33 @@ Describe 'template gates for the server profile'
     When call rendered server dot_config__packages__Uvfile.tmpl
     The status should be success
     The output should not include "mlx-vlm"
+  End
+
+  It 'server on Linux: headless-linux.toml carries the toolbox without the dev-shell 403 workaround'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call rendered server dot_config__mise__conf.d__headless-linux.toml.tmpl
+    The status should be success
+    The output should include '"ripgrep"'
+    The output should include '"sops"'
+    The output should not include 'use_versions_host'
+  End
+
+  It 'dev-shell on Linux: keeps use_versions_host = false'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call rendered dev-shell dot_config__mise__conf.d__headless-linux.toml.tmpl
+    The status should be success
+    The output should include 'use_versions_host = false'
+  End
+
+  # Darwin-runnable guard on the gates themselves (the renders above are
+  # linux-only): the outer gate is the headless trait; the ONLY profile-name
+  # comparison left is the inner dev-shell settings block.
+  It 'headless-linux.toml.tmpl gates on the headless trait, with a single dev-shell inner block'
+    f="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mise/conf.d/headless-linux.toml.tmpl"
+    When call sh -c 'grep -c "\$traits.headless" "$1"; grep -c "eq .profile \"dev-shell\"" "$1"' _ "$f"
+    The status should be success
+    The line 1 of output should equal 1
+    The line 2 of output should equal 1
   End
 End
 

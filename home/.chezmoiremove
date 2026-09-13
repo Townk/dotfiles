@@ -202,3 +202,9 @@ README.md
 # that still have the targets).
 .local/libexec/pty-frame
 .local/libexec/tm-timeline
+
+# ── mise toolbox: dev-shell.toml → headless-linux.toml ─────────────────────
+# The conf was renamed when the server profile joined the headless set
+# (spec 2026-09-13). The old target is ignored on no host after the rename,
+# so this entry fires exactly once on the dev-shell and no-ops elsewhere.
+.config/mise/conf.d/dev-shell.toml

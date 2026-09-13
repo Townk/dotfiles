@@ -18,7 +18,7 @@
 
   mise loads every conf.d/*.toml alongside config.toml, so this layers the
   OS-specific choice without templating the main config (same pattern as
-  dev-shell.toml.tmpl).
+  headless-linux.toml.tmpl).
 */ -}}
 [tools]
 {{- if eq .chezmoi.os "darwin" }}

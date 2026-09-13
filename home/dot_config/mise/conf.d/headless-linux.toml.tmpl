@@ -1,13 +1,12 @@
 {{- /*
-  dev-shell toolbox — extra mise-managed CLI tools for the Linux
-  `dev-shell` profile (headless SSH dev boxes).
+  headless-Linux toolbox — mise-managed CLI tools for the headless Linux
+  profiles (dev-shell, server). On a Mac these tools come from Brewfile.tmpl;
+  here mise is the package manager, so the file renders empty everywhere
+  else.
 
   mise loads every ~/.config/mise/conf.d/*.toml in addition to the main
   config.toml, so these tools install alongside the language runtimes
   without touching that file (no `mise use -g` drift).
-
-  Only emitted on linux + dev-shell. On macOS / other profiles these
-  tools come from Brewfile.tmpl, so the file renders empty there.
 
   Names that resolve in mise's registry are used bare; the rest pin an
   explicit backend — aqua: (curated registry) for tools it covers, else
@@ -17,12 +16,16 @@
   `[exe=...]` overrides the installed binary name when it differs from
   the repo name.
 */ -}}
-{{- if and (eq .chezmoi.os "linux") (eq .profile "dev-shell") }}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- if and (eq .chezmoi.os "linux") $traits.headless }}
+{{- if eq .profile "dev-shell" }}
 [settings]
 # The hosted mise-versions API currently returns 403 for several aqua-backed
-# GitHub release lookups on the dev shell. Disable it here so mise queries the
-# backend directly instead of warning and falling back on every update.
+# GitHub release lookups on the dev shell. Disable it there so mise queries
+# the backend directly instead of warning and falling back on every update.
+# Measured on the dev-shell only; the server keeps mise defaults.
 use_versions_host = false
+{{- end }}
 
 [tools]
 # Registry-resolved (prebuilt binaries)
