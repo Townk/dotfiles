@@ -1,7 +1,7 @@
 {{- /*
-  headless-Linux tool provisioning (dev-shell + server).
+  headless Linux tool provisioning (dev-shell + server).
 
-  Owns the Linux dev-shell equivalent of
+  Owns the headless Linux equivalent of
   run_once_after_10-setup-bootstrap-tools:
 
     1. mise install  — language runtimes (config.toml) + the CLI toolbox
@@ -23,13 +23,20 @@
 #!/bin/bash
 set -uo pipefail
 
-echo "🧰  Provisioning dev-shell tools..."
+echo "🧰  Installing headless Linux tools..."
 
 # chezmoi may run this with a minimal PATH; make sure the bootstrap
 # binaries are reachable.
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/snap/bin:$PATH"
 
 failures=()
+
+# Run a privileged command: directly when already root (a server is
+# administered as root, usually without sudo), via sudo otherwise. Same three
+# lines as .setup.sh — a run-script cannot source the bootstrap.
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
+}
 
 RUNTIME_DIR="${TMPDIR:-/tmp}/runtime-${UID:-$(id -u)}"
 mkdir -p "$RUNTIME_DIR"
@@ -74,8 +81,8 @@ APT_PACKAGES=(
   libclang-dev           # libclang development files for bindgen
 )
 
-# sudo runs with env_reset, so these have to ride on the command line rather
-# than be exported. DEBIAN_FRONTEND stops debconf from opening a dialog;
+# sudo runs with env_reset, so these ride on the command line via `env` rather
+# than being exported. DEBIAN_FRONTEND stops debconf from opening a dialog;
 # NEEDRESTART_SUSPEND stops apt's post-invoke hook from asking which daemons to
 # restart. Either prompt blocks the run forever when chezmoi is attached to a
 # tty, and restarting system daemons is not this script's business.
@@ -83,12 +90,12 @@ APT_ENV=(DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1)
 
 if command -v apt-get >/dev/null 2>&1; then
   echo "📦  Installing system libraries via apt (this can take several minutes)..."
-  sudo "${APT_ENV[@]}" apt-get update -qq || failures+=("apt-get update")
-  if ! sudo "${APT_ENV[@]}" apt-get install -y -qq "${APT_PACKAGES[@]}"; then
+  as_root env "${APT_ENV[@]}" apt-get update -qq || failures+=("apt-get update")
+  if ! as_root env "${APT_ENV[@]}" apt-get install -y -qq "${APT_PACKAGES[@]}"; then
     failures+=("apt: batch install")
     echo "📦  apt batch install failed; retrying packages individually..."
     for pkg in "${APT_PACKAGES[@]}"; do
-      if ! sudo "${APT_ENV[@]}" apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
+      if ! as_root env "${APT_ENV[@]}" apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
         failures+=("apt: $pkg")
       fi
     done
@@ -104,18 +111,18 @@ fi
 # 4. Run the same Homebrew-less convergence path the user gets from
 #    `system-update`. CHEZMOI=1 prevents source pull/apply recursion.
 if command -v system-update >/dev/null 2>&1; then
-  echo "♻️  Running system-update to converge dev-shell tools..."
+  echo "♻️  Running system-update to converge headless Linux tools..."
   CHEZMOI=1 system-update || failures+=("system-update")
 else
   failures+=("system-update not found on PATH")
 fi
 
 if (( ${#failures[@]} )); then
-  echo "⚠️  dev-shell provisioning finished with some skipped items:"
+  echo "⚠️  headless Linux provisioning finished with some skipped items:"
   printf '   - %s\n' "${failures[@]}"
   echo "   (these are best-effort; the shell is still usable)"
 else
-  echo "👍  dev-shell tools provisioned successfully!"
+  echo "👍  headless Linux tools provisioned successfully!"
 fi
 
 # vim:ft=sh

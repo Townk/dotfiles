@@ -267,3 +267,22 @@ Describe 'secrets.yaml server requiredFor'
 MISE_GITHUB_TOKEN"
   End
 End
+
+# Root-aware privilege: a server is administered as root with no sudo. The
+# scripts render only on Linux, so guard the SOURCE here (runs on every host).
+Describe 'headless run-scripts are root-aware'
+  S15="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl"
+  S35="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_after_35-install-dev-shell-sudo-tool-links.sh.tmpl"
+
+  It '15: routes apt through as_root and has no bare sudo call'
+    When call sh -c 'grep -c "^as_root()" "$1"; grep -cE "^[[:space:]]*sudo " "$1" || true' _ "$S15"
+    The line 1 of output should equal 1
+    The line 2 of output should equal 0
+  End
+
+  It '35: links directly when uid is 0'
+    When call grep -F 'if [ "$(id -u)" -eq 0 ]; then' "$S35"
+    The status should be success
+    The output should include 'if [ "$(id -u)" -eq 0 ]; then'
+  End
+End

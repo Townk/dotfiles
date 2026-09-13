@@ -2,7 +2,7 @@
 set -eu
 {{ $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 {{/*
-  On the Linux dev shell, a couple of mise-managed network tools need root
+  On headless Linux (dev-shell, server), a couple of mise-managed network tools need root
   privileges. Running their mise shims under sudo is wrong: the shim executes
   mise as root, which uses root's trust/config/install context. Instead, expose
   root-visible links to the actual installed binaries.
@@ -29,7 +29,12 @@ install_sudo_link() {
     return 0
   fi
 
-  if sudo -n mkdir -p /usr/local/bin 2>/dev/null &&
+  if [ "$(id -u)" -eq 0 ]; then
+    # Root already (a server is administered as root, usually without sudo).
+    mkdir -p /usr/local/bin
+    ln -sfn "$target" "/usr/local/bin/$name"
+    echo "sudo tool link: /usr/local/bin/$name -> $target"
+  elif sudo -n mkdir -p /usr/local/bin 2>/dev/null &&
      sudo -n ln -sfn "$target" "/usr/local/bin/$name" 2>/dev/null; then
     echo "sudo tool link: /usr/local/bin/$name -> $target"
   elif [ -t 0 ]; then
