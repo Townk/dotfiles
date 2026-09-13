@@ -6,17 +6,18 @@
       {{`{{ if eq .profile "personal" }}…{{ end }}`}}
 
   Profile is resolved in this order:
-    1. CHEZMOI_PROFILE env var (set by `.setup.sh` from --work/--personal).
+    1. CHEZMOI_PROFILE env var (set by `.setup.sh` from --profile).
     2. Interactive prompt (TTY required), defaulting to "personal".
 
   Profile is NOT cached in chezmoi state — each `chezmoi init` either
-  uses the env var or prompts. setup.sh handles non-TTY contexts
-  (curl | bash without a flag) by exporting CHEZMOI_PROFILE=personal
-  itself, so the template never hits an unanswerable prompt.
+  uses the env var or prompts. On macOS with no --profile and no TTY,
+  .setup.sh defaults to personal itself (curl | bash without a flag), so
+  the template never hits an unanswerable prompt; on Linux with no --profile
+  and no TTY, .setup.sh refuses before chezmoi init ever runs.
 */ -}}
 {{- /*
   Profile resolution order:
-    1. CHEZMOI_PROFILE env var (set by .setup.sh from --work/--personal).
+    1. CHEZMOI_PROFILE env var (set by .setup.sh from --profile).
     2. `chezmoi init --promptString profile=<value>` flag (when invoking
        chezmoi init by hand). The prompt key is the literal text
        "profile" — `--promptString` matches against the prompt text,

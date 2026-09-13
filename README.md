@@ -2,8 +2,8 @@
 
 Personal dotfiles for macOS (Apple Silicon), managed by
 [chezmoi](https://www.chezmoi.io). macOS-specific artifacts are gated to
-`darwin` via `.chezmoiignore.tmpl` and per-script otherword guards so the same
-source can later coexist with a Linux machine without polluting it.
+`darwin` via `.chezmoiignore.tmpl` and per-script otherword guards, and Linux
+hosts (headless profiles) are first-class from the same source.
 ## What's inside
 
 | Path | Purpose |
@@ -48,8 +48,8 @@ installs its `autoconf`/`pcre2` deps).
 
 ## Bootstrap a fresh machine
 
-Prereqs: `curl` and `bash` — both ship with macOS; on Linux, `curl` (apt-based
-distros only for now). That's it.
+Prereqs: `curl` and `bash` — both ship with macOS; on Linux, `curl`, `bash`,
+and root or `sudo` (apt-based distros only for now). That's it.
 
 ```sh
 # Personal Mac (default when no --profile is given and there is no TTY;
@@ -64,7 +64,8 @@ curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | b
 `.setup.sh` works on two independent axes. **Platform** (`uname -s`) decides how
 tools are installed: on macOS it installs Xcode Command Line Tools, Homebrew and
 chezmoi; on Linux it installs base packages via apt, then chezmoi and mise via
-their official installers into `~/.local/bin`, and makes zsh the login shell.
+their official installers into `~/.local/bin`, and makes zsh the login shell
+(when running as root or on a TTY; otherwise it prints the chsh command).
 Then it clones this repo with
 `chezmoi init Townk`. **Kind** decides who finishes: the script asks the freshly
 cloned repo's `profile-traits.tmpl` whether the profile is headless. A human
@@ -111,8 +112,9 @@ End to end, the script:
 
 1. Creates the XDG directories (`~/.config`, `~/.cache`, `~/.local/{bin,share,state}`).
 2. macOS: installs Xcode Command Line Tools. Linux: installs zsh, git, curl via apt.
-3. macOS: installs Homebrew. Linux: installs mise into ~/.local/bin.
-4. Installs chezmoi (brew on macOS; the official installer into ~/.local/bin on Linux).
+3. macOS: installs Homebrew. Then installs chezmoi (brew on macOS; the
+   official installer into ~/.local/bin on Linux).
+4. Linux only: installs mise into ~/.local/bin.
 5. Runs `chezmoi init Townk` to clone the repo into chezmoi's source path
    (no `apply` yet).
 6. Asks the cloned repo whether the profile is headless; if so, prints the
