@@ -62,6 +62,23 @@ Describe '.setup.sh: interactive auth gates (HI-11)'
       # The interactive prompt must NOT fire in the no-TTY path.
       The output should not include 'Press [Enter]'
     End
+
+    It 'hints instead of looping when op and gh are not installed at all'
+      # `When call` re-redirects stdin internally (to /dev/null or /dev/tty),
+      # discarding an inline `< file` written on the `When` line itself —
+      # so, like run_gate above, the redirection into `bash -s` has to
+      # happen inside a wrapper function instead.
+      run_gate_absent() {
+        awk '/^# Interactive auth gates\./{p=1} /^# Self-onboard/{p=0} p' "$SETUP" > "$WORK/block.sh"
+        { echo 'set -eufo pipefail'; cat "$WORK/block.sh"; echo 'echo REACHED_APPLY'; } > "$WORK/piped.sh"
+        env PATH="/usr/bin:/bin" bash -s < "$WORK/piped.sh"
+      }
+      When call run_gate_absent
+      The status should be success
+      The output should include 'op signin'
+      The output should include 'gh auth login'
+      The output should include 'REACHED_APPLY'
+    End
   End
 
   Describe 'checks already satisfied'
@@ -81,6 +98,127 @@ Describe '.setup.sh: interactive auth gates (HI-11)'
       When call grep -F 'read -r -p "Press [Enter]' "$SETUP"
       The status should be success
       The output should include '</dev/tty'
+    End
+  End
+End
+
+# The two-axis bootstrap: --profile replaces --work/--personal; platform
+# (uname) picks the installers; kind (asked of the repo) picks the lifecycle.
+# Blocks are extracted from the real file by their section markers and run
+# under `bash -s`, exactly like `curl | bash`.
+Describe '.setup.sh: --profile and the two-axis structure'
+  SETUP="$SHELLSPEC_PROJECT_ROOT/.setup.sh"
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/setup-axes.XXXXXX")"
+    mkdir -p "$WORK/bin" "$WORK/home"
+  }
+  cleanup() { rm -rf "$WORK"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  stub_uname() {   # <Darwin|Linux>
+    printf '#!/bin/sh\necho %s\n' "$1" >"$WORK/bin/uname"
+    chmod +x "$WORK/bin/uname"
+  }
+
+  # run_args <args…> — the arguments block + a probe line, piped to bash -s.
+  run_args() {
+    awk '/^# --- arguments/{p=1} /^# --- platform prerequisites/{p=0} p' "$SETUP" >"$WORK/block.sh"
+    { echo 'set -eufo pipefail'; cat "$WORK/block.sh"; echo 'echo "PROFILE=${CHEZMOI_PROFILE:-unset}"'; } >"$WORK/piped.sh"
+    PATH="$WORK/bin:$PATH" bash -s -- "$@" <"$WORK/piped.sh"
+  }
+
+  Describe 'arguments'
+    It 'exports the profile from --profile'
+      stub_uname Darwin
+      When call run_args --profile server
+      The status should be success
+      The output should include 'PROFILE=server'
+    End
+
+    It 'accepts the --profile=<p> form'
+      stub_uname Darwin
+      When call run_args --profile=work
+      The status should be success
+      The output should include 'PROFILE=work'
+    End
+
+    It 'rejects the retired --work flag'
+      stub_uname Darwin
+      When call run_args --work
+      The status should be failure
+      The stderr should include 'Unknown argument: --work'
+    End
+
+    It 'rejects any unknown flag'
+      stub_uname Darwin
+      When call run_args --bogus
+      The status should be failure
+      The stderr should include 'Unknown argument'
+    End
+
+    It 'keeps the documented personal default on darwin with no flag and no TTY'
+      stub_uname Darwin
+      When call run_args
+      The status should be success
+      The output should include 'PROFILE=personal'
+    End
+
+    It 'refuses on Linux with no flag and no TTY (a server must be explicit)'
+      stub_uname Linux
+      When call run_args
+      The status should be failure
+      The stderr should include 'must name its profile'
+    End
+  End
+
+  # run_lifecycle <headless true|false> — the kind-lookup block through EOF,
+  # with a stub chezmoi and NO op/gh/brew/system-onboard on PATH.
+  run_lifecycle() {
+    cat >"$WORK/bin/chezmoi" <<'STUB'
+#!/bin/sh
+case "$1" in
+  execute-template)
+    case "$2" in *includeTemplate*) echo "$STUB_HEADLESS" ;; *) echo "someprofile" ;; esac ;;
+  apply) [ $# -eq 1 ] && echo APPLY_RAN ;;
+esac
+exit 0
+STUB
+    chmod +x "$WORK/bin/chezmoi"
+    awk '/^# --- kind lookup/{p=1} p' "$SETUP" >"$WORK/block.sh"
+    { echo 'set -eufo pipefail'; cat "$WORK/block.sh"; } >"$WORK/piped.sh"
+    STUB_HEADLESS="$1" HOME="$WORK/home" PATH="$WORK/bin:/usr/bin:/bin" bash -s <"$WORK/piped.sh"
+  }
+
+  Describe 'lifecycle'
+    It 'headless: stops with the operator command and never applies'
+      When call run_lifecycle true
+      The status should be success
+      The output should include 'system-onboard --alias'
+      The output should include '--profile someprofile'
+      The output should not include 'APPLY_RAN'
+    End
+
+    It 'human: skips absent brew/op/gh with hints and reaches the apply'
+      When call run_lifecycle false
+      The status should be success
+      The output should include 'op signin'
+      The output should include 'gh auth login'
+      The output should include 'APPLY_RAN'
+      The output should not include 'Press [Enter]'
+    End
+  End
+
+  Describe 'source guards'
+    It 'never names a profile: the kind is asked of the repo'
+      When call grep -nE '"(personal|work|dev-shell|server)"' "$SETUP"
+      The status should be failure
+    End
+
+    It 'asks profile-traits.tmpl for the kind'
+      When call grep -F 'includeTemplate "profile-traits.tmpl"' "$SETUP"
+      The status should be success
     End
   End
 End
