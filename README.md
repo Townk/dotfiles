@@ -63,8 +63,9 @@ curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | b
 
 `.setup.sh` works on two independent axes. **Platform** (`uname -s`) decides how
 tools are installed: on macOS it installs Xcode Command Line Tools, Homebrew and
-chezmoi; on Linux it installs base packages via apt, chezmoi and mise into
-`~/.local/bin`, and makes zsh the login shell. Then it clones this repo with
+chezmoi; on Linux it installs base packages via apt, then chezmoi and mise via
+their official installers into `~/.local/bin`, and makes zsh the login shell.
+Then it clones this repo with
 `chezmoi init Townk`. **Kind** decides who finishes: the script asks the freshly
 cloned repo's `profile-traits.tmpl` whether the profile is headless. A human
 machine clears the 1Password / GitHub auth gates, self-onboards its secrets and
@@ -78,9 +79,9 @@ lives in the script: a new profile is an edit in the traits helper only.
 This repo uses a single `profile` data value (`personal`, `work`,
 `dev-shell`, or `server`) to gate profile-specific entries. The `.chezmoi.toml.tmpl` init
 template reads the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it from
-`--profile`. When no flag is given and a TTY is available, chezmoi prompts.
-When no flag is given and there's no TTY (e.g. `curl | bash` without args),
-the script defaults to `personal`.
+`--profile`. On macOS with no flag and no TTY (e.g. `curl | bash` without
+args) the script defaults to `personal`; on Linux, `--profile` is required
+whenever there is no TTY. With a TTY and no flag, chezmoi prompts.
 
 To change profile on an already-bootstrapped machine, re-run
 `.setup.sh --profile <p>`, then `chezmoi apply`. Templates that branch on profile look like:
@@ -122,7 +123,12 @@ End to end, the script:
 8. Pauses for manual 1Password CLI integration (enable it in 1Password's
    Developer settings; the script polls `op account list`).
 9. Runs `gh auth login` if GitHub isn't yet authenticated.
-10. Finally runs `chezmoi apply`, which deploys every tracked file and
+10. Self-onboards this machine's secrets: a targeted `chezmoi apply` of
+    `system-onboard` and its dependency chain, then (with a TTY)
+    `system-onboard --local --no-apply --no-commit` — so the heavy apply
+    below renders the secrets fragment with the GitHub/Homebrew tokens
+    already live.
+11. Finally runs `chezmoi apply`, which deploys every tracked file and
     fires the bootstrap scripts:
     - `setup-bootstrap-tools.sh.tmpl` runs `mise install` (now that
       `~/.config/mise/config.toml` is on disk) to provision
