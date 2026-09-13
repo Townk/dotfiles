@@ -8,7 +8,7 @@ source can later coexist with a Linux machine without polluting it.
 
 | Path | Purpose |
 | ---- | ------- |
-| `.setup.sh` | Top-level fresh-machine bootstrap (Xcode CLT → Homebrew → chezmoi → init → bootstrap Brewfile → 1Password/gh auth → apply). |
+| `.setup.sh` | Top-level fresh-machine bootstrap on two axes: platform (Xcode CLT + Homebrew, or apt + installers) × kind (human: auth gates → self-onboard → apply; headless: hand over to system-onboard). |
 | `dot_zshrc`, `dot_zshenv`, `dot_p10k.zsh` | Zsh + [zsh4humans](https://github.com/romkatv/zsh4humans) + Powerlevel10k. |
 | `dot_config/zsh/` | Functions, abbreviations, color/lib helpers. |
 | `dot_config/packages/` | `Brewfile.bootstrap` (tools needed before `chezmoi apply` runs: `chezmoi`, `mise`, `gh`, `1password-cli`) and `Brewfile` (everything else). |
@@ -46,37 +46,44 @@ The numeric prefix on `run_*` hooks fixes their execution order: chezmoi runs
 explicit (e.g. the zsh build at `50` must run after bootstrap at `10`, which
 installs its `autoconf`/`pcre2` deps).
 
-## Bootstrap on a fresh Mac
+## Bootstrap a fresh machine
 
-Prereqs: `curl` and `bash` — both ship with macOS by default. That's it.
+Prereqs: `curl` and `bash` — both ship with macOS; on Linux, `curl` (apt-based
+distros only for now). That's it.
 
 ```sh
-# Personal Mac (default; chezmoi will prompt if no flag and a TTY is available)
+# Personal Mac (default when no --profile is given and there is no TTY;
+# chezmoi prompts on a TTY)
 curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash
 
-# Work Mac (skip the personal-only App Store apps and packages)
-curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash -s -- --work
-
-# Explicit personal
-curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash -s -- --personal
+# Any explicit profile
+curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash -s -- --profile work
+curl -fsSL https://raw.githubusercontent.com/Townk/dotfiles/master/.setup.sh | bash -s -- --profile server
 ```
 
-`.setup.sh` is self-bootstrapping: it installs Xcode Command Line Tools,
-Homebrew, and chezmoi; uses `chezmoi init Townk` to clone this repo into
-`~/.local/share/chezmoi/`; clears the 1Password / GitHub auth gates that need
-a human; then runs `chezmoi apply`.
+`.setup.sh` works on two independent axes. **Platform** (`uname -s`) decides how
+tools are installed: on macOS it installs Xcode Command Line Tools, Homebrew and
+chezmoi; on Linux it installs base packages via apt, chezmoi and mise into
+`~/.local/bin`, and makes zsh the login shell. Then it clones this repo with
+`chezmoi init Townk`. **Kind** decides who finishes: the script asks the freshly
+cloned repo's `profile-traits.tmpl` whether the profile is headless. A human
+machine clears the 1Password / GitHub auth gates, self-onboards its secrets and
+runs `chezmoi apply`; a headless machine stops and prints the `system-onboard`
+command an operator runs from a trusted host (which can also stream `.setup.sh`
+to the box itself when it finds chezmoi, mise or zsh missing). No profile name
+lives in the script: a new profile is an edit in the traits helper only.
 
 ### Profile
 
 This repo uses a single `profile` data value (`personal`, `work`,
 `dev-shell`, or `server`) to gate profile-specific entries. The `.chezmoi.toml.tmpl` init
-template reads the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it based on the
-`--work` / `--personal` flag for Macs. When no flag is given and a TTY is
-available, chezmoi prompts. When no flag is given and there's no TTY (e.g.
-`curl | bash` without args), the script defaults to `personal`.
+template reads the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it from
+`--profile`. When no flag is given and a TTY is available, chezmoi prompts.
+When no flag is given and there's no TTY (e.g. `curl | bash` without args),
+the script defaults to `personal`.
 
-To change profile on an already-bootstrapped machine, re-run setup.sh with the
-opposite flag, then `chezmoi apply`. Templates that branch on profile look like:
+To change profile on an already-bootstrapped machine, re-run
+`.setup.sh --profile <p>`, then `chezmoi apply`. Templates that branch on profile look like:
 
 ```
 {{ if eq .profile "personal" -}}
@@ -88,30 +95,34 @@ The App Store (`mas`) entries are split in two blocks: one shared by `personal`
 and `work`, one personal-only. Brews, casks, and the bootstrap Brewfile are
 shared.
 
-The `dev-shell` profile is for headless Linux dev shells, not `.setup.sh`.
-Initialize it with `CHEZMOI_PROFILE=dev-shell` or an equivalent chezmoi config,
-then run `chezmoi apply` on the Linux host. The dev-shell bootstrap script
-installs the mise toolbox, apt libraries, Rust nightly, creates
-`XDG_RUNTIME_DIR`, then calls the Homebrew-less `system-update` path to sync
-package manifests and Neovim plugins.
-
-The `server` profile is for headless, long-lived Linux hosts (hypervisor/NAS class machines). Like `dev-shell` it is onboarded by an operator via `system-onboard --profile server` (kind defaults to `headless`), never through `.setup.sh`. Profile→trait gating (headless/ephemeral) lives in `home/.chezmoitemplates/profile-traits.tmpl`, which fails the render on any unknown profile.
+The `dev-shell` (ephemeral, disposable work sandbox) and `server` (long-lived
+hypervisor/NAS class host) profiles are **headless Linux**. Bootstrap the box with
+`.setup.sh --profile <p>` — or let the operator's `system-onboard` stream it
+there — then onboard it from a trusted host with `system-onboard --alias <a>
+--hostname <h> --profile <p> [--user <login>]`; secrets and the first apply are
+always operator-driven on headless machines. Profile→trait gating
+(headless/ephemeral) lives in `home/.chezmoitemplates/profile-traits.tmpl`, which
+fails the render on any unknown profile. The headless bootstrap installs the mise
+toolbox (`mise/conf.d/headless-linux.toml`), apt libraries, Rust nightly, creates
+`XDG_RUNTIME_DIR`, then calls the Homebrew-less `system-update` path.
 
 End to end, the script:
 
 1. Creates the XDG directories (`~/.config`, `~/.cache`, `~/.local/{bin,share,state}`).
-2. Installs Xcode Command Line Tools (gates on `xcode-select --install`).
-3. Installs Homebrew (curl-piped from `Homebrew/install`).
-4. Installs `chezmoi` (via brew) so the repo can be cloned.
+2. macOS: installs Xcode Command Line Tools. Linux: installs zsh, git, curl via apt.
+3. macOS: installs Homebrew. Linux: installs mise into ~/.local/bin.
+4. Installs chezmoi (brew on macOS; the official installer into ~/.local/bin on Linux).
 5. Runs `chezmoi init Townk` to clone the repo into chezmoi's source path
    (no `apply` yet).
-6. Installs `Brewfile.bootstrap` — `chezmoi`, `mise`, `gh`, `1password-cli`,
+6. Asks the cloned repo whether the profile is headless; if so, prints the
+   operator command and stops here.
+7. Installs `Brewfile.bootstrap` — `chezmoi`, `mise`, `gh`, `1password-cli`,
    `1password/tap`. These are the tools needed before `chezmoi apply` can
    safely fire.
-7. Pauses for manual 1Password CLI integration (enable it in 1Password's
+8. Pauses for manual 1Password CLI integration (enable it in 1Password's
    Developer settings; the script polls `op account list`).
-8. Runs `gh auth login` if GitHub isn't yet authenticated.
-9. Finally runs `chezmoi apply`, which deploys every tracked file and
+9. Runs `gh auth login` if GitHub isn't yet authenticated.
+10. Finally runs `chezmoi apply`, which deploys every tracked file and
     fires the bootstrap scripts:
     - `setup-bootstrap-tools.sh.tmpl` runs `mise install` (now that
       `~/.config/mise/config.toml` is on disk) to provision
@@ -325,9 +336,13 @@ The token is fetched from a 1Password item via the desktop app (it remembers the
 access) that can already SSH to the target:
 
 ```sh
-system-onboard --alias <ssh-alias> --hostname <ssh-host> --profile <profile>
-# kind is inferred: dev-shell → headless, else human
+system-onboard --alias <ssh-alias> --hostname <ssh-host> --profile <profile> [--user <login>]
+# kind comes from the profile's traits (headless profiles → headless)
 ```
+
+If a headless target lacks chezmoi, mise or zsh, `system-onboard` streams this
+checkout's `.setup.sh --profile <p>` to it first; a human target is asked to run
+`.setup.sh` itself.
 
 It reconciles SSH access (loose), the remote `chezmoi init`, an opaque secrets
 slot, the encrypted/1Password-backed fragment, the commit (opaque only), and the
