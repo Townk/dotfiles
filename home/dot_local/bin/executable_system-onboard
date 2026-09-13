@@ -25,7 +25,7 @@ set -eu -o pipefail
 source "$SYSTEM_SECRETS_LIB"
 
 # --- arguments ---------------------------------------------------------------
-ALIAS="" HOSTNAME="" PROFILE="" KIND="" COLOR="" PREPARE=""
+ALIAS="" HOSTNAME="" PROFILE="" KIND="" COLOR="" PREPARE="" LOGIN_USER=""
 DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0 SECRETS_REBUILT=0
 NO_CLIPBOARD=0
 VALID_PROFILES=(personal work dev-shell server)
@@ -42,7 +42,7 @@ host, or use --local to self-onboard this machine.
 
 Usage:
   system-onboard --alias <ssh-alias> --hostname <ssh-host> \\
-                 --profile <personal|work|dev-shell|server> [--kind human|headless]
+                 --profile <personal|work|dev-shell|server> [--kind human|headless] [--user <login>]
   system-onboard --local [--alias <name>] [--profile <p>] [--color <name>] [--no-apply]
   system-onboard update <alias> --color <name>   set a machine's window tint
   system-onboard update <alias> --clear          clear it (revert to default)
@@ -58,6 +58,10 @@ Flags:
   --alias <name>       SSH alias for a remote target, or (with --local) the friendly
                        operator-map key (default: this host's short name). Loose only.
   --hostname <host>    real SSH endpoint (loose only; never committed)
+  --user <login>       ssh login user for the target (e.g. root on a hypervisor).
+                       Loose only: written to the fragment's front matter as
+                       'user:' and rendered as a User line. Hand-edit the front
+                       matter to change it later.
   --profile <p>        personal | work | dev-shell | server (with --local, defaults to this
                        machine's configured chezmoi profile)
   --kind <k>           human | headless (default: from the profile's traits —
@@ -109,6 +113,10 @@ parse_args() {
         ;;
       --hostname)
         HOSTNAME="${2:-}"
+        shift 2
+        ;;
+      --user)
+        LOGIN_USER="${2:-}"
         shift 2
         ;;
       --profile)
@@ -189,6 +197,8 @@ interactive_form() {
 # operator-map key (defaults to this host's short name), and the profile comes
 # from the machine's own chezmoi config unless overridden. Macs only (human).
 validate_local_inputs() {
+  [[ -z "$LOGIN_USER" ]] ||
+    die "--user is not used with --local (self onboarding has no SSH)"
   [[ -z "$HOSTNAME" ]] ||
     die "--hostname is not used with --local (self onboarding has no SSH)"
   [[ -n "$ALIAS" ]] || ALIAS="$(hostname -s)"
@@ -225,6 +235,8 @@ validate_inputs() {
     }
   [[ "$ALIAS" =~ '^[A-Za-z0-9._-]+$' ]] ||
     die "alias must be filename-safe ([A-Za-z0-9._-]): $ALIAS"
+  [[ -z "$LOGIN_USER" || "$LOGIN_USER" =~ '^[A-Za-z0-9._-]+$' ]] ||
+    die "user must be filename-safe ([A-Za-z0-9._-]): $LOGIN_USER"
   is_valid_profile "$PROFILE" || die "invalid profile: $PROFILE"
   if [[ -z "$KIND" ]]; then
     if sec::profile_is_headless "$PROFILE"; then KIND="headless"; else KIND="human"; fi
@@ -303,16 +315,18 @@ valid_peer_hostname() {
   [[ "$1" == [A-Za-z0-9][A-Za-z0-9.-]# ]]
 }
 
-# default_frontmatter <alias> <prepare> — the front matter written for a brand-new
-# (or front-matter-less) fragment. Hand-editable afterwards; system-onboard only
-# ever PRESERVES an existing front matter, never rewrites it, so this seeds it once.
+# default_frontmatter <alias> <prepare> [user] — the front matter written for a
+# brand-new (or front-matter-less) fragment. Hand-editable afterwards;
+# system-onboard only ever PRESERVES an existing front matter, never rewrites
+# it, so this seeds it once.
 default_frontmatter() {
-  local alias="$1" prepare="$2"
+  local alias="$1" prepare="$2" user="${3:-}"
   # Fenced front matter FIRST (top of the file), like YAML front matter — the
   # parser and the preservation logic both key off it, so it stays at line 1.
   print -r -- "# ---"
   print -r -- "# alias: $alias"
   print -r -- "# prepare: $prepare"
+  [[ -z "$user" ]] || print -r -- "# user: $user"
   print -r -- "# ---"
   print -r -- "# Loose per-host ssh fragment written by system-onboard — NOT chezmoi-managed,"
   print -r -- "# never committed (holds the real endpoint). The fenced block above is the"
@@ -369,7 +383,7 @@ write_ssh_conf() {
     frontmatter="$(awk 'tolower($1)=="host"{exit} {print}' "$conf")"
     gpg_line="$(grep -iE '^[[:space:]]*RemoteForward .*@@resolve@@:' "$conf" 2>/dev/null | head -1 || true)"
   fi
-  [[ "$frontmatter" == *alias:* ]] || frontmatter="$(default_frontmatter "$alias" "${PREPARE:-theme}")"
+  [[ "$frontmatter" == *alias:* ]] || frontmatter="$(default_frontmatter "$alias" "${PREPARE:-theme}" "${LOGIN_USER:-}")"
 
   # `prepare` from the (preserved or default) front matter drives the render.
   local prepare
@@ -430,6 +444,23 @@ write_ssh_conf() {
     fi
   fi
 
+  # `user` — the ssh login user. Same preserve-once contract: read from the
+  # front matter; seed it there (before the closing fence) the first time a
+  # LOGIN_USER arrives; a hand-edited value must pass the same charset gate
+  # as the alias, else it renders as if absent.
+  local login_user
+  login_user="$(print -r -- "$frontmatter" | awk '/^#[[:space:]]*user:/{sub(/^#[[:space:]]*user:[[:space:]]*/,"");print;exit}')"
+  if [[ -n "$login_user" && ! "$login_user" =~ '^[A-Za-z0-9._-]+$' ]]; then
+    log_warn "ignoring invalid user '$login_user' in $conf front matter — not a safe login name"
+    login_user=""
+  elif [[ -z "$login_user" && -n "${LOGIN_USER:-}" ]]; then
+    login_user="$LOGIN_USER"
+    frontmatter="$(print -r -- "$frontmatter" | awk -v val="$login_user" '
+      /^#[[:space:]]*---[[:space:]]*$/ { n++; if (n == 2) print "# user: " val }
+      { print }
+    ')"
+  fi
+
   {
     print -r -- "$frontmatter"
     # `Host` answers to every configured alias, plus the peer's own
@@ -460,6 +491,9 @@ write_ssh_conf() {
     fi
     print -r -- "Host ${host_names[*]}"
     print -r -- "    HostName $hostname"
+    if [[ -n "$login_user" ]]; then
+      print -r -- "    User $login_user"
+    fi
     if ((want_clip)); then
       print -r -- "    # Clipboard bridge — exposes this machine's clipboard to $alias so its nvim /"
       print -r -- "    # pickers can read it. Toggle: system-onboard update $alias --no-clipboard"
@@ -518,7 +552,7 @@ reconcile_ssh() {
   local want_clip=$((!NO_CLIPBOARD)) clipmsg
   ((want_clip)) && clipmsg="+ clipboard forward" || clipmsg="no clipboard forward"
   if ((DRY_RUN)); then
-    log_info "[dry-run] would ensure $conf (Host $ALIAS → $HOSTNAME, $clipmsg) and the Include in $sshcfg"
+    log_info "[dry-run] would ensure $conf (Host $ALIAS → ${LOGIN_USER:+$LOGIN_USER@}$HOSTNAME, $clipmsg) and the Include in $sshcfg"
     return 0
   fi
   mkdir -p "$confdir"

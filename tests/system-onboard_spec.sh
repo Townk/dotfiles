@@ -473,3 +473,96 @@ Describe 'system-onboard: server profile validation'
     The status should be failure
   End
 End
+
+# `--user`: the ssh login user for the target, stored as `# user:` front
+# matter (preserve-once, hand-editable, like alias/prepare) and rendered as a
+# `User` line right after HostName. Nothing in the committed layer carries it.
+Describe 'system-onboard: write_ssh_conf (--user)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    CONFDIR="$(mktemp -d "$SHELLSPEC_TMPBASE/ssh-user.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT" CONFDIR
+  }
+  BeforeEach 'setup'
+
+  # run_write_as <user> <conf> <alias> <hostname> <want_clip>
+  run_write_as() {
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      LOGIN_USER="$1"; shift
+      write_ssh_conf "$@"
+    ' _ "$@"
+  }
+
+  It 'renders User directly after HostName when a login user is given'
+    conf="$CONFDIR/box.conf"
+    run_write_as admin "$conf" box box.example 0
+    When call awk 'tolower($1)=="hostname"{h=NR} tolower($1)=="user"{print $2, NR-h}' "$conf"
+    The output should equal "admin 1"
+  End
+
+  It 'seeds the user into the front matter and preserves it on a re-render without LOGIN_USER'
+    conf="$CONFDIR/box.conf"
+    run_write_as admin "$conf" box box.example 0
+    run_write_as "" "$conf" box box.example 0
+    When call grep -c -E '^# user: admin$|^    User admin$' "$conf"
+    The output should equal 2
+  End
+
+  It 'renders no User line when no login user is known'
+    conf="$CONFDIR/box.conf"
+    run_write_as "" "$conf" box box.example 0
+    When call grep -i '^    User ' "$conf"
+    The status should be failure
+  End
+
+  It 'ignores a hand-edited unsafe user value instead of rendering it'
+    conf="$CONFDIR/box.conf"
+    # A hand-authored fragment whose front matter carries an unsafe value;
+    # write_ssh_conf preserves the front matter and re-renders from Host down.
+    printf '%s\n' '# ---' '# alias: box' '# prepare: theme' '# user: bad user' '# ---' \
+      'Host box' '    HostName box.example' >"$conf"
+    run_write_as "" "$conf" box box.example 0 2>/dev/null
+    When call grep -i '^    User ' "$conf"
+    The status should be failure
+  End
+End
+
+Describe 'system-onboard: --user validation'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+  setup() { export SCRIPT_PATH="$SCRIPT" SRC_HOME="$SHELLSPEC_PROJECT_ROOT/home" LIB_PATH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh" }
+  BeforeEach 'setup'
+
+  validate_with_user() {   # <user> <local 0|1>
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      SECRETS_SRC_DIR="$SRC_HOME"
+      chezmoi() { if [[ "$1" == data ]]; then print "profile: personal"; else command chezmoi "$@"; fi }
+      ALIAS=box HOSTNAME=box.local PROFILE=personal KIND="" LOCAL="$2" PREPARE="" LOGIN_USER="$1"
+      (( LOCAL )) && HOSTNAME=""
+      validate_inputs
+      print -r -- "user=$LOGIN_USER"
+    ' _ "$@"
+  }
+
+  It 'accepts a filename-safe login user'
+    When call validate_with_user admin 0
+    The status should be success
+    The output should include "user=admin"
+  End
+
+  It 'rejects an unsafe login user'
+    When call validate_with_user "bad user" 0
+    The status should be failure
+    The stderr should include "user must be"
+  End
+
+  It 'refuses --user together with --local'
+    When call validate_with_user admin 1
+    The status should be failure
+    The stderr should include "--user is not used with --local"
+  End
+End
