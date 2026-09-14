@@ -39,7 +39,7 @@ _system-onboard() {
         '(- *)'{-h,--help}'[show help and exit]' \
         '(--local)--hostname[real SSH endpoint (loose only; never committed)]:hostname:_hosts' \
         '--alias[SSH alias, or (with --local) the operator-map key]:alias:' \
-        '--profile[machine profile]:profile:(personal work dev-shell)' \
+        '--profile[machine profile]:profile:(personal work dev-shell server appliance)' \
         '(--local)--kind[slot kind]:kind:(human headless)' \
         '--color[WezTerm window tint (palette name; operator map, loose)]:color:_system-onboard_palette' \
         '(--hostname --kind)--local[self-onboard THIS machine (human only; no SSH)]' \

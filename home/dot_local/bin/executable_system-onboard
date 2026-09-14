@@ -3,7 +3,7 @@
 #
 # Usage:
 #   system-onboard --alias <ssh-alias> --hostname <ssh-host> \
-#                  --profile <personal|work|dev-shell|server> [--kind human|headless]
+#                  --profile <personal|work|dev-shell|server|appliance> [--kind human|headless]
 #
 # Idempotent and safe to rerun after partial failure. With no args on a TTY it
 # runs an interactive form. Run from an already-trusted operator host that has
