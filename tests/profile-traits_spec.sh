@@ -304,6 +304,15 @@ Describe 'headless run-scripts are root-aware'
     The output should equal apt-first
   End
 
+  # mise resolves most toolbox entries through the GitHub API; unauthenticated,
+  # the 60/hour anonymous budget dies halfway through a fresh box (403s). The
+  # secret fragment is already rendered when run_ scripts fire, so the script
+  # loads it first — the same reason the macOS bootstrap sources it.
+  It '15: loads the secrets fragment before the first mise install'
+    When call awk '/\. "\$HOME\/.config\/zsh\/secrets.sh"/{s=NR} /^  mise install -y/{m=NR} END{if(s&&m&&s<m)print "secrets-first";else print "wrong-order"}' "$S15"
+    The output should equal secrets-first
+  End
+
   It '35: links directly when uid is 0'
     When call grep -F 'if [ "$(id -u)" -eq 0 ]; then' "$S35"
     The status should be success

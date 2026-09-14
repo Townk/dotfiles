@@ -104,6 +104,12 @@ fi
 # 2. mise: language runtimes + conf.d CLI toolbox. Best-effort — mise
 #    installs every tool it can and reports the rest; we don't let a
 #    single failure abort provisioning.
+# The toolbox resolves most tools through the GitHub API; unauthenticated, the
+# 60/hour anonymous budget dies halfway through a fresh box (403s). The secret
+# fragment is already rendered when run_ scripts fire (files apply first), so
+# load it — the same reason 10-setup-bootstrap-tools sources it on macOS.
+[ -r "$HOME/.config/zsh/secrets.sh" ] && . "$HOME/.config/zsh/secrets.sh"
+
 if command -v mise >/dev/null 2>&1; then
   echo "🛠️  Installing mise-managed runtimes and CLI toolbox..."
   mise install -y || failures+=("mise install (some tools failed; rerun 'mise install')")
