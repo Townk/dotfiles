@@ -49,6 +49,7 @@ TEMPLATES=(
   dot_config/atuin/config.toml.tmpl
   dot_config/zsh/dot_zshrc.tmpl
   dot_config/zsh/commands.tsv.tmpl
+  dot_config/nvim/lua/config/chezmoi.lua.tmpl
   dot_config/git/config.tmpl
   dot_config/mise/conf.d/rclone.toml.tmpl
   dot_config/mise/conf.d/headless-linux.toml.tmpl

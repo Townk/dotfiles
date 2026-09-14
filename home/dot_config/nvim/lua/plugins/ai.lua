@@ -11,9 +11,15 @@
 -- The @this prefix automatically includes the current buffer/selection as context.
 --------------------------------------------------------------------------------
 
+local facts_ok, chezmoi = pcall(require, "config.chezmoi")
+-- Off only when the rendered facts say so; a machine without the facts
+-- file (not applied since the traits landed) keeps the plugin.
+local ai = not (facts_ok and chezmoi.traits ~= nil and chezmoi.traits.ai_tooling == false)
+
 return {
   {
     "NickvanDyke/opencode.nvim",
+    enabled = ai,
     dependencies = {
       { "folke/snacks.nvim" },
     },

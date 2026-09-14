@@ -1,4 +1,13 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 return {
   os = {{ .chezmoi.os | quote }},
   profile = {{ .profile | quote }},
+  -- Rendered from .chezmoitemplates/profile-traits.tmpl: the plugin specs gate
+  -- the IDE layer on dev_tooling and the AI plugin on ai_tooling.
+  traits = {
+    headless = {{ $traits.headless }},
+    ephemeral = {{ $traits.ephemeral }},
+    dev_tooling = {{ $traits.devTooling }},
+    ai_tooling = {{ $traits.aiTooling }},
+  },
 }

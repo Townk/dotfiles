@@ -16,6 +16,14 @@
 -- provide intelligent tab behavior and session state tracking.
 --------------------------------------------------------------------------------
 
+-- chezmoi facts (lua/config/chezmoi.lua, rendered per machine). Without the
+-- file — a machine that has not applied since the traits landed — everything
+-- stays on, the pre-appliance behaviour.
+local facts_ok, chezmoi = pcall(require, "config.chezmoi")
+local traits = (facts_ok and chezmoi.traits)
+  or { headless = false, ephemeral = false, dev_tooling = true, ai_tooling = true }
+local dev = traits.dev_tooling
+
 return {
   {
     "folke/lazydev.nvim",
@@ -47,6 +55,7 @@ return {
 
   {
     "neovim/nvim-lspconfig",
+    enabled = dev,
     opts = {
       servers = {
         tinymist = {
@@ -113,6 +122,7 @@ return {
 
   {
     "mfussenegger/nvim-dap",
+    enabled = dev,
     opts = function()
       local dap = require("dap")
 
@@ -139,6 +149,7 @@ return {
 
   {
     "mfussenegger/nvim-dap-python",
+    enabled = dev,
     config = function()
       require("dap-python").setup("uv")
     end,
@@ -192,9 +203,12 @@ return {
 
   {
     "mason-org/mason.nvim",
+    enabled = dev,
     opts = function(_, opts)
-      local ok, chezmoi = pcall(require, "config.chezmoi")
-      if ok and chezmoi.os == "linux" and chezmoi.profile == "dev-shell" then
+      -- Headless Linux: mise owns the toolbox (tree-sitter-cli is built by the
+      -- cargo worker because Mason's binary needs a newer glibc), so mise's
+      -- shims must win over Mason's bin directory.
+      if facts_ok and chezmoi.os == "linux" and traits.headless then
         opts.PATH = "append"
       end
     end,
@@ -202,6 +216,7 @@ return {
 
   {
     "WhoIsSethDaniel/mason-tool-installer.nvim",
+    enabled = dev,
     dependencies = { "mason-org/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
@@ -258,6 +273,7 @@ return {
 
   {
     "stevearc/conform.nvim",
+    enabled = dev,
     opts = {
       log_level = vim.log.levels.DEBUG,
       formatters_by_ft = {
@@ -313,6 +329,7 @@ return {
   -- LazyVim's defaults, so this only adds zsh.
   {
     "mfussenegger/nvim-lint",
+    enabled = dev,
     opts = {
       linters_by_ft = {
         zsh = { "zsh" },
@@ -473,4 +490,11 @@ return {
     event = "InsertEnter",
     opts = {},
   },
+
+  -- IDE layer brought in by LazyVim extras: off without dev tooling (the
+  -- binaries they drive come from Mason or the Cargofile, neither of which an
+  -- appliance has).
+  { "mason-org/mason-lspconfig.nvim", enabled = dev },
+  { "mfussenegger/nvim-jdtls", enabled = dev },
+  { "mrcjkb/rustaceanvim", enabled = dev },
 }

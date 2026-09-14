@@ -462,6 +462,22 @@ Describe 'appliance manifests'
     When call awk '/^ai-assist-trigger\(\) \{/{p=1} p&&/commands\[ai-playbook\]/{g=1} p&&/ai-playbook assist/{print (g?"guarded":"unguarded"); exit}' "$SHELLSPEC_PROJECT_ROOT/home/dot_config/zsh/functions.d/widgets.sh"
     The output should equal guarded
   End
+
+  It 'appliance nvim facts: traits off; server: traits on'
+    When call rendered appliance dot_config__nvim__lua__config__chezmoi.lua.tmpl
+    The status should be success
+    The output should include 'profile = "appliance"'
+    The output should include "headless = true"
+    The output should include "dev_tooling = false"
+    The output should include "ai_tooling = false"
+  End
+
+  It 'server nvim facts: dev and ai tooling on'
+    When call rendered server dot_config__nvim__lua__config__chezmoi.lua.tmpl
+    The status should be success
+    The output should include "dev_tooling = true"
+    The output should include "ai_tooling = true"
+  End
 End
 
 # Root-aware privilege: a server is administered as root with no sudo. The
