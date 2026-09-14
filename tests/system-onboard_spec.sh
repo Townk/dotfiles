@@ -792,13 +792,23 @@ Describe 'system-onboard: gpg forward deferral (first onboarding)'
     ' _ "$@"
   }
 
-  It 'defers the gpg line on a never-healed fragment but keeps prepare and the hook'
+  It 'defers the gpg line and the visited-direction clipboard route, keeps prepare, the hook and the reverse forwards'
     conf="$CONFDIR/box.conf"
-    run_write_defer 1 "$conf" box box.example 0
-    When call sh -c 'grep -c "S.gpg-agent" "$1"; grep -c "^# prepare: gpg theme$" "$1"; grep -c "^Match originalhost" "$1"' _ "$conf"
+    run_write_defer 1 "$conf" box box.example 1
+    When call sh -c 'grep -c "S.gpg-agent" "$1"; grep -c "^# prepare: gpg theme$" "$1"; grep -c "^Match originalhost" "$1"; grep -c "^    LocalForward" "$1"; grep -c "^    RemoteForward 127.0.0.1" "$1"' _ "$conf"
     The line 1 of output should equal 0
     The line 2 of output should equal 1
     The line 3 of output should equal 1
+    The line 4 of output should equal 0
+    The line 5 of output should equal 2
+  End
+
+  It 'renders the visited-direction route once deferral ends'
+    conf="$CONFDIR/box.conf"
+    run_write_defer 1 "$conf" box box.example 1
+    run_write_defer 0 "$conf" box box.example 1
+    When call grep -c "^    LocalForward 127.0.0.1:2491" "$conf"
+    The output should equal 1
   End
 
   It 'keeps an already-healed gpg line even while deferring'
@@ -853,8 +863,40 @@ STUB
       source "$SCRIPT_PATH"
       ALIAS=box HOSTNAME=box.example PREPARE=theme NO_CLIPBOARD=1 DRY_RUN=0
       HOME="$CONFDIR/home"; mkdir -p "$HOME/.ssh/config.d"; cp "$1" "$HOME/.ssh/config.d/box.conf"
-      finalize_gpg_forward; print "rc=$?"
+      finalize_gpg_forward; print "rc=$?"; grep -c "S.gpg-agent" "$HOME/.ssh/config.d/box.conf"
     ' _ "$conf"
-    The output should equal "rc=0"
+    The status should equal 1
+    The output should equal "rc=0
+0"
+  End
+End
+
+# converge_remote primes sops/age with a TARGETED apply of the mise toolbox
+# conf. A targeted apply never creates parent directories, and on a fresh box
+# ~/.config/mise/conf.d does not exist yet, so the priming failed with
+# "stat …/conf.d: no such file or directory". The directory is created first.
+Describe 'system-onboard: converge_remote priming (fresh target)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/onboard-prime.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT" WORK \
+      LIB_PATH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh"
+  }
+  BeforeEach 'setup'
+
+  It 'creates the conf.d directory on the target before the targeted apply'
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      ALIAS=box PROFILE=server KIND=headless SLOT=slot-abc123 DRY_RUN=0 SECRETS_REBUILT=0
+      REPO_ROOT="$WORK" OPERATOR_MAP="$WORK/map.yaml"
+      git() { print -r -- "git@example.invalid:x/y.git" }
+      sec::map_get() { print -r -- "" }
+      rexec() { print -r -- "REXEC: $*" >>"$WORK/rexec.log"; return 0 }
+      converge_remote >/dev/null 2>&1
+      grep -c "mkdir -p ~/.config/mise/conf.d && chezmoi apply --force ~/.config/mise/conf.d/headless-linux.toml" "$WORK/rexec.log"
+    ' _
+    The output should equal 1
   End
 End
