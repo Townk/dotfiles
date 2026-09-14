@@ -245,13 +245,24 @@ validate_inputs() {
     die "invalid kind: $KIND (human|headless)"
 }
 
-# Refuse to commit on top of unrelated local changes (the commit would sweep
-# them in). Allowed when --no-commit.
+# Refuse to run on top of UNRELATED local changes. The tool's own artifacts
+# (sops rules, blobs, fragments, generations, manifest — sec::is_artifact_path)
+# may be dirty from a previous run that died mid-way, e.g. during secret entry;
+# a rerun must reconcile those, not refuse itself — that is the idempotency
+# contract. commit_and_push stages exact artifact paths, so unrelated files can
+# never ride along. Allowed outright when --no-commit.
 check_working_tree() {
   ((NO_COMMIT || DRY_RUN)) && return 0
-  if ! git -C "$REPO_ROOT" diff --quiet || ! git -C "$REPO_ROOT" diff --cached --quiet; then
-    die "working tree has unrelated changes; commit/stash them or pass --no-commit"
-  fi
+  local -a dirty unrelated
+  local p
+  dirty=("${(@f)$(git -C "$REPO_ROOT" diff --name-only HEAD)}")
+  for p in "${dirty[@]}"; do
+    [[ -n "$p" ]] || continue
+    sec::is_artifact_path "$p" || unrelated+=("$p")
+  done
+  ((${#unrelated})) &&
+    die "working tree has unrelated changes (${(j:, :)unrelated}); commit/stash them or pass --no-commit"
+  return 0
 }
 
 # --- step 2: SSH (loose) -----------------------------------------------------

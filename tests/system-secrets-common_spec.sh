@@ -465,4 +465,46 @@ INNER
       The stderr should include "laptop"
     End
   End
+
+  # zsh runs an EXIT trap set inside a function when THAT function returns, not
+  # at shell exit. A scrub helper that sets the EXIT trap in its own body
+  # therefore deletes the staging path the moment it returns — the first
+  # headless onboarding after the helper landed died on its first secret with
+  # "no such file or directory: .../sec-plain.XXXXXX/NAME".
+  Describe 'sec::arm_plain_scrub'
+    LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh"
+    It 'leaves the staging path in place when it returns (EXIT cleanup belongs to the owning function)'
+      When call zsh -f -c 'source "$1"; d="$(mktemp -d)"; sec::arm_plain_scrub "$d"; [[ -d "$d" ]] && print alive; rm -rf "$d"' _ "$LIB"
+      The output should equal alive
+    End
+  End
+
+  # The onboarding working-tree guard must tolerate the tool's OWN artifacts
+  # (a run that died mid-way leaves them dirty) and refuse only unrelated dirt.
+  Describe 'sec::is_artifact_path'
+    setup_paths() {
+      REPO_ROOT="$TEST_TMP/repo"
+      SOPS_YAML="$REPO_ROOT/.sops.yaml"
+      MANIFEST="$REPO_ROOT/home/.chezmoidata/secrets.yaml"
+      GENERATIONS="$REPO_ROOT/secrets/generations.yaml"
+      SECRETS_BLOB_DIR="$REPO_ROOT/secrets"
+      FRAGMENT_DIR="$REPO_ROOT/home/dot_config/zsh/private_secrets.d"
+    }
+    BeforeEach 'setup_paths'
+
+    Parameters
+      .sops.yaml                                                    0
+      secrets/slot-abc123/NAME.sops.sh                              0
+      secrets/generations.yaml                                      0
+      home/dot_config/zsh/private_secrets.d/private_slot-abc123.sh.tmpl 0
+      home/.chezmoidata/secrets.yaml                                0
+      README.md                                                     1
+      home/dot_local/bin/executable_system-onboard                  1
+    End
+
+    It "classifies $1 with exit $2"
+      When call sec::is_artifact_path "$1"
+      The status should equal "$2"
+    End
+  End
 End

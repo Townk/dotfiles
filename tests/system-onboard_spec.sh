@@ -661,3 +661,78 @@ Describe 'system-onboard: reconcile_remote_basics (auto-bootstrap)'
     The output should not include "MUST_NOT_RUN"
   End
 End
+
+# check_working_tree must tolerate the tool's OWN artifacts — a run that died
+# mid-way (e.g. during secret entry) leaves the sops rule and blob dir dirty,
+# and the rerun must reconcile them, not refuse itself. Unrelated tracked
+# changes still block, naming the path. A throwaway git repo stands in for
+# REPO_ROOT; signing is forced off so the fixture commit never touches gpg.
+Describe 'system-onboard: check_working_tree (own artifacts vs unrelated dirt)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/onboard-wt.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT" WORK \
+      LIB_PATH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh"
+    (
+      cd "$WORK" &&
+        git init -q &&
+        mkdir -p secrets home/.chezmoidata home/dot_config/zsh/private_secrets.d &&
+        printf 'creation_rules: []\n' >.sops.yaml &&
+        printf 'secrets: []\n' >home/.chezmoidata/secrets.yaml &&
+        printf '{}\n' >secrets/generations.yaml &&
+        printf 'x\n' >README.md &&
+        git add .sops.yaml home/.chezmoidata/secrets.yaml secrets/generations.yaml README.md &&
+        git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false \
+          commit -q -m init
+    ) >/dev/null 2>&1
+  }
+  BeforeEach 'setup'
+
+  run_check() {
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      REPO_ROOT="$WORK"
+      SOPS_YAML="$WORK/.sops.yaml"
+      MANIFEST="$WORK/home/.chezmoidata/secrets.yaml"
+      GENERATIONS="$WORK/secrets/generations.yaml"
+      SECRETS_BLOB_DIR="$WORK/secrets"
+      FRAGMENT_DIR="$WORK/home/dot_config/zsh/private_secrets.d"
+      NO_COMMIT=0 DRY_RUN=0
+      check_working_tree && print clean-enough
+    ' _
+  }
+
+  It 'passes a clean tree'
+    When call run_check
+    The status should be success
+    The output should equal clean-enough
+  End
+
+  It 'tolerates a dirty sops rule, a staged manifest, and a new blob dir left by a failed run'
+    printf 'creation_rules: [x]\n' >"$WORK/.sops.yaml"
+    printf 'secrets: [y]\n' >"$WORK/home/.chezmoidata/secrets.yaml"
+    git -C "$WORK" add home/.chezmoidata/secrets.yaml
+    mkdir -p "$WORK/secrets/slot-abc123"
+    printf 'blob\n' >"$WORK/secrets/slot-abc123/NAME.sops.sh"
+    When call run_check
+    The status should be success
+    The output should equal clean-enough
+  End
+
+  It 'refuses an unrelated tracked change and names the path'
+    printf 'y\n' >"$WORK/README.md"
+    When call run_check
+    The status should be failure
+    The stderr should include "README.md"
+  End
+
+  It 'refuses an unrelated STAGED change too'
+    printf 'y\n' >"$WORK/README.md"
+    git -C "$WORK" add README.md
+    When call run_check
+    The status should be failure
+    The stderr should include "README.md"
+  End
+End

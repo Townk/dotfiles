@@ -41,6 +41,17 @@ sec::repo_paths() {
   AGE_KEY_REL=".local/state/chezmoi/secrets/key.txt"
 }
 
+# sec::is_artifact_path <repo-relative path> — true when the path is one of the
+# committed artifacts this tooling itself writes (sops rules, per-slot blobs,
+# generations, the manifest, the rendered fragments). A run that dies mid-way
+# leaves these dirty; a rerun must reconcile them rather than refuse itself,
+# so callers use this to tell the tool's own leftovers from unrelated dirt.
+sec::is_artifact_path() {
+  local abs="$REPO_ROOT/$1"
+  [[ "$abs" == "$SOPS_YAML" || "$abs" == "$MANIFEST" || "$abs" == "$GENERATIONS" ||
+     "$abs" == "$SECRETS_BLOB_DIR"/* || "$abs" == "$FRAGMENT_DIR"/* ]]
+}
+
 # ---------------------------------------------------------------------------
 # Manifest queries (env var names + prompts + requiredFor profiles).
 # ---------------------------------------------------------------------------
@@ -1045,15 +1056,20 @@ sec::leak_audit() {
 #   2. after a bare signal trap zsh RESUMES the interrupted code, so the signal
 #      handler must scrub AND exit — falling back into the entry loop would
 #      re-stage cleartext; and
-#   3. prompt::secret installs then clears the shell's traps on every call (its
-#      tty-restore teardown), which wipes any trap set before it — so callers
-#      RE-ARM after each prompt, before any plaintext is written.
+#   3. zsh runs an EXIT trap set inside a function when THAT function returns
+#      (not at shell exit) — so this helper must NEVER set the EXIT trap: it
+#      would scrub the staging path the instant the helper returned, before
+#      the first plaintext is even written (that is exactly how the first
+#      headless onboarding after this helper landed died). The EXIT trap is
+#      set by the function that OWNS the path, where a function-scoped EXIT is
+#      the wanted lifetime: it fires on that function's return and on any
+#      `die`/exit from inside it. Signal traps are not function-scoped in zsh
+#      (no local_traps here), so they may live in this helper.
 # PATH is expanded into the handlers NOW (not deref'd at signal time), so a trap
 # still shreds the right path after the caller's locals go out of scope. Exit
 # codes follow the 128+signal convention so the process still dies by signal.
 sec::arm_plain_scrub() {
   local __p="$1"
-  trap "rm -rf -- ${(q)__p}" EXIT
   trap "rm -rf -- ${(q)__p}; exit 130" INT
   trap "rm -rf -- ${(q)__p}; exit 143" TERM
   trap "rm -rf -- ${(q)__p}; exit 131" QUIT
@@ -1086,13 +1102,21 @@ sec::rebuild_slot() {
     local tmpd
     tmpd="$(mktemp -d "${TMPDIR:-/tmp}/sec-plain.XXXXXX")"
     chmod 0700 "$tmpd"
+    # EXIT cleanup is set HERE, in the function that owns the path (see
+    # sec::arm_plain_scrub for why it cannot live in the helper).
+    trap "rm -rf -- ${(q)tmpd}" EXIT
     sec::arm_plain_scrub "$tmpd"
     mkdir -p "$(sec::blob_dir "$slot")"
     sec::sops_rule_set "$slot" "$recipient"
     log_info "Enter values for the '$profile' secrets (hidden). Headless slot $slot:"
     for n in "${names[@]}"; do
       prompt::secret val "  $n — $(sec::manifest_prompt "$n"):"
-      sec::arm_plain_scrub "$tmpd"   # re-arm: prompt::secret cleared the traps
+      # Re-arm the SIGNAL scrub defensively before any plaintext is written:
+      # the real prompt::secret restores our dispositions (local_traps), but a
+      # prompt that clears global traps must never leave this loop unshredded
+      # on a signal (tests/system-secrets-common_spec.sh, C1). The EXIT trap
+      # set above is function-scoped and untouched by the prompt.
+      sec::arm_plain_scrub "$tmpd"
       printf 'export %s=%s\n' "$n" "${(qq)val}" >"$tmpd/$n"
       val=""
       sec::sops_encrypt "$recipient" "$tmpd/$n" "$(sec::blob_path "$slot" "$n")"
@@ -1165,10 +1189,13 @@ sec::materialize_secret() {
     local val plain
     plain="$(mktemp "${TMPDIR:-/tmp}/sec-plain.XXXXXX")"
     chmod 0600 "$plain"
+    # EXIT cleanup owned here (see sec::arm_plain_scrub for why the helper
+    # must not set it); the signal scrub is re-armed after the prompt, same
+    # defensive reason as in sec::rebuild_slot.
+    trap "rm -f -- ${(q)plain}" EXIT
     sec::arm_plain_scrub "$plain"
     prompt::secret val "  $name — $(sec::manifest_prompt "$name") (headless slot $slot):"
-    sec::arm_plain_scrub "$plain" # re-arm: prompt::secret's local_traps restored
-    # the caller's dispositions on return, and its own EXIT handler ran here
+    sec::arm_plain_scrub "$plain"
     printf 'export %s=%s\n' "$name" "${(qq)val}" >"$plain"
     val=""
     mkdir -p "$(sec::blob_dir "$slot")"
