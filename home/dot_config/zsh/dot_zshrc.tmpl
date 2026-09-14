@@ -196,12 +196,8 @@ ZSH_PLUGIN_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins"
 source "$ZSH_PLUGIN_DIR/zsh-defer/zsh-defer.plugin.zsh"
 
 # ── Environment ──────────────────────────────────────────────────────────
-# Core Go paths
-export GOPATH="$XDG_DATA_HOME/go"
-export GOMODCACHE="$XDG_CACHE_HOME/go-mod"
-export GOCACHE="$XDG_CACHE_HOME/go-build"
-export GOPROXY='https://proxy.golang.org,direct'
-
+# GOPATH/GOBIN and the Go caches are exported by environment.sh (every shell,
+# interactive or not); only the post-activation GOBIN override lives here.
 export HOMEBREW_NO_ENV_HINTS=1
 export MANPAGER="less -R --use-color -Dd+r -Du+b"
 export GPG_TTY=$TTY
@@ -221,8 +217,8 @@ export COLORTERM=truecolor
 command -v mise >/dev/null && eval "$(mise activate zsh)"
 
 # mise's Go backend exports GOBIN as the toolchain's own bin directory.
-# Override it after activation so `go install` binaries stay separate from
-# the compiler and can be reconciled safely by system-package-go.
+# Re-assert environment.sh's value after activation so `go install` binaries
+# stay separate from the compiler and can be reconciled by system-package-go.
 export GOBIN="$GOPATH/bin"
 
 # Extend PATH.

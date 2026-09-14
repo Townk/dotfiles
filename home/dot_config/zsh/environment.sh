@@ -28,15 +28,34 @@ export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
 export MISE_CARGO_HOME="$XDG_DATA_HOME/cargo"
 export MISE_RUSTUP_HOME="$XDG_DATA_HOME/rustup"
 
+# Honour a runtime dir the OS already provides: systemd-logind exports
+# XDG_RUNTIME_DIR=/run/user/<uid> on Linux and `systemctl --user` finds its
+# bus there, so clobbering it breaks every user-unit call (the first server
+# onboarding "failed" to enable units that way). Fall back to a private dir
+# under TMPDIR only when nothing is set (macOS, images without logind) or the
+# provided dir is gone.
 # $UID is a zsh builtin (no fork); falls back to `id -u` under sh.
 # $TMPDIR is set by launchd for user processes; defaults to /tmp elsewhere.
-export XDG_RUNTIME_DIR="${TMPDIR:-/tmp}"
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/runtime-${UID:-$(id -u)}"
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "$XDG_RUNTIME_DIR" ]; then
+  XDG_RUNTIME_DIR="${TMPDIR:-/tmp}"
+  XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR%/}/runtime-${UID:-$(id -u)}"
+  export XDG_RUNTIME_DIR
+fi
 # Create it (0700): apps that use it — notably 1Password's `op` session daemon,
 # which writes op-daemon.pid/socket here — fail to start when it's missing (op
 # logs "couldn't start daemon" and falls back to a slower, uncached path that
 # re-prompts). mkdir -p is idempotent; never let it break sourcing.
 [ -d "$XDG_RUNTIME_DIR" ] || mkdir -m 700 -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+# Go lives under XDG. These MUST be here, not in the interactive rc: a chezmoi
+# apply over ssh, the package workers it runs (system-package-go), and their
+# on-change hooks are all non-interactive, and `go install` without GOBIN
+# silently lands binaries in the default ~/go/bin where nothing looks.
+export GOPATH="$XDG_DATA_HOME/go"
+export GOBIN="$GOPATH/bin"
+export GOMODCACHE="$XDG_CACHE_HOME/go-mod"
+export GOCACHE="$XDG_CACHE_HOME/go-build"
+export GOPROXY='https://proxy.golang.org,direct'
 
 # Refuse bare `pip install`. A loose `pip install [--user]` against the mise
 # Python writes console-script shims straight into ~/.local/bin and dependency
@@ -69,6 +88,10 @@ unset _brew_prefix
 # runs in interactive zsh, which means `#!/bin/zsh` scripts (system-update,
 # system-package, …) can't find local/mise binaries. Prepend the two
 # directories here so they're available wherever `.zshenv` is sourced.
+case ":$PATH:" in
+  *":$GOBIN:"*) ;;
+  *) PATH="$GOBIN:$PATH" ;;
+esac
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;
   *) PATH="$HOME/.local/bin:$PATH" ;;

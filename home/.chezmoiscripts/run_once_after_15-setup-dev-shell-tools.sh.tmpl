@@ -39,7 +39,9 @@ as_root() {
   if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
 }
 
-RUNTIME_DIR="${TMPDIR:-/tmp}/runtime-${UID:-$(id -u)}"
+# Honour a runtime dir the OS already provides (logind's /run/user/<uid>);
+# only images without one get the private fallback environment.sh also uses.
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}/runtime-${UID:-$(id -u)}}"
 mkdir -p "$RUNTIME_DIR"
 chmod 0700 "$RUNTIME_DIR"
 

@@ -181,3 +181,64 @@ Describe 'environment.sh askpass wiring'
     The output should include "|/opt/theirs/askpass||"
   End
 End
+
+# XDG_RUNTIME_DIR must honour a runtime dir the OS already provides
+# (systemd-logind exports /run/user/<uid>; `systemctl --user` finds its bus
+# there, so clobbering it breaks every user-unit call) and fall back under
+# TMPDIR only when nothing is set or the provided dir is gone. The Go env
+# lives HERE, not in the interactive rc: a chezmoi apply over ssh, the package
+# workers it runs, and their on-change hooks are all non-interactive, and
+# `go install` without GOBIN lands binaries in the default ~/go/bin where
+# nothing looks (the first server onboarding did exactly that).
+Describe 'environment.sh runtime dir and Go env'
+  ENV_SH="home/dot_config/zsh/environment.sh"
+
+  setup() {
+    ISO_HOME="$(mktemp -d)"
+    mkdir -p "$ISO_HOME/tmp" "$ISO_HOME/run"
+  }
+  cleanup() { rm -rf "$ISO_HOME"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # probe_env <inherited XDG_RUNTIME_DIR or ""> <VAR> — sources the file under
+  # an isolated env and prints $VAR.
+  probe_env() {
+    env -i \
+      PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+      HOME="$ISO_HOME" \
+      TMPDIR="$ISO_HOME/tmp" \
+      ${1:+XDG_RUNTIME_DIR="$1"} \
+      sh -c '. '"$ENV_SH"' >/dev/null 2>&1; eval "printf \"%s\" \"\$$1\""' _ "$2"
+  }
+
+  It 'keeps a runtime dir the OS already provides'
+    When call probe_env "$ISO_HOME/run" XDG_RUNTIME_DIR
+    The output should equal "$ISO_HOME/run"
+  End
+
+  It 'falls back under TMPDIR when nothing is set'
+    When call probe_env "" XDG_RUNTIME_DIR
+    The output should equal "$ISO_HOME/tmp/runtime-$(id -u)"
+  End
+
+  It 'falls back when the provided dir does not exist'
+    When call probe_env "$ISO_HOME/missing" XDG_RUNTIME_DIR
+    The output should equal "$ISO_HOME/tmp/runtime-$(id -u)"
+  End
+
+  It 'exports GOPATH under XDG_DATA_HOME'
+    When call probe_env "" GOPATH
+    The output should equal "$ISO_HOME/.local/share/go"
+  End
+
+  It 'exports GOBIN under GOPATH'
+    When call probe_env "" GOBIN
+    The output should equal "$ISO_HOME/.local/share/go/bin"
+  End
+
+  It 'puts GOBIN on PATH for non-interactive shells'
+    When call probe_env "" PATH
+    The output should include "$ISO_HOME/.local/share/go/bin:"
+  End
+End
