@@ -5,7 +5,7 @@
 # tried first on every connection and refused ("agent refused operation"),
 # and a pending approval dialog can stall a non-interactive run outright.
 Describe 'ssh defaults (personal.config)'
-  CFG="$SHELLSPEC_PROJECT_ROOT/home/private_dot_ssh/config.d/private_personal.config"
+  CFG="$SHELLSPEC_PROJECT_ROOT/home/private_dot_ssh/private_config.d/private_personal.config"
 
   resolved() { ssh -F "$CFG" -G example.invalid 2>/dev/null | grep -E "^$1 "; }
 
