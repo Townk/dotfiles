@@ -46,10 +46,12 @@ use_versions_host = false
 "duf" = "latest"
 "hyperfine" = "latest"
 "jless" = "latest"
-# tokei: the registry tries cargo first, and cargo-binstall has no prebuilt
-# binary for it — a loud "Fatal error" before mise falls back to a source
-# build. aqua ships Linux binaries; pin that backend.
-"aqua:XAMPPRocky/tokei" = "latest"
+# tokei ships no prebuilt binaries (its releases carry no assets, and aqua's
+# entry is typed `cargo`, which mise refuses), so cargo-binstall always fails
+# loudly before mise falls back to a source build. An explicit `features`
+# option makes mise skip binstall and go straight to `cargo install`;
+# "default" is the crate's own default feature set, so the build is unchanged.
+"cargo:tokei" = { version = "latest", features = "default" }
 "gping" = "latest"
 "grex" = "latest"
 "gron" = "latest"
