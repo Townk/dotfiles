@@ -427,9 +427,21 @@ Describe 'system-onboard: server profile validation'
       SECRETS_SRC_DIR="$SRC_HOME"
       ALIAS=box HOSTNAME=box.local PROFILE="$1" KIND="${2:-}" LOCAL=0 PREPARE="" LOGIN_USER=""
       validate_inputs
-      print -r -- "kind=$KIND"
+      print -r -- "kind=$KIND prepare=$PREPARE"
     ' _ "$@"
   }
+
+  # Default prep steps follow the kind: the pickers' symbols DB and the gpg
+  # forward only reach a headless box through the pre-connect steps.
+  It 'defaults --prepare to all for a headless target'
+    When call run_validate server
+    The output should include "prepare=all"
+  End
+
+  It 'defaults --prepare to theme for a human target'
+    When call run_validate personal
+    The output should include "prepare=theme"
+  End
 
   It 'accepts --profile server and defaults kind to headless'
     When call run_validate server

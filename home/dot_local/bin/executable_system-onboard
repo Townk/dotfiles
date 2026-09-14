@@ -88,7 +88,8 @@ Flags:
                        \`system-onboard update <alias> --clipboard|--no-clipboard\`.
   --prepare <spec>     pre-connect prep steps for this host, written to the ssh
                        fragment's front matter: none | all | a comma/space list of
-                       $(IFS=,; echo "${PREPARE_STEPS[*]}") (default: theme).
+                       $(IFS=,; echo "${PREPARE_STEPS[*]}") (default: all for a
+                       headless target, theme for a human one).
                        \`none\` writes no Match hook (clipboard-only). Change later
                        with \`system-onboard update <alias> --prepare <spec>\`.
   --rotate-secrets     re-collect this slot's secrets even if its fragment exists
@@ -256,6 +257,13 @@ validate_inputs() {
   fi
   [[ "$KIND" == human || "$KIND" == headless ]] ||
     die "invalid kind: $KIND (human|headless)"
+  # Default prep steps follow the kind: a headless box needs every step —
+  # gpg (signing through the forwarded agent), symbols-db (the pickers' DB is
+  # built on macOS and only reaches Linux by this mirror), theme, mount. A
+  # human Mac builds its own DB and signs locally: theme only.
+  if [[ -z "$PREPARE" ]]; then
+    if [[ "$KIND" == headless ]]; then PREPARE=all; else PREPARE=theme; fi
+  fi
 }
 
 # Refuse to run on top of UNRELATED local changes. The tool's own artifacts
