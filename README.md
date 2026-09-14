@@ -123,7 +123,7 @@ tooling) profiles are **headless Linux**. Bootstrap the box with
 there — then onboard it from a trusted host with `system-onboard --alias <a>
 --hostname <h> --profile <p> [--user <login>]`; secrets and the first apply are
 always operator-driven on headless machines. Profile→trait gating
-(headless/ephemeral) lives in `home/.chezmoitemplates/profile-traits.tmpl`, which
+(headless/ephemeral/devTooling/aiTooling) lives in `home/.chezmoitemplates/profile-traits.tmpl`, which
 fails the render on any unknown profile. The headless bootstrap installs the mise
 toolbox (`mise/conf.d/headless-linux.toml`), apt libraries, Rust nightly, creates
 `XDG_RUNTIME_DIR`, then calls the Homebrew-less `system-update` path.
