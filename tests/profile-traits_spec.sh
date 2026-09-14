@@ -485,6 +485,11 @@ Describe 'appliance manifests'
     The output should equal guarded
   End
 
+  It 'the ai-playbook-pick widget guards on the binary before calling it'
+    When call awk '/^ai-playbook-pick\(\) \{/{p=1} p&&/commands\[ai-playbook\]/{g=1} p&&/pick-playbook/{print (g?"guarded":"unguarded"); exit}' "$SHELLSPEC_PROJECT_ROOT/home/dot_config/zsh/functions.d/widgets.sh"
+    The output should equal guarded
+  End
+
   It 'appliance nvim facts: traits off; server: traits on'
     When call rendered appliance dot_config__nvim__lua__config__chezmoi.lua.tmpl
     The status should be success
