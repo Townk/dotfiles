@@ -56,6 +56,24 @@ render() {
   echo "  ✓ $2"
 }
 
+# render_for <consumer-dir-relative> <template-basename> <dest-relative-path>
+# Some consumers exist only on some profiles: the GUI terminals (WezTerm,
+# Ghostty) are absent on headless hosts and the agent harnesses (pi, Claude
+# Code) on appliances, each gated in .chezmoiignore. chezmoi never creates
+# their directories there, and neither may a theme file: a stray ~/.pi or
+# ~/.config/wezterm on a box without the app is exactly what the ignore
+# block exists to prevent. Render only when the consumer's directory is
+# already present — chezmoi applies files before the run-script that invokes
+# us, so wherever the app is deployed its directory always is.
+render_for() {
+  local consumer="$1"; shift
+  if [[ -d "$DEST/$consumer" ]]; then
+    render "$@"
+  else
+    echo "  – $2 (no $consumer here; skipped)"
+  fi
+}
+
 echo "generate-theme: rendering chezmoi-system into $DEST"
 
 # --- shared palette bridges (consumed by shells, viewers, nvim, wezterm, yazi) -
@@ -64,9 +82,9 @@ render palette.json.tmpl ".config/theme/chezmoi-system.json"
 render palette.lua.tmpl  ".config/theme/chezmoi-system.lua"
 
 # --- terminals ---------------------------------------------------------------
-render ghostty.tmpl           ".config/ghostty/themes/chezmoi-system"
-render wezterm.toml.tmpl      ".config/wezterm/colors/chezmoi-system.toml"
-render tint-palette.toml.tmpl ".config/wezterm/tint-palette.toml"
+render_for .config/ghostty ghostty.tmpl           ".config/ghostty/themes/chezmoi-system"
+render_for .config/wezterm wezterm.toml.tmpl      ".config/wezterm/colors/chezmoi-system.toml"
+render_for .config/wezterm tint-palette.toml.tmpl ".config/wezterm/tint-palette.toml"
 
 # --- viewers / tools ---------------------------------------------------------
 render bat.tmTheme.tmpl   ".config/bat/themes/chezmoi-system.tmTheme"
@@ -84,13 +102,13 @@ render zellij-theme.kdl.tmpl ".config/zellij/themes/chezmoi-system-base.kdl"
 render tmux-theme.conf.tmpl ".config/tmux/themes/chezmoi-system-base.conf"
 
 # --- pi agent ----------------------------------------------------------------
-render pi.json.tmpl ".pi/agent/themes/chezmoi-system.json"
+render_for .pi/agent pi.json.tmpl ".pi/agent/themes/chezmoi-system.json"
 
 # --- Claude Code -------------------------------------------------------------
 # Custom theme JSON discovered from ~/.claude/themes/; selected via settings.json
 # ("theme": "custom:chezmoi-system", set by home/dot_claude/modify_settings.json).
 # Claude watches the dir and reloads on change.
-render claude-code.json.tmpl ".claude/themes/chezmoi-system.json"
+render_for .claude claude-code.json.tmpl ".claude/themes/chezmoi-system.json"
 
 # --- yazi (flavor) -----------------------------------------------------------
 # yazi reads a fixed theme.toml; to carry the chezmoi-system name we ship a
