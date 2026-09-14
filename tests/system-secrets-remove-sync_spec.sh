@@ -160,9 +160,9 @@ YAML
       The contents of file "$TEST_TMP/out" should include "already in sync"
     End
 
-    It 'heals a previous run whose commit died: in-sync sets, dirty artifacts'
-      sec::map_set slot-aaa111 host-a personal headless ""
-      make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
+    It 'heals a previous run whose commit died: in-sync sets, dirty artifacts (human slot)'
+      sec::map_set slot-aaa111 host-a personal human ""
+      make_human slot-aaa111 ALPHA_TOKEN=op://v/ALPHA_TOKEN/x BETA_TOKEN=op://v/BETA_TOKEN/x
       commit_fixtures
       print -r -- '# staged by a run that died at commit' >>"$(sec::fragment_path slot-aaa111)"
       sec::sync_slot slot-aaa111 personal >/dev/null 2>&1
@@ -170,26 +170,62 @@ YAML
       The output should equal "feat(secrets): sync slot-aaa111"
     End
 
-    It 'scrubs stale names and commits'
-      sec::map_set slot-aaa111 host-a personal headless ""
-      make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN GAMMA_TOKEN
+    It 'scrubs stale names and commits (human slot)'
+      sec::map_set slot-aaa111 host-a personal human ""
+      make_human slot-aaa111 ALPHA_TOKEN=op://v/ALPHA_TOKEN/x BETA_TOKEN=op://v/BETA_TOKEN/x GAMMA_TOKEN=op://v/GAMMA_TOKEN/x
+      sec::op_scrub_field() { :; }
       sec::sync_slot slot-aaa111 personal >/dev/null 2>&1
       When call git -C "$REPO_ROOT" log --format=%s -1
       The output should equal "feat(secrets): sync slot-aaa111"
-      The file "$SECRETS_BLOB_DIR/slot-aaa111/GAMMA_TOKEN.sops.sh" should not be exist
+      The contents of file "$(sec::fragment_path slot-aaa111)" should not include "GAMMA_TOKEN"
     End
 
-    It 'collects missing names through the materialize seam when interactive'
+    # POLICY: a headless box is a consumer of the repo, never an author — it
+    # signs and pushes only through the operator's forwarded agents. On its own
+    # slot, sync reports drift and points at the operator command instead.
+    It 'headless: reports stale names, never commits, keeps the blob'
       sec::map_set slot-aaa111 host-a personal headless ""
-      make_headless slot-aaa111 ALPHA_TOKEN
+      make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN GAMMA_TOKEN
+      commit_fixtures
+      sec::sync_slot slot-aaa111 personal >"$TEST_TMP/out" 2>&1
+      When call commit_count
+      The output should equal "1"
+      The file "$SECRETS_BLOB_DIR/slot-aaa111/GAMMA_TOKEN.sops.sh" should be exist
+      The contents of file "$TEST_TMP/out" should include "never authors commits"
+      The contents of file "$TEST_TMP/out" should include "system-secrets remove GAMMA_TOKEN --profile personal"
+    End
+
+    It 'headless: reports dirty artifacts and never commits'
+      sec::map_set slot-aaa111 host-a personal headless ""
+      make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
+      commit_fixtures
+      print -r -- '# staged by a run that died at commit' >>"$(sec::fragment_path slot-aaa111)"
+      sec::sync_slot slot-aaa111 personal >"$TEST_TMP/out" 2>&1
+      When call commit_count
+      The output should equal "1"
+      The contents of file "$TEST_TMP/out" should include "never authors commits"
+    End
+
+    It 'headless: a legacy monolithic blob is reported, not migrated'
+      sec::map_set slot-aaa111 host-a personal headless ""
+      make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
+      print -r -- cipher >"$(sec::legacy_blob_path slot-aaa111)"
+      sec::rebuild_slot() { print -r -- MIGRATED; return 1; }
+      When call sec::sync_slot slot-aaa111 personal
+      The status should be success
+      The output should not include "MIGRATED"
+      The stderr should include "system-secrets rotate --slot slot-aaa111"
+    End
+
+    It 'collects missing names through the materialize seam when interactive (human slot)'
+      sec::map_set slot-aaa111 host-a personal human ""
+      make_human slot-aaa111 ALPHA_TOKEN=op://v/ALPHA_TOKEN/x
       sec::sync_can_collect() { return 0; }
-      sec::materialize_secret() {
-        print -r -- cipher >"$SECRETS_BLOB_DIR/$1/$2.sops.sh"
-      }
+      sec::materialize_secret() { print -r -- "$2" >>"$TEST_TMP/collected"; }
       sec::sync_slot slot-aaa111 personal >/dev/null 2>&1
-      When call git -C "$REPO_ROOT" log --format=%s -1
-      The output should equal "feat(secrets): sync slot-aaa111"
-      The file "$SECRETS_BLOB_DIR/slot-aaa111/BETA_TOKEN.sops.sh" should be exist
+      When call sh -c 'git -C "$1" log --format=%s -1; cat "$2"' _ "$REPO_ROOT" "$TEST_TMP/collected"
+      The line 1 of output should equal "feat(secrets): sync slot-aaa111"
+      The line 2 of output should equal "BETA_TOKEN"
     End
 
     It 'only reports missing names without a terminal'
@@ -221,9 +257,9 @@ YAML
       The output should equal "0"
     End
 
-    It 're-collects a name whose generation predates the rotated stamp'
-      sec::map_set slot-aaa111 host-a personal headless ""
-      make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
+    It 're-collects a name whose generation predates the rotated stamp (human slot)'
+      sec::map_set slot-aaa111 host-a personal human ""
+      make_human slot-aaa111 ALPHA_TOKEN=op://v/ALPHA_TOKEN/x BETA_TOKEN=op://v/BETA_TOKEN/x
       sec::manifest_set_rotated ALPHA_TOKEN 200
       sec::gen_set slot-aaa111 ALPHA_TOKEN 100
       sec::sync_can_collect() { return 0; }

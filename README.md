@@ -360,6 +360,18 @@ only reconciles connectivity + brings it current — it never mints or rebuilds
 that machine's secrets. Headless boxes can't self-onboard and stay fully
 operator-driven. Idempotent — safe to rerun.
 
+### Headless boxes never author commits
+
+A headless box holds no signing key and no push credential of its own: it
+signs and pushes only through the operator's forwarded gpg and ssh agents, so
+a commit made there is a commit made *as the operator* by a machine they are
+not sitting at. The rule is therefore: **headless boxes are consumers of this
+repo, never authors.** `system-update` on one pulls and re-renders what the
+committed lockfiles and manifests declare (mise, yazi plugins, secrets
+fragment) and reports drift instead of fixing it. Anything that bumps a
+committed file — yazi plugin pins, secrets scrubbed or rotated — happens on a
+Mac and propagates on the box's next update.
+
 ### Decommissioning a machine
 
 The reverse of onboarding, idempotent and operator-driven:

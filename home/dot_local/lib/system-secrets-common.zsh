@@ -1284,6 +1284,14 @@ sec::sync_can_collect() { [[ -t 0 ]]; }
 # predates the manifest's `rotated` stamp (interactive; skipped with a report
 # when no terminal). Commits once. Sets SEC_SYNC_CHANGED=1 iff anything moved
 # (callers refresh the rendered fragment on that signal). Idempotent.
+# POLICY — headless boxes are CONSUMERS of the repo, never authors. A headless
+# host signs and pushes only through the operator's forwarded gpg/ssh agents,
+# so a commit made there is a commit made AS the operator by a machine they are
+# not sitting at, for as long as their session is open. sync_slot runs on this
+# machine's own slot, so `kind == headless` means "we are that box": it only
+# re-renders from the committed state and REPORTS drift; every write to the
+# repo — scrub, migration, collection, the failed-commit repair — is left to
+# `system-secrets` run on a Mac, and the box picks it up on its next update.
 sec::sync_slot() {
   local slot="$1" profile="$2" kind
   typeset -g SEC_SYNC_CHANGED=""
@@ -1294,12 +1302,7 @@ sec::sync_slot() {
     die "unknown profile '$profile' (valid: ${(j:, :)SEC_PROFILES})"
 
   if [[ "$kind" == headless && -f "$(sec::legacy_blob_path "$slot")" ]]; then
-    log_info "slot $slot still uses a monolithic blob; re-collecting once to migrate"
-    sec::rebuild_slot "$slot"
-    local -a mpaths
-    mpaths=("${(@f)$(sec::commit_paths_for_slot "$slot")}")
-    sec::git_commit "feat(secrets): sync $slot" "${mpaths[@]}"
-    SEC_SYNC_CHANGED=1
+    log_warn "slot $slot still uses a monolithic blob; a headless box never authors commits — from an operator machine run: system-secrets rotate --slot $slot"
     return 0
   fi
 
@@ -1346,12 +1349,24 @@ sec::sync_slot() {
       [[ -n "$(git -C "$REPO_ROOT" status --porcelain -- "$p" 2>/dev/null)" ]] && dirty+=("$p")
     done
     if ((${#dirty})); then
+      if [[ "$kind" == headless ]]; then
+        log_warn "artifacts of $slot are modified but uncommitted; a headless box never authors commits — discard them with: git -C $REPO_ROOT checkout -- ${(j: :)dirty}"
+        return 0
+      fi
       log_info "artifacts in sync but uncommitted (a previous run's commit failed?); committing"
       sec::git_commit "feat(secrets): sync $slot" "${cpaths[@]}"
       SEC_SYNC_CHANGED=1
     else
       log_ok "slot $slot already in sync with profile '$profile'"
     fi
+    return 0
+  fi
+
+  if [[ "$kind" == headless ]]; then
+    log_warn "slot $slot drifts from profile '$profile'; a headless box never authors commits — from an operator machine:"
+    for n in "${stale[@]}";    do log_warn "  stale    $n  →  system-secrets remove $n --profile $profile"; done
+    for n in "${missing[@]}";  do log_warn "  missing  $n  →  system-secrets rotate $n --slot $slot"; done
+    for n in "${outdated[@]}"; do log_warn "  outdated $n  →  system-secrets rotate $n --slot $slot"; done
     return 0
   fi
 
