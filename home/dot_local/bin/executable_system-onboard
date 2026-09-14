@@ -1181,7 +1181,10 @@ reconcile_op_token() {
 # the committed artifacts in ONE commit through the leak-audited path.
 # Host packages (apt) stay: nothing can tell which pre-existed the bootstrap,
 # and they are harmless. Streamed as `bash -s` like the bootstrap; generic —
-# it derives what to remove from `chezmoi managed` on the target.
+# it derives what to remove from `chezmoi managed` on the target, and the
+# operator passes the managed directory names from its own source tree
+# (MANAGED_CONFIG_DIRS, MANAGED_SHARE_DIRS) so a box that already lost
+# chezmoi — a rerun after a partial teardown — still loses every one of them.
 readonly DECOMMISSION_SCRIPT='
 set -u
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1222,11 +1225,14 @@ if command -v chezmoi >/dev/null 2>&1 && [ -d "$HOME/.local/share/chezmoi" ]; th
   done
   chezmoi purge --force >/dev/null 2>&1 || true
 fi
+for d in ${MANAGED_CONFIG_DIRS:-}; do rm -rf -- "$HOME/.config/$d"; done
+for d in ${MANAGED_SHARE_DIRS:-}; do rm -rf -- "$HOME/.local/share/$d"; done
 rm -rf "$HOME/.local/share/chezmoi" "$HOME/.config/chezmoi" "$HOME/.local/state/chezmoi" "$HOME/.config/zsh/secrets.d" "$HOME"/.cache/chezmoi*
 echo "== state, caches and scratch our stack wrote"
 # Always ours, whatever --purge-tools says: runtime state, caches and /tmp
 # scratch that the deployed stack creates on first use.
 rm -rf "$HOME"/.local/state/{clipboard,mise,mux,nvim,ssh,theme,yazi,zsh,zellij,tmux,atuin,pueue,share,pick} \
+       "$HOME"/.config/{glow,go,theme} \
        "$HOME"/.local/share/{atuin,Trash,zoxide,tealdeer,tldr,gitstatus} \
        "$HOME"/.cache/{glow,pick,yazi,bat,mise,nvim,zsh,gitstatus,tree-sitter,zellij,mux,theme,quick-launch,node-gyp,npm,pip,uv,go-build,go-mod,sigstore-rust,chezmoi-drift} "$HOME"/.cache/p10k* \
        "/tmp/tmux-$(id -u)" "/tmp/yazi-$(id -u)" /tmp/zsh-abbr-privileged-users /tmp/zsh-job-queue "/tmp/hsperfdata_$(id -un)" /tmp/node-compile-cache /tmp/core-js-banners
@@ -1245,6 +1251,21 @@ if [ "${PURGE_TOOLS:-0}" = 1 ]; then
 fi
 echo "== done"
 '
+
+# managed_dir_names <source dir> — the target names of that directory's
+# top-level entries, space-separated (chezmoi attribute prefixes stripped):
+# what `chezmoi managed` would list for it, derivable without the target.
+managed_dir_names() {
+  [[ -d "$1" ]] || return 0
+  local e; local -a names
+  for e in "$1"/*(N:t) "$1"/.*(N:t); do
+    e="${e#private_}"; e="${e#readonly_}"; e="${e#exact_}"; e="${e#executable_}"; e="${e#symlink_}"
+    e="${e/#dot_/.}"; e="${e%.tmpl}"
+    [[ "$e" == .chezmoi* ]] && continue
+    names+=("$e")
+  done
+  print -r -- "${(j: :)${(u)names}}"
+}
 
 cmd_decommission() {
   local target="" purge_tools=0 keep_target=0 yes=0 no_push=0
@@ -1280,13 +1301,17 @@ cmd_decommission() {
   # 1. target
   if [[ "$kind" == headless ]] && ((!keep_target)); then
     local what="units, sshd drop-in, tool links, every chezmoi-managed file, chezmoi state, identity, secrets fragment, login shell"
+    local managed_config managed_share
+    managed_config="$(managed_dir_names "$REPO_ROOT/home/dot_config")"
+    managed_share="$(managed_dir_names "$REPO_ROOT/home/dot_local/share")"
     ((purge_tools)) && what+=", tool homes"
     if ((DRY_RUN)); then
       log_info "[dry-run] would tear down $target over ssh: $what"
     else
       ((yes)) || prompt::confirm "Tear down $target ($SLOT): $what?" || die "aborted"
       rexec true || die "cannot reach $target — pass --keep-target to decommission the operator side only"
-      print -r -- "$DECOMMISSION_SCRIPT" | rexec "PURGE_TOOLS=$purge_tools bash -s" ||
+      print -r -- "$DECOMMISSION_SCRIPT" |
+        rexec "PURGE_TOOLS=$purge_tools MANAGED_CONFIG_DIRS='$managed_config' MANAGED_SHARE_DIRS='$managed_share' bash -s" ||
         die "teardown failed on $target (rerun; it is idempotent)"
       log_ok "torn down $target"
     fi

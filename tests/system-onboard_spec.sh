@@ -1059,7 +1059,7 @@ Describe 'system-onboard: decommission'
     The status should be success
     The output should include "torn down box"
     The output should include "decommissioned box (slot-aaaaaa)"
-    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=0 bash -s"
+    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=0 MANAGED_CONFIG_DIRS='zsh' MANAGED_SHARE_DIRS='' bash -s"
     The contents of file "$WORK/streamed" should include "== user units"
     The path "$WORK/home/.ssh/config.d/box.conf" should not be exist
     The contents of file "$WORK/map.yaml" should not include "slot-aaaaaa"
@@ -1075,7 +1075,7 @@ Describe 'system-onboard: decommission'
     When call decom box --yes --no-push --purge-tools
     The status should be success
     The output should include "torn down box"
-    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=1 bash -s"
+    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=1 MANAGED_CONFIG_DIRS='zsh' MANAGED_SHARE_DIRS='' bash -s"
   End
 
   It 'asks for confirmation before touching a headless target unless --yes'
@@ -1157,8 +1157,10 @@ STUB
 
   run_remote() {
     zsh -f -c 'export SYSTEM_ONBOARD_NO_RUN=1; source "$SCRIPT_PATH"; print -r -- "$DECOMMISSION_SCRIPT"' |
-      env -i HOME="$H" PATH="$H/.local/bin:/usr/bin:/bin" PURGE_TOOLS="${1:-0}" bash -s
+      env -i HOME="$H" PATH="$H/.local/bin:/usr/bin:/bin" PURGE_TOOLS="${1:-0}" \
+        MANAGED_CONFIG_DIRS="${MANAGED_CONFIG_DIRS:-}" MANAGED_SHARE_DIRS="${MANAGED_SHARE_DIRS:-}" bash -s
   }
+  run_remote_with_names() { MANAGED_CONFIG_DIRS="zsh nvim" MANAGED_SHARE_DIRS="zsh" run_remote; }
 
   It 'strips only the appended Include pair from ~/.ssh/config and finishes without chezmoi'
     When call run_remote
@@ -1198,5 +1200,22 @@ STUB
     The path "$H/.local/bin" should not be exist
     The path "$H/.config/chromium/Local State" should be exist
   End
-End
+
+  It 'without chezmoi on the box, removes the managed dirs the operator names plus runtime .config state'
+    mkdir -p "$H/.config/zsh" "$H/.config/nvim" "$H/.config/chromium" "$H/.config/theme" "$H/.config/go" \
+      "$H/.local/share/zsh" "$H/.local/share/nano"
+    printf 'left behind by a partial teardown\n' >"$H/.config/zsh/.zshrc.zwc"
+    printf 'pre-existing app\n' >"$H/.config/chromium/Local State"
+    printf 'pre-existing\n' >"$H/.local/share/nano/x"
+    When call run_remote_with_names
+    The status should be success
+    The output should include "== done"
+    The path "$H/.config/zsh" should not be exist
+    The path "$H/.config/nvim" should not be exist
+    The path "$H/.config/theme" should not be exist
+    The path "$H/.config/go" should not be exist
+    The path "$H/.local/share/zsh" should not be exist
+    The path "$H/.config/chromium/Local State" should be exist
+    The path "$H/.local/share/nano/x" should be exist
+  End
 End
