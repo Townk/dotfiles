@@ -20,8 +20,8 @@ hash = "34e3e12060f833cc21446f23a7ced8d1"
 
 [[plugin.deps]]
 use = "ndtoan96/ouch"
-rev = "cfe4f50"
-hash = "eff5702573b6cfba61e4ac8b1969629a"
+rev = "596b666"
+hash = "c2f4f4aca257dcceafa9e3b828dbf1c9"
 
 [[plugin.deps]]
 use = "Rolv-Apneseth/bypass"
