@@ -43,16 +43,20 @@ duf	system	1	disk usage	Disk usage and free space per mount, as a table
 bandwhich	system	1	net usage	Live per-process network bandwidth (needs sudo on macOS)
 doggo	system	1	DNS lookup	DNS lookup with readable output — a modern dig
 gping	system	1	ping graph	Ping as a live graph, several hosts at once
+{{ if $traits.devTooling -}}
 hyperfine	system	1	benchmark	Benchmark a command with warmups, statistics and comparison
 
+{{ end -}}
 # ─── the welcome screen: column 2, data & text ────────────────────────────────
 jq	data	2	JSON	Query and transform JSON
 gron	data	2	JSON to lines	Flatten JSON into grep-able lines, and rebuild it after
 jless	data	2	JSON viewer	Page, fold and search large JSON interactively
 tv	data	2	view CSV	Pretty-print CSV and TSV as an aligned table (tidy-viewer)
+{{ if $traits.devTooling -}}
 tokei	data	2	code stats	Count lines of code per language across a tree
 grex	data	2	regex builder	Build a regex from example strings it has to match
 
+{{ end -}}
 # ─── the welcome screen: column 3, files & misc ───────────────────────────────
 7zz	files	3	7-Zip	Create and extract 7z archives, and most other formats
 unrar	files	3	.rar archives	Extract .rar archives
@@ -90,7 +94,9 @@ xq	data	0		Query XML and HTML the way jq queries JSON
 rg	data	0		Search file contents fast, respecting .gitignore
 rga	data	0		rg inside PDFs, e-books, archives and office documents
 fd	data	0		Find files by name fast, with sane defaults
+{{ if $traits.devTooling -}}
 ast-grep	data	0		Search and rewrite code by AST pattern instead of by text
+{{ end -}}
 bat	data	0		cat with syntax highlighting, git marks and paging
 glow	data	0		Render Markdown readably in the terminal
 rich	data	0		Render Markdown, JSON, code and tables with Rich
@@ -135,17 +141,23 @@ lazygit	code	0		Stage, commit, rebase and browse git history in a TUI
 delta	code	0		Syntax-highlighted, side-by-side git and diff output
 diffnav	code	0		Browse a diff with a file tree beside it
 hunkdiff	code	0		Terminal diff viewer built for reviewing agent changesets
+{{ if $traits.devTooling -}}
 git-cliff	code	0		Generate a changelog from Conventional Commits
+{{ end -}}
 git-lfs	code	0		Track large files in git through LFS
 git-sizer	code	0		Report what makes a repository slow or oversized
 git-extras	code	0		Extra git subcommands: summary, changelog, ignore and more
+{{ if $traits.devTooling -}}
 onefetch	code	0		Repository summary and language stats, fetch-style
+{{ end -}}
 lazysql	code	0		Browse and query databases in a TUI
 shellspec	code	0		Run this repo's BDD test suite under zsh
 just	code	0		Run project task recipes from a justfile
 uv	code	0		Manage Python versions, virtualenvs and installed tools
 cargo-binstall	code	0		Install Rust binaries without compiling them
+{{ if $traits.devTooling -}}
 tsc	code	0		Compile TypeScript
+{{ end -}}
 {{ if eq .profile "work" -}}
 acli	code	0		Atlassian CLI: Jira and Confluence from the terminal
 {{ end -}}

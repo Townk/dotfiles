@@ -446,6 +446,9 @@ Describe 'appliance manifests'
     The output should not include "pi	agents"
     The output should not include "ai-playbook	agents"
     The output should not include "ai-commit	ops"
+    The output should not include "hyperfine	system"
+    The output should not include "tokei	data"
+    The output should not include "tsc	code"
     The output should include "troupe	agents"
     The output should include "system-onboard	ops"
   End
@@ -456,6 +459,7 @@ Describe 'appliance manifests'
     The output should include "claude	agents"
     The output should include "ai-playbook	agents"
     The output should include "ai-commit	ops"
+    The output should include "hyperfine	system"
   End
 
   It 'the ai-playbook widgets guard on the binary before calling it'
