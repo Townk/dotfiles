@@ -184,6 +184,48 @@ Describe '.chezmoiignore profile gating'
     The status should be success
     The output should include ".config/mise/conf.d/headless-linux.toml"
   End
+
+  It 'appliance: the whole AI layer is ignored'
+    When call ignored_for appliance
+    The status should be success
+    The output should include ".pi"
+    The output should include ".claude"
+    The output should include ".config/ai-playbook"
+    The output should include ".config/agent-skills"
+    The output should include ".config/pi-memctx"
+    The output should include "AGENTS.md"
+    The output should include ".local/bin/ai-commit"
+    The output should include ".local/bin/ai-commit-pi"
+    The output should include ".local/bin/ai-commit-claude"
+    The output should include ".local/lib/commit-agent-common.zsh"
+    The output should include ".local/libexec/pick-playbook"
+    The output should include ".local/share/zsh/site-functions/_ai-commit"
+  End
+
+  It 'appliance: everything general stays (shell, git, yazi, tmux, mux, gnupg, systemd worker)'
+    When call ignored_for appliance
+    The status should be success
+    The output should not include ".config/zsh/.zshrc"
+    The output should not include ".config/git"
+    The output should not include ".config/yazi"
+    The output should not include ".config/tmux"
+    The output should not include ".config/mux"
+    The output should not include ".gnupg"
+    The output should not include ".local/bin/system-update"
+  End
+
+  It 'server: the AI layer is NOT ignored'
+    When call ignored_for server
+    The status should be success
+    # Whole-line check: a bare substring match on ".claude" also hits the
+    # pre-existing, unrelated work-only acli skill entries
+    # (.claude/skills/jira-acli, .claude/skills/confluence-acli), which are
+    # correctly ignored on server regardless of aiTooling.
+    The output should not include $'\n.claude\n'
+    The output should not include "AGENTS.md"
+    The output should not include ".config/ai-playbook"
+    The output should not include ".local/bin/ai-commit-pi"
+  End
 End
 
 Describe 'template gates for the server profile'
@@ -395,6 +437,30 @@ Describe 'appliance manifests'
   It 'headless-linux.toml.tmpl gates each authoring aid on devTooling'
     When call grep -c 'if \$traits.devTooling' "$SHELLSPEC_PROJECT_ROOT/home/dot_config/mise/conf.d/headless-linux.toml.tmpl"
     The output should equal 4
+  End
+
+  It 'appliance palette: no agent entries; server keeps them'
+    When call rendered appliance dot_config__zsh__commands.tsv.tmpl
+    The status should be success
+    The output should not include "claude	agents"
+    The output should not include "pi	agents"
+    The output should not include "ai-playbook	agents"
+    The output should not include "ai-commit	ops"
+    The output should include "troupe	agents"
+    The output should include "system-onboard	ops"
+  End
+
+  It 'server palette: still lists the agents'
+    When call rendered server dot_config__zsh__commands.tsv.tmpl
+    The status should be success
+    The output should include "claude	agents"
+    The output should include "ai-playbook	agents"
+    The output should include "ai-commit	ops"
+  End
+
+  It 'the ai-playbook widgets guard on the binary before calling it'
+    When call awk '/^ai-assist-trigger\(\) \{/{p=1} p&&/commands\[ai-playbook\]/{g=1} p&&/ai-playbook assist/{print (g?"guarded":"unguarded"); exit}' "$SHELLSPEC_PROJECT_ROOT/home/dot_config/zsh/functions.d/widgets.sh"
+    The output should equal guarded
   End
 End
 

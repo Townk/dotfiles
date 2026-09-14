@@ -219,6 +219,37 @@ Library/**
 .pi/agent/skills/confluence-acli/**
 {{- end }}
 
+{{/* AI tooling is its own trait (aiTooling): the agent harnesses, their homes,
+     shared skills, the ai-playbook config and store picker, the ai-commit
+     dispatcher with its workers, lib and completions, and the home AGENTS.md.
+     An appliance gets none of it. The headless `.pi/agent-local` ignore below
+     is moot once the whole `.pi` is ignored, but keeps dev-shell/server
+     semantics intact. .chezmoiremove HARD RULE: `.pi/agent/skills/commit` and
+     `.pi/agent/themes/catppuccin-mocha.json` are matched here, so their
+     removals are invisible on appliances — where those targets never existed;
+     they still fire on every other host. */}}
+{{ if not $traits.aiTooling -}}
+.pi
+.pi/**
+.claude
+.claude/**
+.config/ai-playbook
+.config/ai-playbook/**
+.config/agent-skills
+.config/agent-skills/**
+.config/pi-memctx
+.config/pi-memctx/**
+AGENTS.md
+.local/bin/ai-commit
+.local/bin/ai-commit-pi
+.local/bin/ai-commit-claude
+.local/lib/commit-agent-common.zsh
+.local/libexec/pick-playbook
+.local/share/zsh/site-functions/_ai-commit
+.local/share/zsh/site-functions/_ai-commit-pi
+.local/share/zsh/site-functions/_ai-commit-claude
+{{- end }}
+
 # pi-coding-agent: paths managed by pi itself at runtime, or sensitive.
 # We track specific configs under ~/.pi/agent/ but never these dirs.
 .pi/.DS_Store

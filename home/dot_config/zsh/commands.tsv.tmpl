@@ -1,3 +1,4 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 # The curated command index behind the welcome screen and `cmds`.
 #
 # Tab-separated, five fields: COMMAND, GROUP, COLUMN, BLURB, DESCRIPTION.
@@ -158,14 +159,18 @@ age	secrets	0		Encrypt a file to a public key or a passphrase
 sops	secrets	0		Encrypt the values inside a config file to age recipients
 
 # ─── agents & models ──────────────────────────────────────────────────────────
+{{ if $traits.aiTooling -}}
 claude	agents	0		Claude Code agent in the terminal
 pi	agents	0		Pi coding agent, cloud configuration
 pi-local	agents	0		Pi coding agent against the local 32K-context config
+{{ end -}}
 {{ if lookPath "cursor-agent" -}}
 cursor-agent	agents	0		Cursor Agent in the terminal
 {{ end -}}
+{{ if $traits.aiTooling -}}
 ai-playbook	agents	0		Capture, author and run terminal playbooks
 apb	agents	0		Short form of ai-playbook
+{{ end -}}
 troupe	agents	0		Themed terminal widgets for scripts: dialogs, pickers frame, task dashboard
 {{ if ne .profile "dev-shell" -}}
 hf	agents	0		Hugging Face Hub: download and manage models
@@ -186,7 +191,9 @@ system-onboard	ops	0		Reconcile a machine into this dotfiles system
 system-backup	ops	0		Tiered, encrypted restic backups of this machine
 system-images	ops	0		Create, mount and manage the local sparse disk images
 tm	ops	0		Terminal Time Machine: browse and diff snapshots of this directory
+{{ if $traits.aiTooling -}}
 ai-commit	ops	0		Group the working tree into logical Conventional Commits
+{{ end -}}
 notify	ops	0		Send a desktop notification from a script
 preview	ops	0		Render a file preview for fzf, Yazi or the terminal
 term-quick-view	ops	0		Quick Look one file in the terminal, in a singleton tab
