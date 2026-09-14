@@ -33,17 +33,20 @@ Describe 'profile-traits.tmpl'
   }
 
   Parameters
-    personal  false false
-    work      false false
-    dev-shell true  true
-    server    true  false
+    personal  false false true  true
+    work      false false true  true
+    dev-shell true  true  true  true
+    server    true  false true  true
+    appliance true  false false false
   End
 
-  It "maps profile $1 to headless=$2 ephemeral=$3"
+  It "maps profile $1 to headless=$2 ephemeral=$3 devTooling=$4 aiTooling=$5"
     When call traits_for "$1"
     The status should be success
     The output should include "\"headless\": $2"
     The output should include "\"ephemeral\": $3"
+    The output should include "\"devTooling\": $4"
+    The output should include "\"aiTooling\": $5"
   End
 End
 
@@ -102,6 +105,13 @@ Describe '.chezmoi.toml.tmpl headless SOPS gate'
     When call render_init dev-shell
     The status should be success
     The output should include "SOPS_AGE_KEY_FILE"
+  End
+
+  It 'emits SOPS_AGE_KEY_FILE for appliance'
+    When call render_init appliance
+    The status should be success
+    The output should include "SOPS_AGE_KEY_FILE"
+    The output should include 'profile = "appliance"'
   End
 
   It 'does not emit SOPS_AGE_KEY_FILE for personal'

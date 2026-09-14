@@ -14,6 +14,21 @@
                session, not about attached displays.
     ephemeral  disposable work sandbox (dev-shell): prunable state, snap
                ecosystem, the 90-prune script.
+    devTooling utilities and IDE-like packages used to develop ON the
+               machine: hyperfine/git-cliff/ast-grep/grex/onefetch in the
+               headless toolbox, tokei/tree-sitter-cli/kdl-lsp/usvg in the
+               Cargofile, the LSP packages in the Npmfile, nvim's
+               Mason/LSP/DAP/lint/format layer. Toolchains (go, rust, node,
+               python, java, kotlin, lua, uv) are NOT dev tooling: they build
+               the toolbox itself and stay everywhere.
+    aiTooling  agent harnesses and everything that only serves them: pi and
+               claude (Npmfile), ai-playbook (Gofile), ~/.pi, ~/.claude,
+               ~/.config/{ai-playbook,agent-skills,pi-memctx}, AGENTS.md,
+               the ai-commit dispatcher, the palette's agent entries, nvim's
+               AI plugin, the CONTEXT7 secret.
+
+  server = headless + dev + ai (the full-blown headless box);
+  appliance = headless only (a box nobody develops on).
 
   Work tooling (Cursor, acli skills) is deliberately NOT a trait here:
   those gates stay as positive `eq .profile "work"` checks, which already
@@ -29,11 +44,13 @@
 */ -}}
 {{- $p := .profile -}}
 {{- if eq $p "personal" "work" -}}
-{"headless": false, "ephemeral": false}
+{"headless": false, "ephemeral": false, "devTooling": true, "aiTooling": true}
 {{- else if eq $p "dev-shell" -}}
-{"headless": true, "ephemeral": true}
+{"headless": true, "ephemeral": true, "devTooling": true, "aiTooling": true}
 {{- else if eq $p "server" -}}
-{"headless": true, "ephemeral": false}
+{"headless": true, "ephemeral": false, "devTooling": true, "aiTooling": true}
+{{- else if eq $p "appliance" -}}
+{"headless": true, "ephemeral": false, "devTooling": false, "aiTooling": false}
 {{- else -}}
 {{- fail (printf "profile-traits: unknown profile %q" $p) -}}
 {{- end -}}

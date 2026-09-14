@@ -1,7 +1,8 @@
 {{- /*
   Init template. Runs on `chezmoi init` to generate
   ~/.config/chezmoi/chezmoi.toml. Templates elsewhere branch on the
-  `.profile` data value (`personal`, `work`, `dev-shell`, `server`) via:
+  `.profile` data value (`personal`, `work`, `dev-shell`, `server`,
+  `appliance`) via:
 
       {{`{{ if eq .profile "personal" }}…{{ end }}`}}
 
@@ -86,7 +87,7 @@ encryption = "gpg"
   set in sync with .chezmoitemplates/profile-traits.tmpl (not includable
   here: at init time the data values it is normally fed do not exist yet).
 */}}
-{{- $headless := or (eq $profile "dev-shell") (eq $profile "server") -}}
+{{- $headless := or (eq $profile "dev-shell") (eq $profile "server") (eq $profile "appliance") -}}
 {{ if $headless }}
 {{- /*
   Headless hosts decrypt their SOPS+age secret fragment at apply via the
