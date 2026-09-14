@@ -35,8 +35,12 @@ uv_current_python() {
   fi
 }
 
+# uv_python_drifted <before_snap> — true when the interpreter changed since the
+# stamp was written. With no stamp yet, only a machine that ALREADY has tools
+# (installed before the stamp existed) needs the safety rebuild; a brand-new
+# box with no tools is a first sync, not a drift.
 uv_python_drifted() {
-  local current
+  local before_snap="$1" current
   current=$(uv_current_python)
   [[ -z "$current" ]] && return 1
   if [[ -f "$PYTHON_STAMP" ]]; then
@@ -44,7 +48,7 @@ uv_python_drifted() {
     last=$(<"$PYTHON_STAMP")
     [[ "$current" != "$last" ]]
   else
-    return 0
+    [[ -s "$before_snap" ]]
   fi
 }
 
@@ -93,7 +97,7 @@ do_sync() {
 
   uv_snapshot_versions >"$before_snap"
 
-  if uv_python_drifted; then
+  if uv_python_drifted "$before_snap"; then
     log_warn "Python version changed since last sync — rebuilding uv tool venvs"
     local -a uv_quiet=(-q)
     ((PKG_VERBOSE)) && uv_quiet=()
@@ -284,5 +288,12 @@ main() {
       ;;
   esac
 }
+
+# SYSTEM_PACKAGE_UV_NO_RUN (test-only escape hatch, same convention as
+# SYSTEM_ONBOARD_NO_RUN): a spec sources this file with it set to call the
+# drift check directly, without main() running.
+if [[ -n "${SYSTEM_PACKAGE_UV_NO_RUN:-}" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 main "$@"
