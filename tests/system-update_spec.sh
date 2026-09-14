@@ -271,3 +271,13 @@ SH
     The stdout should include "GOROOT=/kept/go"
   End
 End
+
+# The Homebrew-less path (headless Linux) must materialize the yazi plugins
+# package.toml declares; a fresh server had none and yazi refused to start.
+Describe 'system-update: Homebrew-less path installs yazi plugins'
+  UPDATE="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-update"
+  It 'runs `ya pkg install` inside the no-brew branch'
+    When call awk '/^if ! command -v brew/{p=1} p&&/^else$/{exit} p&&/ya pkg install/{f=1} END{print (f?"yes":"no")}' "$UPDATE"
+    The output should equal yes
+  End
+End

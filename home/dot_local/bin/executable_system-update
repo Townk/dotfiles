@@ -645,6 +645,16 @@ if ! command -v brew >/dev/null 2>&1; then
     # output (common.zsh only paints on a TTY).
     system-service sync || log_warn "system-service sync had failures"
   fi
+  if command -v ya >/dev/null 2>&1; then
+    print -P -- "\n🦆 Sync Yazi plugins...\n"
+    # Install-only here: package.toml is the committed lockfile and upgrades
+    # (with their hash bumps) are published from the Macs on the Homebrew
+    # path; a headless host just materializes what the lockfile declares.
+    yazi_before=$(step_snapshot snapshot_yazi)
+    run_step "yazi: installing declared plugins" ya pkg install \
+      || log_warn "ya pkg install had failures"
+    step_report "$yazi_before" snapshot_yazi plugin
+  fi
   if command -v nvim >/dev/null 2>&1; then
     print -P -- "\n📝 Upgrade NeoVim plugins...\n"
     # Bounded with `timeout`: headless plugin sync can hang indefinitely
