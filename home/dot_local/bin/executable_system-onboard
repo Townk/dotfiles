@@ -1203,13 +1203,33 @@ for l in /usr/local/bin/*; do
   [ -L "$l" ] || continue
   case "$(readlink "$l")" in "$HOME"/.local/share/mise/*) as_root rm -f "$l" 2>/dev/null || true ;; esac
 done
-echo "== chezmoi-managed files, state, identity, secrets"
+echo "== chezmoi-managed files and directories, state, identity, secrets"
+# Shared containers are never removed whole: they may hold things that
+# pre-date the bootstrap (a user tool in ~/.local/bin, another app under
+# ~/.config). Every other managed directory is ours entirely — compiled
+# zsh files, plugin clones and state written under it included — so it goes
+# with everything in it.
+is_shared_container() {
+  case "$1" in
+    .config|.local|.local/bin|.local/share|.local/state|.local/lib|.local/libexec|.local/opt|.ssh|.cache|Library|Library/*) return 0 ;;
+  esac
+  return 1
+}
 if command -v chezmoi >/dev/null 2>&1 && [ -d "$HOME/.local/share/chezmoi" ]; then
   chezmoi managed --include=files,symlinks 2>/dev/null | while IFS= read -r t; do rm -f -- "$HOME/$t"; done
-  chezmoi managed --include=dirs 2>/dev/null | sort -r | while IFS= read -r d; do rmdir -- "$HOME/$d" 2>/dev/null || true; done
+  chezmoi managed --include=dirs 2>/dev/null | sort -r | while IFS= read -r d; do
+    if is_shared_container "$d"; then rmdir -- "$HOME/$d" 2>/dev/null || true; else rm -rf -- "$HOME/$d"; fi
+  done
   chezmoi purge --force >/dev/null 2>&1 || true
 fi
 rm -rf "$HOME/.local/share/chezmoi" "$HOME/.config/chezmoi" "$HOME/.local/state/chezmoi" "$HOME/.config/zsh/secrets.d" "$HOME"/.cache/chezmoi*
+echo "== state, caches and scratch our stack wrote"
+# Always ours, whatever --purge-tools says: runtime state, caches and /tmp
+# scratch that the deployed stack creates on first use.
+rm -rf "$HOME"/.local/state/{clipboard,mise,mux,nvim,ssh,theme,yazi,zsh,zellij,tmux,atuin,pueue,share,pick} \
+       "$HOME"/.local/share/{atuin,Trash,zoxide,tealdeer,tldr,gitstatus} \
+       "$HOME"/.cache/{glow,pick,yazi,bat,mise,nvim,zsh,gitstatus,tree-sitter,zellij,mux,theme,quick-launch,node-gyp,npm,pip,uv,go-build,go-mod,sigstore-rust,chezmoi-drift} "$HOME"/.cache/p10k* \
+       "/tmp/tmux-$(id -u)" "/tmp/yazi-$(id -u)" /tmp/zsh-abbr-privileged-users /tmp/zsh-job-queue "/tmp/hsperfdata_$(id -un)" /tmp/node-compile-cache /tmp/core-js-banners
 if [ -f "$HOME/.ssh/config" ]; then
   awk '"'"'/^Match all$/ { getline nxt; if (nxt ~ /^Include ~\/\.ssh\/config\.d\/\*$/) next; print; print nxt; next } { print }'"'"' "$HOME/.ssh/config" >"$HOME/.ssh/config.tmp" && mv -f "$HOME/.ssh/config.tmp" "$HOME/.ssh/config"
 fi
@@ -1221,7 +1241,6 @@ if [ "${PURGE_TOOLS:-0}" = 1 ]; then
   echo "== tool homes"
   rm -rf "$HOME"/.local/share/{mise,cargo,rustup,go,uv,nvim,zsh,fonts,man,services,npm,pnpm} \
          "$HOME"/.local/{bin,lib,libexec,opt} \
-         "$HOME"/.cache/{mise,go-build,go-mod,npm,pip,uv,nvim,zsh,bat,gitstatus,tree-sitter,zellij,mux,theme,quick-launch,node-gyp,sigstore-rust} "$HOME"/.cache/p10k* \
          "$HOME"/{.pi,.claude,.cargo,.rustup,go,.npm,.zshenv,.bash_profile,AGENTS.md}
 fi
 echo "== done"

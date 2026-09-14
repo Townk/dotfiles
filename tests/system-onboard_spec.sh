@@ -1118,29 +1118,85 @@ Describe 'system-onboard: decommission remote script'
 
   setup() {
     WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/decom-remote.XXXXXX")"
+    H="$WORK/home"
     # The script sets its own PATH with ~/.local/bin first, so stubs live there.
-    mkdir -p "$WORK/home/.ssh" "$WORK/home/.local/bin"
-    ln -s "$WORK/home/.local/bin" "$WORK/bin"
-    printf 'Ciphers aes256-gcm@openssh.com\n\nMatch all\nInclude ~/.ssh/config.d/*\n' >"$WORK/home/.ssh/config"
-    printf '#!/bin/sh\nexit 0\n' >"$WORK/bin/systemctl"
-    printf '#!/bin/sh\necho "root:x:0:0:root:/root:/bin/bash"\n' >"$WORK/bin/getent"
-    printf '#!/bin/sh\nexit 0\n' >"$WORK/bin/chsh"
-    chmod +x "$WORK/bin/"*
-    export SCRIPT_PATH="$SCRIPT" WORK
+    mkdir -p "$H/.ssh" "$H/.local/bin"
+    ln -s "$H/.local/bin" "$WORK/bin"
+    printf 'Ciphers aes256-gcm@openssh.com\n\nMatch all\nInclude ~/.ssh/config.d/*\n' >"$H/.ssh/config"
+    printf '#!/bin/sh\nexit 0\n' >"$H/.local/bin/systemctl"
+    printf '#!/bin/sh\necho "root:x:0:0:root:/root:/bin/bash"\n' >"$H/.local/bin/getent"
+    printf '#!/bin/sh\nexit 0\n' >"$H/.local/bin/chsh"
+    chmod +x "$H/.local/bin/"*
+    export SCRIPT_PATH="$SCRIPT" WORK H
   }
   BeforeEach 'setup'
 
-  run_remote() {
-    zsh -f -c 'export SYSTEM_ONBOARD_NO_RUN=1; source "$SCRIPT_PATH"; print -r -- "$DECOMMISSION_SCRIPT"' |
-      env -i HOME="$WORK/home" PATH="$WORK/bin:/usr/bin:/bin" bash -s
+  # A managed tree the way chezmoi lays it out: a stub `chezmoi managed` lists
+  # it, and the source dir must exist for the script to consult it at all.
+  lay_managed_tree() {
+    mkdir -p "$H/.local/share/chezmoi/.git" "$H/.config/zsh" "$H/.config/chromium" "$H/.ssh/config.d" \
+      "$H/.local/state/zsh" "$H/.local/state/clipboard" "$H/.local/share/atuin" "$H/.local/share/Trash" "$H/.cache/yazi" \
+      "$WORK/tmp"
+    printf 'managed\n' >"$H/.config/zsh/.zshrc"
+    printf 'compiled at runtime\n' >"$H/.config/zsh/.zshrc.zwc"     # unmanaged, but inside a managed dir
+    printf 'pre-existing app\n' >"$H/.config/chromium/Local State"  # unmanaged neighbor in a shared container
+    printf 'managed\n' >"$H/.ssh/config.d/personal.config"
+    printf 'managed\n' >"$H/.local/bin/managed-tool"
+    printf 'mine\n' >"$H/.local/bin/user-own-tool"                    # unmanaged neighbor in a shared container
+    printf 'history\n' >"$H/.local/state/zsh/history"
+    cat >"$H/.local/bin/chezmoi" <<'STUB'
+#!/bin/sh
+case "$*" in
+  "managed --include=files,symlinks") printf '%s\n' .config/zsh/.zshrc .ssh/config.d/personal.config .local/bin/managed-tool ;;
+  "managed --include=dirs")           printf '%s\n' .config .config/zsh .ssh .ssh/config.d .local .local/bin ;;
+esac
+exit 0
+STUB
+    chmod +x "$H/.local/bin/chezmoi"
   }
 
-  It 'strips only the appended Include pair from ~/.ssh/config and finishes'
+  run_remote() {
+    zsh -f -c 'export SYSTEM_ONBOARD_NO_RUN=1; source "$SCRIPT_PATH"; print -r -- "$DECOMMISSION_SCRIPT"' |
+      env -i HOME="$H" PATH="$H/.local/bin:/usr/bin:/bin" PURGE_TOOLS="${1:-0}" bash -s
+  }
+
+  It 'strips only the appended Include pair from ~/.ssh/config and finishes without chezmoi'
     When call run_remote
     The status should be success
     The output should include "== done"
-    The contents of file "$WORK/home/.ssh/config" should include "Ciphers aes256-gcm@openssh.com"
-    The contents of file "$WORK/home/.ssh/config" should not include "Include"
-    The contents of file "$WORK/home/.ssh/config" should not include "Match all"
+    The contents of file "$H/.ssh/config" should include "Ciphers aes256-gcm@openssh.com"
+    The contents of file "$H/.ssh/config" should not include "Include"
+    The contents of file "$H/.ssh/config" should not include "Match all"
   End
+
+  It 'removes managed dirs whole, keeps shared containers and their unmanaged neighbors, drops our state'
+    lay_managed_tree
+    When call run_remote
+    The status should be success
+    The output should include "== done"
+    The path "$H/.config/zsh" should not be exist
+    The path "$H/.ssh/config.d" should not be exist
+    The path "$H/.config/chromium/Local State" should be exist
+    The path "$H/.local/bin/user-own-tool" should be exist
+    The path "$H/.local/bin/managed-tool" should not be exist
+    The path "$H/.local/state/zsh" should not be exist
+    The path "$H/.local/state/clipboard" should not be exist
+    The path "$H/.local/share/atuin" should not be exist
+    The path "$H/.local/share/Trash" should not be exist
+    The path "$H/.cache/yazi" should not be exist
+    The path "$H/.local/share/chezmoi" should not be exist
+  End
+
+  It '--purge-tools additionally removes the tool homes and ~/.local/bin'
+    lay_managed_tree
+    mkdir -p "$H/.local/share/mise" "$H/.local/share/cargo"
+    When call run_remote 1
+    The status should be success
+    The output should include "== done"
+    The path "$H/.local/share/mise" should not be exist
+    The path "$H/.local/share/cargo" should not be exist
+    The path "$H/.local/bin" should not be exist
+    The path "$H/.config/chromium/Local State" should be exist
+  End
+End
 End
