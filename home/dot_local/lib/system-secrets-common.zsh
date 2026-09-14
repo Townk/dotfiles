@@ -492,6 +492,43 @@ sec::sops_rule_set() {
   ' "$SOPS_YAML"
 }
 
+# sec::sops_rule_remove <slot> — drop the slot's per-secret creation rule
+# (secrets/<slot>/.*\.sops\.sh$). No-op if absent.
+sec::sops_rule_remove() {
+  [[ -f "$SOPS_YAML" ]] || return 0
+  re="secrets/${1}/.*\\.sops\\.sh\$" yq -i \
+    '.creation_rules = ((.creation_rules // []) | map(select(.path_regex != strenv(re))))' \
+    "$SOPS_YAML"
+}
+
+# sec::gen_del_slot <slot> — forget every generation stamp of a slot.
+sec::gen_del_slot() {
+  [[ -f "$GENERATIONS" ]] || return 0
+  slot="$1" yq -i 'del(.[strenv(slot)])' "$GENERATIONS"
+}
+
+# sec::map_del <slot> — forget a slot in this operator's loose map.
+sec::map_del() {
+  [[ -f "$OPERATOR_MAP" ]] || return 0
+  slot="$1" yq -i 'del(.[strenv(slot)])' "$OPERATOR_MAP"
+}
+
+# sec::decommission_slot <slot> — remove every COMMITTED artifact of a slot
+# from the work tree and the index (per-secret blobs, any legacy blob, the
+# rendered fragment template, its sops rules, its generation stamps) so one
+# commit retires it. The loose layer (map, ssh fragment) is the caller's.
+sec::decommission_slot() {
+  local slot="$1" frag dir legacy
+  frag="$(sec::fragment_path "$slot")"
+  dir="$(sec::blob_dir "$slot")"
+  legacy="$(sec::legacy_blob_path "$slot")"
+  git -C "$REPO_ROOT" rm -q -r --ignore-unmatch --cached -- "$frag" "$dir" "$legacy" 2>/dev/null || true
+  rm -rf -- "$frag" "$dir" "$legacy"
+  sec::sops_rule_remove "$slot"
+  sec::sops_rule_remove_legacy "$slot"
+  sec::gen_del_slot "$slot"
+}
+
 # sec::sops_rule_remove_legacy <slot> — drop the pre-split monolithic rule
 # (secrets/<slot>.sops.sh$) once per-secret blobs replace it. No-op if absent.
 sec::sops_rule_remove_legacy() {

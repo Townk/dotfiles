@@ -360,6 +360,27 @@ only reconciles connectivity + brings it current — it never mints or rebuilds
 that machine's secrets. Headless boxes can't self-onboard and stay fully
 operator-driven. Idempotent — safe to rerun.
 
+### Decommissioning a machine
+
+The reverse of onboarding, idempotent and operator-driven:
+
+```sh
+system-onboard decommission <alias> [--purge-tools] [--keep-target] [--yes] [--dry-run] [--no-push]
+```
+
+For a **headless** target it first tears the box down over SSH (after a
+confirmation, or `--yes`): the adopted user units, the sshd forwarding drop-in,
+the sudo tool links, every chezmoi-managed file, chezmoi's own state, the age
+identity, the rendered secrets fragment, and the login shell back to bash;
+`--purge-tools` also removes the tool homes the bootstrap created (mise, cargo,
+rustup, go, uv, npm, nvim, zsh plugins, pi, claude). Host packages installed via
+apt stay — nothing can tell which of them pre-existed, and they are harmless.
+A **human** machine owns its own config, so only the operator side is touched.
+Then it drops the loose ssh fragment and the operator-map entry, and retires the
+slot's committed artifacts (blobs, fragment template, sops rule, generation
+stamps) in one leak-audited commit, pushed unless `--no-push`. `--keep-target`
+skips the SSH half (an unreachable or already-wiped box).
+
 ### Managing secrets
 
 ```sh

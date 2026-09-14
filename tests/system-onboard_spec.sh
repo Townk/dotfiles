@@ -975,3 +975,160 @@ Describe 'system-onboard: converge_remote priming (fresh target)'
     The output should equal 1
   End
 End
+
+# `system-onboard decommission <alias>` — the reverse of onboarding: (headless)
+# tear the target down over ssh, then clear this operator's loose layer, then
+# retire the slot's committed artifacts in one commit. Exercised against a
+# throwaway repo, map and HOME; rexec and the confirmation prompt are stubbed.
+Describe 'system-onboard: decommission'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/decom.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT" WORK \
+      LIB_PATH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh"
+    mkdir -p "$WORK/home/.ssh/config.d" "$WORK/repo/secrets/slot-aaaaaa" "$WORK/repo/secrets/slot-bbbbbb" \
+      "$WORK/repo/home/dot_config/zsh/private_secrets.d" "$WORK/repo/home/.chezmoidata"
+    printf 'Host box\n' >"$WORK/home/.ssh/config.d/box.conf"
+    printf 'slot-aaaaaa:\n  alias: box\n  profile: server\n  kind: headless\nslot-bbbbbb:\n  alias: other\n  profile: server\n  kind: headless\nslot-cccccc:\n  alias: mac\n  profile: personal\n  kind: human\n' >"$WORK/map.yaml"
+    (
+      cd "$WORK/repo" && git init -q &&
+        printf 'blob\n' >secrets/slot-aaaaaa/NAME.sops.sh && printf 'blob\n' >secrets/slot-bbbbbb/NAME.sops.sh &&
+        printf 'tmpl\n' >home/dot_config/zsh/private_secrets.d/private_slot-aaaaaa.sh.tmpl &&
+        printf 'tmpl\n' >home/dot_config/zsh/private_secrets.d/private_slot-bbbbbb.sh.tmpl &&
+        printf 'tmpl\n' >home/dot_config/zsh/private_secrets.d/private_slot-cccccc.sh.tmpl &&
+        printf 'creation_rules:\n  - path_regex: secrets/slot-aaaaaa/.*\\.sops\\.sh$\n    age: age1a\n  - path_regex: secrets/slot-bbbbbb/.*\\.sops\\.sh$\n    age: age1b\n' >.sops.yaml &&
+        printf 'slot-aaaaaa:\n  NAME: 1\nslot-bbbbbb:\n  NAME: 2\n' >secrets/generations.yaml &&
+        printf 'secrets: []\n' >home/.chezmoidata/secrets.yaml &&
+        git add -A && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -m seed &&
+        git config user.name t && git config user.email t@example.invalid && git config commit.gpgsign false
+    ) >/dev/null 2>&1
+  }
+  BeforeEach 'setup'
+
+  # decom <args…> — runs cmd_decommission with everything pointed at $WORK.
+  decom() {
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      HOME="$WORK/home"
+      REPO_ROOT="$WORK/repo"; SECRETS_SRC_DIR="$WORK/repo/home"
+      SOPS_YAML="$REPO_ROOT/.sops.yaml"; MANIFEST="$REPO_ROOT/home/.chezmoidata/secrets.yaml"
+      GENERATIONS="$REPO_ROOT/secrets/generations.yaml"; SECRETS_BLOB_DIR="$REPO_ROOT/secrets"
+      FRAGMENT_DIR="$REPO_ROOT/home/dot_config/zsh/private_secrets.d"
+      OPERATOR_MAP="$WORK/map.yaml"; LEAK_PATTERNS="$WORK/no-such-patterns"
+      DRY_RUN=0
+      prompt::confirm() { print -r -- "CONFIRM: $1" >>"$WORK/log"; return 0 }
+      rexec() {
+        print -r -- "REXEC: $*" >>"$WORK/log"
+        [[ "$*" == *"bash -s"* ]] && cat >"$WORK/streamed"
+        return 0
+      }
+      cmd_decommission "$@"
+    ' _ "$@"
+  }
+
+  It 'dry-run prints the plan and touches nothing'
+    When call decom box --dry-run
+    The status should be success
+    The output should include "[dry-run] would tear down box"
+    The output should include "[dry-run] would remove"
+    The output should include "[dry-run] would remove the committed artifacts of slot-aaaaaa"
+    The path "$WORK/home/.ssh/config.d/box.conf" should be exist
+    The path "$WORK/repo/secrets/slot-aaaaaa/NAME.sops.sh" should be exist
+    The path "$WORK/log" should not be exist
+  End
+
+  last_commit_subject() { git -C "$WORK/repo" log -1 --format=%s; }
+  tree_is_clean() { [ -z "$(git -C "$WORK/repo" status --porcelain)" ] && echo clean || echo dirty; }
+
+  It 'headless: streams the teardown, clears the loose layer, retires the slot in one commit'
+    When call decom box --yes --no-push
+    The status should be success
+    The output should include "torn down box"
+    The output should include "decommissioned box (slot-aaaaaa)"
+    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=0 bash -s"
+    The contents of file "$WORK/streamed" should include "== user units"
+    The path "$WORK/home/.ssh/config.d/box.conf" should not be exist
+    The contents of file "$WORK/map.yaml" should not include "slot-aaaaaa"
+    The contents of file "$WORK/map.yaml" should include "slot-bbbbbb"
+    The path "$WORK/repo/secrets/slot-aaaaaa" should not be exist
+    The path "$WORK/repo/home/dot_config/zsh/private_secrets.d/private_slot-aaaaaa.sh.tmpl" should not be exist
+    The path "$WORK/repo/secrets/slot-bbbbbb/NAME.sops.sh" should be exist
+    The result of function last_commit_subject should equal "chore(secrets): decommission slot-aaaaaa"
+    The result of function tree_is_clean should equal "clean"
+  End
+
+  It 'headless --purge-tools passes the flag to the streamed script'
+    When call decom box --yes --no-push --purge-tools
+    The status should be success
+    The output should include "torn down box"
+    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=1 bash -s"
+  End
+
+  It 'asks for confirmation before touching a headless target unless --yes'
+    When call decom box --no-push
+    The status should be success
+    The output should include "decommissioned box"
+    The contents of file "$WORK/log" should include "CONFIRM: Tear down box (slot-aaaaaa)"
+  End
+
+  It '--keep-target never reaches for ssh'
+    When call decom box --yes --no-push --keep-target
+    The status should be success
+    The output should include "leaving box untouched"
+    The path "$WORK/log" should not be exist
+    The path "$WORK/repo/secrets/slot-aaaaaa" should not be exist
+  End
+
+  It 'a human machine is decommissioned on the operator side only'
+    When call decom mac --yes --no-push
+    The status should be success
+    The output should include "owns its own config"
+    The path "$WORK/log" should not be exist
+    The contents of file "$WORK/map.yaml" should not include "slot-cccccc"
+    The path "$WORK/repo/home/dot_config/zsh/private_secrets.d/private_slot-cccccc.sh.tmpl" should not be exist
+  End
+
+  It 'refuses an alias the operator map does not know'
+    When call decom nobody --yes --no-push
+    The status should be failure
+    The stderr should include "no slot for alias 'nobody'"
+  End
+End
+
+# The streamed teardown script itself, run in a sandbox HOME with the system
+# commands it touches stubbed: proves the ssh-config surgery (drop only the
+# `Match all` + `Include ~/.ssh/config.d/*` pair onboarding appended) and that
+# it survives a box with no chezmoi at all.
+Describe 'system-onboard: decommission remote script'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/decom-remote.XXXXXX")"
+    # The script sets its own PATH with ~/.local/bin first, so stubs live there.
+    mkdir -p "$WORK/home/.ssh" "$WORK/home/.local/bin"
+    ln -s "$WORK/home/.local/bin" "$WORK/bin"
+    printf 'Ciphers aes256-gcm@openssh.com\n\nMatch all\nInclude ~/.ssh/config.d/*\n' >"$WORK/home/.ssh/config"
+    printf '#!/bin/sh\nexit 0\n' >"$WORK/bin/systemctl"
+    printf '#!/bin/sh\necho "root:x:0:0:root:/root:/bin/bash"\n' >"$WORK/bin/getent"
+    printf '#!/bin/sh\nexit 0\n' >"$WORK/bin/chsh"
+    chmod +x "$WORK/bin/"*
+    export SCRIPT_PATH="$SCRIPT" WORK
+  }
+  BeforeEach 'setup'
+
+  run_remote() {
+    zsh -f -c 'export SYSTEM_ONBOARD_NO_RUN=1; source "$SCRIPT_PATH"; print -r -- "$DECOMMISSION_SCRIPT"' |
+      env -i HOME="$WORK/home" PATH="$WORK/bin:/usr/bin:/bin" bash -s
+  }
+
+  It 'strips only the appended Include pair from ~/.ssh/config and finishes'
+    When call run_remote
+    The status should be success
+    The output should include "== done"
+    The contents of file "$WORK/home/.ssh/config" should include "Ciphers aes256-gcm@openssh.com"
+    The contents of file "$WORK/home/.ssh/config" should not include "Include"
+    The contents of file "$WORK/home/.ssh/config" should not include "Match all"
+  End
+End

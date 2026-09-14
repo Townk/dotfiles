@@ -507,4 +507,56 @@ INNER
       The status should equal "$2"
     End
   End
+
+  # Retiring a slot: every committed artifact goes in one sweep, staged for a
+  # single commit; nothing else in the repo is touched. Exercised against a
+  # throwaway git repo (signing off) laid out like the real one.
+  Describe 'sec::decommission_slot'
+    setup_repo() {
+      REPO_ROOT="$TEST_TMP/repo"
+      SOPS_YAML="$REPO_ROOT/.sops.yaml"
+      GENERATIONS="$REPO_ROOT/secrets/generations.yaml"
+      SECRETS_BLOB_DIR="$REPO_ROOT/secrets"
+      FRAGMENT_DIR="$REPO_ROOT/home/dot_config/zsh/private_secrets.d"
+      OPERATOR_MAP="$TEST_TMP/onboard-map.yaml"
+      mkdir -p "$SECRETS_BLOB_DIR/slot-aaaaaa" "$SECRETS_BLOB_DIR/slot-bbbbbb" "$FRAGMENT_DIR"
+      printf 'blob\n' >"$SECRETS_BLOB_DIR/slot-aaaaaa/NAME.sops.sh"
+      printf 'blob\n' >"$SECRETS_BLOB_DIR/slot-bbbbbb/NAME.sops.sh"
+      printf 'tmpl\n' >"$FRAGMENT_DIR/private_slot-aaaaaa.sh.tmpl"
+      printf 'tmpl\n' >"$FRAGMENT_DIR/private_slot-bbbbbb.sh.tmpl"
+      printf 'creation_rules:\n  - path_regex: secrets/slot-aaaaaa/.*\\.sops\\.sh$\n    age: age1a\n  - path_regex: secrets/slot-bbbbbb/.*\\.sops\\.sh$\n    age: age1b\n' >"$SOPS_YAML"
+      printf 'slot-aaaaaa:\n  NAME: 1\nslot-bbbbbb:\n  NAME: 2\n' >"$GENERATIONS"
+      printf 'slot-aaaaaa:\n  alias: box\n  kind: headless\nslot-bbbbbb:\n  alias: other\n  kind: headless\n' >"$OPERATOR_MAP"
+      ( cd "$REPO_ROOT" && git init -q && git add -A && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -m seed )
+    }
+    BeforeEach 'setup_repo'
+
+    It 'removes the slot blobs, fragment, sops rule and stamps, staged as deletions'
+      sec::decommission_slot slot-aaaaaa
+      When call sh -c 'cd "$1"; ls secrets/slot-aaaaaa home/dot_config/zsh/private_secrets.d/private_slot-aaaaaa.sh.tmpl 2>/dev/null | wc -l | tr -d " "; grep -c aaaaaa .sops.yaml secrets/generations.yaml | tr "\n" " "; echo; git diff --cached --name-only | sort | tr "\n" " "' _ "$REPO_ROOT"
+      The line 1 of output should equal 0
+      The line 2 of output should equal ".sops.yaml:0 secrets/generations.yaml:0 "
+      The line 3 of output should equal "home/dot_config/zsh/private_secrets.d/private_slot-aaaaaa.sh.tmpl secrets/slot-aaaaaa/NAME.sops.sh "
+    End
+
+    It 'leaves every other slot intact'
+      sec::decommission_slot slot-aaaaaa
+      When call sh -c 'cd "$1"; ls secrets/slot-bbbbbb/NAME.sops.sh home/dot_config/zsh/private_secrets.d/private_slot-bbbbbb.sh.tmpl | wc -l | tr -d " "; grep -c bbbbbb .sops.yaml secrets/generations.yaml | tr "\n" " "' _ "$REPO_ROOT"
+      The line 1 of output should equal 2
+      The line 2 of output should equal ".sops.yaml:1 secrets/generations.yaml:1 "
+    End
+
+    It 'is idempotent: a second run over a retired slot changes nothing and succeeds'
+      sec::decommission_slot slot-aaaaaa
+      When call sec::decommission_slot slot-aaaaaa
+      The status should be success
+    End
+
+    It 'sec::map_del forgets only that slot in the loose map'
+      sec::map_del slot-aaaaaa
+      When call sh -c 'grep -c "^slot-" "$1"; grep -c bbbbbb "$1"' _ "$OPERATOR_MAP"
+      The line 1 of output should equal 1
+      The line 2 of output should equal 1
+    End
+  End
 End

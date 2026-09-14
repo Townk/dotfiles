@@ -52,6 +52,17 @@ Usage:
   system-onboard update <alias> --no-clipboard   remove its clipboard forward
   system-onboard update <alias> --prepare <spec> set its pre-connect prep steps
   system-onboard colors                          list machines' tints + palette
+  system-onboard decommission <alias> [--purge-tools] [--keep-target] [--yes]
+                                      [--dry-run] [--no-push]
+                       retire a machine: (headless) tear it down over SSH —
+                       units, sshd drop-in, tool links, every chezmoi-managed
+                       file, chezmoi state, identity, secrets fragment, login
+                       shell (--purge-tools also removes the tool homes: mise,
+                       cargo, rustup, go, uv, npm, nvim, zsh plugins, pi,
+                       claude); then drop the loose ssh fragment + map entry
+                       and commit/push the removal of its committed artifacts.
+                       Host packages (apt) stay. A human machine owns its own
+                       config: only the operator side is decommissioned.
 
 Flags:
   --local              self-onboard THIS machine (human only; no SSH). Assigns a
@@ -1156,6 +1167,133 @@ reconcile_op_token() {
   log_ok "configured $ALIAS as an operator (SA token at ~/$OP_TOKEN_REL, loose, 0600)"
 }
 
+# --- decommission: retire a machine ------------------------------------------
+# The reverse of onboarding, idempotent. Target side first (headless only:
+# a human Mac owns its own config), then this operator's loose layer, then
+# the committed artifacts in ONE commit through the leak-audited path.
+# Host packages (apt) stay: nothing can tell which pre-existed the bootstrap,
+# and they are harmless. Streamed as `bash -s` like the bootstrap; generic —
+# it derives what to remove from `chezmoi managed` on the target.
+readonly DECOMMISSION_SCRIPT='
+set -u
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; elif sudo -n true 2>/dev/null; then sudo -n "$@"; else return 1; fi; }
+echo "== user units"
+if [ -d "$HOME/.config/systemd/user" ]; then
+  for u in "$HOME"/.config/systemd/user/*.socket "$HOME"/.config/systemd/user/*.service; do
+    [ -e "$u" ] || continue
+    systemctl --user disable --now "$(basename "$u")" >/dev/null 2>&1 || true
+  done
+fi
+echo "== sshd drop-in, tool links"
+if [ -f /etc/ssh/sshd_config.d/99-gpg-agent-forward.conf ]; then
+  as_root rm -f /etc/ssh/sshd_config.d/99-gpg-agent-forward.conf && as_root systemctl reload ssh 2>/dev/null \
+    || echo "   sshd drop-in left in place (no root/sudo)"
+fi
+for l in /usr/local/bin/*; do
+  [ -L "$l" ] || continue
+  case "$(readlink "$l")" in "$HOME"/.local/share/mise/*) as_root rm -f "$l" 2>/dev/null || true ;; esac
+done
+echo "== chezmoi-managed files, state, identity, secrets"
+if command -v chezmoi >/dev/null 2>&1 && [ -d "$HOME/.local/share/chezmoi" ]; then
+  chezmoi managed --include=files,symlinks 2>/dev/null | while IFS= read -r t; do rm -f -- "$HOME/$t"; done
+  chezmoi managed --include=dirs 2>/dev/null | sort -r | while IFS= read -r d; do rmdir -- "$HOME/$d" 2>/dev/null || true; done
+  chezmoi purge --force >/dev/null 2>&1 || true
+fi
+rm -rf "$HOME/.local/share/chezmoi" "$HOME/.config/chezmoi" "$HOME/.local/state/chezmoi" "$HOME/.config/zsh/secrets.d" "$HOME"/.cache/chezmoi*
+if [ -f "$HOME/.ssh/config" ]; then
+  awk '"'"'/^Match all$/ { getline nxt; if (nxt ~ /^Include ~\/\.ssh\/config\.d\/\*$/) next; print; print nxt; next } { print }'"'"' "$HOME/.ssh/config" >"$HOME/.ssh/config.tmp" && mv -f "$HOME/.ssh/config.tmp" "$HOME/.ssh/config"
+fi
+[ -f "$HOME/.bashrc" ] || { [ -f /usr/share/base-files/dot.bashrc ] && cp /usr/share/base-files/dot.bashrc "$HOME/.bashrc"; }
+[ -f "$HOME/.profile" ] || { [ -f /usr/share/base-files/dot.profile ] && cp /usr/share/base-files/dot.profile "$HOME/.profile"; }
+echo "== login shell"
+case "$(getent passwd "$(id -un)" | cut -d: -f7)" in */zsh) chsh -s /bin/bash "$(id -un)" 2>/dev/null || echo "   login shell left as zsh (chsh refused)" ;; esac
+if [ "${PURGE_TOOLS:-0}" = 1 ]; then
+  echo "== tool homes"
+  rm -rf "$HOME"/.local/share/{mise,cargo,rustup,go,uv,nvim,zsh,fonts,man,services,npm,pnpm} \
+         "$HOME"/.local/{bin,lib,libexec,opt} \
+         "$HOME"/.cache/{mise,go-build,go-mod,npm,pip,uv,nvim,zsh,bat,gitstatus,tree-sitter,zellij,mux,theme,quick-launch,node-gyp,sigstore-rust} "$HOME"/.cache/p10k* \
+         "$HOME"/{.pi,.claude,.cargo,.rustup,go,.npm,.zshenv,.bash_profile,AGENTS.md}
+fi
+echo "== done"
+'
+
+cmd_decommission() {
+  local target="" purge_tools=0 keep_target=0 yes=0 no_push=0
+  while (($#)); do
+    case "$1" in
+      --purge-tools) purge_tools=1; shift ;;
+      --keep-target) keep_target=1; shift ;;
+      --yes | -y) yes=1; shift ;;
+      --dry-run) DRY_RUN=1; shift ;;
+      --no-push) no_push=1; shift ;;
+      -h | --help | help) usage; exit 0 ;;
+      -*) usage >&2; die "decommission: unknown flag: $1" ;;
+      *)
+        [[ -z "$target" ]] && { target="$1"; shift; } || { usage >&2; die "decommission: unexpected argument: $1"; }
+        ;;
+    esac
+  done
+  [[ -n "$target" ]] || { usage >&2; die "decommission: <alias> is required"; }
+  [[ "$target" =~ '^[A-Za-z0-9._-]+$' ]] || die "alias must be filename-safe ([A-Za-z0-9._-]): $target"
+
+  SLOT="$(sec::map_slot_for_alias "$target")"
+  [[ -n "$SLOT" ]] || die "no slot for alias '$target' in the operator map ($OPERATOR_MAP)"
+  local kind
+  kind="$(sec::map_get "$SLOT" kind)"
+  ALIAS="$target"
+  local conf="$HOME/.ssh/config.d/$target.conf"
+  # Commit paths depend on the map entry's kind — collect them before it goes.
+  local -a paths
+  paths=("${(@f)$(sec::commit_paths_for_slot "$SLOT")}")
+
+  log_info "${C_BWH}Decommissioning $target ($SLOT, $kind)${C_RES}"
+
+  # 1. target
+  if [[ "$kind" == headless ]] && ((!keep_target)); then
+    local what="units, sshd drop-in, tool links, every chezmoi-managed file, chezmoi state, identity, secrets fragment, login shell"
+    ((purge_tools)) && what+=", tool homes"
+    if ((DRY_RUN)); then
+      log_info "[dry-run] would tear down $target over ssh: $what"
+    else
+      ((yes)) || prompt::confirm "Tear down $target ($SLOT): $what?" || die "aborted"
+      rexec true || die "cannot reach $target — pass --keep-target to decommission the operator side only"
+      print -r -- "$DECOMMISSION_SCRIPT" | rexec "PURGE_TOOLS=$purge_tools bash -s" ||
+        die "teardown failed on $target (rerun; it is idempotent)"
+      log_ok "torn down $target"
+    fi
+  elif [[ "$kind" == human ]]; then
+    log_info "$target is a human machine and owns its own config; decommissioning the operator side only"
+  else
+    log_info "--keep-target: leaving $target untouched"
+  fi
+
+  # 2. loose layer
+  if ((DRY_RUN)); then
+    log_info "[dry-run] would remove $conf and the map entry for $SLOT"
+  else
+    rm -f -- "$conf"
+    sec::map_del "$SLOT"
+    log_ok "loose layer cleared for $target"
+  fi
+
+  # 3. committed artifacts
+  if ((DRY_RUN)); then
+    log_info "[dry-run] would remove the committed artifacts of $SLOT and commit (push: $((!no_push)))"
+    return 0
+  fi
+  NO_COMMIT=0 check_working_tree
+  sec::decommission_slot "$SLOT"
+  sec::git_commit "chore(secrets): decommission $SLOT" "${paths[@]}"
+  if ((no_push)); then
+    log_info "--no-push: not pushing"
+  else
+    git -C "$REPO_ROOT" push >/dev/null 2>&1 && log_ok "pushed" || log_warn "git push failed (push manually)"
+  fi
+  log_ok "decommissioned $target ($SLOT)"
+}
+
 # --- window-tint color management (config, not secrets; no SSH) ---------------
 # The palette (valid names → hex) is owned by the terminal-mux WezTerm
 # integration and shared via tint-palette.toml; we only READ it to list/validate.
@@ -1325,6 +1463,13 @@ main() {
       sec::repo_paths
       require_cmd yq jq
       cmd_colors "$@"
+      return $?
+      ;;
+    decommission)
+      shift
+      sec::repo_paths
+      require_cmd yq git ssh
+      cmd_decommission "$@"
       return $?
       ;;
   esac
