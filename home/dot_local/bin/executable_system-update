@@ -608,7 +608,13 @@ fi
 # host and reconcile services (systemd worker), then skip the
 # brew-specific steps.
 if ! command -v brew >/dev/null 2>&1; then
-  log_warn "Homebrew not found — running the Homebrew-less update path."
+  # Homebrew is macOS-only in this system: its absence is the designed path on
+  # Linux (say so quietly) and an anomaly on a Mac (warn).
+  if [[ "$OSTYPE" == darwin* ]]; then
+    log_warn "Homebrew not found — running the Homebrew-less update path."
+  else
+    log_info "No Homebrew on this platform — running the Homebrew-less update path."
+  fi
   system_package_synced=0
   if command -v mise >/dev/null 2>&1; then
     print -P -- "\n🛠️ Sync Mise tools...\n"
