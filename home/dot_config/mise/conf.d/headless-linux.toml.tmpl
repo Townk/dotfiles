@@ -46,12 +46,10 @@ use_versions_host = false
 "duf" = "latest"
 "hyperfine" = "latest"
 "jless" = "latest"
-# tokei ships no prebuilt binaries (its releases carry no assets, and aqua's
-# entry is typed `cargo`, which mise refuses), so cargo-binstall always fails
-# loudly before mise falls back to a source build. An explicit `features`
-# option makes mise skip binstall and go straight to `cargo install`;
-# "default" is the crate's own default feature set, so the build is unchanged.
-"cargo:tokei" = { version = "latest", features = "default" }
+# tokei is NOT here: it ships no prebuilt binaries, so it must be built from
+# source, and mise's cargo backend runs inside the same `mise install` that
+# installs Rust — before rustup has a default toolchain. It lives in the
+# Cargofile instead (built later by the cargo worker, once Rust is ready).
 "gping" = "latest"
 "grex" = "latest"
 "gron" = "latest"

@@ -12,6 +12,10 @@ usvg              # SVG simplifier; normalizes custom icons in the nerd-font bui
 tidy-viewer       # CSV pretty-printer (command: tidy-viewer / tv)
 {{- if eq .chezmoi.os "linux" }}
 tree-sitter-cli --locked  # Build locally; Mason's Linux binary needs newer glibc.
+tokei --locked            # Source code metrics (brew on macOS). No prebuilt binaries
+                          # exist, and the mise toolbox installs before rustup has a
+                          # default toolchain; the explicit flag routes this straight
+                          # to `cargo install` (no binstall probe) once Rust is ready.
 {{- end }}
 
 # vim:ft=conf.gotmpl
