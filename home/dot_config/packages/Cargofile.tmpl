@@ -13,12 +13,17 @@ kdl-lsp           # KDL Document Language LSP server (for: nvim)
 usvg              # SVG simplifier; normalizes custom icons in the nerd-font build
 {{- end }}
 tidy-viewer       # CSV pretty-printer (command: tidy-viewer / tv)
-{{- if and (eq .chezmoi.os "linux") $traits.devTooling }}
-tree-sitter-cli --locked  # Build locally; Mason's Linux binary needs newer glibc.
+{{- if eq .chezmoi.os "linux" }}
+tree-sitter-cli --locked  # nvim-treesitter (main) builds EVERY parser through the
+                          # tree-sitter CLI, so syntax highlighting needs it on every
+                          # profile: infrastructure, not dev tooling. Built locally
+                          # because Mason's Linux binary needs a newer glibc.
+{{- if $traits.devTooling }}
 tokei --locked            # Source code metrics (brew on macOS). No prebuilt binaries
                           # exist, and the mise toolbox installs before rustup has a
                           # default toolchain; the explicit flag routes this straight
                           # to `cargo install` (no binstall probe) once Rust is ready.
+{{- end }}
 {{- end }}
 
 # vim:ft=conf.gotmpl

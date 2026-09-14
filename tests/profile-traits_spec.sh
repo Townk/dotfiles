@@ -390,7 +390,14 @@ Describe 'appliance manifests'
     The output should not include "kdl-lsp"
     The output should not include "usvg"
     The output should not include "tokei"
-    The output should not include "tree-sitter-cli"
+  End
+
+  It 'appliance Cargofile on Linux: tree-sitter-cli stays (nvim builds every parser through it)'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call rendered appliance dot_config__packages__Cargofile.tmpl
+    The status should be success
+    The output should include "tree-sitter-cli --locked"
+    The output should not include "tokei"
   End
 
   It 'server Cargofile: still carries the dev crates'
