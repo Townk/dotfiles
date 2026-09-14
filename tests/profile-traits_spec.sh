@@ -138,6 +138,11 @@ Describe '.chezmoiignore profile gating'
     cat "$MTMP/$1/ignored.txt"
   }
 
+  # ignored_line_for <profile> <target> — exit 0 iff <target> is a whole line
+  # of the ignored list (a bare substring match would also hit children such
+  # as .claude/skills/jira-acli, which are ignored on every non-work profile).
+  ignored_line_for() { ignored_for "$1" | grep -qx -- "$2"; }
+
   It 'server: work tooling, TM stack, GUI configs, and the local pi home stay off'
     When call ignored_for server
     The status should be success
@@ -188,18 +193,26 @@ Describe '.chezmoiignore profile gating'
   It 'appliance: the whole AI layer is ignored'
     When call ignored_for appliance
     The status should be success
-    The output should include ".pi"
-    The output should include ".claude"
     The output should include ".config/ai-playbook"
-    The output should include ".config/agent-skills"
     The output should include ".config/pi-memctx"
     The output should include "AGENTS.md"
-    The output should include ".local/bin/ai-commit"
     The output should include ".local/bin/ai-commit-pi"
     The output should include ".local/bin/ai-commit-claude"
     The output should include ".local/lib/commit-agent-common.zsh"
     The output should include ".local/libexec/pick-playbook"
-    The output should include ".local/share/zsh/site-functions/_ai-commit"
+  End
+
+  Parameters
+    ".pi"
+    ".claude"
+    ".config/agent-skills"
+    ".local/bin/ai-commit"
+    ".local/share/zsh/site-functions/_ai-commit"
+  End
+
+  It "appliance: whole-line ignored: $1"
+    When call ignored_line_for appliance "$1"
+    The status should be success
   End
 
   It 'appliance: everything general stays (shell, git, yazi, tmux, mux, gnupg, systemd worker)'
@@ -217,14 +230,19 @@ Describe '.chezmoiignore profile gating'
   It 'server: the AI layer is NOT ignored'
     When call ignored_for server
     The status should be success
-    # Whole-line check: a bare substring match on ".claude" also hits the
-    # pre-existing, unrelated work-only acli skill entries
-    # (.claude/skills/jira-acli, .claude/skills/confluence-acli), which are
-    # correctly ignored on server regardless of aiTooling.
-    The output should not include $'\n.claude\n'
-    The output should not include "AGENTS.md"
-    The output should not include ".config/ai-playbook"
     The output should not include ".local/bin/ai-commit-pi"
+  End
+
+  Parameters
+    ".claude"
+    ".pi"
+    "AGENTS.md"
+    ".config/ai-playbook"
+  End
+
+  It "server: whole-line NOT ignored: $1"
+    When call ignored_line_for server "$1"
+    The status should be failure
   End
 End
 
