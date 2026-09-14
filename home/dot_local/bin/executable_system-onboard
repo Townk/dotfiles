@@ -887,8 +887,19 @@ converge_remote() {
     # conf.d dir does not exist yet, so create it first.
     rexec "mkdir -p ~/.config/mise/conf.d && chezmoi apply --force ~/.config/mise/conf.d/headless-linux.toml" ||
       log_warn "could not pre-apply mise toolbox config on $ALIAS"
-    rexec "command -v mise >/dev/null 2>&1 && mise install sops age -y" ||
-      log_warn "could not install sops/age via mise on $ALIAS — decrypt will fail until 'mise install' runs there"
+    # sops/age come from GitHub releases, and the box has no token yet — its
+    # fragment needs sops to render. Lend this operator's own MISE_GITHUB_TOKEN
+    # for the one command, over stdin (never argv: no process list, no
+    # history); without one, the anonymous budget usually covers two lookups.
+    local prime='command -v mise >/dev/null 2>&1 && mise install sops age -y'
+    if [[ -n "${MISE_GITHUB_TOKEN:-}" ]]; then
+      print -r -- "$MISE_GITHUB_TOKEN" |
+        rexec 'command -v mise >/dev/null 2>&1 && { IFS= read -r t; MISE_GITHUB_TOKEN="$t" mise install sops age -y; }' ||
+        log_warn "could not install sops/age via mise on $ALIAS — decrypt will fail until 'mise install' runs there"
+    else
+      rexec "$prime" ||
+        log_warn "could not install sops/age via mise on $ALIAS — decrypt will fail until 'mise install' runs there"
+    fi
   fi
 
   log_info "applying on $ALIAS …"

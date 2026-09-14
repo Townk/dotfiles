@@ -885,6 +885,52 @@ Describe 'system-onboard: converge_remote priming (fresh target)'
   }
   BeforeEach 'setup'
 
+  # sops/age come from GitHub releases and the box has no token yet (the
+  # fragment needs sops to render), so the operator lends its own
+  # MISE_GITHUB_TOKEN for that one command — over stdin, never on the command
+  # line, so it shows in no process list or history.
+  It 'lends the operator token to the sops/age install over stdin, never in argv'
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      ALIAS=box PROFILE=server KIND=headless SLOT=slot-abc123 DRY_RUN=0 SECRETS_REBUILT=0
+      REPO_ROOT="$WORK" OPERATOR_MAP="$WORK/map.yaml"
+      export MISE_GITHUB_TOKEN=lent-token
+      git() { print -r -- "git@example.invalid:x/y.git" }
+      sec::map_get() { print -r -- "" }
+      rexec() {
+        print -r -- "ARGV: $*" >>"$WORK/rexec.log"
+        if [[ "$*" == *"mise install sops age"* ]]; then
+          local t; IFS= read -r t; print -r -- "STDIN: $t" >>"$WORK/rexec.log"
+        fi
+        return 0
+      }
+      converge_remote >/dev/null 2>&1
+      print -r -- "argv-hits=$(grep -c "ARGV:.*lent-token" "$WORK/rexec.log" || true)"
+      grep "^STDIN:" "$WORK/rexec.log"
+    ' _
+    The status should be success
+    The line 1 of output should equal "argv-hits=0"
+    The line 2 of output should equal "STDIN: lent-token"
+  End
+
+  It 'installs sops/age anonymously when the operator has no token'
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      unset MISE_GITHUB_TOKEN
+      ALIAS=box PROFILE=server KIND=headless SLOT=slot-abc123 DRY_RUN=0 SECRETS_REBUILT=0
+      REPO_ROOT="$WORK" OPERATOR_MAP="$WORK/map.yaml"
+      git() { print -r -- "git@example.invalid:x/y.git" }
+      sec::map_get() { print -r -- "" }
+      rexec() { print -r -- "REXEC: $*" >>"$WORK/rexec.log"; return 0 }
+      converge_remote >/dev/null 2>&1
+      print -r -- "plain=$(grep -c "mise install sops age" "$WORK/rexec.log" || true) stdin=$(grep -c "read -r" "$WORK/rexec.log" || true)"
+    ' _
+    The status should be success
+    The output should equal "plain=1 stdin=0"
+  End
+
   It 'creates the conf.d directory on the target before the targeted apply'
     When call zsh -f -c '
       export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
