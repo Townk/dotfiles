@@ -1,6 +1,8 @@
 {{- /*
 
-  shell-color-scripts — build hook (Macs only: profiles work + personal).
+  shell-color-scripts — build hook (Macs with the work or personal profile,
+  plus every headless Linux host: the NeoVim dashboard shells out to
+  `colorscript`, and nvim deploys there too).
 
   Installs Derek Taylor's shell-color-scripts into ~/.local/opt/colorscripts
   (no sudo), patches its hardcoded /opt data dir to the user install, and
@@ -20,10 +22,12 @@
   upstream updates are pulled on demand
   (COLORSCRIPTS_UPDATE=1 bash build-colorscripts.sh).
 
-  Scope: macOS with the work or personal profile (matches the zsh custom
-  build — personal-machine, macOS-tuned). Exits cleanly elsewhere.
+  Scope: macOS with the work or personal profile, or headless Linux (the
+  builder is plain bash + git and installs under ~/.local/opt). Exits
+  cleanly elsewhere.
 */ -}}
-{{- $target := and (eq .chezmoi.os "darwin") (or (eq .profile "work") (eq .profile "personal")) -}}
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+{{- $target := or (and (eq .chezmoi.os "darwin") (or (eq .profile "work") (eq .profile "personal"))) (and (eq .chezmoi.os "linux") $traits.headless) -}}
 {{- $buildSHA := "" -}}
 {{- $swapSHA := "" -}}
 {{- if $target -}}
@@ -47,7 +51,7 @@
 set -eu
 
 {{- if not $target }}
-# Only built on macOS work/personal profiles; nothing to do here.
+# Only built on macOS work/personal profiles and headless Linux; nothing to do here.
 exit 0
 {{- end }}
 

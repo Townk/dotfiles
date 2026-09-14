@@ -322,6 +322,13 @@ Describe 'headless run-scripts are root-aware'
     The output should equal env-first
   End
 
+  # The NeoVim dashboard shells out to `colorscript`; nvim deploys on headless
+  # Linux, so the build hook must fire there too, not only on the Macs.
+  It '55: the colorscripts build targets headless Linux as well as the Macs'
+    When call grep -c 'and (eq .chezmoi.os "linux") $traits.headless' "$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_55-custom-build-colorscripts.sh.tmpl"
+    The output should equal 1
+  End
+
   It '35: links directly when uid is 0'
     When call grep -F 'if [ "$(id -u)" -eq 0 ]; then' "$S35"
     The status should be success
