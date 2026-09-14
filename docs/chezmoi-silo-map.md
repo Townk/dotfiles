@@ -33,12 +33,12 @@ Repo's own module map: `home/dot_local/bin/README.md` (authoritative for the
    path. An agent changing a library MUST run the relevant spec file(s).
 5. **chezmoi rendering**: most config files are `*.tmpl` (chezmoi templates
    with `{{ }}`). An agent editing config must understand the template data
-   (`os`, `profile` personal/work/dev-shell/server, `chezmoi.*`) — see
+   (`os`, `profile` personal/work/dev-shell/server/appliance, `chezmoi.*`) — see
    `.chezmoidata/` and `.chezmoiignore.tmpl`. Don't strip template guards.
 6. **macOS vs Linux vs dev-shell**: behavior is gated by `os`/`profile` in
    templates and `otherword` guards in scripts. An agent must preserve these
    guards — the dev-shell profile is headless and `.chezmoiignore`s most GUI
-   config (`hammerspoon`, `wezterm`, `ghostty`); trait gates (headless/ephemeral) resolve through `.chezmoitemplates/profile-traits.tmpl`, which fails closed on unknown profiles.
+   config (`hammerspoon`, `wezterm`, `ghostty`); trait gates (headless/ephemeral/devTooling/aiTooling) resolve through `.chezmoitemplates/profile-traits.tmpl`, which fails closed on unknown profiles.
 7. **Custom-build outputs are not in the repo.** Built artifacts
    (`symbols.db`, the patched font, the custom `zsh` binary) land under
    `$XDG_DATA_HOME/fonts/nerd-font/`, `~/.local/opt/zsh`, etc. The repo holds

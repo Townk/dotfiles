@@ -78,7 +78,26 @@ lives in the script: a new profile is an edit in the traits helper only.
 ### Profile
 
 This repo uses a single `profile` data value (`personal`, `work`,
-`dev-shell`, or `server`) to gate profile-specific entries. The `.chezmoi.toml.tmpl` init
+`dev-shell`, `server`, or `appliance`) to gate profile-specific entries. Each
+profile resolves to a set of **traits** in
+`home/.chezmoitemplates/profile-traits.tmpl`, which fails the render on any
+unknown profile; templates gate on traits, never on profile names, so a new
+profile picks every trait deliberately:
+
+| trait | personal | work | dev-shell | server | appliance | meaning |
+|---|---|---|---|---|---|---|
+| `headless` | no | no | yes | yes | yes | no human desktop session: no GUI-app configs, no tab-edit, no TM scrub UX, no local pi home |
+| `ephemeral` | no | no | yes | no | no | disposable sandbox: prunable state, snaps, the prune script |
+| `devTooling` | yes | yes | yes | yes | no | utilities and IDE-like packages to develop *on* the box (hyperfine, tokei, LSP servers, nvim's Mason/LSP/DAP layer) |
+| `aiTooling` | yes | yes | yes | yes | no | agent harnesses and everything that only serves them (pi, claude, ai-playbook, their homes, skills, ai-commit, the CONTEXT7 secret) |
+
+Toolchains (go, rust, node, python, java, kotlin, lua, uv) are infrastructure,
+not dev tooling: they build the toolbox itself and ship on every profile.
+`server` is the full-blown headless box (headless + dev + ai); `appliance` is a
+box nobody develops on (headless only) and carries exactly one secret,
+`MISE_GITHUB_TOKEN`.
+
+The `.chezmoi.toml.tmpl` init
 template reads the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it from
 `--profile`. On macOS with no flag and no TTY (e.g. `curl | bash` without
 args) the script defaults to `personal`; on Linux, `--profile` is required
@@ -97,8 +116,9 @@ The App Store (`mas`) entries are split in two blocks: one shared by `personal`
 and `work`, one personal-only. Brews, casks, and the bootstrap Brewfile are
 shared.
 
-The `dev-shell` (ephemeral, disposable work sandbox) and `server` (long-lived
-hypervisor/NAS class host) profiles are **headless Linux**. Bootstrap the box with
+The `dev-shell` (ephemeral, disposable work sandbox), `server` (long-lived
+hypervisor/NAS class host) and `appliance` (a `server` without dev or AI
+tooling) profiles are **headless Linux**. Bootstrap the box with
 `.setup.sh --profile <p>` — or let the operator's `system-onboard` stream it
 there — then onboard it from a trusted host with `system-onboard --alias <a>
 --hostname <h> --profile <p> [--user <login>]`; secrets and the first apply are
