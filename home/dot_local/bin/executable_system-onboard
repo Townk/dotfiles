@@ -30,7 +30,7 @@ ALIAS="" HOSTNAME="" PROFILE="" KIND="" COLOR="" PREPARE="" LOGIN_USER=""
 GPG_FORWARD_DEFER=0
 DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0 SECRETS_REBUILT=0
 NO_CLIPBOARD=0
-VALID_PROFILES=(personal work dev-shell server)
+VALID_PROFILES=(personal work dev-shell server appliance)
 # ssh-prepare-connection steps a host's front matter may request (see
 # ~/.local/libexec/ssh-prepare-connection). `--prepare` also accepts the meta
 # values `none` (no pre-connect hook at all) and `all` (every step).
@@ -44,7 +44,7 @@ host, or use --local to self-onboard this machine.
 
 Usage:
   system-onboard --alias <ssh-alias> --hostname <ssh-host> \\
-                 --profile <personal|work|dev-shell|server> [--kind human|headless] [--user <login>]
+                 --profile <personal|work|dev-shell|server|appliance> [--kind human|headless] [--user <login>]
   system-onboard --local [--alias <name>] [--profile <p>] [--color <name>] [--no-apply]
   system-onboard update <alias> --color <name>   set a machine's window tint
   system-onboard update <alias> --clear          clear it (revert to default)
@@ -79,7 +79,7 @@ Flags:
                        Loose only: written to the fragment's front matter as
                        'user:' and rendered as a User line. Hand-edit the front
                        matter to change it later.
-  --profile <p>        personal | work | dev-shell | server (with --local, defaults to this
+  --profile <p>        personal | work | dev-shell | server | appliance (with --local, defaults to this
                        machine's configured chezmoi profile)
   --kind <k>           human | headless (default: from the profile's traits —
                        headless profiles → headless, else human)

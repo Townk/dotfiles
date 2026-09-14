@@ -452,6 +452,7 @@ INNER
       work      1
       dev-shell 0
       server    0
+      appliance 0
     End
 
     It "answers headless for $1 with exit $2"

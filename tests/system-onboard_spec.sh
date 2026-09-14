@@ -449,6 +449,12 @@ Describe 'system-onboard: server profile validation'
     The output should include "kind=headless"
   End
 
+  It 'accepts --profile appliance: kind headless, every pre-connect step'
+    When call run_validate appliance
+    The status should be success
+    The output should include "kind=headless prepare=all"
+  End
+
   It 'still defaults dev-shell to headless and personal to human'
     When call run_validate dev-shell
     The output should include "kind=headless"

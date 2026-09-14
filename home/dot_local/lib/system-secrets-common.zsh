@@ -222,7 +222,7 @@ sec::gen_del() {
 # home/.chezmoitemplates/profile-traits.tmpl (the template-side fail-closed
 # authority; a bare zsh lib cannot include it).
 # ---------------------------------------------------------------------------
-SEC_PROFILES=(personal work dev-shell server)
+SEC_PROFILES=(personal work dev-shell server appliance)
 sec::valid_profile() { (( ${SEC_PROFILES[(Ie)$1]} )); }
 
 # sec::profile_is_headless <profile> — exit 0 when the repo's traits helper

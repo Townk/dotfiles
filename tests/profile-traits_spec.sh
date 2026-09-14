@@ -277,7 +277,7 @@ End
 
 # The server's secret set, straight from the committed manifest with the same
 # filter sec::manifest_names_for_profile uses.
-Describe 'secrets.yaml server requiredFor'
+Describe 'secrets.yaml headless requiredFor'
   MANIFEST="$SHELLSPEC_PROJECT_ROOT/home/.chezmoidata/secrets.yaml"
 
   server_secrets() {
@@ -291,6 +291,18 @@ Describe 'secrets.yaml server requiredFor'
     The status should be success
     The output should equal "CONTEXT7_API_KEY
 MISE_GITHUB_TOKEN"
+  End
+
+  appliance_secrets() {
+    profile=appliance yq -r \
+      '.secrets[] | select(.requiredFor[] == strenv(profile)) | .name' \
+      "$MANIFEST" | sort
+  }
+
+  It 'grants appliance exactly MISE_GITHUB_TOKEN (mise runs there; no AI, no CONTEXT7)'
+    When call appliance_secrets
+    The status should be success
+    The output should equal "MISE_GITHUB_TOKEN"
   End
 End
 
