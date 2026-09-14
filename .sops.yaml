@@ -21,5 +21,3 @@
 creation_rules:
   - path_regex: secrets/slot-686a5d/.*\.sops\.sh$
     age: age1k28rm03x0atk94vmxltuy3tcrhygprs56vhxzz8gpdtdlj7gdf6qqa0eqr
-  - path_regex: secrets/slot-7db22b/.*\.sops\.sh$
-    age: age10fgs6nv7z820f93vr2zchzdtwqhfn4tz9ds3a6wl2kxfwu7nve0q38fd8d
