@@ -52,8 +52,8 @@ Usage:
   system-onboard update <alias> --no-clipboard   remove its clipboard forward
   system-onboard update <alias> --prepare <spec> set its pre-connect prep steps
   system-onboard colors                          list machines' tints + palette
-  system-onboard decommission <alias> [--purge-tools] [--keep-target] [--yes]
-                                      [--dry-run] [--no-push]
+  system-onboard decommission <alias> [--purge-tools] [--purge-apt]
+                                      [--keep-target] [--yes] [--dry-run] [--no-push]
                        retire a machine: (headless) tear it down over SSH —
                        units, sshd drop-in, tool links, every chezmoi-managed
                        file, chezmoi state, identity, secrets fragment, login
@@ -61,8 +61,12 @@ Usage:
                        cargo, rustup, go, uv, npm, nvim, zsh plugins, pi,
                        claude); then drop the loose ssh fragment + map entry
                        and commit/push the removal of its committed artifacts.
-                       Host packages (apt) stay. A human machine owns its own
-                       config: only the operator side is decommissioned.
+                       Host packages (apt) stay unless --purge-apt: then the
+                       packages the bootstrap's own apt runs installed (per
+                       the box's apt history, dependencies included) are
+                       purged, refused if apt would take anything else with
+                       them. A human machine owns its own config: only the
+                       operator side is decommissioned.
 
 Flags:
   --local              self-onboard THIS machine (human only; no SSH). Assigns a
@@ -1179,8 +1183,14 @@ reconcile_op_token() {
 # The reverse of onboarding, idempotent. Target side first (headless only:
 # a human Mac owns its own config), then this operator's loose layer, then
 # the committed artifacts in ONE commit through the leak-audited path.
-# Host packages (apt) stay: nothing can tell which pre-existed the bootstrap,
-# and they are harmless. Streamed as `bash -s` like the bootstrap; generic —
+# Host packages (apt) stay by default: nothing on the box itself can tell
+# which pre-existed the bootstrap, and they are harmless. With PURGE_APT=1 the
+# apt history is the witness: the operator passes the package lists its own
+# bootstrap scripts install (ONBOARD_APT_PACKAGES) and the script purges what
+# the history records those exact `apt-get install -y -qq <ours…>` runs as
+# having installed — dependencies included, nothing else — after a
+# simulation proves apt would remove nothing beyond that set.
+# Streamed as `bash -s` like the bootstrap; generic —
 # it derives what to remove from `chezmoi managed` on the target, and the
 # operator passes the managed directory names from its own source tree
 # (MANAGED_CONFIG_DIRS, MANAGED_SHARE_DIRS) so a box that already lost
@@ -1254,8 +1264,64 @@ if [ "${PURGE_TOOLS:-0}" = 1 ]; then
          "$HOME"/.local/{bin,lib,libexec,opt} \
          "$HOME"/{.pi,.claude,.cargo,.rustup,go,.npm,.zshenv,.bash_profile,AGENTS.md}
 fi
+if [ "${PURGE_APT:-0}" = 1 ]; then
+  echo "== apt packages the bootstrap installed"
+  hist="${APT_HISTORY_DIR:-/var/log/apt}"
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "   no apt-get here; nothing to purge"
+  elif [ -z "${ONBOARD_APT_PACKAGES:-}" ]; then
+    echo "   no bootstrap package list received; nothing to purge"
+  else
+    # Every apt run our scripts issue has the exact shape
+    # `apt-get install -y -qq <pkgs…>` with pkgs drawn from the lists the
+    # operator passed (whole list, or one package on the per-package retry).
+    # Anything else in the history — a hand-typed install, a run by another
+    # tool — is not ours, even when it names one of our packages.
+    recorded=$({ zcat -f "$hist"/history.log.*.gz 2>/dev/null; cat "$hist"/history.log 2>/dev/null; } |
+      awk -v ours=" $ONBOARD_APT_PACKAGES " '"'"'
+        /^Commandline: apt-get install -y -qq / { ok=1; for (i=6;i<=NF;i++) if (index(ours, " " $i " ")==0) ok=0; next }
+        /^Install:/ && ok { sub(/^Install: /,""); n=split($0,a,", "); for (i=1;i<=n;i++){ sub(/:[a-z0-9]+ \(.*$/,"",a[i]); print a[i] } }
+        /^End-Date/ { ok=0 }'"'"' | sort -u)
+    still=""
+    for p in $recorded; do
+      case "$(dpkg-query -W -f='"'"'${db:Status-Abbrev}'"'"' "$p" 2>/dev/null)" in ii*) still="$still $p" ;; esac
+    done
+    if [ -z "$still" ]; then
+      echo "   nothing to purge (no bootstrap install in the apt history, or already gone)"
+    else
+      # apt follows reverse dependencies: refuse rather than take a package
+      # the bootstrap did not install (something installed later on top of
+      # ours) down with the set.
+      extra=""
+      for p in $(as_root apt-get purge -s -y $still 2>/dev/null | awk '"'"'/^(Remv|Purg) /{print $2}'"'"' | sort -u); do
+        case " $still " in *" $p "*) ;; *) extra="$extra $p" ;; esac
+      done
+      if [ -n "$extra" ]; then
+        echo "   apt would also remove packages the bootstrap did not install — purge skipped:$extra"
+      elif as_root env DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get purge -y -qq $still >/dev/null 2>&1; then
+        echo "   purged $(echo $still | wc -w | tr -d " ") packages"
+        as_root env DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1 apt-get autoremove --purge -y -qq >/dev/null 2>&1 || true
+      else
+        echo "   apt-get purge failed (rerun; it is idempotent)"
+      fi
+    fi
+  fi
+fi
 echo "== done"
 '
+
+# bootstrap_apt_packages — every package name our own bootstrap installs with
+# apt (.setup.sh's base set and the headless run-script's APT_PACKAGES),
+# space-separated: the witness list the decommission script matches the
+# target's apt history against.
+bootstrap_apt_packages() {
+  local -a pkgs
+  local setup="$REPO_ROOT/.setup.sh"
+  local script="$REPO_ROOT/home/.chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl"
+  [[ -f "$setup" ]] && pkgs+=(${=$(sed -n 's/^ *apt-get install -y -qq //p' "$setup")})
+  [[ -f "$script" ]] && pkgs+=(${=$(sed -n '/^APT_PACKAGES=(/,/^)/{ /^APT_PACKAGES=(/d; /^)/d; s/#.*//; p; }' "$script")})
+  print -r -- "${(j: :)${(u)pkgs}}"
+}
 
 # managed_dir_names <source dir> — the target names of that directory's
 # top-level entries, space-separated (chezmoi attribute prefixes stripped):
@@ -1273,10 +1339,11 @@ managed_dir_names() {
 }
 
 cmd_decommission() {
-  local target="" purge_tools=0 keep_target=0 yes=0 no_push=0
+  local target="" purge_tools=0 purge_apt=0 keep_target=0 yes=0 no_push=0
   while (($#)); do
     case "$1" in
       --purge-tools) purge_tools=1; shift ;;
+      --purge-apt) purge_apt=1; shift ;;
       --keep-target) keep_target=1; shift ;;
       --yes | -y) yes=1; shift ;;
       --dry-run) DRY_RUN=1; shift ;;
@@ -1306,9 +1373,11 @@ cmd_decommission() {
   # 1. target
   if [[ "$kind" == headless ]] && ((!keep_target)); then
     local what="units, sshd drop-in, tool links, every chezmoi-managed file, chezmoi state, identity, secrets fragment, login shell"
-    local managed_config managed_share
+    ((purge_apt)) && what+=", apt packages the bootstrap installed"
+    local managed_config managed_share apt_packages
     managed_config="$(managed_dir_names "$REPO_ROOT/home/dot_config")"
     managed_share="$(managed_dir_names "$REPO_ROOT/home/dot_local/share")"
+    apt_packages="$(bootstrap_apt_packages)"
     ((purge_tools)) && what+=", tool homes"
     if ((DRY_RUN)); then
       log_info "[dry-run] would tear down $target over ssh: $what"
@@ -1316,7 +1385,7 @@ cmd_decommission() {
       ((yes)) || prompt::confirm "Tear down $target ($SLOT): $what?" || die "aborted"
       rexec true || die "cannot reach $target — pass --keep-target to decommission the operator side only"
       print -r -- "$DECOMMISSION_SCRIPT" |
-        rexec "PURGE_TOOLS=$purge_tools MANAGED_CONFIG_DIRS='$managed_config' MANAGED_SHARE_DIRS='$managed_share' bash -s" ||
+        rexec "PURGE_TOOLS=$purge_tools PURGE_APT=$purge_apt MANAGED_CONFIG_DIRS='$managed_config' MANAGED_SHARE_DIRS='$managed_share' ONBOARD_APT_PACKAGES='$apt_packages' bash -s" ||
         die "teardown failed on $target (rerun; it is idempotent)"
       log_ok "torn down $target"
     fi

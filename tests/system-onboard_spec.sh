@@ -1003,6 +1003,9 @@ Describe 'system-onboard: decommission'
       "$WORK/repo/home/dot_config/zsh/private_secrets.d" "$WORK/repo/home/.chezmoidata"
     printf 'Host box\n' >"$WORK/home/.ssh/config.d/box.conf"
     printf 'slot-aaaaaa:\n  alias: box\n  profile: server\n  kind: headless\nslot-bbbbbb:\n  alias: other\n  profile: server\n  kind: headless\nslot-cccccc:\n  alias: mac\n  profile: personal\n  kind: human\n' >"$WORK/map.yaml"
+    mkdir -p "$WORK/repo/home/.chezmoiscripts"
+    printf '      apt-get install -y -qq zsh git curl\n' >"$WORK/repo/.setup.sh"
+    printf 'APT_PACKAGES=(\n  figlet # banner\n  bison  # yacc\n)\n' >"$WORK/repo/home/.chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl"
     (
       cd "$WORK/repo" && git init -q &&
         printf 'blob\n' >secrets/slot-aaaaaa/NAME.sops.sh && printf 'blob\n' >secrets/slot-bbbbbb/NAME.sops.sh &&
@@ -1059,7 +1062,7 @@ Describe 'system-onboard: decommission'
     The status should be success
     The output should include "torn down box"
     The output should include "decommissioned box (slot-aaaaaa)"
-    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=0 MANAGED_CONFIG_DIRS='zsh' MANAGED_SHARE_DIRS='' bash -s"
+    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=0 PURGE_APT=0 MANAGED_CONFIG_DIRS='zsh' MANAGED_SHARE_DIRS='' ONBOARD_APT_PACKAGES='zsh git curl figlet bison' bash -s"
     The contents of file "$WORK/streamed" should include "== user units"
     The path "$WORK/home/.ssh/config.d/box.conf" should not be exist
     The contents of file "$WORK/map.yaml" should not include "slot-aaaaaa"
@@ -1075,7 +1078,15 @@ Describe 'system-onboard: decommission'
     When call decom box --yes --no-push --purge-tools
     The status should be success
     The output should include "torn down box"
-    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=1 MANAGED_CONFIG_DIRS='zsh' MANAGED_SHARE_DIRS='' bash -s"
+    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=1 PURGE_APT=0 MANAGED_CONFIG_DIRS='zsh' MANAGED_SHARE_DIRS='' ONBOARD_APT_PACKAGES='zsh git curl figlet bison' bash -s"
+  End
+
+  It 'headless --purge-apt passes the flag and names it in the confirmation'
+    When call decom box --purge-apt --no-push
+    The status should be success
+    The output should include "torn down box"
+    The contents of file "$WORK/log" should include "apt packages the bootstrap installed?"
+    The contents of file "$WORK/log" should include "REXEC: PURGE_TOOLS=0 PURGE_APT=1 MANAGED_CONFIG_DIRS='zsh'"
   End
 
   It 'asks for confirmation before touching a headless target unless --yes'
@@ -1158,8 +1169,62 @@ STUB
   run_remote() {
     zsh -f -c 'export SYSTEM_ONBOARD_NO_RUN=1; source "$SCRIPT_PATH"; print -r -- "$DECOMMISSION_SCRIPT"' |
       env -i HOME="$H" PATH="$H/.local/bin:/usr/bin:/bin" PURGE_TOOLS="${1:-0}" \
-        MANAGED_CONFIG_DIRS="${MANAGED_CONFIG_DIRS:-}" MANAGED_SHARE_DIRS="${MANAGED_SHARE_DIRS:-}" bash -s
+        MANAGED_CONFIG_DIRS="${MANAGED_CONFIG_DIRS:-}" MANAGED_SHARE_DIRS="${MANAGED_SHARE_DIRS:-}" \
+        PURGE_APT="${PURGE_APT:-0}" ONBOARD_APT_PACKAGES="${ONBOARD_APT_PACKAGES:-}" APT_HISTORY_DIR="$WORK/apt" bash -s
   }
+
+  # An apt world: a history log, an `id` that says root (so as_root runs apt
+  # directly), a dpkg-query that answers "ii" for the names in installed.txt,
+  # and an apt-get whose simulation removes the requested set plus whatever
+  # collateral.txt lists, and whose real runs only log their arguments.
+  lay_apt_world() {
+    mkdir -p "$WORK/apt"
+    cat >"$WORK/apt/history.log" <<'LOG'
+
+Start-Date: 2026-08-24  23:18:20
+Commandline: apt-get install -y --no-install-recommends git
+Install: git:amd64 (2.47.2), git-man:amd64 (2.47.2, automatic)
+End-Date: 2026-08-24  23:18:30
+
+Start-Date: 2026-09-13  22:40:58
+Commandline: apt-get install -y -qq zsh git curl
+Install: zsh-common:amd64 (5.9-8, automatic), zsh:amd64 (5.9-8+b24)
+End-Date: 2026-09-13  22:41:10
+
+Start-Date: 2026-09-13  22:42:42
+Commandline: apt-get install -y -qq figlet bison
+Install: figlet:amd64 (2.2.5-3), bison:amd64 (2:3.8.2), m4:amd64 (1.4.19, automatic)
+End-Date: 2026-09-13  22:43:00
+
+Start-Date: 2026-09-13  22:50:00
+Commandline: apt-get install -y -qq sqlite3
+Install: sqlite3:amd64 (3.46.1)
+End-Date: 2026-09-13  22:50:05
+LOG
+    printf '#!/bin/sh\ncase "$1" in -u) echo 0 ;; -un) echo root ;; *) echo 0 ;; esac\n' >"$H/.local/bin/id"
+    cat >"$H/.local/bin/dpkg-query" <<STUB
+#!/bin/sh
+# dpkg-query -W -f=... <pkg>
+for a; do p="\$a"; done
+grep -qx "\$p" "$WORK/apt/installed.txt" 2>/dev/null && printf 'ii '
+exit 0
+STUB
+    cat >"$H/.local/bin/apt-get" <<STUB
+#!/bin/sh
+printf 'APT: %s\n' "\$*" >>"$WORK/apt/log"
+case " \$* " in
+  *" -s "*)
+    for a; do case "\$a" in -*|purge|autoremove) ;; *) echo "Purg \$a [1]" ;; esac; done
+    [ -f "$WORK/apt/collateral.txt" ] && sed 's/^/Remv /; s/\$/ [1]/' "$WORK/apt/collateral.txt"
+    ;;
+esac
+exit 0
+STUB
+    chmod +x "$H/.local/bin/id" "$H/.local/bin/dpkg-query" "$H/.local/bin/apt-get"
+    printf '%s\n' git git-man zsh zsh-common figlet m4 sqlite3 >"$WORK/apt/installed.txt"   # bison already gone
+  }
+  run_remote_purge_apt() { PURGE_APT=1 ONBOARD_APT_PACKAGES="zsh git curl figlet bison" run_remote; }
+  apt_purge_line() { grep '^APT: purge -y -qq' "$WORK/apt/log"; }
   ssh_config_line_count() { wc -l <"$H/.ssh/config" | tr -d " "; }
   run_remote_with_names() { MANAGED_CONFIG_DIRS="zsh nvim" MANAGED_SHARE_DIRS="zsh" run_remote; }
 
@@ -1219,6 +1284,39 @@ STUB
     The path "$H/.local/share/zsh" should not be exist
     The path "$H/.config/chromium/Local State" should be exist
     The path "$H/.local/share/nano/x" should be exist
+  End
+
+  It '--purge-apt purges exactly what the bootstrap runs recorded, skipping what is gone and installs by others'
+    lay_apt_world
+    When call run_remote_purge_apt
+    The status should be success
+    The output should include "purged 4 packages"
+    The output should include "== done"
+    # zsh + its dependency, figlet + its dependency; bison is no longer installed
+    The result of function apt_purge_line should equal "APT: purge -y -qq figlet m4 zsh zsh-common"
+    # git came from a hand-typed --no-install-recommends install, sqlite3 from a run naming a package that is not ours
+    The result of function apt_purge_line should not include "git"
+    The result of function apt_purge_line should not include "sqlite3"
+    The contents of file "$WORK/apt/log" should include "APT: autoremove --purge -y -qq"
+  End
+
+  It '--purge-apt refuses when apt would take a package the bootstrap did not install'
+    lay_apt_world
+    printf 'chromium\n' >"$WORK/apt/collateral.txt"
+    When call run_remote_purge_apt
+    The status should be success
+    The output should include "purge skipped: chromium"
+    The output should include "== done"
+    The contents of file "$WORK/apt/log" should not include "APT: purge -y -qq"
+  End
+
+  It 'without --purge-apt, apt is never touched'
+    lay_apt_world
+    When call run_remote
+    The status should be success
+    The output should include "== done"
+    The output should not include "apt packages"
+    The path "$WORK/apt/log" should not be exist
   End
 
   It 'removes the state container once it is empty, keeps it when something else lives there'

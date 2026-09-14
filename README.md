@@ -377,7 +377,7 @@ Mac and propagates on the box's next update.
 The reverse of onboarding, idempotent and operator-driven:
 
 ```sh
-system-onboard decommission <alias> [--purge-tools] [--keep-target] [--yes] [--dry-run] [--no-push]
+system-onboard decommission <alias> [--purge-tools] [--purge-apt] [--keep-target] [--yes] [--dry-run] [--no-push]
 ```
 
 For a **headless** target it first tears the box down over SSH (after a
@@ -386,7 +386,13 @@ the sudo tool links, every chezmoi-managed file, chezmoi's own state, the age
 identity, the rendered secrets fragment, and the login shell back to bash;
 `--purge-tools` also removes the tool homes the bootstrap created (mise, cargo,
 rustup, go, uv, npm, nvim, zsh plugins, pi, claude). Host packages installed via
-apt stay — nothing can tell which of them pre-existed, and they are harmless.
+apt stay by default — the box alone cannot tell which of them pre-existed, and
+they are harmless. `--purge-apt` uses the box's apt history as the witness: it
+purges exactly what the bootstrap's own `apt-get install` runs (`.setup.sh`'s
+base set and the headless run-script's list, as recorded in the history with
+their dependencies) installed, skips what is already gone, ignores installs of
+the same packages by anyone else, and refuses if a simulation shows apt would
+take a package the bootstrap did not install down with them.
 A **human** machine owns its own config, so only the operator side is touched.
 Then it drops the loose ssh fragment and the operator-map entry, and retires the
 slot's committed artifacts (blobs, fragment template, sops rule, generation
