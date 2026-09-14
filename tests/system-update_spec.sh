@@ -281,3 +281,56 @@ Describe 'system-update: Homebrew-less path installs yazi plugins'
     The output should equal yes
   End
 End
+
+# The Mason commands exist only where the rendered facts file says
+# dev_tooling = true (the appliance profile turns nvim's IDE layer off); on an
+# appliance `+MasonToolsUpdateSync` would abort the whole plugin sync. A
+# machine without the facts file (not applied since the traits landed) keeps
+# the Mason step — the pre-appliance behaviour.
+Describe 'system-update: nvim_sync_cmds follows the rendered dev_tooling trait'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-update"
+
+  setup() {
+    STAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/nvim-sync.XXXXXX")"
+    mkdir -p "$STAGE/home/.local" "$STAGE/home/.config/nvim/lua/config"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/home/.local/lib"
+    export SCRIPT_PATH="$SCRIPT" STAGE
+  }
+  cleanup() { rm -rf "$STAGE"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  facts() { printf 'return { traits = { dev_tooling = %s } }\n' "$1" >"$STAGE/home/.config/nvim/lua/config/chezmoi.lua"; }
+  sync_cmds() {
+    zsh -f -c 'export SYSTEM_UPDATE_NO_RUN=1; HOME="$STAGE/home"; source "$SCRIPT_PATH"; set --; nvim_sync_cmds'
+  }
+
+  It 'skips the Mason commands when dev_tooling = false'
+    facts false
+    When call sync_cmds
+    The status should be success
+    The line 1 of output should equal "+Lazy! sync"
+    The line 2 of output should equal "+quitall"
+    The output should not include "Mason"
+  End
+
+  It 'keeps the Mason commands when dev_tooling = true'
+    facts true
+    When call sync_cmds
+    The status should be success
+    The output should include "+Lazy load mason-tool-installer.nvim"
+    The output should include "+MasonToolsUpdateSync"
+    The line 4 of output should equal "+quitall"
+  End
+
+  It 'keeps the Mason commands when there is no facts file yet'
+    When call sync_cmds
+    The status should be success
+    The output should include "+MasonToolsUpdateSync"
+  End
+
+  It 'both nvim sync call sites go through the helper'
+    When call grep -c 'nvim --headless "${(@f)$(nvim_sync_cmds)}"' "$SCRIPT"
+    The output should equal 2
+  End
+End

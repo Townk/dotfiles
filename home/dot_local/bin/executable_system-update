@@ -53,7 +53,7 @@ block later steps unless explicitly fatal):
   5. `brew cleanup --prune=all`
   6. `system-service sync`    reconcile services with services.toml (launchd/systemd)
   7. `ya pkg upgrade --discard`  + commit any package.toml bumps to chezmoi
-  8. NeoVim: `Lazy! sync` + `MasonToolsUpdateSync`
+  8. NeoVim: `Lazy! sync` (+ `MasonToolsUpdateSync` where the IDE layer is deployed)
   9. Pi: `pi update --extensions` for the cloud + local config homes
  10. `git pull` the zsh plugins in ~/.local/share/zsh/plugins
 EOF
@@ -471,6 +471,21 @@ publish_yazi_bump() {
   )
 }
 
+# nvim_sync_cmds — the +commands of the headless plugin sync, one per line.
+# Mason's commands exist only where the rendered chezmoi facts file says
+# dev_tooling = true (the appliance profile turns nvim's IDE layer off);
+# elsewhere `+MasonToolsUpdateSync` would abort the sync. No facts file at all
+# (a machine not applied since the traits landed) keeps the Mason step.
+nvim_sync_cmds() {
+  local facts="$HOME/.config/nvim/lua/config/chezmoi.lua"
+  print -r -- "+Lazy! sync"
+  if [[ ! -f "$facts" ]] || grep -q 'dev_tooling = true' "$facts"; then
+    print -r -- "+Lazy load mason-tool-installer.nvim"
+    print -r -- "+MasonToolsUpdateSync"
+  fi
+  print -r -- "+quitall"
+}
+
 # SYSTEM_UPDATE_NO_RUN (test-only escape hatch, same convention as
 # SYSTEM_ONBOARD_NO_RUN / PICK_CLIPBOARD_NO_RUN): a test harness sources this
 # file with it set so it can call helpers like publish_yazi_bump directly,
@@ -662,7 +677,7 @@ if ! command -v brew >/dev/null 2>&1; then
     # Report covers Lazy plugins only (see the Homebrew path's note).
     nvim_before=$(step_snapshot snapshot_nvim)
     run_step "nvim: syncing plugins" \
-      timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
+      timeout 300 nvim --headless "${(@f)$(nvim_sync_cmds)}" ||
       log_warn "NeoVim plugin upgrade timed out or had failures"
     step_report "$nvim_before" snapshot_nvim plugin
   fi
@@ -787,7 +802,7 @@ if command -v nvim >/dev/null 2>&1; then
   # the Mason tool updates this same command performs are NOT reflected there.
   nvim_before=$(step_snapshot snapshot_nvim)
   run_step "nvim: syncing plugins" \
-    timeout 300 nvim --headless "+Lazy! sync" "+Lazy load mason-tool-installer.nvim" "+MasonToolsUpdateSync" "+quitall" ||
+    timeout 300 nvim --headless "${(@f)$(nvim_sync_cmds)}" ||
     log_warn "NeoVim plugin upgrade timed out or had failures"
   step_report "$nvim_before" snapshot_nvim plugin
 fi
