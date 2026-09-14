@@ -29,6 +29,12 @@ echo "🧰  Installing headless Linux tools..."
 # binaries are reachable.
 export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/snap/bin:$PATH"
 
+# The XDG homes every other shell sees (MISE_CARGO_HOME, MISE_RUSTUP_HOME,
+# GOPATH/GOBIN, XDG_RUNTIME_DIR). Without them mise puts Rust at the default
+# ~/.cargo, which system-update later treats as a stale link and reinstalls.
+# environment.sh is sh-compatible; chezmoi deployed it before this script runs.
+[ -r "$HOME/.config/zsh/environment.sh" ] && . "$HOME/.config/zsh/environment.sh"
+
 failures=()
 
 # Run a privileged command: directly when already root (a server is

@@ -313,6 +313,15 @@ Describe 'headless run-scripts are root-aware'
     The output should equal secrets-first
   End
 
+  # environment.sh carries the XDG homes mise must see (MISE_CARGO_HOME,
+  # MISE_RUSTUP_HOME, GOPATH/GOBIN). Installing without them put Rust at the
+  # default ~/.cargo, which system-update later flagged as a stale link and
+  # reinstalled (with rustup's "cannot install while Rust is installed" noise).
+  It '15: loads environment.sh before the first mise install'
+    When call awk '/\. "\$HOME\/.config\/zsh\/environment.sh"/{e=NR} /^  mise install -y/{m=NR} END{if(e&&m&&e<m)print "env-first";else print "wrong-order"}' "$S15"
+    The output should equal env-first
+  End
+
   It '35: links directly when uid is 0'
     When call grep -F 'if [ "$(id -u)" -eq 0 ]; then' "$S35"
     The status should be success
