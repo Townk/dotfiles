@@ -12,14 +12,17 @@ Describe 'zsh/commands.tsv — the curated command index'
   # The source is a template gated per profile, so the subject is what chezmoi
   # renders for THIS machine: the rows for other profiles name commands that are
   # legitimately absent here, and asserting on the raw source would fail on the
-  # template directives themselves.
+  # template directives themselves. --source points chezmoi at this checkout so
+  # the shared .chezmoitemplates helpers come from the tree under test, not from
+  # the machine's live source; the config (and so the profile) stays the
+  # machine's own.
   template="$SHELLSPEC_PROJECT_ROOT/home/dot_config/zsh/commands.tsv.tmpl"
   index="$SHELLSPEC_TMPBASE/commands-index.tsv"
   functions_d="$SHELLSPEC_PROJECT_ROOT/home/dot_config/zsh/functions.d"
   aliases_file="$SHELLSPEC_PROJECT_ROOT/home/dot_config/zsh/aliases.d/personal.sh"
   picker="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-command"
 
-  render_index() { chezmoi execute-template <"$template" >"$index"; }
+  render_index() { chezmoi --source "$SHELLSPEC_PROJECT_ROOT/home" execute-template <"$template" >"$index"; }
   BeforeAll 'render_index'
 
   # Every probe reports its violations and then a count, so a failure shows
