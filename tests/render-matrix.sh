@@ -51,6 +51,7 @@ TEMPLATES=(
   dot_config/git/config.tmpl
   dot_config/mise/conf.d/rclone.toml.tmpl
   dot_config/mise/conf.d/headless-linux.toml.tmpl
+  dot_config/mise/conf.d/darwin.toml.tmpl
   dot_config/yazi/keymap.toml.tmpl
   dot_config/packages/Uvfile.tmpl
   dot_config/packages/Cargofile.tmpl

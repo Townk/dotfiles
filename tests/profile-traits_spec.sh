@@ -240,6 +240,22 @@ Describe 'template gates for the server profile'
   # Darwin-runnable guard on the gates themselves (the renders above are
   # linux-only): the outer gate is the headless trait; the ONLY profile-name
   # comparison left is the inner dev-shell settings block.
+  # macOS-only mise tools (assets that exist only for darwin) live in their
+  # own darwin-gated conf, never in the shared config.toml, so a Linux host's
+  # `mise install` does not fail on them.
+  It 'darwin.toml carries the macOS-only tools on this darwin host'
+    Skip if "darwin only" [ "$(uname -s)" != "Darwin" ]
+    When call rendered personal dot_config__mise__conf.d__darwin.toml.tmpl
+    The status should be success
+    The output should include 'dictutil'
+  End
+
+  It 'the shared mise config.toml names no darwin-only asset'
+    When call grep -c 'darwin-64bit' "$SHELLSPEC_PROJECT_ROOT/home/dot_config/mise/config.toml"
+    The status should be failure
+    The output should equal 0
+  End
+
   It 'headless-linux.toml.tmpl gates on the headless trait, with a single dev-shell inner block'
     f="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mise/conf.d/headless-linux.toml.tmpl"
     When call sh -c 'grep -c "\$traits.headless" "$1"; grep -c "eq .profile \"dev-shell\"" "$1"' _ "$f"

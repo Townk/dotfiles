@@ -1,0 +1,15 @@
+{{- /*
+  macOS-only mise tools — assets that exist only for darwin. Kept out of the
+  shared config.toml so a Linux host's `mise install` never fails on them
+  (a server's first provisioning did exactly that). Renders empty elsewhere;
+  an empty file is valid TOML and mise ignores it.
+*/ -}}
+{{- if eq .chezmoi.os "darwin" }}
+[tools]
+# dictgen (pgaskin/dictutil) builds Kobo custom dictionaries for bindery's
+# X-Ray renderer. No brew formula exists; the release ships a single Go
+# binary, so mise's ubi backend fetches it straight from GitHub. The darwin
+# asset is Intel-only ("darwin-64bit") and runs under Rosetta; pinned because
+# the dicthtml index format is what the device firmware parses.
+"ubi:pgaskin/dictutil" = { version = "v0.3.2", exe = "dictgen", matching = "darwin-64bit" }
+{{- end }}
