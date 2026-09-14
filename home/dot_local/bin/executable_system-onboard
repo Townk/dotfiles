@@ -26,6 +26,8 @@ source "$SYSTEM_SECRETS_LIB"
 
 # --- arguments ---------------------------------------------------------------
 ALIAS="" HOSTNAME="" PROFILE="" KIND="" COLOR="" PREPARE="" LOGIN_USER=""
+# Set for the duration of a remote onboarding: see write_ssh_conf / finalize_gpg_forward.
+GPG_FORWARD_DEFER=0
 DRY_RUN=0 NO_COMMIT=0 NO_PUSH=0 ROTATE_SECRETS=0 LOCAL=0 NO_APPLY=0 SECRETS_REBUILT=0
 NO_CLIPBOARD=0
 VALID_PROFILES=(personal work dev-shell server)
@@ -407,6 +409,13 @@ write_ssh_conf() {
   local want_hook=1 want_gpg=0
   [[ "$prepare" == none ]] && want_hook=0
   [[ "$prepare" == all || "$prepare" == *gpg* ]] && want_gpg=1
+  # First onboarding: the gpg listen path can only be resolved once the target
+  # carries the provisioning script (after its first apply), and a pending
+  # placeholder makes every earlier connection print "remote port forwarding
+  # failed for listen path /nonexistent/…". Defer the line while onboarding
+  # runs; an already-healed line is never dropped. finalize_gpg_forward renders
+  # and resolves it once the target is converged.
+  if (( GPG_FORWARD_DEFER )) && [[ -z "$gpg_line" ]]; then want_gpg=0; fi
 
   # `alias` — parse the (preserved or default) front matter's `alias:` field
   # into the full list of configured names. `${=...}` splits on whitespace;
@@ -898,6 +907,28 @@ converge_remote() {
   reconcile_remote_map
 }
 
+# --- step 9.6: gpg forward, once the target can resolve it ------------------
+# Counterpart of the deferral in write_ssh_conf: re-render the fragment with
+# the gpg line and run the pre-connect hook once (it resolves the remote socket
+# path through a forward-free ssh and pushes the theme), so the first
+# forward-bearing connection binds cleanly instead of warning.
+finalize_gpg_forward() {
+  GPG_FORWARD_DEFER=0
+  local conf="$HOME/.ssh/config.d/$ALIAS.conf"
+  [[ -f "$conf" ]] || return 0
+  grep -qiE '^#[[:space:]]*prepare:.*(gpg|all)' "$conf" || return 0
+  if ((DRY_RUN)); then
+    log_info "[dry-run] would render the gpg forward for $ALIAS and resolve it once"
+    return 0
+  fi
+  write_ssh_conf "$conf" "$ALIAS" "$HOSTNAME" $((!NO_CLIPBOARD))
+  if _SYNCREMOTE=1 "$HOME/.local/libexec/ssh-prepare-connection" "$conf" </dev/null >/dev/null 2>&1; then
+    log_ok "gpg-agent forward resolved for $ALIAS"
+  else
+    log_warn "gpg-agent forward left pending for $ALIAS (heals on the next connection)"
+  fi
+}
+
 # --- step 9.5: record the target's OWN map entry ----------------------------
 # A remotely-onboarded machine gets the SA token (operator-capable) but, unlike
 # a --local self-onboard, never recorded its own slot in ITS operator map — so
@@ -1301,6 +1332,7 @@ main() {
   # Headless onboarding encrypts locally, so it needs sops/age here. Human
   # onboarding uses 1Password references only — don't require them.
   [[ "$KIND" == headless ]] && require_cmd sops age
+  GPG_FORWARD_DEFER=1
 
   log_info "${C_BWH}Onboarding $ALIAS ($PROFILE/$KIND)${C_RES}"
   check_working_tree
@@ -1332,6 +1364,7 @@ main() {
     fi
     apply_slot_color
     converge_remote
+    finalize_gpg_forward
     log_ok "connectivity reconciled for $ALIAS (self-onboarded slot $SLOT)"
     return 0
   fi
@@ -1344,6 +1377,7 @@ main() {
   commit_and_push
   reconcile_op_token
   converge_remote
+  finalize_gpg_forward
   log_ok "onboarding complete for $ALIAS (slot $SLOT)"
 }
 

@@ -766,3 +766,95 @@ Describe 'system-onboard: --prepare is written space-separated'
     The line 2 of output should equal 1
   End
 End
+
+# The gpg forward's listen path can only be resolved once the target has the
+# provisioning script deployed (after the first apply). Rendering the pending
+# placeholder from the start made every pre-apply connection print "remote
+# port forwarding failed for listen path /nonexistent/…". During a first
+# onboarding the line is deferred; an already-healed line is never dropped;
+# once deferral ends the pending line renders and main() resolves it once.
+Describe 'system-onboard: gpg forward deferral (first onboarding)'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    CONFDIR="$(mktemp -d "$SHELLSPEC_TMPBASE/ssh-gpgdefer.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT" CONFDIR
+  }
+  BeforeEach 'setup'
+
+  run_write_defer() {   # <GPG_FORWARD_DEFER 0|1> <conf> <alias> <host> <clip>
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      GPG_FORWARD_DEFER="$1"; shift
+      PREPARE="gpg,theme"
+      write_ssh_conf "$@"
+    ' _ "$@"
+  }
+
+  It 'defers the gpg line on a never-healed fragment but keeps prepare and the hook'
+    conf="$CONFDIR/box.conf"
+    run_write_defer 1 "$conf" box box.example 0
+    When call sh -c 'grep -c "S.gpg-agent" "$1"; grep -c "^# prepare: gpg theme$" "$1"; grep -c "^Match originalhost" "$1"' _ "$conf"
+    The line 1 of output should equal 0
+    The line 2 of output should equal 1
+    The line 3 of output should equal 1
+  End
+
+  It 'keeps an already-healed gpg line even while deferring'
+    conf="$CONFDIR/box.conf"
+    run_write_defer 0 "$conf" box box.example 0
+    sed 's|RemoteForward /nonexistent/S.gpg-agent.pending-first-connect|RemoteForward /run/user/0/gnupg/d.abc/S.gpg-agent|' "$conf" >"$conf.new" && mv "$conf.new" "$conf"
+    run_write_defer 1 "$conf" box box.example 0
+    When call grep -c "RemoteForward /run/user/0/gnupg/d.abc/S.gpg-agent" "$conf"
+    The output should equal 1
+  End
+
+  It 'renders the pending gpg line once deferral ends'
+    conf="$CONFDIR/box.conf"
+    run_write_defer 1 "$conf" box box.example 0
+    run_write_defer 0 "$conf" box box.example 0
+    When call grep -c "RemoteForward /nonexistent/S.gpg-agent.pending-first-connect" "$conf"
+    The output should equal 1
+  End
+
+  It 'finalize_gpg_forward resolves the line through the pre-connect hook and reports it'
+    conf="$CONFDIR/box.conf"
+    run_write_defer 1 "$conf" box box.example 0
+    # Stub hook: record its argument and heal the line the way the real one does.
+    cat >"$CONFDIR/hook" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$@" >"$HOOK_LOG"
+sed -i.bak 's|/nonexistent/S.gpg-agent.pending-first-connect|/run/user/0/gnupg/d.abc/S.gpg-agent|' "$1"
+STUB
+    chmod +x "$CONFDIR/hook"
+    export HOOK_LOG="$CONFDIR/hook-calls"
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      ALIAS=box HOSTNAME=box.example PREPARE="gpg,theme" NO_CLIPBOARD=1 DRY_RUN=0
+      HOME="$CONFDIR/home"; mkdir -p "$HOME/.ssh/config.d" "$HOME/.local/libexec"
+      cp "$1" "$HOME/.ssh/config.d/box.conf"
+      cp "$CONFDIR/hook" "$HOME/.local/libexec/ssh-prepare-connection"
+      finalize_gpg_forward
+      grep -c "d.abc/S.gpg-agent" "$HOME/.ssh/config.d/box.conf"
+    ' _ "$conf"
+    The status should be success
+    The output should include "gpg-agent forward resolved for box"
+    The output should include "1"
+    The contents of file "$CONFDIR/hook-calls" should include "box.conf"
+  End
+
+  It 'finalize_gpg_forward is a no-op when gpg is not in prepare'
+    conf="$CONFDIR/box.conf"
+    zsh -f -c 'export SYSTEM_ONBOARD_NO_RUN=1; source "$SCRIPT_PATH"; PREPARE=theme; write_ssh_conf "$@"' _ "$conf" box box.example 0
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      ALIAS=box HOSTNAME=box.example PREPARE=theme NO_CLIPBOARD=1 DRY_RUN=0
+      HOME="$CONFDIR/home"; mkdir -p "$HOME/.ssh/config.d"; cp "$1" "$HOME/.ssh/config.d/box.conf"
+      finalize_gpg_forward; print "rc=$?"
+    ' _ "$conf"
+    The output should equal "rc=0"
+  End
+End
