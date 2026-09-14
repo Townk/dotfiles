@@ -335,8 +335,9 @@ Describe 'template gates for the server profile'
   End
 End
 
-# The server's secret set, straight from the committed manifest with the same
-# filter sec::manifest_names_for_profile uses.
+# The headless profiles' secret sets (server and appliance), straight from
+# the committed manifest with the same filter sec::manifest_names_for_profile
+# uses.
 Describe 'secrets.yaml headless requiredFor'
   MANIFEST="$SHELLSPEC_PROJECT_ROOT/home/.chezmoidata/secrets.yaml"
 

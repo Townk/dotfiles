@@ -95,7 +95,8 @@ Toolchains (go, rust, node, python, java, kotlin, lua, uv) are infrastructure,
 not dev tooling: they build the toolbox itself and ship on every profile.
 `server` is the full-blown headless box (headless + dev + ai); `appliance` is a
 box nobody develops on (headless only) and carries exactly one secret,
-`MISE_GITHUB_TOKEN`.
+`MISE_GITHUB_TOKEN`. `appliance` is a headless-Linux profile: the macOS
+Brewfile is not trait-gated (Macs are dev + AI machines by definition).
 
 The `.chezmoi.toml.tmpl` init
 template reads the `CHEZMOI_PROFILE` env var; `.setup.sh` sets it from
@@ -295,7 +296,7 @@ backends, chosen by machine kind:
   per-machine value is a concealed field labeled with the slot hash, so refs are
   deterministic: `op://<vault>/<NAME>/<slot-hash>` (per-machine values +
   per-machine rotation, one item per variable).
-- **Headless machines** (`dev-shell`): **SOPS + age**. There is no interactive
+- **Headless machines** (`dev-shell`, `server`, `appliance`): **SOPS + age**. There is no interactive
   `op signin`, so values are encrypted at rest to the box's own age recipient
   and decrypted **once at apply** by the `output "sops" "--decrypt"` template.
 
