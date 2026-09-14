@@ -1,3 +1,4 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 # Gofile — Go binaries installed via `go install`.
 # Entries are full module paths (NOT bare binary names), optionally pinned
 # with `@<version>` (e.g. example.com/cmd/tool@v1.2.0-RC1). Unpinned entries
@@ -12,6 +13,7 @@
 # (`troupe timeline`, the tm-timeline port) — one binary for all of it.
 github.com/Townk/troupe/cmd/troupe@v0.2.2
 
+{{ if $traits.aiTooling -}}
 # ai-playbook — the AI terminal assistant (docked pager, diff viewer,
 # playbook drive; installs the short `apb` alias too via cmd/apb). RC4 is
 # the troupe-consolidation release: its dialog widgets come from troupe
@@ -19,6 +21,7 @@ github.com/Townk/troupe/cmd/troupe@v0.2.2
 # uninstalled the binary here).
 github.com/Townk/ai-playbook/cmd/ai-playbook@v1.0.0-RC4
 github.com/Townk/ai-playbook/cmd/apb@v1.0.0-RC4
+{{- end }}
 
 {{ if eq .profile "personal" -}}
 github.com/bscott/pm-cli/cmd/pm-cli

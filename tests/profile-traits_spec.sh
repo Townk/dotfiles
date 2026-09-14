@@ -306,6 +306,98 @@ MISE_GITHUB_TOKEN"
   End
 End
 
+# Appliance: toolchains and operating tools stay; dev utilities, IDE packages
+# and AI tooling leave. Server keeps all of it (byte-parity is asserted in the
+# plan's final check, these examples pin the semantics).
+Describe 'appliance manifests'
+  setup_matrix() {
+    MTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/render-matrix.XXXXXX")"
+  }
+  BeforeEach 'setup_matrix'
+
+  rendered() {  # rendered <profile> <flattened-template-name>
+    "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
+      --source "$SHELLSPEC_PROJECT_ROOT/home" --profile "$1" --out "$MTMP/$1" \
+      >/dev/null || return $?
+    cat "$MTMP/$1/rendered/$2"
+  }
+
+  It 'appliance Cargofile: no dev crates, tidy-viewer stays'
+    When call rendered appliance dot_config__packages__Cargofile.tmpl
+    The status should be success
+    The output should include "tidy-viewer"
+    The output should not include "kdl-lsp"
+    The output should not include "usvg"
+    The output should not include "tokei"
+    The output should not include "tree-sitter-cli"
+  End
+
+  It 'server Cargofile: still carries the dev crates'
+    When call rendered server dot_config__packages__Cargofile.tmpl
+    The status should be success
+    The output should include "kdl-lsp"
+    The output should include "usvg"
+  End
+
+  It 'appliance Gofile: troupe stays, ai-playbook leaves'
+    When call rendered appliance dot_config__packages__Gofile.tmpl
+    The status should be success
+    The output should include "cmd/troupe"
+    The output should not include "ai-playbook"
+  End
+
+  It 'server Gofile: still carries ai-playbook'
+    When call rendered server dot_config__packages__Gofile.tmpl
+    The status should be success
+    The output should include "cmd/ai-playbook"
+    The output should include "cmd/apb"
+  End
+
+  It 'appliance Npmfile: hunkdiff stays; agents and LSPs leave'
+    When call rendered appliance dot_config__packages__Npmfile.tmpl
+    The status should be success
+    The output should include "hunkdiff"
+    The output should not include "claude-code"
+    The output should not include "pi-coding-agent"
+    The output should not include "typescript"
+    The output should not include "basedpyright"
+  End
+
+  It 'server Npmfile: still carries agents and LSPs'
+    When call rendered server dot_config__packages__Npmfile.tmpl
+    The status should be success
+    The output should include "@anthropic-ai/claude-code"
+    The output should include "typescript-language-server"
+  End
+
+  It 'appliance on Linux: headless-linux.toml keeps the operating toolbox, drops the authoring aids'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call rendered appliance dot_config__mise__conf.d__headless-linux.toml.tmpl
+    The status should be success
+    The output should include '"ripgrep"'
+    The output should include '"sops"'
+    The output should include '"lazygit"'
+    The output should not include '"hyperfine"'
+    The output should not include '"git-cliff"'
+    The output should not include '"ast-grep"'
+    The output should not include '"grex"'
+    The output should not include 'onefetch'
+  End
+
+  It 'server on Linux: headless-linux.toml still carries the authoring aids'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call rendered server dot_config__mise__conf.d__headless-linux.toml.tmpl
+    The status should be success
+    The output should include '"hyperfine"'
+    The output should include 'onefetch'
+  End
+
+  It 'headless-linux.toml.tmpl gates each authoring aid on devTooling'
+    When call grep -c 'if \$traits.devTooling' "$SHELLSPEC_PROJECT_ROOT/home/dot_config/mise/conf.d/headless-linux.toml.tmpl"
+    The output should equal 4
+  End
+End
+
 # Root-aware privilege: a server is administered as root with no sudo. The
 # scripts render only on Linux, so guard the SOURCE here (runs on every host).
 Describe 'headless run-scripts are root-aware'

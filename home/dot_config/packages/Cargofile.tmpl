@@ -1,3 +1,4 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 # Cargofile — Rust binaries installed via `cargo install`.
 # Synced by `system-package cargo sync`. Strict cleanup: removing a
 # line uninstalls the crate on next sync.
@@ -7,10 +8,12 @@
 # Crates installed with extra args are reinstalled with `--force` when the
 # line below changes, so edited flags actually re-apply.
 
+{{ if $traits.devTooling -}}
 kdl-lsp           # KDL Document Language LSP server (for: nvim)
 usvg              # SVG simplifier; normalizes custom icons in the nerd-font build
+{{- end }}
 tidy-viewer       # CSV pretty-printer (command: tidy-viewer / tv)
-{{- if eq .chezmoi.os "linux" }}
+{{- if and (eq .chezmoi.os "linux") $traits.devTooling }}
 tree-sitter-cli --locked  # Build locally; Mason's Linux binary needs newer glibc.
 tokei --locked            # Source code metrics (brew on macOS). No prebuilt binaries
                           # exist, and the mise toolbox installs before rustup has a

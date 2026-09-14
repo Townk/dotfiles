@@ -1,8 +1,8 @@
 {{- /*
   headless-Linux toolbox — mise-managed CLI tools for the headless Linux
-  profiles (dev-shell, server). On a Mac these tools come from Brewfile.tmpl;
-  here mise is the package manager, so the file renders empty everywhere
-  else.
+  profiles (dev-shell, server, appliance). On a Mac these tools come from
+  Brewfile.tmpl; here mise is the package manager, so the file renders empty
+  everywhere else.
 
   mise loads every ~/.config/mise/conf.d/*.toml in addition to the main
   config.toml, so these tools install alongside the language runtimes
@@ -15,6 +15,10 @@
   there's no usable release asset.
   `[exe=...]` overrides the installed binary name when it differs from
   the repo name.
+
+  Authoring aids (benchmarking, changelogs, structural search, regex
+  authoring, repo stats) are gated on the devTooling trait; the appliance
+  profile leaves them out.
 */ -}}
 {{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 {{- if and (eq .chezmoi.os "linux") $traits.headless }}
@@ -44,14 +48,18 @@ use_versions_host = false
 "delta" = "latest"
 "bottom" = "latest"
 "duf" = "latest"
+{{ if $traits.devTooling -}}
 "hyperfine" = "latest"
+{{- end }}
 "jless" = "latest"
 # tokei is NOT here: it ships no prebuilt binaries, so it must be built from
 # source, and mise's cargo backend runs inside the same `mise install` that
 # installs Rust — before rustup has a default toolchain. It lives in the
 # Cargofile instead (built later by the cargo worker, once Rust is ready).
 "gping" = "latest"
+{{ if $traits.devTooling -}}
 "grex" = "latest"
+{{- end }}
 "gron" = "latest"
 "zoxide" = "latest"
 "yazi" = "latest"
@@ -60,8 +68,10 @@ use_versions_host = false
 "gum" = "latest"
 "doggo" = "latest"
 "atuin" = "latest"
+{{ if $traits.devTooling -}}
 "git-cliff" = "latest"
 "ast-grep" = "latest"
+{{- end }}
 "hexyl" = "latest"
 
 # Secret decryption at chezmoi apply. A headless host's secrets fragment runs
@@ -88,7 +98,9 @@ use_versions_host = false
 
 # Not in the registry — pinned to a GitHub-release backend.
 "aqua:dalance/procs" = "latest"
+{{ if $traits.devTooling -}}
 "aqua:o2sh/onefetch" = "latest"
+{{- end }}
 "aqua:ouch-org/ouch" = "latest"
 "aqua:imsnif/bandwhich" = "latest"
 "aqua:fujiapple852/trippy" = "latest"

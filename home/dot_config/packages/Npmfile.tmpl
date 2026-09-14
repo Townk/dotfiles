@@ -1,3 +1,4 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 # Npmfile — globally-installed npm packages.
 # Synced by `system-package npm sync`. Strict cleanup: removing a
 # line uninstalls the package on next sync.
@@ -8,13 +9,17 @@
 # to `npm install -g`. Prefer GitHub tarball URLs over github: URLs.
 
 # Apps
+{{ if $traits.aiTooling -}}
 @anthropic-ai/claude-code
 @earendil-works/pi-coding-agent
+{{- end }}
 hunkdiff
 
+{{ if $traits.devTooling -}}
 # LSP packages
 typescript
 typescript-language-server
 basedpyright
+{{- end }}
 
 # vim:ft=conf.gotmpl
