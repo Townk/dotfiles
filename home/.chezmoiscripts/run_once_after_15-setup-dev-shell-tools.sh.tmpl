@@ -4,11 +4,11 @@
   Owns the headless Linux equivalent of
   run_once_after_10-setup-bootstrap-tools:
 
-    1. mise install  — language runtimes (config.toml) + the CLI toolbox
-                       declared in conf.d/headless-linux.toml.
-    2. apt-get       — system libraries that aren't single Go/Rust
+    1. apt-get       — system libraries that aren't single Go/Rust
                        binaries (media/doc tooling many CLIs and the
                        `preview` script depend on).
+    2. mise install  — language runtimes (config.toml) + the CLI toolbox
+                       declared in conf.d/headless-linux.toml.
     3. system-update — Homebrew-less convergence for package manifests,
                        Neovim plugins, and refreshable ecosystems.
 
@@ -45,17 +45,9 @@ RUNTIME_DIR="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}/runtime-${UID:-$(id -u)}}"
 mkdir -p "$RUNTIME_DIR"
 chmod 0700 "$RUNTIME_DIR"
 
-# 1. mise: language runtimes + conf.d CLI toolbox. Best-effort — mise
-#    installs every tool it can and reports the rest; we don't let a
-#    single failure abort provisioning.
-if command -v mise >/dev/null 2>&1; then
-  echo "🛠️  Installing mise-managed runtimes and CLI toolbox..."
-  mise install -y || failures+=("mise install (some tools failed; rerun 'mise install')")
-else
-  failures+=("mise not found on PATH")
-fi
-
-# 2. System libraries via apt. These back the media/document handlers in
+# 1. System libraries via apt (FIRST: they are the build deps — bison,
+#    readline, ncurses — that mise-built tools like tmux and lua need, so
+#    running mise before apt guarantees a failed first pass). These back the media/document handlers in
 #    the `preview` script, yazi previews, and assorted CLI tools that
 #    aren't distributed as standalone Go/Rust binaries.
 APT_PACKAGES=(
@@ -107,6 +99,16 @@ if command -v apt-get >/dev/null 2>&1; then
   fi
 else
   failures+=("apt-get not found (skipped system libraries)")
+fi
+
+# 2. mise: language runtimes + conf.d CLI toolbox. Best-effort — mise
+#    installs every tool it can and reports the rest; we don't let a
+#    single failure abort provisioning.
+if command -v mise >/dev/null 2>&1; then
+  echo "🛠️  Installing mise-managed runtimes and CLI toolbox..."
+  mise install -y || failures+=("mise install (some tools failed; rerun 'mise install')")
+else
+  failures+=("mise not found on PATH")
 fi
 
 # 3. Zsh plugins (zsh-abbr included) are cloned by the cross-platform

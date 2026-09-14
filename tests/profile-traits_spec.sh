@@ -296,6 +296,14 @@ Describe 'headless run-scripts are root-aware'
     The line 2 of output should equal 0
   End
 
+  # apt supplies the build deps (bison, readline, ncurses…) that mise-built
+  # tools need; running `mise install` first guarantees a failed first pass
+  # and a misleading "some tools failed" on every fresh box.
+  It '15: installs apt packages BEFORE the first mise install'
+    When call awk '/apt-get install -y -qq "\$\{APT_PACKAGES/{a=NR} /^  mise install -y/{m=NR} END{if(a&&m&&a<m)print "apt-first";else print "wrong-order"}' "$S15"
+    The output should equal apt-first
+  End
+
   It '35: links directly when uid is 0'
     When call grep -F 'if [ "$(id -u)" -eq 0 ]; then' "$S35"
     The status should be success
