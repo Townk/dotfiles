@@ -78,8 +78,10 @@ APT_PACKAGES=(
   netcat-openbsd         # nc -U for trusted local clipboard socket
   file                   # mime detection (preview dispatch)
   git-lfs                # large files in git
-  build-essential        # local source builds (tmux)
+  build-essential        # local source builds (tmux, lua)
   libncurses-dev         # tmux build dependency
+  bison                  # yacc — tmux's configure refuses to run without it
+  libreadline-dev        # readline headers — mise builds lua against them
   clang                  # bindgen/libclang headers for Rust crates (tree-sitter-cli)
   libclang-dev           # libclang development files for bindgen
 )
