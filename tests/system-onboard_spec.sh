@@ -914,6 +914,35 @@ Describe 'system-onboard: converge_remote priming (fresh target)'
     The line 2 of output should equal "STDIN: lent-token"
   End
 
+  # The apply renders the secrets fragment through the sops shim, and mise
+  # resolves the whole toolset (rust@latest, …) before running any shim —
+  # anonymously, since the only token on the box is inside the file being
+  # decrypted. The headless apply borrows the operator token the same way.
+  It 'lends the operator token to the headless apply over stdin, never in argv'
+    When call zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"
+      source "$SCRIPT_PATH"
+      ALIAS=box PROFILE=server KIND=headless SLOT=slot-abc123 DRY_RUN=0 SECRETS_REBUILT=0
+      REPO_ROOT="$WORK" OPERATOR_MAP="$WORK/map.yaml"
+      export MISE_GITHUB_TOKEN=lent-token
+      git() { print -r -- "git@example.invalid:x/y.git" }
+      sec::map_get() { print -r -- "" }
+      rexec() {
+        print -r -- "ARGV: $*" >>"$WORK/rexec.log"
+        if [[ "$*" == *"chezmoi apply --force"* && "$*" != *"conf.d"* ]]; then
+          local t; IFS= read -r t; print -r -- "APPLY-STDIN: $t" >>"$WORK/rexec.log"
+        fi
+        return 0
+      }
+      converge_remote >/dev/null 2>&1
+      print -r -- "argv-hits=$(grep -c "ARGV:.*lent-token" "$WORK/rexec.log" || true)"
+      grep "^APPLY-STDIN:" "$WORK/rexec.log"
+    ' _
+    The status should be success
+    The line 1 of output should equal "argv-hits=0"
+    The line 2 of output should equal "APPLY-STDIN: lent-token"
+  End
+
   It 'installs sops/age anonymously when the operator has no token'
     When call zsh -f -c '
       export SYSTEM_ONBOARD_NO_RUN=1 SYSTEM_SECRETS_LIB="$LIB_PATH"

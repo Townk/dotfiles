@@ -903,8 +903,18 @@ converge_remote() {
   fi
 
   log_info "applying on $ALIAS …"
-  rexec "${pre}chezmoi apply --force" ||
-    die "remote chezmoi apply failed on $ALIAS"
+  if [[ "$KIND" == headless && -n "${MISE_GITHUB_TOKEN:-}" ]]; then
+    # The apply renders the secrets fragment through the sops shim, and mise
+    # resolves the whole toolset (rust@latest, …) before running any shim —
+    # anonymously, since the only token on the box sits inside the file being
+    # decrypted. Lend the operator token over stdin for the apply as well.
+    print -r -- "$MISE_GITHUB_TOKEN" |
+      rexec "${pre}IFS= read -r t; MISE_GITHUB_TOKEN=\"\$t\" chezmoi apply --force" ||
+      die "remote chezmoi apply failed on $ALIAS"
+  else
+    rexec "${pre}chezmoi apply --force" ||
+      die "remote chezmoi apply failed on $ALIAS"
+  fi
 
   if rexec "test -r ~/.config/zsh/secrets.d/$SLOT.sh"; then
     log_ok "secret fragment materialized on $ALIAS"
