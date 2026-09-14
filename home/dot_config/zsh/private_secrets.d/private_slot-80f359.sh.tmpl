@@ -1,8 +1,0 @@
-{{- /* headless slot slot-80f359: SOPS+age secrets, decrypted ONCE per apply into a
-       0600 file (the private_ source prefix). One ciphertext blob per variable
-       at repo-root secrets/slot-80f359/<NAME>.sops.sh, outside the chezmoi source
-       root, so each is read by path and never rendered into $HOME. sops finds
-       the age identity through SOPS_AGE_KEY_FILE, set in chezmoi's [env] on
-       headless hosts. Each blob decrypts to a single `export NAME=value`. */ -}}
-{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-80f359" "MISE_GITHUB_TOKEN.sops.sh") }}
-{{ output "sops" "--decrypt" (joinPath .chezmoi.sourceDir ".." "secrets" "slot-80f359" "CONTEXT7_API_KEY.sops.sh") }}
