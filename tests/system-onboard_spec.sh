@@ -1160,6 +1160,7 @@ STUB
       env -i HOME="$H" PATH="$H/.local/bin:/usr/bin:/bin" PURGE_TOOLS="${1:-0}" \
         MANAGED_CONFIG_DIRS="${MANAGED_CONFIG_DIRS:-}" MANAGED_SHARE_DIRS="${MANAGED_SHARE_DIRS:-}" bash -s
   }
+  ssh_config_line_count() { wc -l <"$H/.ssh/config" | tr -d " "; }
   run_remote_with_names() { MANAGED_CONFIG_DIRS="zsh nvim" MANAGED_SHARE_DIRS="zsh" run_remote; }
 
   It 'strips only the appended Include pair from ~/.ssh/config and finishes without chezmoi'
@@ -1169,6 +1170,7 @@ STUB
     The contents of file "$H/.ssh/config" should include "Ciphers aes256-gcm@openssh.com"
     The contents of file "$H/.ssh/config" should not include "Include"
     The contents of file "$H/.ssh/config" should not include "Match all"
+    The result of function ssh_config_line_count should equal 1
   End
 
   It 'removes managed dirs whole, keeps shared containers and their unmanaged neighbors, drops our state'
@@ -1217,5 +1219,14 @@ STUB
     The path "$H/.local/share/zsh" should not be exist
     The path "$H/.config/chromium/Local State" should be exist
     The path "$H/.local/share/nano/x" should be exist
+  End
+
+  It 'removes the state container once it is empty, keeps it when something else lives there'
+    mkdir -p "$H/.local/state/zsh"
+    When call run_remote
+    The status should be success
+    The output should include "== done"
+    The path "$H/.local/state" should not be exist
+    The path "$H/.local" should be exist
   End
 End

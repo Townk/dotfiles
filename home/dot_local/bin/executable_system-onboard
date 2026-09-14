@@ -1237,8 +1237,13 @@ rm -rf "$HOME"/.local/state/{clipboard,mise,mux,nvim,ssh,theme,yazi,zsh,zellij,t
        "$HOME"/.cache/{glow,pick,yazi,bat,mise,nvim,zsh,gitstatus,tree-sitter,zellij,mux,theme,quick-launch,node-gyp,npm,pip,uv,go-build,go-mod,sigstore-rust,chezmoi-drift} "$HOME"/.cache/p10k* \
        "/tmp/tmux-$(id -u)" "/tmp/yazi-$(id -u)" /tmp/zsh-abbr-privileged-users /tmp/zsh-job-queue "/tmp/hsperfdata_$(id -un)" /tmp/node-compile-cache /tmp/core-js-banners
 if [ -f "$HOME/.ssh/config" ]; then
-  awk '"'"'/^Match all$/ { getline nxt; if (nxt ~ /^Include ~\/\.ssh\/config\.d\/\*$/) next; print; print nxt; next } { print }'"'"' "$HOME/.ssh/config" >"$HOME/.ssh/config.tmp" && mv -f "$HOME/.ssh/config.tmp" "$HOME/.ssh/config"
+  # Drop the appended pair, then the blank line that separated it from what
+  # was there before (trailing blank lines only).
+  awk '"'"'/^Match all$/ { getline nxt; if (nxt ~ /^Include ~\/\.ssh\/config\.d\/\*$/) next; print; print nxt; next } { print }'"'"' "$HOME/.ssh/config" |
+    awk '"'"'{ l[NR]=$0 } END { n=NR; while (n>0 && l[n]=="") n--; for (i=1;i<=n;i++) print l[i] }'"'"' >"$HOME/.ssh/config.tmp" && mv -f "$HOME/.ssh/config.tmp" "$HOME/.ssh/config"
 fi
+# Containers our stack created and nothing else uses any more.
+rmdir -- "$HOME/.local/state" "$HOME/.local" 2>/dev/null || true
 [ -f "$HOME/.bashrc" ] || { [ -f /usr/share/base-files/dot.bashrc ] && cp /usr/share/base-files/dot.bashrc "$HOME/.bashrc"; }
 [ -f "$HOME/.profile" ] || { [ -f /usr/share/base-files/dot.profile ] && cp /usr/share/base-files/dot.profile "$HOME/.profile"; }
 echo "== login shell"
