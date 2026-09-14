@@ -415,7 +415,9 @@ typeset -a steps
 if [[ -z "$prepare" || "$prepare" == all ]]; then
   steps=("${all_steps[@]}")
 else
-  steps=(${=prepare})
+  # Commas and whitespace both separate steps: system-onboard accepts either
+  # for --prepare, and the front matter is hand-editable.
+  steps=(${=${prepare//,/ }})
 fi
 
 # gpg prep MUST precede any rsync step that opens the forward-bearing master, so

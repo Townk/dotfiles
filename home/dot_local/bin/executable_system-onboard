@@ -331,7 +331,9 @@ valid_peer_hostname() {
 # system-onboard only ever PRESERVES an existing front matter, never rewrites
 # it, so this seeds it once.
 default_frontmatter() {
-  local alias="$1" prepare="$2" user="${3:-}"
+  # Canonical form is space-separated (the hook splits on both, but one token
+  # per step is what a reader expects to see).
+  local alias="$1" prepare="${2//,/ }" user="${3:-}"
   # Fenced front matter FIRST (top of the file), like YAML front matter — the
   # parser and the preservation logic both key off it, so it stays at line 1.
   print -r -- "# ---"
@@ -1183,7 +1185,7 @@ cmd_update() {
     fi
     # Replace the first `# prepare:` line in the front matter (above Host).
     local tmp rc; tmp="$(mktemp)"
-    awk -v val="$prepare_spec" '
+    awk -v val="${prepare_spec//,/ }" '
       tolower($1)=="host" { host=1 }
       !host && !done && /^#[[:space:]]*prepare:/ { print "# prepare: " val; done=1; next }
       { print }

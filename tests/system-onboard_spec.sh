@@ -736,3 +736,33 @@ Describe 'system-onboard: check_working_tree (own artifacts vs unrelated dirt)'
     The stderr should include "README.md"
   End
 End
+
+# `--prepare` accepts a comma or space list; the fragment must carry the
+# canonical space-separated form so the pre-connect hook (which reads it on
+# every ssh) sees one token per step.
+Describe 'system-onboard: --prepare is written space-separated'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
+
+  setup() {
+    CONFDIR="$(mktemp -d "$SHELLSPEC_TMPBASE/ssh-prep.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT" CONFDIR
+  }
+  BeforeEach 'setup'
+
+  run_write_prepare() {   # <PREPARE> <conf>
+    zsh -f -c '
+      export SYSTEM_ONBOARD_NO_RUN=1
+      source "$SCRIPT_PATH"
+      PREPARE="$1"; shift
+      write_ssh_conf "$@"
+    ' _ "$@"
+  }
+
+  It 'normalizes a comma list in the seeded front matter and still renders the gpg forward'
+    conf="$CONFDIR/box.conf"
+    run_write_prepare "gpg,theme" "$conf" box box.example 0
+    When call sh -c 'grep -c "^# prepare: gpg theme$" "$1"; grep -c "S.gpg-agent" "$1"' _ "$conf"
+    The line 1 of output should equal 1
+    The line 2 of output should equal 1
+  End
+End
