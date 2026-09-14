@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 # gpg-agent-forward-provision — make SSH gpg-agent forwarding survive
-# disconnect/reconnect AND reboot on the dev shell.
+# disconnect/reconnect AND reboot on headless Linux (dev shell, server).
 #
 # Invoked by the (home-persisted, linger-enabled) gpg-forward-socketdir.service
 # on every boot — never by chezmoi directly. This dev shell wipes everything
@@ -28,31 +28,32 @@ set -eu
 
 gpgconf --create-socketdir
 
-drop_in=/etc/ssh/sshd_config.d/99-gpg-agent-forward.conf
+# GPG_FORWARD_SSHD_DROPIN is a test seam only (the spec must never touch /etc).
+drop_in="${GPG_FORWARD_SSHD_DROPIN:-/etc/ssh/sshd_config.d/99-gpg-agent-forward.conf}"
 [ -f "$drop_in" ] && exit 0
 
-if ! sudo -n true 2>/dev/null; then
+# The sshd half needs root. A server is administered as root, usually without
+# sudo, so run directly when already root; otherwise go through a
+# non-interactive sudo, and without either say so and leave sshd alone (the
+# per-connect gpg-forward-prepare still scrubs a dead socket, best-effort).
+if [ "$(id -u)" -eq 0 ]; then
+  as_root() { "$@"; }
+elif sudo -n true 2>/dev/null; then
+  as_root() { sudo -n "$@"; }
+else
   echo "gpg-agent forwarding: sudo unavailable non-interactively; StreamLocalBindUnlink not set." >&2
   exit 0
 fi
 
-sudo -n tee "$drop_in" >/dev/null <<'EOF'
-# Managed by gpg-agent-forward-provision — gpg-agent SSH forwarding.
-# Re-applied on every boot (this dev shell wipes /etc on reboot).
-# For RemoteForward (-R) the remote sshd creates the listening socket, so
-# stale socket cleanup before bind is controlled HERE (server side), not by
-# the client's ssh_config. Without this, a socket left behind by an unclean
-# disconnect blocks every subsequent forward.
+as_root tee "$drop_in" >/dev/null <<'EOF'
 StreamLocalBindUnlink yes
 EOF
 
-if sudo -n sshd -t; then
-  sudo -n systemctl reload ssh
+if as_root sshd -t; then
+  as_root systemctl reload ssh
   echo "gpg-agent forwarding: installed $drop_in and reloaded sshd."
 else
   echo "gpg-agent forwarding: 'sshd -t' rejected the config; reverting $drop_in." >&2
-  sudo -n rm -f "$drop_in"
+  as_root rm -f "$drop_in"
   exit 1
 fi
-
-# vim:ft=sh
