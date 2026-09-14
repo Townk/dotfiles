@@ -46,7 +46,10 @@ use_versions_host = false
 "duf" = "latest"
 "hyperfine" = "latest"
 "jless" = "latest"
-"tokei" = "latest"
+# tokei: the registry tries cargo first, and cargo-binstall has no prebuilt
+# binary for it — a loud "Fatal error" before mise falls back to a source
+# build. aqua ships Linux binaries; pin that backend.
+"aqua:XAMPPRocky/tokei" = "latest"
 "gping" = "latest"
 "grex" = "latest"
 "gron" = "latest"
