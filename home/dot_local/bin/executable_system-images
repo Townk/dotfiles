@@ -163,18 +163,23 @@ img::automount() {
 #   * <mount-point> the first mounted volume's mount point, or empty when the
 #                   image is attached with no mounted volume (e.g. ejected in
 #                   Finder while the /dev/diskN device lingers).
-# Returns 0 iff the image is attached at all, 1 otherwise. Shared by
+# Returns 0 iff the image is attached, 1 iff it is confirmed NOT attached,
+# and 2 when the attach state is UNKNOWN — `hdiutil info -plist` failed or
+# its output did not parse. Callers that only need a yes/no (is_mounted,
+# list, status) treat 2 like 1; `remove` must not — it fails closed on 2,
+# because "unknown" collapsing into "not attached" is exactly what would
+# send `rm -f` at the backing store of a live device. Shared by
 # img::is_mounted and `remove` so both agree on attach state.
 img::attach_info() {
   local img js line
   img=$(img::imgpath "$1")
-  js=$(hdiutil info -plist 2>/dev/null | plutil -convert json -o - -- - 2>/dev/null) || return 1
+  js=$(hdiutil info -plist 2>/dev/null | plutil -convert json -o - -- - 2>/dev/null) || return 2
   line=$(printf '%s' "$js" | jq -r --arg p "$img" '
     .images[]? | select(."image-path" == $p)
     | ([.["system-entities"][]?["dev-entry"]] | map(select(. != null)) | .[0] // "")
       + "\t"
       + ([.["system-entities"][]? | select(has("mount-point")) | .["mount-point"]] | .[0] // "")
-  ') || return 1
+  ') || return 2
   [[ -n "$line" ]] || return 1
   printf '%s\n' "$line"
 }
@@ -422,14 +427,16 @@ do_remove() {
   # in Finder with the /dev/diskN device still live, a mount-dir detach is a
   # silent no-op and `rm -f` would unlink the backing store of a LIVE device
   # (unrecoverable). Detach the device, then REFUSE to delete unless the image
-  # is confirmed no longer attached.
-  local info dev
-  if info=$(img::attach_info "$name"); then
+  # is CONFIRMED no longer attached — an unknowable attach state (probe
+  # failed, rc 2) is refused too, never read as "not attached".
+  local info dev rc
+  info=$(img::attach_info "$name") && rc=0 || rc=$?   # errexit-safe capture
+  (( rc == 2 )) && die "cannot determine whether '$name' is attached (hdiutil info unreadable); refusing to delete $img"
+  if (( rc == 0 )); then
     dev="${info%%$'\t'*}"
     [[ -n "$dev" ]] && hdiutil detach "$dev" >/dev/null 2>&1 || true
-    if img::attach_info "$name" >/dev/null 2>&1; then
-      die "image '$name' is still attached (detach failed); refusing to delete $img"
-    fi
+    img::attach_info "$name" >/dev/null 2>&1 && rc=0 || rc=$?
+    (( rc == 1 )) || die "image '$name' is still attached (detach failed or attach state unreadable); refusing to delete $img"
   fi
   rm -f "$img"
   log_ok "removed $img"

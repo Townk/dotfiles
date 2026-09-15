@@ -117,7 +117,10 @@ EOF
     printf 'sparse-bytes' >"$IMG"        # a plausible backing file
 
     # hdiutil stub: `info -plist` serves $HDIUTIL_STATE; attach/detach are
-    # logged; a non-stubborn detach flips the state to the empty plist.
+    # logged; a non-stubborn detach flips the state to the empty plist. With
+    # HDIUTIL_INFO_BROKEN=1, `info` prefixes its plist with a notice on
+    # STDOUT (the shape a deprecation banner would take), so the plist no
+    # longer parses — the attach state becomes unknowable.
     STUB_DIR="$STAGE/stub"; mkdir -p "$STUB_DIR"
     export HDIUTIL_LOG="$STAGE/hdiutil.log"; : >"$HDIUTIL_LOG"
     export HDIUTIL_STATE="$STAGE/hdiutil.plist"
@@ -127,7 +130,8 @@ EOF
     cat >"$STUB_DIR/hdiutil" <<'STUB'
 #!/bin/sh
 case "$1" in
-  info)   cat "$HDIUTIL_STATE" ;;
+  info)   [ "${HDIUTIL_INFO_BROKEN:-0}" = 1 ] && echo "hdiutil: info is deprecated; use diskutil image info"
+          cat "$HDIUTIL_STATE" ;;
   attach) shift; printf 'attach %s\n' "$*" >>"$HDIUTIL_LOG" ;;
   detach) shift; printf 'detach %s\n' "$*" >>"$HDIUTIL_LOG"
           [ "${HDIUTIL_STUBBORN:-0}" = 1 ] || cp "$HDIUTIL_EMPTY" "$HDIUTIL_STATE" ;;
@@ -141,7 +145,7 @@ STUB
   cleanup() {
     export HOME="$OLD_HOME"
     rm -rf "$STAGE"
-    unset IMGFILE IMG_DIR MOUNT_PARENT HDIUTIL_LOG HDIUTIL_STATE HDIUTIL_EMPTY HDIUTIL_STUBBORN
+    unset IMGFILE IMG_DIR MOUNT_PARENT HDIUTIL_LOG HDIUTIL_STATE HDIUTIL_EMPTY HDIUTIL_STUBBORN HDIUTIL_INFO_BROKEN
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'
@@ -271,6 +275,36 @@ STUB
         The status should be failure
         The stderr should include "still attached"
         The path "$IMG" should be exist
+      End
+    End
+
+    # Fail CLOSED: when the attach probe itself cannot be trusted (hdiutil
+    # info output no longer parses as a plist), "unknown" must not collapse
+    # into "not attached" — that would send `rm -f` at a possibly-live device.
+    Context 'attach state cannot be determined (hdiutil info unparseable)'
+      Context 'while the image is attached'
+        before() { attach_at "/Volumes/work"; export HDIUTIL_INFO_BROKEN=1; }
+        BeforeEach 'before'
+
+        It 'refuses to delete and does not detach anything'
+          When run run_remove work
+          The status should be failure
+          The stderr should include "cannot determine"
+          The path "$IMG" should be exist
+          The contents of file "$HDIUTIL_LOG" should not include "detach"
+        End
+      End
+
+      Context 'while the image is not attached'
+        before() { export HDIUTIL_INFO_BROKEN=1; }
+        BeforeEach 'before'
+
+        It 'still refuses to delete (unknown is not "not attached")'
+          When run run_remove work
+          The status should be failure
+          The stderr should include "cannot determine"
+          The path "$IMG" should be exist
+        End
       End
     End
   End
