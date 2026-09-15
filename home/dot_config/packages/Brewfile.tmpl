@@ -189,10 +189,14 @@ brew 'libdvdcss'                    # CSS decryption — lets HandBrake read
                                     # the brew lib; set up 2026-08-19)
 cask 'xld'                          # CD -> FLAC with MusicBrainz tagging
 brew 'flac'                         # metaflac — the enrichment stage's tag/art embedder
-cask 'musicbrainz-picard'           # Tag editor for after-the-fact fixes over
-                                    # the cantina SMB share (fingerprint lookup
-                                    # for loose files — the one thing XLD can't
-                                    # do; see fleet runbooks/rip-media.md)
+# MusicBrainz Picard — tag editor for after-the-fact fixes over the cantina
+# SMB share (fingerprint lookup for loose files — the one thing XLD can't
+# do; see fleet runbooks/rip-media.md). NOT a cask for now: the cask tracks
+# 2.13.3, whose only macOS build is Intel and needs Rosetta (gone after the
+# macOS 27 upgrade). Picard 3.0.0rc3 ships a native arm64 DMG, installed by
+# hand to /Applications (2026-09-15). Re-add `cask 'musicbrainz-picard'`
+# once the cask moves to a 3.x arm64 build — and uninstall the manual copy
+# first, or the cask install collides with it.
 
 # Audiobooks — NOT disc ripping (server half is cantina's `audiobooks`
 # service; fleet spec docs/superpowers/specs/2026-08-21-audiobookshelf-design.md).

@@ -7,9 +7,12 @@
 {{- if eq .chezmoi.os "darwin" }}
 [tools]
 # dictgen (pgaskin/dictutil) builds Kobo custom dictionaries for bindery's
-# X-Ray renderer. No brew formula exists; the release ships a single Go
-# binary, so mise's ubi backend fetches it straight from GitHub. The darwin
-# asset is Intel-only ("darwin-64bit") and runs under Rosetta; pinned because
-# the dicthtml index format is what the device firmware parses.
-"ubi:pgaskin/dictutil" = { version = "v0.3.2", exe = "dictgen", matching = "darwin-64bit" }
+# X-Ray renderer. No brew formula exists. The GitHub release's only darwin
+# asset is Intel ("darwin-64bit"), which needed Rosetta — gone from macOS 27
+# upgrades and removed outright in 28 — so build it natively from the v0.3.2
+# tag with mise's go backend instead (cgo: the bundled marisa-trie needs the
+# CLT, already a baseline here). Pinned because the dicthtml index format is
+# what the device firmware parses. The source build reports
+# `Version: dictgen dev`, not v0.3.2 — same code, no ldflags.
+"go:github.com/pgaskin/dictutil/cmd/dictgen" = "0.3.2"
 {{- end }}
