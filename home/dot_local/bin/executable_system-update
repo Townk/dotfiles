@@ -665,8 +665,15 @@ if ! command -v brew >/dev/null 2>&1; then
     # Install-only here: package.toml is the committed lockfile and upgrades
     # (with their hash bumps) are published from the Macs on the Homebrew
     # path; a headless host just materializes what the lockfile declares.
+    #
+    # --discard for the same reason the Homebrew path's upgrade carries it, plus
+    # one this path owns: `ya` compares a deployed plugin against the hash in
+    # package.toml, so a host whose plugins sat STALE while the Macs published
+    # newer revs reads as locally modified. It then aborts on the FIRST such
+    # plugin and deploys none of the rest — which is how nine plugins stayed
+    # behind here behind a message about editing one.
     yazi_before=$(step_snapshot snapshot_yazi)
-    run_step "yazi: installing declared plugins" ya pkg install \
+    run_step "yazi: installing declared plugins" ya pkg install --discard \
       || log_warn "ya pkg install had failures"
     step_report "$yazi_before" snapshot_yazi plugin
   fi
@@ -683,6 +690,18 @@ if ! command -v brew >/dev/null 2>&1; then
   fi
   update_pi_extensions
   update_zsh_plugins
+  # Same step and position as the Homebrew path below, for the same reasons.
+  # On a headless slot reporting is ALL it does — the box never authors a
+  # commit, it just prints the `system-secrets rotate --slot …` line an
+  # operator then runs on a Mac (see sec::sync_slot's POLICY note) — which is
+  # exactly why its absence here was invisible: a rotation broadcast from
+  # another machine left this box carrying the superseded value with nothing
+  # ever naming it. A MISE_GITHUB_TOKEN revoked on 2026-08-14 sat here for a
+  # month, 401ing every mise version lookup, found only by hand.
+  if command -v system-secrets >/dev/null 2>&1; then
+    print -P -- "\n🔑 Sync secrets...\n"
+    system-secrets sync || log_warn "secrets sync had failures (continuing)"
+  fi
   finalize_session
   exit 0
 fi
