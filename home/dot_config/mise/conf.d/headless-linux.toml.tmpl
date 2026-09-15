@@ -29,6 +29,22 @@
 # the backend directly instead of warning and falling back on every update.
 # Measured on the dev-shell only; the server keeps mise defaults.
 use_versions_host = false
+# The dev shell is Ubuntu 22.04 (glibc 2.35), older than the hosts upstreams
+# now build their gnu assets on: yazi 26.9.1 and gping want GLIBC_2.39, atuin
+# and fend 2.38, so every one of them died with a linker error rather than
+# running. The aqua registry already maps linux to unknown-linux-musl for
+# these, but mise rewrites that suffix back to -gnu whenever it detects glibc
+# (apply_aqua_libc_replacement, src/backend/aqua.rs), and the github backend
+# scores assets by the same detected libc. Declaring musl overrides the
+# detection, so both backends take the static builds and stay immune to the
+# next upstream toolchain bump.
+#
+# Only affects tools installed AFTER this lands — mise keys installs by version
+# alone, so a tool already present is left on its gnu build until it upgrades.
+# Safe for the runtimes: go and rust carry no libc variants, python's
+# precompiled builds and node both publish musl (mise routes node to
+# unofficial-builds.nodejs.org, which nodejs.org/dist has no musl tarballs for).
+libc = "musl"
 {{- end }}
 
 [tools]
@@ -98,9 +114,9 @@ use_versions_host = false
 
 # Not in the registry — pinned to a GitHub-release backend.
 "aqua:dalance/procs" = "latest"
-{{ if $traits.devTooling -}}
-"aqua:o2sh/onefetch" = "latest"
-{{- end }}
+# onefetch is NOT here: its single linux asset is glibc-2.39-only with no musl
+# counterpart, so the libc = "musl" above cannot reach it. It builds from source
+# in the Cargofile instead, alongside tokei.
 "aqua:ouch-org/ouch" = "latest"
 "aqua:imsnif/bandwhich" = "latest"
 "aqua:fujiapple852/trippy" = "latest"

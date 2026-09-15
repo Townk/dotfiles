@@ -23,6 +23,12 @@ tokei --locked            # Source code metrics (brew on macOS). No prebuilt bin
                           # exist, and the mise toolbox installs before rustup has a
                           # default toolchain; the explicit flag routes this straight
                           # to `cargo install` (no binstall probe) once Rust is ready.
+onefetch --locked         # Repo stats (brew on macOS). Upstream publishes ONE linux
+                          # asset, onefetch-linux.tar.gz, and it needs GLIBC_2.39 —
+                          # unrunnable on Ubuntu 22.04, with no musl build to fall back
+                          # to the way the rest of the mise toolbox now does. The flag
+                          # is load-bearing for the same reason as tokei's: bare lines
+                          # go through binstall, which would fetch that very binary.
 {{- end }}
 {{- end }}
 

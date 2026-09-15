@@ -390,6 +390,7 @@ Describe 'appliance manifests'
     The output should not include "kdl-lsp"
     The output should not include "usvg"
     The output should not include "tokei"
+    The output should not include "onefetch"
   End
 
   It 'appliance Cargofile on Linux: tree-sitter-cli stays (nvim builds every parser through it)'
@@ -398,6 +399,7 @@ Describe 'appliance manifests'
     The status should be success
     The output should include "tree-sitter-cli --locked"
     The output should not include "tokei"
+    The output should not include "onefetch"
   End
 
   It 'server Cargofile: still carries the dev crates'
@@ -405,6 +407,16 @@ Describe 'appliance manifests'
     The status should be success
     The output should include "kdl-lsp"
     The output should include "usvg"
+  End
+
+  # onefetch builds from source on Linux rather than coming from the mise
+  # toolbox: its one linux release asset is glibc-2.39-only, with no musl
+  # build for the toolbox's libc = "musl" to select.
+  It 'server Cargofile on Linux: onefetch builds from source, flagged past binstall'
+    Skip if "linux only" [ "$(uname -s)" != "Linux" ]
+    When call rendered server dot_config__packages__Cargofile.tmpl
+    The status should be success
+    The output should include "onefetch --locked"
   End
 
   It 'appliance Gofile: troupe stays, ai-playbook leaves'
@@ -449,7 +461,6 @@ Describe 'appliance manifests'
     The output should not include '"git-cliff"'
     The output should not include '"ast-grep"'
     The output should not include '"grex"'
-    The output should not include 'onefetch'
   End
 
   It 'server on Linux: headless-linux.toml still carries the authoring aids'
@@ -457,12 +468,12 @@ Describe 'appliance manifests'
     When call rendered server dot_config__mise__conf.d__headless-linux.toml.tmpl
     The status should be success
     The output should include '"hyperfine"'
-    The output should include 'onefetch'
+    The output should include '"ast-grep"'
   End
 
   It 'headless-linux.toml.tmpl gates each authoring aid on devTooling'
     When call grep -c 'if \$traits.devTooling' "$SHELLSPEC_PROJECT_ROOT/home/dot_config/mise/conf.d/headless-linux.toml.tmpl"
-    The output should equal 4
+    The output should equal 3
   End
 
   It 'appliance palette: no agent entries; server keeps them'
