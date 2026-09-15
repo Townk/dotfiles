@@ -1,0 +1,9 @@
+# Yield to the remote machine's espanso while driving it over Screen Sharing
+# or RustDesk. Both Macs run espanso from the same Brewfile line, so without
+# this the client side expands the trigger too: its trigger-erasing
+# backspaces are forwarded to the remote and land right after the remote's
+# own expansion, which the remote's espanso reads as a Backspace-undo —
+# expansion deleted, trigger retyped. On macOS `filter_exec` matches the
+# bundle identifier.
+filter_exec: "com.apple.ScreenSharing|com.carriez.RustDesk"
+enable: false
