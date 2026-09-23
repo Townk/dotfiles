@@ -20,14 +20,17 @@ Describe 'environment.sh over-SSH detection'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  # probe SSH_TTY SSH_CONNECTION SSH_CLIENT -> prints the resulting
-  # PINENTRY_USER_DATA (empty when the over-SSH block did not fire).
+  # probe SSH_TTY SSH_CONNECTION SSH_CLIENT [inherited] -> prints the resulting
+  # PINENTRY_USER_DATA (empty when the over-SSH block did not fire). The
+  # optional fourth argument presets it, as a tmux server born over SSH does.
   probe() {
+    # shellcheck disable=SC2086  # the ${4:+...} word must vanish when unset
     env -i \
       PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
       HOME="$ISO_HOME" \
       TMPDIR="$ISO_HOME/tmp" \
       SSH_TTY="$1" SSH_CONNECTION="$2" SSH_CLIENT="$3" \
+      ${4:+PINENTRY_USER_DATA=$4} \
       sh -c 'mkdir -p "$TMPDIR" 2>/dev/null; . '"$ENV_SH"' >/dev/null 2>&1; printf "%s" "${PINENTRY_USER_DATA:-}"'
   }
 
@@ -76,6 +79,42 @@ Describe 'environment.sh over-SSH detection'
 
   It 'ignores a commented-out no-autostart'
     gpgconf_with "# no-autostart"
+    When call probe "/dev/pts/3" "" ""
+    The output should equal "USE_CURSES=1"
+  End
+
+  # A Mac with the `presence` helper picks the pinentry per request and ignores
+  # USE_CURSES, so there the variable can only hurt: gpg-agent forwards it as
+  # `OPTION pinentry-user-data`, and pinentry-touchid 0.0.3 answers that unknown
+  # option with ERR *and* OK. Every later reply is then off by one, GETPIN reads
+  # SETPROMPT's stale OK, and signing fails with "No passphrase given" while
+  # Touch ID is still on screen. A tmux server born over SSH hands both the SSH
+  # markers and the variable to every later pane, so an inherited copy has to
+  # be removed, not merely left unexported.
+  install_presence() {
+    mkdir -p "$ISO_HOME/.local/libexec"
+    printf '#!/bin/sh\necho touchid\n' > "$ISO_HOME/.local/libexec/presence"
+    chmod +x "$ISO_HOME/.local/libexec/presence"
+  }
+  not_darwin() { [ "$(uname -s)" != Darwin ]; }
+
+  It 'skips USE_CURSES on a Mac with the presence helper'
+    Skip if "the presence lane only exists on Darwin" not_darwin
+    install_presence
+    When call probe "/dev/pts/3" "" ""
+    The output should equal ""
+  End
+
+  It 'removes a USE_CURSES inherited from an SSH-born tmux server'
+    Skip if "the presence lane only exists on Darwin" not_darwin
+    install_presence
+    When call probe "/dev/pts/3" "" "" "USE_CURSES=1"
+    The output should equal ""
+  End
+
+  It 'keeps USE_CURSES when the presence helper is not executable'
+    install_presence
+    chmod -x "$ISO_HOME/.local/libexec/presence"
     When call probe "/dev/pts/3" "" ""
     The output should equal "USE_CURSES=1"
   End

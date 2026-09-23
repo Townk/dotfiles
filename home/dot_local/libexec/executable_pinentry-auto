@@ -29,7 +29,12 @@
 # keyboard whose Touch ID sensor was plugged in and waiting. So on a Mac with
 # the helper installed, USE_CURSES is not consulted at all; presence probes
 # the machine fresh (console lock state, input recency, VNC connections,
-# sensor reachability) each time a password is asked for.
+# sensor reachability) each time a password is asked for. Not consulting it
+# here is not enough, though: gpg-agent still forwards the variable, as
+# `OPTION pinentry-user-data`, to whichever pinentry this script execs, and
+# pinentry-touchid answers that option with ERR *and* OK, desyncing the
+# protocol until GETPIN returns an empty passphrase. So environment.sh does not
+# export it on such a Mac at all, and unsets an inherited copy.
 #
 # The USE_CURSES ladder below the presence block is not dead code; it is two
 # live paths. Off a Mac there is nothing to probe — the helper prints `remote`

@@ -143,8 +143,24 @@ if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
   # local agent" (see gpg.conf.tmpl's headless block), so it is exactly the
   # right discriminator and needs no new flag. The grep costs a fork, in the
   # branch that already forks for the op token below.
+  #
+  # ...and never on a Mac with the `presence` helper. There pinentry-auto picks
+  # the lane per request and ignores USE_CURSES, so the variable can only hurt:
+  # gpg-agent forwards it as `OPTION pinentry-user-data`, and pinentry-touchid
+  # (0.0.3, go-assuan) answers that unknown option with ERR *and* OK. Every
+  # later reply is then off by one, GETPIN consumes SETPROMPT's stale OK, and
+  # signing fails with "No passphrase given" while Touch ID is still on screen.
+  # A tmux server born over SSH hands its SSH_* markers to every later pane, so
+  # this branch runs even at the console, and that server's global environment
+  # already carries the variable, hence an explicit unset rather than a skip.
+  # A one-off `PINENTRY_USER_DATA=... git commit -S` (pinentry-ui's debug
+  # token) is set after this runs and still reaches the agent.
   if ! grep -qs '^[[:space:]]*no-autostart' "$GNUPGHOME/gpg.conf"; then
-    export PINENTRY_USER_DATA="USE_CURSES=1"
+    if [ "$(/usr/bin/uname -s)" = Darwin ] && [ -x "$HOME/.local/libexec/presence" ]; then
+      unset PINENTRY_USER_DATA
+    else
+      export PINENTRY_USER_DATA="USE_CURSES=1"
+    fi
   fi
 
   # Point every OTHER password prompt at the same dialog. sudo, ssh and git all
