@@ -400,6 +400,14 @@ return {
           local col = vim.api.nvim_win_get_cursor(0)[2]
           local line = vim.api.nvim_get_current_line()
           local text_before = line:sub(1, col):match("(%S+)$") or ""
+
+          -- No word before the cursor (line start, blank line, after a space):
+          -- fall through to snippet_forward/fallback so Tab indents instead of
+          -- opening the completion menu
+          if text_before == "" then
+            return
+          end
+
           local items = require("blink.cmp.completion.list").items or {}
 
           -- If only one completion available, auto-accept it
