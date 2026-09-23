@@ -147,6 +147,7 @@ cask 'dropbox'                      # Cloud storage
 cask 'google-chrome'                # Browser
 cask 'microsoft-teams'              # Meetings
 cask 'proton-mail'                  # Secure Email
+cask 'qflipper'                     # Flipper Zero controller
 # proton-mail-bridge REMOVED 2026-08-29: the bridge now runs headless on
 # echo-base (fleet LXC 108) and native mail clients dial `mail` over the LAN
 # or tailnet instead of a local one. Running it here too would mean a second
@@ -156,6 +157,7 @@ cask 'steam'                        # Gaming
 cask 'tailscale-app'                # VPN
 cask 'zen'                          # Browser
 cask 'zoom'                         # Meetings
+cask 'zulip'                        # Local message board
 {{- end }}
 
 {{ if eq .profile "personal" -}}
