@@ -20,10 +20,9 @@ Describe 'rip audiobooks'
     # "$RIP_BIN_DIR/rip-abs-authors" after a verified push. Left at its
     # production default ($HOME/.local/bin) that would resolve to a REAL
     # path on whatever machine runs the suite — exactly the live-network
-    # escape this suite has already been bitten by once. An empty sandbox
-    # dir means the shell-out 404s (command not found) and the hop's own
-    # `|| log_warn` swallows it — hermetic by construction, not by
-    # per-example discipline.
+    # escape this suite has already been bitten by once. A sandbox dir
+    # holding a silent success stub (rip_stub_remote_hops, below) keeps it
+    # hermetic by construction, not by per-example discipline.
     export RIP_BIN_DIR="$RIP_SANDBOX/bin"
     # The enrichment retags every staged book on the way to the push and
     # REFUSES one whose tags cannot be written and read back. The push and
@@ -34,6 +33,7 @@ Describe 'rip audiobooks'
     . "$SHELLSPEC_PROJECT_ROOT/tests/rip_helper.sh"
     rip_fake_ffmpeg_pair "$RIP_SANDBOX/tools"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks" "$RIP_SANDBOX/server/audiobooks" "$RIP_BIN_DIR"
+    rip_stub_remote_hops "$RIP_BIN_DIR"
     cat > "$RIP_SANDBOX/pueue" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
@@ -262,6 +262,7 @@ EOF
     When run zsh "$PROVIDER" list
     The status should equal 0
     The contents of file "$RIP_SANDBOX/libation.log" should not include "set-status"
+    The output should include '{"id":"B00ECDZ08I"'
   End
 
   It 'provider: a missing LibationCli fails cleanly'
@@ -1220,8 +1221,6 @@ EOF
     The line 2 should equal "J.K. Rowling"
     The line 3 should equal "Chamber of Secrets"
     The line 4 should equal "J.K. Rowling"
-    # (the ABS remote hop's own 404 against the empty sandbox bin dir is the
-    # only thing on stderr here — see setup's RIP_BIN_DIR note)
     The stderr should not include "refusing"
   End
 
@@ -1402,6 +1401,8 @@ EOF
     The contents of file "$RIP_SANDBOX/libation.log" should not include "--id HAVE"
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
+    The stderr should include 'error: rip: already on cantina, refusing to re-acquire: A/Have'
+    The output should include 'skipped refused=1 dup=0'
   End
 
   # The worker MUST forward the plan item's own path as the folder
@@ -1422,6 +1423,7 @@ EOF
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/RawFolder.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/RawFolder" should not be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # The operator asked to be TOLD, not to have the batch aborted (Task 4):
@@ -1439,6 +1441,7 @@ EOF
     The stderr should include "A/Have"
     The contents of file "$RIP_SANDBOX/libation.log" should not include "--id HAVE"
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
+    The output should include 'skipped refused=1 dup=0'
   End
 
   It 'session: the refusal count is reported when the run finishes'
@@ -1492,6 +1495,7 @@ EOF
     The stderr should include "Ann Leckie/Ancillary Justice"
     The path "$RIP_SANDBOX/server/audiobooks/A/Fresh/fresh.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Dup" should not be exist
+    The output should include 'skipped refused=0 dup=1'
   End
 
   It 'session: the duplicate refusal is counted and reported at the end'
@@ -1504,6 +1508,7 @@ EOF
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook/dup.m4b\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"}]}" > "$RIP_SANDBOX/plan.json"
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The stderr should include "1 already stored"
+    The output should include 'skipped refused=0 dup=1'
   End
 
   # --- Task 5, Step 3b: identity assigned at import ----------------------
@@ -1547,6 +1552,7 @@ EOF
     The stderr should include "already stored as"
     The stderr should include "A/Orig"
     The path "$RIP_SANDBOX/server/audiobooks/A/Copy" should not be exist
+    The output should include 'skipped refused=0 dup=1'
   End
 
   # --- final review F1: "ids": [] from the panel's Lua encode --------------
@@ -1683,6 +1689,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The stderr should include "could not reach cantina"
     The path "$RIP_SANDBOX/server/audiobooks/A/Fresh/fresh.m4b" should be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # Regression guard (final-review finding, 2026-08-22): rip::staging_for
@@ -1703,6 +1710,7 @@ EOF
     The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson" should not be exist
     # the override tree itself is empty again after the verified push
     The path "$custom/Brandon Sanderson" should not be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   It 'worker: the sidecar carries the plan identity, not the path fallback'
@@ -2247,6 +2255,7 @@ EOF
     The status should not equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     The stderr should include "acquire failed"
+    The output should include 'download failed'
   End
 
   It 'worker: re-keys the identity when the folder that landed differs'
@@ -2314,6 +2323,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_STAGING_ROOT/.work/ab-plans/x.json"
     The status should equal 0
     The path "$RIP_STAGING_ROOT/.work/ab-plans/x.json" should not be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # --- the acquire's OUTCOME, not its exit code -----------------------------
@@ -2361,6 +2371,7 @@ EOF
     # NEVER a cause we did not establish: this row carries no plus/absent, so
     # the message must not blame a licence.
     The stderr should not include "licence"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # A book directory that EXISTS but holds no audio is the same failure: a
@@ -2383,6 +2394,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should not equal 0
     The stderr should include "acquire produced no files for Pierce Brown/Red Rising"
+    The output should include 'rip: nothing settled to push for audiobooks (age gate 0s)'
   End
 
   # The diagnostic, built from the ROW'S OWN DATA: a Plus title Audible's
@@ -2400,6 +2412,7 @@ EOF
     # stale, and refusing on stale metadata would block a legitimate rip.
     The stderr should include "attempting anyway"
     The contents of file "$RIP_SANDBOX/libation.log" should include "--id LOCKED"
+    The output should include 'rip: nothing settled to push for audiobooks (age gate 0s)'
   End
 
   # The sibling-credit trap. The reconcile step falls back to "the newest
@@ -2429,6 +2442,7 @@ EOF
     The status should not equal 0
     The stderr should include "acquire produced no files for Brandon Sanderson/Wind and Truth"
     The stderr should not include "Wind and Truth landed as"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # …and the same batch, judged on ARTEFACTS rather than stderr (review
@@ -2487,6 +2501,7 @@ EOF
     # both books still keyed by their OWN paths: no rewrite happened at all
     The contents of file "$RIP_SANDBOX/ab-meta.snapshot" should include '"path":"Brandon Sanderson/Steelheart"'
     The contents of file "$RIP_SANDBOX/ab-meta.snapshot" should include '"path":"Brandon Sanderson/Wind and Truth"'
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # THE MTIME-ORDER TRAP the same fix closes. A provider that writes its
@@ -2514,6 +2529,7 @@ EOF
     The stderr should include "landed as Brandon Sanderson/Steelheart (Unabridged)"
     The stderr should not include "acquire produced no files"
     The contents of file "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart (Unabridged)/.fleet-book.json" should include "B00ECDZ08I"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # --- ABS author enrichment (rip-abs-authors + the RIP_AB_REMOTE_HOPS
@@ -2582,6 +2598,7 @@ EOF
     The status should equal 0
     The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/libraries/lib-book/authors"
     The contents of file "$RIP_SANDBOX/abscurl.log" should not include "/api/libraries/lib-pod/authors"
+    The output should include 'rip-abs-authors: matched Brandon Sanderson'
   End
 
   It 'abs-authors: an author with both fields empty gets matched'
@@ -2840,6 +2857,7 @@ EOF
     The status should equal 0
     The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The contents of file "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "audio"
+    The stderr should include 'rip: imported Ann Leckie/Ancillary Justice — the watcher will push it'
   End
 
   It 'import: stages a directory by copying its contents into the book dir'
@@ -2850,6 +2868,7 @@ EOF
     The status should equal 0
     The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Sword/part1.m4b" should be exist
     The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Sword/cover.jpg" should be exist
+    The stderr should include 'rip: imported Ann Leckie/Ancillary Sword — the watcher will push it'
   End
 
   It 'import: records a manual-provider identity row in the meta index'
@@ -2857,6 +2876,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice' && jq -c '{path,title,authors,provider}' \$(rip::_ab_meta_index_default)"
     The status should equal 0
     The output should equal '{"path":"Ann Leckie/Ancillary Justice","title":"Ancillary Justice","authors":["Ann Leckie"],"provider":"manual"}'
+    The stderr should include 'rip: imported Ann Leckie/Ancillary Justice — the watcher will push it'
   End
 
   It 'import: rejects a traversing author or title'
@@ -2897,6 +2917,7 @@ EOF
     The status should equal 0
     # The staged file must use NFC bytes in its name, even though the title arg was NFD
     The path "$RIP_STAGING_ROOT/audiobooks/Test Author/${nfc}/${nfc}.m4b" should be exist
+    The stderr should include 'rip: imported Test Author/Antônio — the watcher will push it'
   End
 
   It 'import: a failed copy leaves nothing in the watched staging tree'
@@ -2935,6 +2956,7 @@ FAKECP
     When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.mp3' 'Ann Leckie' 'Test' && jq -c '.format' \$(rip::_ab_meta_index_default)"
     The status should equal 0
     The output should equal '"mp3"'
+    The stderr should include 'rip: imported Ann Leckie/Test — the watcher will push it'
   End
 
   # rip::ab_have's --have check hardcodes the lowercase "${rel:t}.m4b" —
@@ -2947,6 +2969,7 @@ FAKECP
     The status should equal 0
     The output should equal '"m4b"'
     The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Mercy/Ancillary Mercy.m4b" should be exist
+    The stderr should include 'rip: imported Ann Leckie/Ancillary Mercy — the watcher will push it'
   End
 
   It 'import: directory with no audio files omits the format key'
@@ -2955,6 +2978,7 @@ FAKECP
     When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B' && jq -c 'has(\"format\")' \$(rip::_ab_meta_index_default)"
     The status should equal 0
     The output should equal 'false'
+    The stderr should include 'rip: imported A/B — the watcher will push it'
   End
 
   It 'import: RIP_AB_STAGING override uses same-filesystem temp, leaves no debris'
@@ -2983,6 +3007,7 @@ FAKECP
     The path "$RIP_STAGING_ROOT/audiobooks/Author/Title/Title.m4b" should be exist
     # .DS_Store is gone (cleaned before rename)
     The path "$RIP_STAGING_ROOT/audiobooks/Author/Title/.DS_Store" should not be exist
+    The stderr should include 'rip: imported Author/Title — the watcher will push it'
   End
 
   It 'import: refuses destination with real files, even if it also has dotfiles'

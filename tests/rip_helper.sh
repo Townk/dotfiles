@@ -63,3 +63,25 @@ FFPROBE
   export RIP_FFMPEG_BIN="$1/ffmpeg" RIP_FFPROBE_BIN="$1/ffprobe"
   export RIP_FAKE_TAGS="$1/last-tags"
 }
+
+# rip_stub_remote_hops <bin_dir> — install a silent, successful stand-in for
+# every helper the default RIP_AB_REMOTE_HOPS shell out to (today only
+# rip-abs-authors) in <bin_dir>, which the spec exports as RIP_BIN_DIR.
+#
+# WHY THIS EXISTS. The hops run after every verified audiobooks push, and at
+# their production default they resolve the REAL deployed helpers, i.e. live
+# calls against cantina. The suites used to guard against that with an EMPTY
+# sandbox bin dir: the shell-out failed with "no such file or directory" and
+# the hop's `|| log_warn` swallowed it. That was hermetic, but it wrote the
+# failure to stderr in every push example (~20 shellspec warnings) and made
+# every example quietly exercise the hop's FAILURE path. A stub that exits 0
+# and prints nothing is just as hermetic (it is still a sandbox path, never
+# the deployed helper) and lets each example test what it is about.
+#
+# Examples that are ABOUT the hops (argv logging, a failing hop that must not
+# fail the job) overwrite this stub with their own after setup.
+rip_stub_remote_hops() {
+  mkdir -p "$1"
+  printf '#!/bin/sh\nexit 0\n' > "$1/rip-abs-authors"
+  chmod +x "$1/rip-abs-authors"
+}

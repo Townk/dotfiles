@@ -67,8 +67,8 @@ EOF
     # ships via `chezmoi apply`. Left unsandboxed, every audiobooks
     # push_worker example below would, on a machine with the real
     # AUDIOBOOKSHELF_API_KEY exported (system-secrets), make live match
-    # calls against cantina after its verified push. Empty sandbox dir: the
-    # shell-out 404s and the hop's own `|| log_warn` swallows it.
+    # calls against cantina after its verified push. A sandbox dir holding
+    # a silent success stub (rip_stub_remote_hops, below) keeps it hermetic.
     export RIP_BIN_DIR="$RIP_SANDBOX/bin"
     mkdir -p "$RIP_BIN_DIR"
     # rip::_enrich_audiobooks retags every staged book and REFUSES one whose
@@ -78,6 +78,7 @@ EOF
     # itself is pinned against real media in tests/rip-audiobook_spec.sh.
     . "$SHELLSPEC_PROJECT_ROOT/tests/rip_helper.sh"
     rip_fake_ffmpeg_pair "$RIP_SANDBOX/tools"
+    rip_stub_remote_hops "$RIP_BIN_DIR"
     # Every pre-existing example here stages files moments before running
     # the worker, so they'd all sit inside the default 90s age gate. Disable
     # it suite-wide; the three age-gate examples below re-export the real
@@ -219,6 +220,7 @@ EOF
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/A/.rip-folder.1" should not be exist
     The path "$RIP_SANDBOX/server/audiobooks/A" should not be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # rip::ab_worker refuses to re-acquire a book already on the server (Task
@@ -234,6 +236,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should equal "complete"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # --- author canonicalization (Task 3) --------------------------------------
@@ -251,6 +254,7 @@ EOF
     The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien" should not be exist
     The stderr should include "canonical author"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   It 'push: canonicalization merges into an existing staged directory without clobbering'
@@ -263,6 +267,8 @@ EOF
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers/The Two Towers.m4b" should equal "keep"
     The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+    The stderr should include 'error: rip: canonical author — staged "J.R.R. Tolkien" renamed to "J. R. R. Tolkien" (the spelling cantina already uses)'
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # NOTE: RIP_REMOTE_BASE here is still the local sandbox dir — reachable —
@@ -275,6 +281,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # The genuine failure path: rip::ab_server_library's local-dir branch
@@ -290,6 +297,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/unreachable/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # Regression guard (review finding): rip::_canonical_author is called
@@ -393,6 +401,8 @@ EOF
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"published": "1937-09-21T07:00:00"'
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"provider": "libation"'
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"Rob Inglis"'
+    The stderr should include 'error: rip: canonical author — staged "J.R.R. Tolkien" renamed to "J. R. R. Tolkien" (the spelling cantina already uses)'
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # The same hazard on the path that has NO index at all — the watcher case
@@ -416,6 +426,8 @@ EOF
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"audible.asin": "B0079POAT8"'
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"published": "1937-09-21T07:00:00"'
+    The stderr should include 'error: rip: canonical author — staged "J.R.R. Tolkien" renamed to "J. R. R. Tolkien" (the spelling cantina already uses)'
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   # A book that did NOT actually move must not be re-keyed: pointing its
@@ -482,6 +494,7 @@ EOF
     # staging) under the canonical spelling.
     The path "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien" should not be exist
     The stderr should include "canonical author"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   It 'push: music is never canonicalized'
@@ -491,6 +504,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The path "$RIP_SANDBOX/server/music/A.B. Artist/Album/01 T.flac" should be exist
+    The output should include 'rip: music verified on cantina — cleaning staging'
   End
 
   # Regression guard, live 2026-08-28: "Ready Player One" was invisible in
@@ -2082,6 +2096,7 @@ EOF
       rip::push_worker audiobooks"
     The stderr should include "could not write the identity sidecar for A/B"
     The path "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should not be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   It 'enrichment with no hops changes exactly one thing: the sidecar appears'
@@ -2106,6 +2121,7 @@ EOF
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/note.txt" should equal "note"
     The path "$RIP_STAGING_ROOT/audiobooks/A/B/note.txt" should not be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   It 'enrichment: a failing hop is logged and never fails the push'
@@ -2118,6 +2134,7 @@ EOF
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should be exist
     The stderr should include "enrichment hop failed: hop_boom"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   It 'enrichment: an UNregistered file is neither pushed nor deleted'
@@ -2130,6 +2147,7 @@ EOF
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/A/B/sneaky.txt" should not be exist
     The path "$RIP_STAGING_ROOT/audiobooks/A/B/sneaky.txt" should be exist
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   It 'enrichment: music pushes are untouched by the audiobook stage'
@@ -2138,6 +2156,7 @@ EOF
     When run zsh -c "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The path "$RIP_SANDBOX/server/music/Artist/Album/.fleet-book.json" should not be exist
+    The output should include 'rip: music verified on cantina — cleaning staging'
   End
 
   # --- enrichment: post-verify remote hops ----------------------------------
@@ -2152,6 +2171,7 @@ EOF
     The status should equal 0
     The contents of file "$RIP_SANDBOX/remote.log" should include "$RIP_SANDBOX/server"
     The contents of file "$RIP_SANDBOX/remote.log" should include "A/B/B.m4b"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 
   It 'remote hops never run when the verify found differences'
@@ -2188,5 +2208,6 @@ EOF
     The status should equal 0
     The contents of file "$RIP_SANDBOX/hop.log" should equal "boomed"
     The stderr should include "hop_boom"
+    The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
 End

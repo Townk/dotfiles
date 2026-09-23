@@ -320,6 +320,7 @@ Describe 'rip-provider-folder'
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/bonus.pdf" should be exist
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/cover.jpg" should be exist
+    The output should include 'progress -1 copying'
   End
 
   # Final review F3 (2026-08-25): cmd_acquire was deliberately fixed to
@@ -370,6 +371,7 @@ Describe 'rip-provider-folder'
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The contents of file "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "real audio"
+    The output should include 'progress -1 copying'
   End
 
   It 'acquire: the caller-supplied relpath wins over any derivation'
@@ -378,6 +380,7 @@ Describe 'rip-provider-folder'
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Edited Author/Edited Title/Ancillary Justice.m4b" should be exist
     The path "$RIP_SANDBOX/staging/Ann Leckie" should not be exist
+    The output should include 'progress -1 copying'
   End
 
   It 'acquire: a book sitting directly under the root derives no bogus author'
@@ -386,6 +389,7 @@ Describe 'rip-provider-folder'
     When run zsh "$FOLDER_BIN" acquire "$ROOT/LooseBook/LooseBook.m4b" "$RIP_SANDBOX/staging"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/LooseBook/LooseBook.m4b" should be exist
+    The output should include 'progress -1 copying'
   End
 
   # One .m4b is one book, so acquire is handed a FILE. A directory is no
