@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting, NSWorkspace};
+use objc2_app_kit::{NSPasteboard, NSPasteboardItem, NSPasteboardWriting};
 use objc2_foundation::{
     NSArray, NSData, NSPropertyListFormat, NSPropertyListReadOptions, NSPropertyListSerialization,
     NSString, NSURL,
@@ -394,7 +394,7 @@ pub fn attributed_to_text(bytes: &[u8], doc: RichDoc) -> Option<String> {
     parsed.ok().map(|s| s.string().to_string())
 }
 
-/// Whether this process may touch `NSWorkspace` yet. The workspace's
+/// Whether this process may attribute `source_app` yet. The workspace's
 /// LaunchServices connection is process-global and established on FIRST use:
 /// touched while the login session is still assembling, it latches the
 /// sessionless answer and `frontmostApplication` stays nil for the process's
@@ -404,16 +404,16 @@ pub fn attributed_to_text(bytes: &[u8], doc: RichDoc) -> Option<String> {
 /// all still worked. A FRESH process always resolves the truth (verified from
 /// shell, launchd-submitted and daemon-child lineages alike), so the gate asks
 /// one — `lsappinfo`, over its own new connection — and opens only once a
-/// real, non-loginwindow application is frontmost. Only then is NSWorkspace
-/// touched in-process, by which point the session is established and the
-/// first touch is safe.
+/// real, non-loginwindow application is frontmost. Attribution stays on that
+/// same out-of-process probe: a headless daemon has no run loop, so in-process
+/// `frontmostApplication` latched the first app it saw and never updated.
 enum WorkspaceGate {
     /// No live GUI session confirmed yet; probe again once the cooldown
     /// allows.
     Closed {
         last_probe: Option<std::time::Instant>,
     },
-    /// A live session was seen; NSWorkspace is safe for this process.
+    /// A live session was seen; per-capture attribution may run.
     Open,
 }
 
@@ -450,26 +450,58 @@ fn workspace_ready() -> bool {
     }
 }
 
+/// One `lsappinfo front` ASN, then name and bundle id — so attribution cannot
+/// split across two focus changes.
+fn probed_front_app() -> Option<(String, Option<String>)> {
+    use std::process::{Command, Stdio};
+    let output = Command::new("/bin/sh")
+        .args([
+            "-c",
+            r#"asn=$(lsappinfo front)
+lsappinfo info -only name "$asn"
+printf '\0'
+lsappinfo info -only bundleid "$asn""#,
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let blob = String::from_utf8_lossy(&output.stdout);
+    let (name_out, bundle_out) = blob.split_once('\0')?;
+    let name = parse_lsappinfo_name(name_out)?;
+    let bundle_id = parse_lsappinfo_bundle_id(bundle_out);
+    Some((name, bundle_id))
+}
+
 /// The out-of-process session probe: `lsappinfo` resolves the frontmost
 /// application through a LaunchServices connection this process has never
 /// used, so it tells the truth a too-early in-process query cannot. `None` —
 /// no output, `[ NULL ]`, no resolvable name — means no live GUI session.
 fn probed_front_app_name() -> Option<String> {
-    use std::process::{Command, Stdio};
-    let output = Command::new("/bin/sh")
-        .args(["-c", r#"lsappinfo info -only name "$(lsappinfo front)""#])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    parse_lsappinfo_name(&String::from_utf8_lossy(&output.stdout))
+    probed_front_app().map(|(name, _)| name)
 }
 
-/// `lsappinfo info -only name` prints `"LSDisplayName"="Ghostty"` for a live
-/// application and `"LSDisplayName"=[ NULL ]` (or nothing at all) otherwise.
+/// `lsappinfo info -only name` prints either the legacy
+/// `"LSDisplayName"="Ghostty"` shape or a first line `"Ghostty" ASN:…` for a
+/// live application, and `"LSDisplayName"=[ NULL ]` (or nothing at all)
+/// otherwise.
 fn parse_lsappinfo_name(out: &str) -> Option<String> {
-    let (_, value) = out.split_once('=')?;
-    let name = value.trim().strip_prefix('"')?.strip_suffix('"')?;
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("\"LSDisplayName\"") {
+        let (_, value) = trimmed.split_once('=')?;
+        let name = value.trim().strip_prefix('"')?.strip_suffix('"')?;
+        return if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        };
+    }
+    let first = trimmed.lines().next()?.trim();
+    let rest = first.strip_prefix('"')?;
+    let name = rest.split('"').next()?;
     if name.is_empty() {
         None
     } else {
@@ -477,23 +509,50 @@ fn parse_lsappinfo_name(out: &str) -> Option<String> {
     }
 }
 
-/// The frontmost application, from a non-GUI process (probe Q7): what
-/// `source_app`, `source_bundle_id` and the password-manager deny-list all
-/// depend on. `None` — no frontmost application, or one with no name — is the
-/// no-GUI-session case the capture pipeline refuses. Gated: until an
-/// out-of-process probe confirms a live GUI session, NSWorkspace is not
-/// touched at all (see [`WorkspaceGate`]) and the answer is the same `None` a
-/// genuine sessionless machine gives.
+/// `lsappinfo info -only bundleid` prints a first line `[ NULL ] ASN:…` and a
+/// `bundleID="com.example.app"` detail line (or `bundleID=[ NULL ]`) for the
+/// current shape; legacy `"LSBundleIdentifier"="…"` is still accepted.
+fn parse_lsappinfo_bundle_id(out: &str) -> Option<String> {
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("\"LSBundleIdentifier\"") {
+        let (_, value) = trimmed.split_once('=')?;
+        let id = value.trim().strip_prefix('"')?.strip_suffix('"')?;
+        return if id.is_empty() { None } else { Some(id.to_string()) };
+    }
+    for line in trimmed.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("bundleID=") {
+            let rest = rest.trim();
+            if rest.starts_with('[') {
+                return None;
+            }
+            if let Some(id) = rest.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                if id.is_empty() {
+                    return None;
+                }
+                return Some(id.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// The frontmost application, from a non-GUI process: what `source_app`,
+/// `source_bundle_id` and the password-manager deny-list all depend on.
+/// `None` — no frontmost application, or one with no name — is the
+/// no-GUI-session case the capture pipeline refuses. Gated until
+/// [`WorkspaceGate`] confirms a live session; each call re-probes via
+/// `lsappinfo` (name and bundle id from one front ASN) so attribution tracks
+/// focus changes.
 pub fn frontmost_app() -> Option<FrontmostApp> {
     if !workspace_ready() {
         return None;
     }
-    let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
-    let name = app.localizedName()?.to_string();
-    Some(FrontmostApp {
-        name,
-        bundle_id: app.bundleIdentifier().map(|id| id.to_string()),
-    })
+    let (name, bundle_id) = probed_front_app()?;
+    Some(FrontmostApp { name, bundle_id })
 }
 
 /// How the capture loop is launched (`recobd --capture`).
@@ -672,25 +731,53 @@ mod tests {
             Some("Bambu Studio")
         );
         assert_eq!(parse_lsappinfo_name("\"LSDisplayName\"=[ NULL ] \n"), None);
+        assert_eq!(
+            parse_lsappinfo_name(
+                "\"Ghostty\" ASN:0x0-0x45045: (in front) \n    bundleID=[ NULL ] \n"
+            )
+            .as_deref(),
+            Some("Ghostty")
+        );
         assert_eq!(parse_lsappinfo_name(""), None);
         assert_eq!(parse_lsappinfo_name("no equals sign"), None);
         assert_eq!(parse_lsappinfo_name("\"LSDisplayName\"=\"\""), None);
     }
 
     #[test]
+    fn lsappinfo_bundle_id_parsing_covers_live_null_and_garbage() {
+        assert_eq!(
+            parse_lsappinfo_bundle_id(
+                "[ NULL ]  ASN:0x0-0x45045: (in front) \n    bundleID=\"com.mitchellh.ghostty\"\n"
+            )
+            .as_deref(),
+            Some("com.mitchellh.ghostty")
+        );
+        assert_eq!(
+            parse_lsappinfo_bundle_id("\"LSBundleIdentifier\"=\"md.obsidian\"\n").as_deref(),
+            Some("md.obsidian")
+        );
+        assert_eq!(
+            parse_lsappinfo_bundle_id("    bundleID=[ NULL ] \n"),
+            None
+        );
+        assert_eq!(parse_lsappinfo_bundle_id(""), None);
+        assert_eq!(parse_lsappinfo_bundle_id("no bundleID key"), None);
+        assert_eq!(
+            parse_lsappinfo_bundle_id("\"LSBundleIdentifier\"=\"\""),
+            None
+        );
+    }
+
+    #[test]
     fn the_workspace_gate_and_the_probe_agree() {
         // The probe consults launchservicesd from a fresh child, so it tells
-        // the truth regardless of this process's history. The gated query
-        // must agree in kind: a live session resolves a frontmost app, no
-        // session yields None WITHOUT NSWorkspace ever being touched — the
-        // touch that wedges a too-early process is exactly what the gate
-        // exists to defer.
-        match probed_front_app_name() {
-            Some(name) if name != "loginwindow" => {
-                assert!(
-                    frontmost_app().is_some(),
-                    "a live GUI session opens the gate and resolves"
-                );
+        // the truth regardless of this process's history. Once the gate opens,
+        // attribution is the same probe — not an in-process workspace query.
+        match probed_front_app() {
+            Some((name, bundle_id)) if name != "loginwindow" => {
+                let front = frontmost_app().expect("a live GUI session opens the gate");
+                assert_eq!(front.name, name);
+                assert_eq!(front.bundle_id, bundle_id);
             }
             _ => {
                 assert!(

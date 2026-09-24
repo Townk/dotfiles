@@ -44,8 +44,6 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard",
     "NSPasteboardItem",
-    "NSWorkspace",
-    "NSRunningApplication",
     "NSAttributedString",
 ] }
 objc2-foundation = { version = "0.3", features = [
