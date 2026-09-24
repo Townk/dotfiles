@@ -67,7 +67,17 @@ function M.copyChromeCurrentTabUrl()
   ]])
 
   if ok and url and url ~= "" then
-    hs.pasteboard.setContents(url)
+    local home = os.getenv("HOME") or ""
+    local pbcopy = home .. "/.local/bin/pbcopy"
+    local function shell_quote(s)
+      return "'" .. tostring(s):gsub("'", [['\'']]) .. "'"
+    end
+    local cmd = "printf '%s' " .. shell_quote(url) .. " | " .. shell_quote(pbcopy)
+    local _, succeeded = hs.execute(cmd)
+    if not succeeded then
+      hs.printf("Chrome tab URL copy failed")
+      return
+    end
     osd.notify("glyph:nf-fa-chrome", "URL copied to clipboard", "Frog")
   else
     hs.printf("Chrome active tab URL was not available")
