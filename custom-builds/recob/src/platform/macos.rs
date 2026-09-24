@@ -566,14 +566,14 @@ pub struct CaptureConfig {
 
 impl CaptureConfig {
     /// The production shape: the general pasteboard, the pickers' store, and
-    /// the watcher's 0.5 s interval (`RECOB_CAPTURE_POLL_MS` to override —
+    /// the watcher's 100 ms interval (`RECOB_CAPTURE_POLL_MS` to override —
     /// §6.2 measured the poll at 0.56 µs, so the interval is free to shrink).
     pub fn from_env() -> CaptureConfig {
         let poll = std::env::var("RECOB_CAPTURE_POLL_MS")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
             .filter(|ms| *ms > 0)
-            .map_or(Duration::from_millis(500), Duration::from_millis);
+            .map_or(Duration::from_millis(100), Duration::from_millis);
         CaptureConfig {
             pasteboard: std::env::var("RECOB_CAPTURE_PASTEBOARD")
                 .ok()

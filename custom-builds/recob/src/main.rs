@@ -43,7 +43,7 @@ sockets are adopted from fd 3 up and nothing is bound.
 Environment:
   RECOB_TIMEOUT_S            exchange timeout in seconds (default 2, spec §5.2)
   RECOB_IMPL                 build identity reported in the capabilities frame
-  RECOB_CAPTURE_POLL_MS      capture poll interval (default 500)
+  RECOB_CAPTURE_POLL_MS      capture poll interval (default 100)
   RECOB_CAPTURE_PASTEBOARD   named pasteboard to observe instead of the general
                              one (test/diagnostic seam)
 ";

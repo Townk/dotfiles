@@ -137,7 +137,7 @@ recobd --capture                    # also observe the pasteboard and write
                                     # history rows (§14.2, macOS only)
 ```
 
-`--capture` polls `changeCount` every 500 ms (`RECOB_CAPTURE_POLL_MS`) and can
+`--capture` polls `changeCount` every 100 ms (`RECOB_CAPTURE_POLL_MS`) and can
 be pointed at a named pasteboard instead of the general one with
 `RECOB_CAPTURE_PASTEBOARD` — the seam `tests/capture_macos.rs` uses so the
 suite never touches the live clipboard. One further live check exists behind
