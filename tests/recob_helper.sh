@@ -130,10 +130,14 @@ recob_start() {
     _attempt=$((_attempt + 1))
     export CLIPBOARD_BRIDGE_PORT="$(_recob_pick_port)"
     rm -f "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" "$RECOB_DIR/daemon.log"
+    # fds 3-9 are ShellSpec's executor/reporter pipes. Closed here, a daemon
+    # that outlives its example (a failed BeforeEach skips the AfterEach that
+    # stops it) is only a stray process; holding them, it hangs the whole run
+    # with the reporter waiting for EOF.
     "$(recob_bin)" --record \
       --port "$CLIPBOARD_BRIDGE_PORT" \
       --socket "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" \
-      >"$RECOB_DIR/daemon.log" 2>&1 &
+      >"$RECOB_DIR/daemon.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
     RECOB_PID=$!
     _recob_await_ready && return 0
     kill "$RECOB_PID" 2>/dev/null

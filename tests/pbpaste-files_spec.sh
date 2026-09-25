@@ -775,6 +775,18 @@ End
 Describe 'paste --files interrupt safety'
   Include tests/recob_helper.sh
 
+  # macOS 27 prints a deprecation WARNING on stderr for hdiutil's create and
+  # attach. ShellSpec fails a hook that writes to stderr even when it exits 0,
+  # and a failed BeforeEach skips its AfterEach: the volume stays mounted and
+  # the recob daemon is never stopped. Drop exactly that warning; any other
+  # hdiutil stderr still fails the hook.
+  hdiutil_quiet() {
+    hdiutil "$@" 2>"$RECOB_DIR/hdiutil.err"
+    _rc=$?
+    grep -v "^hdiutil: WARNING: '.*' is deprecated\." "$RECOB_DIR/hdiutil.err" >&2
+    return "$_rc"
+  }
+
   setup() {
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
     recob_start
@@ -787,8 +799,8 @@ Describe 'paste --files interrupt safety'
     export CLIP_FILE_MAX=17179869184
 
     DMG="$RECOB_DIR/xvol.sparseimage"
-    hdiutil create -size 5g -fs APFS -volname PbpasteFilesTest -type SPARSE "$DMG" >/dev/null
-    ATTACH_OUT=$(hdiutil attach "$DMG" -nobrowse)
+    hdiutil_quiet create -size 5g -fs APFS -volname PbpasteFilesTest -type SPARSE "$DMG" >/dev/null
+    ATTACH_OUT=$(hdiutil_quiet attach "$DMG" -nobrowse)
     MNT=$(printf '%s\n' "$ATTACH_OUT" | awk -F'\t' '/\/Volumes\//{print $NF; exit}')
     export MNT
     # A genuinely dense, cross-container source, so tier 1's degraded copy has
