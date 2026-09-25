@@ -6,8 +6,15 @@ Describe 'rip audiobooks'
   PROVIDER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_rip-provider-libation"
   ABS_BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-abs-authors"
 
+  # What the fake server was asked to run, with the sandbox path replaced, so an
+  # assertion about the commands never matches the random temp path.
+  ssh_cmds() { sed "s|$RIP_SANDBOX|<sandbox>|g" "$RIP_SANDBOX/ssh.cmds"; }
+
   setup() {
-    export RIP_SANDBOX=$(mktemp -d)
+    # "jq" in the name on purpose: assertions that the server is never asked to run
+    # jq must look past the sandbox path (see ssh_cmds). With a random name this
+    # mistake failed about 1 run in 400; with this one it fails every run.
+    export RIP_SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/rip-jq.XXXXXX")
     export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
     export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
     export JOB_STATE_ROOT="$RIP_SANDBOX/state"
@@ -4191,7 +4198,7 @@ EOF
     The result of function ssh_calls should equal "2"
     # …and nothing the server was asked to run mentions jq. The restricted
     # PATH above already makes a remote jq fail; this names the regression.
-    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function ssh_cmds should not include "jq"
   End
 
   # The trap this fix had to dodge: rip::_server_sidecars ANNOTATES each row
@@ -4918,7 +4925,7 @@ EOF
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/.fleet-book.json" should not include "_path"
     The output should include "re-spelled 1 of 1"
     # cantina has no jq: nothing the server was asked to run may mention it.
-    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function ssh_cmds should not include "jq"
   End
 
   It 'sweep: an already-canonical author is left byte-for-byte identical'
@@ -5371,7 +5378,7 @@ EOF
     # batch. 247 books must never be 247 round-trips.
     The result of function ssh_calls should equal "4"
     # …and nothing the server was asked to run mentions jq. cantina has none.
-    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function ssh_cmds should not include "jq"
   End
 
   It 'repair: a dry run writes nothing and opens no write connection'
@@ -5604,7 +5611,7 @@ EOF
     # library + sidecars + hash + write.
     The result of function ssh_calls should equal "4"
     # The hash is sha256sum's job, not jq's — the server has no jq.
-    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function ssh_cmds should not include "jq"
   End
 
   # THE REASON THE KEY WAS SPLIT, stated as behaviour rather than as a field
@@ -6064,7 +6071,7 @@ EOF
     The result of function ssh_calls should equal "3"
     # …and nothing the server was asked to run mentions jq. fake_server_ssh's
     # handpicked PATH holds none; this names the regression.
-    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function ssh_cmds should not include "jq"
     The result of function rc_kinds should equal '["pdf"]'
   End
 
@@ -7824,7 +7831,7 @@ JS
     The output should include "backfilled 2 of 2 sidecar(s)"
     # ONE ssh to enumerate, ONE for the whole write batch — not one per book.
     The result of function ssh_calls should equal "2"
-    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function ssh_cmds should not include "jq"
   End
 
   It 'backfill-work-uid: a write that fails leaves the good sidecar untouched and reports the book failed'
@@ -7937,7 +7944,7 @@ EOF
     The status should equal 0
     The output should equal "B"
     The result of function ssh_calls should equal "1"
-    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function ssh_cmds should not include "jq"
   End
 
   It 'remote sidecar: a book with no sidecar is confirmed ABSENT, not unknown'
@@ -8427,7 +8434,7 @@ EOF
     The output should include "retagged 2 of 2 book(s)"
     # enumerate, list, probe, write — one per STAGE, not one per book.
     The result of function ssh_calls should equal "4"
-    The contents of file "$RIP_SANDBOX/ssh.cmds" should not include "jq"
+    The result of function ssh_cmds should not include "jq"
     The result of function rtg_tags_ab should equal "A Author|B Book|B Book"
     The result of function rtg_extra_ab should equal "J. K. Rowling|A. B. Comp"
     The result of function rtg_has_cd should equal "false false"
