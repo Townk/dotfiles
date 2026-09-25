@@ -4,8 +4,8 @@
 #
 # shellspec forks a subshell per example, and a zsh spawn is ~30ms: the floor
 # is ~0.14s PER EXAMPLE regardless of what the example does, so the full
-# suite's ~980 examples cost ~137s before a single assertion runs. The whole
-# suite is ~10 minutes, which is exactly the kind of number that stops being
+# suite's ~3,100 examples cost ~434s before a single assertion runs. The whole
+# suite is ~9 minutes, which is exactly the kind of number that stops being
 # run. (`shellspec --jobs` would parallelise it, but under this zsh it
 # corrupts its own IPC — internals leak into the output and examples fail
 # spuriously. Do not reach for it without re-testing that.)
@@ -43,7 +43,7 @@ MUX_SPECS  := tests/mux_spec.sh tests/zellij_spec.sh \
               $(wildcard tests/mux_*_spec.sh) $(wildcard tests/tmux_*_spec.sh) \
               tests/quick_launch_tmux_spec.sh tests/theme_apply_tmux_spec.sh
 
-# The one to run while working: ~55s, everything that does not need a daemon.
+# The one to run while working: ~5.5 minutes, everything that does not need a daemon.
 test: lint recob
 	$(SHELLSPEC) $(FAST_SPECS)
 
@@ -51,7 +51,7 @@ test: lint recob
 test-mux: lint recob
 	$(SHELLSPEC) $(MUX_SPECS)
 
-# The gate: everything, before a push and in CI. ~10 minutes.
+# The gate: everything, before a push and in CI. ~9 minutes.
 test-all: lint recob
 	$(SHELLSPEC)
 
