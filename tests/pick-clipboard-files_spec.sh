@@ -1448,12 +1448,12 @@ FAKE
     sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'row-300 text');"
     sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',500,'row-500 text');"
 
-    When call emit_rows_with_two_live
+    When call show_separators emit_rows_with_two_live
     The status should be success
     The line 1 of output should include 'row-500'
-    The line 2 of output should include $'\x1f''LIVE'$'\x1e'
+    The line 2 of output should include '<US>LIVE<RS>'
     The line 3 of output should include 'row-300'
-    The line 4 of output should include $'\x1f''LIVEF'$'\x1e'
+    The line 4 of output should include '<US>LIVEF<RS>'
     # Regression lock for the NUL-truncation fix at the LIVEF prerender (see
     # the comment there): a kind=files row with N>1 paths renders as "first
     # path (+N-1)" (clip::render_file_content), never the literal later
@@ -1497,12 +1497,12 @@ FAKE
     sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',300,'row-300 text');"
     sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts, text_plain) VALUES ('text','mac-mini',500,'row-500 text');"
 
-    When call emit_script_with_two_live
+    When call show_separators emit_script_with_two_live
     The status should be success
     The line 1 of output should include 'row-500'
-    The line 2 of output should include $'\x1f''LIVE'$'\x1e'
+    The line 2 of output should include '<US>LIVE<RS>'
     The line 3 of output should include 'row-300'
-    The line 4 of output should include $'\x1f''LIVEF'$'\x1e'
+    The line 4 of output should include '<US>LIVEF<RS>'
     The line 5 of output should include 'row-100'
   End
 End

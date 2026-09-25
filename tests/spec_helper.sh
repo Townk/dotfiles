@@ -31,3 +31,24 @@ if command -v chezmoi >/dev/null 2>&1 && [ -f "$_palette_tpl" ]; then
     export THEME_PALETTE_FILE="$_palette_tmp"
   fi
 fi
+
+# show_separators CMD [ARGS...] — run CMD and print its stdout with every US
+# (\037) as <US> and every RS (\036) as <RS>, returning CMD's own status.
+#
+# US and RS are the field and record separators of ShellSpec's report stream.
+# An expectation or subject that carries them raw splits a report record: the
+# reporter evals a garbage field ("command not found: field_..."), the run is
+# "Aborted", and ShellSpec 0.28.1 then exits 0 even with failures (see
+# tests/run-shellspec.sh). Assert on the visible form instead:
+#
+#   When call show_separators input::form --spec "$SPEC"
+#   The output should equal "name<US>Ada<RS>email<US>yes"
+show_separators() {
+  _ss_out=$("$@")
+  _ss_rc=$?
+  # No output stays no output: a lone newline would be unasserted stdout.
+  if [ -n "$_ss_out" ]; then
+    printf '%s\n' "$_ss_out" | LC_ALL=C sed "s/$(printf '\037')/<US>/g; s/$(printf '\036')/<RS>/g"
+  fi
+  return "$_ss_rc"
+}

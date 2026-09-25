@@ -23,10 +23,10 @@ Describe 'input::form'
     export AII_OUT="name${US}Ada${RS}email${US}yes"
     printf 'name%sline%sName%s%semail%sconfirm%sSubscribe%syes' \
       "$US" "$US" "$US" "$RS" "$US" "$US" "$US" > "$TEST_TMP/spec"
-    When call input::form --title "Sign up" --spec "$TEST_TMP/spec"
+    When call show_separators input::form --title "Sign up" --spec "$TEST_TMP/spec"
     The contents of file "$TEST_TMP/aii.args" should include "--type form"
     The contents of file "$TEST_TMP/aii.args" should include "--spec"
-    The output should equal "name${US}Ada${RS}email${US}yes"
+    The output should equal "name<US>Ada<RS>email<US>yes"
     The status should be success
   End
 
@@ -34,25 +34,25 @@ Describe 'input::form'
     export AII_OUT="ok${US}no${RS}note${US}after"
     printf 'ok%sconfirm%sProceed%s%snote%sline%sNote' \
       "$US" "$US" "$US" "$RS" "$US" "$US" > "$TEST_TMP/spec"
-    When call input::form --spec "$TEST_TMP/spec"
+    When call show_separators input::form --spec "$TEST_TMP/spec"
     The contents of file "$TEST_TMP/aii.args" should include "--type form"
-    The output should equal "ok${US}no${RS}note${US}after"
+    The output should equal "ok<US>no<RS>note<US>after"
     The status should be success
   End
 
   It 'aborts the whole form (130) when the binary exits non-zero'
     export AII_RC=130
     printf 'a%sline%sA%s%sb%sline%sB' "$US" "$US" "$US" "$RS" "$US" "$US" > "$TEST_TMP/spec"
-    When call input::form --spec "$TEST_TMP/spec"
+    When call show_separators input::form --spec "$TEST_TMP/spec"
     The status should eq 130
   End
 
   It 'passes --title to the binary'
     export AII_OUT="solo${US}val"
     printf 'a%sline%sA%s%sb%sline%sB' "$US" "$US" "$US" "$RS" "$US" "$US" > "$TEST_TMP/spec"
-    When call input::form --title "My Form" --spec "$TEST_TMP/spec"
+    When call show_separators input::form --title "My Form" --spec "$TEST_TMP/spec"
     The contents of file "$TEST_TMP/aii.args" should include "--title My Form"
-    The output should equal "solo${US}val"
+    The output should equal "solo<US>val"
     The status should be success
   End
 End
