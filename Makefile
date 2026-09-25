@@ -1,6 +1,7 @@
-.PHONY: test test-mux test-all lint recob
+.PHONY: test test-mux test-all test-one lint recob
 
-# Three lanes, because one lane cannot be both complete and quick here.
+# Three lanes, because one lane cannot be both complete and quick here — plus
+# test-one, which runs a single spec (see below).
 #
 # shellspec forks a subshell per example, and a zsh spawn is ~30ms: the floor
 # is ~0.14s PER EXAMPLE regardless of what the example does, so the full
@@ -54,6 +55,15 @@ test-mux: lint recob
 # The gate: everything, before a push and in CI. ~9 minutes.
 test-all: lint recob
 	$(SHELLSPEC)
+
+# One spec, seconds instead of minutes: make test-one SPEC=tests/<name>_spec.sh.
+# Builds recob first only when the spec pulls in tests/recob_helper.sh, and
+# goes through the same wrapper as the other lanes. No lint: that is the
+# lanes' job, not the inner loop's.
+TEST_ONE_DEPS := $(if $(SPEC),$(if $(shell grep -ls 'tests/recob_helper\.sh' $(SPEC)),recob))
+test-one: $(TEST_ONE_DEPS)
+	@if [ -z '$(SPEC)' ]; then echo 'usage: make test-one SPEC=tests/<name>_spec.sh' >&2; exit 2; fi
+	$(SHELLSPEC) $(SPEC)
 
 # Guard the single-source theme: no raw hex outside .chezmoidata/theme.yaml.
 # The recob specs drive the repo's own build (custom-builds/recob/target), which
