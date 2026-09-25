@@ -11,6 +11,10 @@
 # spuriously. Do not reach for it without re-testing that.)
 SPECS      := $(wildcard tests/*_spec.sh)
 
+# shellspec 0.28.1 exits 0 on an aborted run, even one with failures; the
+# wrapper fails it instead. See tests/run-shellspec.sh.
+SHELLSPEC  := tests/run-shellspec.sh
+
 # Specs that cost more than ~5s each, measured. They are the ones that drive
 # real filesystems, mounts, restic, or tmux servers — worth running, not
 # worth running on every save. Keep this list honest: if a spec grows past a
@@ -41,15 +45,15 @@ MUX_SPECS  := tests/mux_spec.sh tests/zellij_spec.sh \
 
 # The one to run while working: ~55s, everything that does not need a daemon.
 test: lint
-	shellspec $(FAST_SPECS)
+	$(SHELLSPEC) $(FAST_SPECS)
 
 # The mux/tmux surface (~135s) — the lane the migration work lives in.
 test-mux: lint
-	shellspec $(MUX_SPECS)
+	$(SHELLSPEC) $(MUX_SPECS)
 
 # The gate: everything, before a push and in CI. ~10 minutes.
 test-all: lint
-	shellspec
+	$(SHELLSPEC)
 
 # Guard the single-source theme: no raw hex outside .chezmoidata/theme.yaml.
 lint:
