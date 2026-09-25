@@ -1,4 +1,4 @@
-.PHONY: test test-mux test-all lint
+.PHONY: test test-mux test-all lint recob
 
 # Three lanes, because one lane cannot be both complete and quick here.
 #
@@ -44,17 +44,25 @@ MUX_SPECS  := tests/mux_spec.sh tests/zellij_spec.sh \
               tests/quick_launch_tmux_spec.sh tests/theme_apply_tmux_spec.sh
 
 # The one to run while working: ~55s, everything that does not need a daemon.
-test: lint
+test: lint recob
 	$(SHELLSPEC) $(FAST_SPECS)
 
 # The mux/tmux surface (~135s) — the lane the migration work lives in.
-test-mux: lint
+test-mux: lint recob
 	$(SHELLSPEC) $(MUX_SPECS)
 
 # The gate: everything, before a push and in CI. ~10 minutes.
-test-all: lint
+test-all: lint recob
 	$(SHELLSPEC)
 
 # Guard the single-source theme: no raw hex outside .chezmoidata/theme.yaml.
+# The recob specs drive the repo's own build (custom-builds/recob/target), which
+# git does not track: a fresh clone or worktree has none, and every spec that
+# uses tests/recob_helper.sh fails. Cargo is incremental — ~1s when nothing
+# changed, ~17s cold — and a change to recob is then tested against itself,
+# never against a stale binary.
+recob:
+	@$(MAKE) --no-print-directory -C custom-builds/recob build >/dev/null
+
 lint:
 	@bash tests/lint-theme.sh
