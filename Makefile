@@ -1,7 +1,8 @@
-.PHONY: test test-mux test-all test-one lint recob
+.PHONY: test test-mux test-all test-one test-changed lint recob
 
 # Three lanes, because one lane cannot be both complete and quick here — plus
-# test-one, which runs a single spec (see below).
+# test-one, which runs a single spec, and test-changed, which runs only the
+# specs the branch's diff against master can reach (see below).
 #
 # shellspec forks a subshell per example, and a zsh spawn is ~30ms: the floor
 # is ~0.14s PER EXAMPLE regardless of what the example does, so the full
@@ -45,25 +46,42 @@ MUX_SPECS  := tests/mux_spec.sh tests/zellij_spec.sh \
               tests/quick_launch_tmux_spec.sh tests/theme_apply_tmux_spec.sh
 
 # The one to run while working: ~5.5 minutes, everything that does not need a daemon.
+# test-changed is the quicker inner loop; this is the lane to trust before landing.
 test: lint recob
 	$(SHELLSPEC) $(FAST_SPECS)
 
-# The mux/tmux surface (~135s) — the lane the migration work lives in.
+# The mux/tmux surface (~135s) — the lane the migration work lives in. Not
+# diff-driven: test-changed only picks a mux spec if the diff reaches it.
 test-mux: lint recob
 	$(SHELLSPEC) $(MUX_SPECS)
 
-# The gate: everything, before a push and in CI. ~9 minutes.
+# The gate: everything, before a push and in CI. ~9 minutes. Neither test-one
+# nor test-changed stands in for it.
 test-all: lint recob
 	$(SHELLSPEC)
 
 # One spec, seconds instead of minutes: make test-one SPEC=tests/<name>_spec.sh.
 # Builds recob first only when the spec pulls in tests/recob_helper.sh, and
 # goes through the same wrapper as the other lanes. No lint: that is the
-# lanes' job, not the inner loop's.
+# lanes' job, not the inner loop's. To run whatever the branch touched rather
+# than one named spec, use test-changed.
 TEST_ONE_DEPS := $(if $(SPEC),$(if $(shell grep -ls 'tests/recob_helper\.sh' $(SPEC)),recob))
 test-one: $(TEST_ONE_DEPS)
 	@if [ -z '$(SPEC)' ]; then echo 'usage: make test-one SPEC=tests/<name>_spec.sh' >&2; exit 2; fi
 	$(SHELLSPEC) $(SPEC)
+
+# Only what the diff against master reaches — committed, staged, unstaged and
+# untracked: every changed tests/*_spec.sh, plus every spec that textually
+# references a changed home/dot_local/lib/**/*.zsh library (as dot_local/lib/…
+# or .local/lib/…) or a changed tests/ helper. It prints the selected specs,
+# then runs them through the same wrapper; an empty selection (docs only, say)
+# runs nothing and passes. It falls back to the full `test` lane, saying why,
+# when the Makefile, .shellspec or tests/spec_helper.sh changed — every spec
+# depends on those — or when there is no master to diff against. The match is
+# textual: a spec that reaches a library only through a script is not picked.
+# See tests/test-changed.sh.
+test-changed: lint recob
+	@MAKE='$(MAKE)' tests/test-changed.sh
 
 # Guard the single-source theme: no raw hex outside .chezmoidata/theme.yaml.
 # The recob specs drive the repo's own build (custom-builds/recob/target), which

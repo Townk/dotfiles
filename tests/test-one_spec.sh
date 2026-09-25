@@ -39,6 +39,7 @@ Describe 'make test-one'
     The status should be success
     The output should include 'tests/run-shellspec.sh'
     The output should include '1 example, 0 failures'
+    The error should include 'run-shellspec: 1 examples, 0 failures, 0 skips'
   End
 
   It 'passes SPEC to the wrapper and nothing else'

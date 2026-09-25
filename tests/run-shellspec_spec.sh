@@ -37,6 +37,14 @@ Describe 'run-shellspec.sh'
       echo '  End'
       echo 'End'
     } > "$PROJ/spec/pass_spec.sh"
+    { echo "Describe 'skips'"
+      echo "  It 'skips'"
+      echo "    Skip 'not today'"
+      echo '    When call true'
+      echo '    The status should be success'
+      echo '  End'
+      echo 'End'
+    } > "$PROJ/spec/skip_spec.sh"
   }
   cleanup() { rm -rf "$PROJ"; }
   BeforeEach 'setup'
@@ -58,6 +66,7 @@ Describe 'run-shellspec.sh'
     The status should eq 102
     The output should include '1 failure'
     The error should include 'run-shellspec: shellspec aborted'
+    The error should include 'run-shellspec: 2 examples, 1 failures, 0 skips in '
   End
 
   It 'fails an aborted run even when every example passed'
@@ -71,11 +80,27 @@ Describe 'run-shellspec.sh'
     When run inner "$RUNNER" spec/fail_spec.sh
     The status should eq 101
     The output should include '1 failure'
+    The error should include 'run-shellspec: 1 examples, 1 failures, 0 skips in '
   End
 
   It 'passes a clean green run'
     When run inner "$RUNNER" spec/pass_spec.sh
     The status should be success
     The output should include '0 failures'
+    The error should include 'run-shellspec: 1 examples, 0 failures, 0 skips in '
+  End
+
+  It 'counts skips in the summary line'
+    When run inner "$RUNNER" spec/skip_spec.sh spec/pass_spec.sh
+    The status should be success
+    The output should include '1 skip'
+    The error should match pattern 'run-shellspec: 2 examples, 0 failures, 1 skips in [0-9]*m [0-9]*s'
+  End
+
+  It 'writes the summary line to stderr only'
+    When run inner "$RUNNER" spec/pass_spec.sh
+    The status should be success
+    The output should not include 'run-shellspec:'
+    The error should include 'run-shellspec: 1 examples'
   End
 End
