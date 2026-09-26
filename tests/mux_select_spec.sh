@@ -42,13 +42,15 @@ Describe 'mouse word/WORD selection'
       "printf 'aa foo-bar_baz.txt/qux bb\n'; sleep 120"
     TMUX_TMPDIR=$OUT tmux -f /dev/null new-session -d -s O -x 60 -y 8 \
       "env -u TMUX TMUX_TMPDIR=$IN tmux attach -t I"
-    sleep 2
+    ms_until ms_attached
     local n
     for n in $(seq 1 $2); do
       TMUX_TMPDIR=$OUT tmux send-keys -t O -H $(sgr "$1" 8 1 M)
       TMUX_TMPDIR=$OUT tmux send-keys -t O -H $(sgr "$1" 8 1 m)
     done
-    sleep 2
+    # Each gesture copies after a 0.3s run-shell delay, and a triple-click's
+    # double-click copies first: wait for a copy, then for it to hold still.
+    ms_until ms_settled && sleep 0.5 && ms_until ms_settled
     BUF="$(TMUX_TMPDIR=$IN tmux show-buffer 2>/dev/null)"
     SEP="$(TMUX_TMPDIR=$IN tmux show -w -v word-separators 2>/dev/null)"
     TMUX_TMPDIR=$IN tmux kill-server 2>/dev/null
@@ -56,6 +58,20 @@ Describe 'mouse word/WORD selection'
     print -r -- "$BUF"
   }
   leftover_separators() { print -r -- "$SEP"; }
+
+  # ms_until <check> — poll a check for up to 2s, the fixed sleep it replaces,
+  # so a gesture that never lands still fails the way it did.
+  ms_until() { local i; for i in {1..40}; do "$1" && return 0; sleep 0.05; done; return 1; }
+  # The outer client is attached to the inner session and the text is drawn.
+  ms_attached() {
+    [[ -n $(TMUX_TMPDIR=$IN tmux list-clients -t I 2>/dev/null) ]] &&
+      [[ $(TMUX_TMPDIR=$IN tmux capture-pane -p -t I 2>/dev/null) == *foo-bar* ]]
+  }
+  # A copy landed and the gesture has finished: out of copy mode, flag unset.
+  ms_settled() {
+    [[ -n $(TMUX_TMPDIR=$IN tmux show-buffer 2>/dev/null) ]] &&
+      [[ $(TMUX_TMPDIR=$IN tmux display -p -t I '#{pane_in_mode}#{@mouse_select}' 2>/dev/null) == 0 ]]
+  }
 
   # Cursor lands inside `bar_baz` of `foo-bar_baz.txt/qux`, which is the point:
   # `-`, `.` and `/` are separators while `_` is not, so the two gestures give

@@ -32,6 +32,10 @@ Describe 'mux-click'
   # Values travel in the environment, not argv — see the header of mux-click.
   click() { MUX_CLICK_URI="$1" MUX_CLICK_LINE="$2" MUX_CLICK_COL="$3" "$MC_TMP/bin/mux-click"; }
 
+  # mc_until <command...> — poll for up to 2s, the fixed sleep each call
+  # replaces, so an event that never lands still fails the way it did.
+  mc_until() { local i; for i in {1..40}; do "$@" && return 0; sleep 0.05; done; return 1; }
+
   Describe 'an OSC 8 hyperlink'
     # Exact, and its target may differ from the text shown — OSC 8 allows that
     # — so it must never be second-guessed by scanning the line.
@@ -164,7 +168,7 @@ PROBE
       tmux -f /dev/null new-session -d -s 23 -x 80 -y 10
       tmux select-pane -t 23 -T "$1"
       tmux run-shell -b "MC_LOG=$MC_TMP/blog MUX_SESSION=#{q:session_name} MUX_CLICK_URI=#{q:pane_title} MUX_CLICK_LINE=#{q:pane_title} $MC_TMP/bin/probe"
-      sleep 1
+      mc_until test -s "$MC_TMP/blog"
       tmux kill-server 2>/dev/null
       cat "$MC_TMP/blog"
     }
@@ -211,15 +215,22 @@ PROBE
       ; } >"$MC_TMP/inner.conf"
       TMUX_TMPDIR=$IN tmux -f "$MC_TMP/inner.conf" new-session -d -s I -x 60 -y 8 "cat $MC_TMP/osc8; sleep 120"
       TMUX_TMPDIR=$OUT tmux -f /dev/null new-session -d -s O -x 60 -y 8 "env -u TMUX TMUX_TMPDIR=$IN tmux attach -t I"
-      sleep 2
-      [ -n "$1" ] && { TMUX_TMPDIR=$IN tmux $1 -t I; sleep 1; }
+      mc_until mc_attached
+      [ -n "$1" ] && { TMUX_TMPDIR=$IN tmux $1 -t I; mc_until mc_in_mode; }
       # SGR press, button 0 + meta(8), column 3 row 1 — over CLICKME.
       TMUX_TMPDIR=$OUT tmux send-keys -t O -H 1b 5b 3c 38 3b 33 3b 31 4d
-      sleep 2
+      mc_until test -s "$LOG"
       TMUX_TMPDIR=$IN tmux kill-server 2>/dev/null
       TMUX_TMPDIR=$OUT tmux kill-server 2>/dev/null
       cat "$LOG"
     }
+
+    # The outer client is attached to the inner session and the link is drawn.
+    mc_attached() {
+      [[ -n $(TMUX_TMPDIR=$IN tmux list-clients -t I 2>/dev/null) ]] &&
+        [[ $(TMUX_TMPDIR=$IN tmux capture-pane -p -t I 2>/dev/null) == *CLICKME* ]]
+    }
+    mc_in_mode() { [[ $(TMUX_TMPDIR=$IN tmux display -p -t I '#{pane_in_mode}' 2>/dev/null) == 1 ]]; }
 
     It 'resolves the hyperlink under the pointer in normal mode'
       When call probe ""
