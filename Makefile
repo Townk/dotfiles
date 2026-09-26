@@ -15,13 +15,14 @@
 # in 96d6a0da; it holds under --jobs too.) JOBS=1 runs one file at a time.
 JOBS       ?= $(shell sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 export JOBS
-HEAVY      := tests/rip-audiobook_spec.sh tests/profile-traits_spec.sh \
-              tests/pbpaste-files_spec.sh tests/backup_tm_spec.sh \
-              tests/rip-push_spec.sh tests/backup_spec.sh \
-              tests/clipboard-mount_spec.sh tests/mux_click_spec.sh \
-              tests/pick-clipboard-files_spec.sh tests/job_spec.sh \
-              tests/mux_select_spec.sh tests/ssh-prepare-mount_spec.sh \
-              tests/mux_spec.sh tests/mux_stack_spec.sh
+HEAVY      := tests/backup_tm_spec.sh tests/rip-push_spec.sh \
+              tests/rip-audiobook-panel_spec.sh tests/rip-audiobook-library_spec.sh \
+              tests/backup_spec.sh tests/pbpaste-files_spec.sh \
+              tests/pick-clipboard-files_spec.sh tests/rip-audiobook-sweep_spec.sh \
+              tests/rip-audiobook_spec.sh tests/clipboard-mount_spec.sh \
+              tests/preview_spec.sh tests/ssh-prepare-mount_spec.sh \
+              tests/mux_spec.sh tests/job_spec.sh tests/rip-extra_spec.sh \
+              tests/mux_stack_spec.sh
 # $(call heavy_first,LIST): LIST with its HEAVY files first, longest first.
 heavy_first = $(foreach h,$(HEAVY),$(filter $(h),$(1))) $(filter-out $(HEAVY),$(1))
 SPECS      := $(wildcard tests/*_spec.sh)
