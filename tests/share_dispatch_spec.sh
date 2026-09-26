@@ -85,6 +85,42 @@ SH
     The stderr should include 'no such file'
   End
 
+  # share::_duration_seconds prints 0 for both a genuine typo ("3D", "3days")
+  # and a well-formed zero ("0d") — indistinguishable from each other, and
+  # from "never expires", once fed on to a backend. croc's own binary would
+  # have refused a bad --store-expiration before any bytes moved, but rclone
+  # has no such backstop: before this guard, a typo silently uploaded the
+  # file, recorded expires=EPOCHSECONDS, and handed the very next `share
+  # prune --apply` a reason to delete a share the sender just sent in good
+  # faith. Checked once in share::send, before either backend runs.
+  It 'rejects a malformed --expiration before the croc backend ever runs'
+    SHARE_PROFILE=personal
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+printf 'called\n' >>"$SHARE_CALLS"
+SH
+    chmod +x "$SB/bin/croc"
+    SHARE_CALLS="$SB/calls"; export SHARE_CALLS
+    When run share::send --expiration 3D "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'invalid --expiration'
+    The path "$SB/calls" should not be exist
+  End
+
+  It 'rejects a malformed --expiration before the rclone backend ever runs'
+    SHARE_PROFILE=work
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+printf 'called\n' >>"$SHARE_CALLS"
+SH
+    chmod +x "$SB/bin/rclone"
+    SHARE_CALLS="$SB/calls"; export SHARE_CALLS
+    When run share::send --expiration 3days "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'invalid --expiration'
+    The path "$SB/calls" should not be exist
+  End
+
   It 'revokes a croc receipt through the croc backend'
     SHARE_PROFILE=personal
     share::ledger_add rid croc drop 'R' abc123 'https://x' 0

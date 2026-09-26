@@ -70,8 +70,23 @@ share::rclone_revoke() {
   rclone purge "$1"
 }
 
-# share::rclone_send <endpoint> <path…>
+# share::rclone_send [--expiration D] <endpoint> <path…>
+#
+# `--expiration` is a leading flag, not a positional, for the same reason
+# share::croc_send's `--secret-file` is: every existing caller and test keeps
+# its argument order, and only a caller that actually needs to override the
+# default has to know the flag exists.
 share::rclone_send() {
+  zmodload zsh/datetime 2>/dev/null
+  local expiration="$SHARE_DEFAULT_EXPIRATION"
+  while (( $# )); do
+    case "$1" in
+      --expiration)
+        [[ $# -ge 2 ]] || { log_error "share: --expiration requires a value"; return 1; }
+        expiration="$2"; shift 2 ;;
+      *) break ;;
+    esac
+  done
   local endpoint="$1"; shift
   local label; label="$(share::label "$@")" || return 1
 
@@ -156,7 +171,15 @@ share::rclone_send() {
   # needs the directory in every case (see the comment there). Recording the
   # directory here is what makes revoke work uniformly for single- and
   # multi-file sends alike.
+  # `expires` is advisory — OneDrive itself does not enforce it, and rclone
+  # has no --expiration flag of its own to hand it to. Recording a real
+  # deadline here is what lets `share prune` sweep the object later; without
+  # it every rclone row carried expires=0 and share::ledger_overdue could
+  # never flag one.
+  local -i expires_epoch=0
+  [[ -n "$expiration" ]] && expires_epoch=$(( EPOCHSECONDS + $(share::_duration_seconds "$expiration") ))
+
   local id; id="$(share::gen_id)"
-  share::ledger_add "$id" rclone "$endpoint" "$label" "$dest_dir" "$url" 0
-  share::blurb "$endpoint" web "$label" "$url" 'never' 'unlimited downloads'
+  share::ledger_add "$id" rclone "$endpoint" "$label" "$dest_dir" "$url" "$expires_epoch"
+  share::blurb "$endpoint" web "$label" "$url" "$(share::_expires_human "$expires_epoch")" 'unlimited downloads'
 }

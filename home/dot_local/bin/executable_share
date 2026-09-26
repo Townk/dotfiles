@@ -8,6 +8,8 @@
 #   share list                         receipts, newest first
 #   share revoke <id>                  kill a link and forget the receipt
 #   share endpoints                    what this profile may send to
+#   share prune [--apply]               sweep overdue rclone shares (dry run
+#                                       by default)
 #
 # Which mechanism carries the bytes is a property of the ENDPOINT, never of the
 # command line: croc's zero-knowledge store for personal files, rclone/OneDrive
@@ -38,6 +40,9 @@ Usage:
   share revoke <id>                  kill a link and forget the receipt
   share endpoints                    endpoints this profile may use
   share status [<endpoint>...]        per-endpoint reachability + share's jobs
+  share prune [--apply]               sweep overdue rclone shares (dry run by
+                                      default; --apply purges the remote
+                                      object and forgets the receipt)
 
 Sending is LIVE and in the BACKGROUND by default: the pasteable line is
 printed and copied straight away, and the transfer waits for the recipient.
@@ -253,6 +258,7 @@ main() {
                (( $# >= 1 )) || die "share revoke: an id is required"
                share::revoke "$1" ;;
     endpoints) shift; share::endpoints_for_profile ;;
+    prune)     shift; share::prune "$@" ;;
     peek)      shift
                # Faces only: "is there a share on the clipboard, and what is
                # it" without receiving anything. Deliberately undocumented in

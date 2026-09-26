@@ -347,6 +347,71 @@ SH
     The status should be success
   End
 
+  # F-share-prune: share::rclone_send used to hardcode `expires_epoch` to 0
+  # in the ledger row it wrote, and the blurb's expiry to the literal string
+  # 'never' — so no rclone share ever got a recorded deadline, and
+  # share::ledger_overdue could never flag one. share::send already threads
+  # its `expiration` local to the croc backend; these examples pin the same
+  # threading for rclone, driven straight at share::rclone_send the way the
+  # rest of this file already does.
+  It 'records a real expiry using the default duration when none is given'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
+done
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    do_it() {
+      share::rclone_send onedrive "$SB/Report.pdf" >/dev/null
+      local expires; expires="$(share::ledger_list | jq -r '.[0].expires')"
+      (( expires > EPOCHSECONDS ))
+    }
+    zmodload zsh/datetime 2>/dev/null
+    When call do_it
+    The status should be success
+  End
+
+  It 'records a real expiry honouring an explicit --expiration override'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
+done
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    do_it() {
+      share::rclone_send --expiration 90m onedrive "$SB/Report.pdf" >/dev/null
+      local expires; expires="$(share::ledger_list | jq -r '.[0].expires')"
+      local -i want=$(( EPOCHSECONDS + 5400 ))
+      # Within a few seconds of the expected 90-minute deadline — not exact,
+      # since a little wall-clock time passes between the two EPOCHSECONDS
+      # reads (this test's and share::rclone_send's own).
+      (( expires >= want - 5 && expires <= want + 5 ))
+    }
+    zmodload zsh/datetime 2>/dev/null
+    When call do_it
+    The status should be success
+  End
+
+  It 'prints the real expiry in the blurb instead of the hardcoded "never"'
+    cat >"$SB/bin/rclone" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
+done
+exit 0
+SH
+    chmod +x "$SB/bin/rclone"
+    PATH="$SB/bin:$PATH"
+    When call share::rclone_send onedrive "$SB/Report.pdf"
+    The output should not include 'never'
+  End
+
   It 'records the shared directory as the ledger ref for a multi-file send, and revoke purges it'
     cat >"$SB/bin/rclone" <<'SH'
 #!/bin/sh

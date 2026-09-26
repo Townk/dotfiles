@@ -68,6 +68,21 @@ Describe 'share:: receipt ledger'
     The output should equal 'old'
   End
 
+  It 'returns full overdue rows, not just ids'
+    share::ledger_add old rclone onedrive 'a' ref1 'u1' 1
+    share::ledger_add new rclone onedrive 'b' ref2 'u2' 9999999999
+    When call share::ledger_overdue_rows
+    The output should include '"id":"old"'
+    The output should not include '"id":"new"'
+  End
+
+  It 'restricts overdue rows to the given backend'
+    share::ledger_add oldcroc croc public 'a' r1 'u1' 1
+    share::ledger_add oldrclone rclone onedrive 'b' r2 'u2' 1
+    only_rclone() { share::ledger_overdue_rows rclone | jq -r '.id'; }
+    The result of function only_rclone should equal 'oldrclone'
+  End
+
   It 'returns an empty array when no ledger file exists'
     When call share::ledger_list
     The output should equal '[]'

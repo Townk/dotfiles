@@ -83,3 +83,20 @@ share::ledger_overdue() {
   jq -r --argjson now "$EPOCHSECONDS" \
     'select(.expires > 0 and .expires < $now) | .id' "$file"
 }
+
+# share::ledger_overdue_rows [<backend>] — full JSON rows (not just ids) for
+# every overdue entry, optionally restricted to one backend. `share prune`
+# needs the backend, endpoint, label and ref to report and purge each row,
+# which the plain id list share::ledger_overdue returns is not enough for.
+share::ledger_overdue_rows() {
+  zmodload zsh/datetime 2>/dev/null
+  local backend="${1-}" file; file="$(share::_ledger_file)"
+  [[ -f "$file" ]] || return 0
+  if [[ -n "$backend" ]]; then
+    jq -c --argjson now "$EPOCHSECONDS" --arg b "$backend" \
+      'select(.backend == $b and .expires > 0 and .expires < $now)' "$file"
+  else
+    jq -c --argjson now "$EPOCHSECONDS" \
+      'select(.expires > 0 and .expires < $now)' "$file"
+  fi
+}

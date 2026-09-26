@@ -488,6 +488,23 @@ share::send() {
   done
   (( $# )) || die "share: no files given"
 
+  # share::_duration_seconds prints 0 both for a genuinely unparseable spec
+  # ("3days", "3D", "abc") and for a well-formed zero ("0d") — croc tolerates
+  # that ambiguity for free, because croc's own --store-expiration flag
+  # validates the string itself and refuses a bad one before any bytes move
+  # (share::croc_argv). rclone has no such backstop: nothing else ever checks
+  # this string, so a typo silently became "never expires" before this guard
+  # existed — worse, after share::rclone_send started recording a real
+  # expires_epoch, a typo here would upload the file, record
+  # expires=EPOCHSECONDS (0 seconds from now), and hand the very next `share
+  # prune --apply` a reason to delete a share the sender just sent in good
+  # faith. Checked once here, for both backends, before either backend or any
+  # transfer runs.
+  if [[ -n "$expiration" ]] && (( $(share::_duration_seconds "$expiration") == 0 )); then
+    log_error "share: invalid --expiration: $expiration (expected <N>m|h|d|w, e.g. 3d)"
+    return 1
+  fi
+
   # Every path is validated BEFORE any transfer starts — a partial multi-file
   # send that dies on file 3 having already uploaded 1 and 2 is worse than
   # refusing up front. Two hazards, checked per path:
@@ -595,7 +612,7 @@ share::send() {
       ;;
     rclone)
       [[ "$mode" == live ]] && die "share: the rclone backend has no live mode"
-      blurb="$(share::rclone_send "$endpoint" "$@")" || return 1
+      blurb="$(share::rclone_send --expiration "$expiration" "$endpoint" "$@")" || return 1
       ;;
     *) die "share: unknown backend: $backend" ;;
   esac
@@ -645,6 +662,79 @@ share::revoke() {
     *) log_error "share: unknown backend in receipt: $backend"; return 1 ;;
   esac
   share::ledger_remove "$id"
+}
+
+# share::_overdue_human <expires_epoch> — how overdue, roughly ("3d", "2h",
+# "45m"): the coarsest non-zero unit, in the same m/h/d/w vocabulary
+# share::_duration_seconds already reads for --expiration.
+share::_overdue_human() {
+  zmodload zsh/datetime 2>/dev/null
+  local -i expires="${1:-0}" delta
+  delta=$(( EPOCHSECONDS - expires ))
+  (( delta > 0 )) || { printf '0m\n'; return 0; }
+  if (( delta >= 604800 )); then printf '%dw\n' $(( delta / 604800 ))
+  elif (( delta >= 86400 )); then printf '%dd\n' $(( delta / 86400 ))
+  elif (( delta >= 3600 )); then printf '%dh\n' $(( delta / 3600 ))
+  else printf '%dm\n' $(( delta / 60 )); fi
+}
+
+# share::prune [--apply] — sweep overdue rclone shares. rclone's `expires` is
+# advisory (OneDrive itself does not enforce it, see share::rclone_send) —
+# this command is what actually enforces it. croc's own store is explicitly
+# out of scope: it expires server-side, on croc's own schedule, with no
+# ledger row to sweep.
+#
+# Dry run by default — lists what WOULD be purged and touches neither the
+# ledger nor any remote object. `--apply` purges the remote object via
+# share::rclone_revoke and only then removes the ledger row, so a purge
+# failure leaves that row exactly where share list already shows it, rather
+# than forgetting a receipt for an object that is still sitting in OneDrive.
+# A failure on one row is reported and does NOT stop the sweep — the whole
+# point of a sweep is to make progress on everything it can.
+share::prune() {
+  local apply=0
+  case "${1-}" in
+    --apply) apply=1; shift ;;
+  esac
+
+  local -a rows
+  rows=("${(@f)$(share::ledger_overdue_rows rclone)}")
+
+  local row id label endpoint ref expires overdue_for
+  local -i purged=0 failed=0 total=0
+
+  for row in "${rows[@]}"; do
+    [[ -n "$row" ]] || continue
+    total=$(( total + 1 ))
+    id="$(printf '%s' "$row" | jq -r '.id')"
+    label="$(printf '%s' "$row" | jq -r '.label')"
+    endpoint="$(printf '%s' "$row" | jq -r '.endpoint')"
+    ref="$(printf '%s' "$row" | jq -r '.ref')"
+    expires="$(printf '%s' "$row" | jq -r '.expires')"
+    overdue_for="$(share::_overdue_human "$expires")"
+
+    if (( apply )); then
+      if share::rclone_revoke "$ref"; then
+        share::ledger_remove "$id"
+        purged=$(( purged + 1 ))
+        log_ok "share prune: purged $id ($label, $endpoint) — was overdue $overdue_for"
+      else
+        failed=$(( failed + 1 ))
+        log_error "share prune: FAILED to purge $id ($label, $endpoint) — left in the ledger"
+      fi
+    else
+      printf '%s\t%s\t%s\t%s\n' "$id" "$label" "$endpoint" "$overdue_for"
+    fi
+  done
+
+  if (( apply )); then
+    printf 'share prune: purged %d, failed %d\n' "$purged" "$failed"
+    (( failed == 0 ))
+  elif (( total == 0 )); then
+    printf 'share prune: nothing overdue\n'
+  else
+    printf 'share prune: %d overdue rclone share(s) would be purged\n' "$total"
+  fi
 }
 
 # --- receive ----------------------------------------------------------------
