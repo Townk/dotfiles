@@ -48,8 +48,8 @@ SLOW_SPECS := tests/backup_spec.sh tests/backup_changes_spec.sh \
               tests/platform_spec.sh tests/preview_spec.sh \
               tests/quick_launch_tmux_spec.sh tests/ssh-prepare-mount_spec.sh \
               tests/system-onboard_spec.sh tests/system-service-launchd_spec.sh \
-              tests/theme_apply_tmux_spec.sh tests/tmux_status_right_spec.sh \
-              tests/zellij_spec.sh
+              tests/theme_apply_tmux_spec.sh tests/tmux_socket_isolation_spec.sh \
+              tests/tmux_status_right_spec.sh tests/zellij_spec.sh
 
 FAST_SPECS := $(filter-out $(SLOW_SPECS),$(SPECS))
 # tests/mux_spec.sh is named explicitly: `mux_*_spec.sh` needs a middle

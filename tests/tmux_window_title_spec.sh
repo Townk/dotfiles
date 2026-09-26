@@ -8,7 +8,8 @@
 # from a real shell, which is the only way to prove tmux tracks it.
 Describe 'tmux window titles'
   setup_all() {
-    WT_TMP=$(mktemp -d)
+    WT_TMP=$(mktemp -d "$SHELLSPEC_TMPBASE/tw.XXXXXX")
+    export TMUX_TMPDIR="$WT_TMP"   # socket off the shared /tmp/tmux-$UID
     chezmoi execute-template <home/dot_config/tmux/tmux.conf.tmpl >"$WT_TMP/base.conf" 2>/dev/null
     chezmoi execute-template <custom-builds/theme/templates/tmux-theme.conf.tmpl >"$WT_TMP/theme.conf" 2>/dev/null
     # Only the pieces under test: the base options (automatic-rename-format)

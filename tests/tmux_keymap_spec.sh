@@ -10,7 +10,10 @@
 # session.
 Describe 'tmux keymap tables'
   setup_all() {
-    KM_TMP=$(mktemp -d)
+    # Own TMUX_TMPDIR: the -L socket lands here, never in the shared
+    # /tmp/tmux-$UID (tests/tmux_socket_isolation_spec.sh guards this).
+    KM_TMP=$(mktemp -d "$SHELLSPEC_TMPBASE/tk.XXXXXX")
+    export TMUX_TMPDIR="$KM_TMP"
     chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT" <home/dot_config/tmux/keymap-base.conf.tmpl >"$KM_TMP/keymap-base.conf" 2>/dev/null
     chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT" <home/dot_config/tmux/keymap.conf.tmpl >"$KM_TMP/keymap.conf" 2>/dev/null
     # Phase 4: the theme's %hidden color fragments must parse BEFORE
@@ -510,7 +513,8 @@ End
 # spawned later believes it is on SSH.
 Describe 'tmux update-environment'
   setup_all() {
-    UE_TMP=$(mktemp -d)
+    UE_TMP=$(mktemp -d "$SHELLSPEC_TMPBASE/tu.XXXXXX")
+    export TMUX_TMPDIR="$UE_TMP"   # socket off the shared /tmp/tmux-$UID
     chezmoi execute-template -S "$SHELLSPEC_PROJECT_ROOT" <home/dot_config/tmux/tmux.conf.tmpl 2>/dev/null \
       | grep -E '^set -g[ua] update-environment' >"$UE_TMP/ue.conf"
     tmux -L uespec -f /dev/null new-session -d -s ue -x 80 -y 24
