@@ -32,6 +32,32 @@ if command -v chezmoi >/dev/null 2>&1 && [ -f "$_palette_tpl" ]; then
   fi
 fi
 
+# A $SHELLSPEC_TMPBASE of each spec file's own. shellspec gives the whole run
+# one, and the specs write fixed names under it ($SHELLSPEC_TMPBASE/state,
+# /bin, /calls, ...), so under `--jobs` two files using the same name overwrite
+# each other's fixtures mid-example. These root hooks run in each file's own
+# process, after shellspec has fixed that file's $SHELLSPEC_WORKDIR (which its
+# own bookkeeping uses) and around all of its blocks, so the file's top-level
+# code, hooks and examples all see the new value. tests/spec_tmpbase_spec.sh
+# pins it.
+#
+# The directory is a sibling of shellspec's, not inside it: recob specs bind
+# Unix sockets under it, and macOS caps a socket path at 103 bytes. Under
+# shellspec's own base those paths are already 101 bytes long; this one is
+# shorter than that base.
+spec_helper_configure() {
+  before_all spec_helper_own_tmpbase
+  after_all spec_helper_drop_tmpbase
+}
+spec_helper_own_tmpbase() {
+  SPEC_HELPER_TMPBASE=$(mktemp -d "${TMPDIR:-/tmp}/spec.XXXXXX") || return 1
+  SHELLSPEC_TMPBASE=$SPEC_HELPER_TMPBASE
+}
+spec_helper_drop_tmpbase() {
+  [ -n "${SPEC_HELPER_TMPBASE:-}" ] && rm -rf "$SPEC_HELPER_TMPBASE"
+  return 0
+}
+
 # show_separators CMD [ARGS...] — run CMD and print its stdout with every US
 # (\037) as <US> and every RS (\036) as <RS>, returning CMD's own status.
 #
