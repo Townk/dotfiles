@@ -184,6 +184,31 @@ SH
     The stdout should equal ''
   End
 
+  # A bad --expiration on a backgrounded LIVE send used to slip past entirely:
+  # share::send_background never looked at the flag, so the pasteable line
+  # was already minted, printed, and clipped before the job ever ran
+  # share::send's own guard — by which point the human already has a working
+  # link for a share that (at best) never expires and (at worst) is already
+  # eligible for `share prune`. This must refuse before share::resolve,
+  # share::live_capable, share::croc_secret_file, or share::emit_live_blurb
+  # ever run: nothing minted, nothing printed, nothing clipped, no job.
+  It 'refuses a bad --expiration on a live send before minting or clipping anything'
+    When run share::send_background --to lan --expiration -3d "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'invalid --expiration'
+    The stdout should equal ''
+    The path "$SB/clip.txt" should not be exist
+    The path "$JOB_STATE_ROOT" should not be exist
+  End
+
+  It 'refuses a zero --expiration on a live send before minting or clipping anything'
+    When run share::send_background --to lan --expiration 0d "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'invalid --expiration'
+    The path "$SB/clip.txt" should not be exist
+    The path "$JOB_STATE_ROOT" should not be exist
+  End
+
   # --- the enqueued command must not re-enqueue (fork-bomb regression) ------
   # Phase 1.5 made backgrounding the DEFAULT. The enqueued command was
   # `share send …` with no mode flag, so when the job ran it, dispatch_send saw

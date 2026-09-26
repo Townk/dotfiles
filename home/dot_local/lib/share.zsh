@@ -442,6 +442,35 @@ share::emit_live_blurb() {
 SHARE_DEFAULT_EXPIRATION="${SHARE_DEFAULT_EXPIRATION:-3d}"
 SHARE_DEFAULT_DOWNLOADS="${SHARE_DEFAULT_DOWNLOADS:-1}"
 
+# share::_validate_expiration <spec> — shared by share::send and
+# share::send_background so both refuse the exact same bad specs with the
+# exact same message, before either mints anything.
+#
+# share::_duration_seconds prints 0 both for a genuinely unparseable spec
+# ("3days", "3D", "abc") and for a well-formed zero ("0d") — croc tolerates
+# that ambiguity for free, because croc's own --store-expiration flag
+# validates the string itself and refuses a bad one before any bytes move
+# (share::croc_argv). rclone has no such backstop: nothing else ever checks
+# this string, so a typo silently became "never expires" before this guard
+# existed — worse, after share::rclone_send started recording a real
+# expires_epoch, a typo here would upload the file, record
+# expires=EPOCHSECONDS (0 seconds from now), and hand the very next `share
+# prune --apply` a reason to delete a share the sender just sent in good
+# faith. A NEGATIVE spec ("-3d") is just as broken: share::_duration_seconds
+# multiplies the numeric prefix by the unit's seconds without checking its
+# sign, so it comes back as a real negative number rather than 0 — `== 0`
+# alone let it through. Checked once here, for both backends and both send
+# paths, before either backend or any transfer runs.
+share::_validate_expiration() {
+  local spec="$1"
+  [[ -n "$spec" ]] || return 0
+  if (( $(share::_duration_seconds "$spec") <= 0 )); then
+    log_error "share: invalid --expiration: $spec (expected <N>m|h|d|w, e.g. 3d)"
+    return 1
+  fi
+  return 0
+}
+
 # share::send [--to E] [--live] [--expiration D] [--downloads N] <path…>
 share::send() {
   # Live is the DEFAULT (amendment D1). The asynchrony this silo exists for is
@@ -488,22 +517,7 @@ share::send() {
   done
   (( $# )) || die "share: no files given"
 
-  # share::_duration_seconds prints 0 both for a genuinely unparseable spec
-  # ("3days", "3D", "abc") and for a well-formed zero ("0d") — croc tolerates
-  # that ambiguity for free, because croc's own --store-expiration flag
-  # validates the string itself and refuses a bad one before any bytes move
-  # (share::croc_argv). rclone has no such backstop: nothing else ever checks
-  # this string, so a typo silently became "never expires" before this guard
-  # existed — worse, after share::rclone_send started recording a real
-  # expires_epoch, a typo here would upload the file, record
-  # expires=EPOCHSECONDS (0 seconds from now), and hand the very next `share
-  # prune --apply` a reason to delete a share the sender just sent in good
-  # faith. Checked once here, for both backends, before either backend or any
-  # transfer runs.
-  if [[ -n "$expiration" ]] && (( $(share::_duration_seconds "$expiration") == 0 )); then
-    log_error "share: invalid --expiration: $expiration (expected <N>m|h|d|w, e.g. 3d)"
-    return 1
-  fi
+  share::_validate_expiration "$expiration" || return 1
 
   # Every path is validated BEFORE any transfer starts — a partial multi-file
   # send that dies on file 3 having already uploaded 1 and 2 is worse than
@@ -1258,14 +1272,15 @@ share::send_background() {
   # rendezvous is even available.
   local -a paths=()
   local -i i=1 n=${#send_args[@]} no_more_flags=0
-  local a to="" mode=live
+  local a to="" mode=live expiration=""
   local -i mode_explicit=0 for_face=0
   while (( i <= n )); do
     a="${send_args[i]}"
     if (( no_more_flags )); then paths+=("$a"); (( i += 1 )); continue; fi
     case "$a" in
-      --to)                                   to="${send_args[i+1]:-}"; (( i += 2 )) ;;
-      --expiration|--downloads|--secret-file) (( i += 2 )) ;;
+      --to)                         to="${send_args[i+1]:-}"; (( i += 2 )) ;;
+      --expiration)                 expiration="${send_args[i+1]:-}"; (( i += 2 )) ;;
+      --downloads|--secret-file)    (( i += 2 )) ;;
       --live)                       mode=live;  mode_explicit=1; (( i += 1 )) ;;
       --store)                      mode=store; mode_explicit=1; (( i += 1 )) ;;
       --for-face)                   for_face=1; (( i += 1 )) ;;
@@ -1274,6 +1289,16 @@ share::send_background() {
       *)                                      paths+=("$a"); (( i += 1 )) ;;
     esac
   done
+
+  # Validated up front, before anything observable happens: for a live send
+  # (the default) everything below this point — share::label's title lookup,
+  # share::resolve, share::live_capable, minting a secret file, emitting and
+  # clipping the pasteable line — runs before share::send's OWN --expiration
+  # guard would ever fire, because that guard only runs once pueue actually
+  # executes the enqueued job. Without this check, a bad --expiration on a
+  # backgrounded live send still handed the human a working, clipped
+  # pasteable line before the delayed failure ever surfaced.
+  share::_validate_expiration "$expiration" || return 1
 
   # share::label fails closed on a bad path (logs to stderr, returns 1,
   # prints nothing) — that failure must not be swallowed by the command

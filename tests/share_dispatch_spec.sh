@@ -121,6 +121,24 @@ SH
     The path "$SB/calls" should not be exist
   End
 
+  # A negative spec ("-3d") is well-formed enough to parse (numeric prefix +
+  # a valid unit letter) but multiplies out to a negative number of seconds,
+  # not zero — the original `== 0` guard let it straight through to the
+  # backend.
+  It 'rejects a negative --expiration before any backend ever runs'
+    SHARE_PROFILE=personal
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+printf 'called\n' >>"$SHARE_CALLS"
+SH
+    chmod +x "$SB/bin/croc"
+    SHARE_CALLS="$SB/calls"; export SHARE_CALLS
+    When run share::send --expiration -3d "$SB/Report.pdf"
+    The status should be failure
+    The stderr should include 'invalid --expiration'
+    The path "$SB/calls" should not be exist
+  End
+
   It 'revokes a croc receipt through the croc backend'
     SHARE_PROFILE=personal
     share::ledger_add rid croc drop 'R' abc123 'https://x' 0
