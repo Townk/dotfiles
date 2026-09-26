@@ -91,7 +91,7 @@ main() {
   fi
   print -r -- "test-changed: running $#specs spec(s) affected by the diff against $base:"
   print -rl -- "  "${^specs}
-  tests/run-shellspec.sh $specs
+  tests/run-shellspec.sh ${JOBS:+--jobs $JOBS} $specs
 }
 
 main "$@"

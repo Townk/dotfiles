@@ -4,13 +4,26 @@
 # test-one, which runs a single spec, and test-changed, which runs only the
 # specs the branch's diff against master can reach (see below).
 #
-# shellspec forks a subshell per example, and a zsh spawn is ~30ms: the floor
-# is ~0.14s PER EXAMPLE regardless of what the example does, so the full
-# suite's ~3,100 examples cost ~434s before a single assertion runs. The whole
-# suite is ~9 minutes, which is exactly the kind of number that stops being
-# run. (`shellspec --jobs` would parallelise it, but under this zsh it
-# corrupts its own IPC — internals leak into the output and examples fail
-# spuriously. Do not reach for it without re-testing that.)
+# Every lane runs its spec files in parallel (shellspec --jobs), one job per
+# performance core. The framework itself is cheap (~4.5ms per example, ~8ms per
+# file, measured 2026-09-25); the time is what the examples do, ~10 minutes of
+# it for the whole suite, so parallel files are the lever. shellspec schedules
+# whole FILES, so a run cannot end before its longest file: HEAVY lists the
+# longest ones, measured, and every lane starts them first. Keep it honest when
+# a spec grows or shrinks. (The old warning that --jobs "corrupts its own IPC"
+# was raw US/RS bytes in two specs corrupting shellspec's report stream, fixed
+# in 96d6a0da; it holds under --jobs too.) JOBS=1 runs one file at a time.
+JOBS       ?= $(shell sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+export JOBS
+HEAVY      := tests/rip-audiobook_spec.sh tests/profile-traits_spec.sh \
+              tests/pbpaste-files_spec.sh tests/backup_tm_spec.sh \
+              tests/rip-push_spec.sh tests/backup_spec.sh \
+              tests/clipboard-mount_spec.sh tests/mux_click_spec.sh \
+              tests/pick-clipboard-files_spec.sh tests/job_spec.sh \
+              tests/mux_select_spec.sh tests/ssh-prepare-mount_spec.sh \
+              tests/mux_spec.sh tests/mux_stack_spec.sh
+# $(call heavy_first,LIST): LIST with its HEAVY files first, longest first.
+heavy_first = $(foreach h,$(HEAVY),$(filter $(h),$(1))) $(filter-out $(HEAVY),$(1))
 SPECS      := $(wildcard tests/*_spec.sh)
 
 # shellspec 0.28.1 exits 0 on an aborted run, even one with failures; the
@@ -45,20 +58,20 @@ MUX_SPECS  := tests/mux_spec.sh tests/zellij_spec.sh \
               $(wildcard tests/mux_*_spec.sh) $(wildcard tests/tmux_*_spec.sh) \
               tests/quick_launch_tmux_spec.sh tests/theme_apply_tmux_spec.sh
 
-# The one to run while working: ~5.5 minutes, everything that does not need a daemon.
-# test-changed is the quicker inner loop; this is the lane to trust before landing.
+# Everything that does not need a daemon. test-changed is the quicker inner
+# loop; this is the lane to trust before landing.
 test: lint recob
-	$(SHELLSPEC) $(FAST_SPECS)
+	$(SHELLSPEC) --jobs $(JOBS) $(call heavy_first,$(FAST_SPECS))
 
 # The mux/tmux surface (~135s) — the lane the migration work lives in. Not
 # diff-driven: test-changed only picks a mux spec if the diff reaches it.
 test-mux: lint recob
-	$(SHELLSPEC) $(MUX_SPECS)
+	$(SHELLSPEC) --jobs $(JOBS) $(call heavy_first,$(MUX_SPECS))
 
-# The gate: everything, before a push and in CI. ~9 minutes. Neither test-one
-# nor test-changed stands in for it.
+# The gate: everything, before a push and in CI. Neither test-one nor
+# test-changed stands in for it.
 test-all: lint recob
-	$(SHELLSPEC)
+	$(SHELLSPEC) --jobs $(JOBS) $(call heavy_first,$(SPECS))
 
 # One spec, seconds instead of minutes: make test-one SPEC=tests/<name>_spec.sh.
 # Builds recob first only when the spec pulls in tests/recob_helper.sh, and
