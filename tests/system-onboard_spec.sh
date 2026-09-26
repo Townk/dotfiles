@@ -1174,7 +1174,7 @@ STUB
 
   run_remote() {
     zsh -f -c 'export SYSTEM_ONBOARD_NO_RUN=1; source "$SCRIPT_PATH"; print -r -- "$DECOMMISSION_SCRIPT"' |
-      env -i HOME="$H" PATH="$H/.local/bin:/usr/bin:/bin" PURGE_TOOLS="${1:-0}" \
+      env -i HOME="$H" PATH="$H/.local/bin:/usr/bin:/bin" PURGE_TOOLS="${1:-0}" DECOMMISSION_TMP="$WORK/tmp" \
         MANAGED_CONFIG_DIRS="${MANAGED_CONFIG_DIRS:-}" MANAGED_SHARE_DIRS="${MANAGED_SHARE_DIRS:-}" \
         PURGE_APT="${PURGE_APT:-0}" ONBOARD_APT_PACKAGES="${ONBOARD_APT_PACKAGES:-}" APT_HISTORY_DIR="$WORK/apt" bash -s
   }
@@ -1242,6 +1242,57 @@ STUB
     The contents of file "$H/.ssh/config" should not include "Include"
     The contents of file "$H/.ssh/config" should not include "Match all"
     The result of function ssh_config_line_count should equal 1
+  End
+
+  # DECOMMISSION_SCRIPT is one single-quoted string. A stray apostrophe inside
+  # it ends the string early and turns the rest (rm -rf "$HOME"/...) into code
+  # that runs whenever the script is merely SOURCED, as several examples do
+  # with the real $HOME. Checked statically, so it can never run that code.
+  quote_leaks() {
+    awk '
+      /^readonly DECOMMISSION_SCRIPT=\047$/ { inside = 1; next }
+      inside && /^\047$/ { exit }
+      inside { gsub(/\047"\047"\047/, ""); if (index($0, "\047")) print NR ": " $0 }
+    ' "${1:-$SCRIPT}"
+  }
+
+  It 'keeps DECOMMISSION_SCRIPT one intact quoted string (no stray apostrophe)'
+    When call quote_leaks
+    The output should equal ""
+  End
+
+  It 'the quote check catches a stray apostrophe'
+    leaky() {
+      f="$WORK/leaky"
+      sed 's/scratch that the deployed stack creates/scratch the stack'"'"'s own tools create/' "$SCRIPT" >"$f"
+      quote_leaks "$f"
+    }
+    When call leaky
+    The output should include "stack's own tools"
+  End
+
+  # These examples run the real script on the machine running the spec: a
+  # literal /tmp path in it deletes that machine's own tmux sockets and job
+  # queue (it did, on every test-all run, until 2026-09-25).
+  It 'never names a real /tmp path: its scratch lives under DECOMMISSION_TMP'
+    remote_script() {
+      zsh -f -c 'export SYSTEM_ONBOARD_NO_RUN=1; source "$SCRIPT_PATH"; print -r -- "$DECOMMISSION_SCRIPT"'
+    }
+    When call remote_script
+    The output should not include '"/tmp/'
+    The output should not include ' /tmp/'
+    The output should include '${DECOMMISSION_TMP:-/tmp}'
+  End
+
+  It 'clears our scratch under DECOMMISSION_TMP, not the machine running the spec'
+    tmp_cleared() {
+      u=$(id -u)
+      mkdir -p "$WORK/tmp/tmux-$u" "$WORK/tmp/zsh-job-queue"
+      run_remote >/dev/null 2>&1
+      if [ ! -e "$WORK/tmp/tmux-$u" ] && [ ! -e "$WORK/tmp/zsh-job-queue" ]; then echo cleared; fi
+    }
+    When call tmp_cleared
+    The output should equal cleared
   End
 
   It 'removes managed dirs whole, keeps shared containers and their unmanaged neighbors, drops our state'

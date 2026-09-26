@@ -1240,12 +1240,17 @@ for d in ${MANAGED_SHARE_DIRS:-}; do rm -rf -- "$HOME/.local/share/$d"; done
 rm -rf "$HOME/.local/share/chezmoi" "$HOME/.config/chezmoi" "$HOME/.local/state/chezmoi" "$HOME/.config/zsh/secrets.d" "$HOME"/.cache/chezmoi*
 echo "== state, caches and scratch our stack wrote"
 # Always ours, whatever --purge-tools says: runtime state, caches and /tmp
-# scratch that the deployed stack creates on first use.
+# scratch that the deployed stack creates on first use. The scratch root is
+# DECOMMISSION_TMP (default /tmp) so the spec can run this for real without
+# deleting the tmux sockets and job queue of the machine running it.
 rm -rf "$HOME"/.local/state/{clipboard,mise,mux,nvim,ssh,theme,yazi,zsh,zellij,tmux,atuin,pueue,share,pick} \
        "$HOME"/.config/{glow,go,theme} \
        "$HOME"/.local/share/{atuin,Trash,zoxide,tealdeer,tldr,gitstatus} \
        "$HOME"/.cache/{glow,pick,yazi,bat,mise,nvim,zsh,gitstatus,tree-sitter,zellij,mux,theme,quick-launch,node-gyp,npm,pip,uv,go-build,go-mod,sigstore-rust,chezmoi-drift} "$HOME"/.cache/p10k* \
-       "/tmp/tmux-$(id -u)" "/tmp/yazi-$(id -u)" /tmp/zsh-abbr-privileged-users /tmp/zsh-job-queue "/tmp/hsperfdata_$(id -un)" /tmp/node-compile-cache /tmp/core-js-banners
+       "${DECOMMISSION_TMP:-/tmp}/tmux-$(id -u)" "${DECOMMISSION_TMP:-/tmp}/yazi-$(id -u)" \
+       "${DECOMMISSION_TMP:-/tmp}/zsh-abbr-privileged-users" "${DECOMMISSION_TMP:-/tmp}/zsh-job-queue" \
+       "${DECOMMISSION_TMP:-/tmp}/hsperfdata_$(id -un)" "${DECOMMISSION_TMP:-/tmp}/node-compile-cache" \
+       "${DECOMMISSION_TMP:-/tmp}/core-js-banners"
 if [ -f "$HOME/.ssh/config" ]; then
   # Drop the appended pair, then the blank line that separated it from what
   # was there before (trailing blank lines only).
