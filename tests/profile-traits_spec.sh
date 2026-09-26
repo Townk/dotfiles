@@ -125,17 +125,26 @@ End
 # through tests/render-matrix.sh (executed, never sourced). OS-dependent
 # expectations are gated on the host OS: the suite runs on both the Macs and
 # the Linux dev-shell, so both branches get exercised across machines.
-Describe '.chezmoiignore profile gating'
-  setup_matrix() {
-    MTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/render-matrix.XXXXXX")"
-  }
-  BeforeEach 'setup_matrix'
+# rendered_matrix <profile> — tests/render-matrix.sh's output for <profile>,
+# rendered once per run into $RENDER_CACHE/<profile>. It is a pure function of
+# the source tree and the profile, and a render costs ~0.8s: rendering it for
+# every example made this the slowest spec in the suite. A failed render is
+# not cached, so its status reaches every example that asks.
+RENDER_CACHE="$SHELLSPEC_TMPBASE/profile-traits-renders"
+rendered_matrix() {
+  [[ -d "$RENDER_CACHE/$1" ]] && return 0
+  mkdir -p "$RENDER_CACHE"
+  local tmp; tmp="$(mktemp -d "$RENDER_CACHE/.render.XXXXXX")" || return 1
+  "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
+    --source "$SHELLSPEC_PROJECT_ROOT/home" --profile "$1" --out "$tmp" \
+    >/dev/null || { local rc=$?; rm -rf "$tmp"; return $rc; }
+  mv "$tmp" "$RENDER_CACHE/$1"
+}
 
+Describe '.chezmoiignore profile gating'
   ignored_for() {
-    "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
-      --source "$SHELLSPEC_PROJECT_ROOT/home" --profile "$1" --out "$MTMP/$1" \
-      >/dev/null || return $?
-    cat "$MTMP/$1/ignored.txt"
+    rendered_matrix "$1" || return $?
+    cat "$RENDER_CACHE/$1/ignored.txt"
   }
 
   # ignored_line_for <profile> <target> — exit 0 iff <target> is a whole line
@@ -247,16 +256,9 @@ Describe '.chezmoiignore profile gating'
 End
 
 Describe 'template gates for the server profile'
-  setup_matrix() {
-    MTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/render-matrix.XXXXXX")"
-  }
-  BeforeEach 'setup_matrix'
-
   rendered() {  # rendered <profile> <flattened-template-name>
-    "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
-      --source "$SHELLSPEC_PROJECT_ROOT/home" --profile "$1" --out "$MTMP/$1" \
-      >/dev/null || return $?
-    cat "$MTMP/$1/rendered/$2"
+    rendered_matrix "$1" || return $?
+    cat "$RENDER_CACHE/$1/rendered/$2"
   }
 
   It 'server: ai-playbook drives the claude harness (cursor never deploys there)'
@@ -371,16 +373,9 @@ End
 # and AI tooling leave. Server keeps all of it (byte-parity is asserted in the
 # plan's final check, these examples pin the semantics).
 Describe 'appliance manifests'
-  setup_matrix() {
-    MTMP="$(mktemp -d "$SHELLSPEC_TMPBASE/render-matrix.XXXXXX")"
-  }
-  BeforeEach 'setup_matrix'
-
   rendered() {  # rendered <profile> <flattened-template-name>
-    "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
-      --source "$SHELLSPEC_PROJECT_ROOT/home" --profile "$1" --out "$MTMP/$1" \
-      >/dev/null || return $?
-    cat "$MTMP/$1/rendered/$2"
+    rendered_matrix "$1" || return $?
+    cat "$RENDER_CACHE/$1/rendered/$2"
   }
 
   It 'appliance Cargofile: no dev crates, tidy-viewer stays'
