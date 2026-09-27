@@ -299,4 +299,93 @@ TOML
     The output should include 'd.example.com/s/abc'
     The stderr should include 'sending to d.example.com'
   End
+
+  # --- --qr flag tests -------------------------------------------------------
+  # QR rendering is best-effort: missing tool prints one line to stderr and
+  # continues unchanged, never failing the send.
+  #
+  # These live-mode examples run through the SAME house rule as every other
+  # example in this file (see the comment in setup()): `--to lan` resolves to
+  # a real croc invocation unless the fake croc on PATH intercepts it. The
+  # fake, from setup(), exits immediately with canned output, so `--foreground`
+  # here never blocks on a real peer or touches the network.
+  #
+  # The stub records its own argv and stdin, so the specs can assert on
+  # exactly what was handed to it — a bare receive command/URL, never the
+  # whole labeled blurb (unusable as a phone-scannable code). SHARE_QRENCODE_BIN
+  # points share::render_qr straight at the stub or, for the "missing" case, at
+  # a path that provably does not exist — never by shrinking PATH, which would
+  # also hide the fake croc/pueue/tmux/pbcopy and let the send fall through to
+  # whatever real binaries the host happens to have.
+  stub_qrencode() {
+    cat >"$SB/bin/qrencode" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >"$SB/qrencode-argv"
+cat >"$SB/qrencode-stdin"
+printf '%s\n' "$1"
+SH
+    chmod +x "$SB/bin/qrencode"
+    export SHARE_QRENCODE_BIN="$SB/bin/qrencode"
+  }
+
+  It 'renders a QR code for a live send when qrencode is present'
+    stub_qrencode QR_CODE_OUTPUT
+    When run script "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
+    The status should be success
+    The output should include 'receive with:  croc'
+    The output should include 'QR_CODE_OUTPUT'
+    The stderr should include 'sending to'
+    The contents of file "$SB/qrencode-argv" should include '-t ANSIUTF8'
+    The contents of file "$SB/qrencode-stdin" should match pattern 'croc [a-z2-9]*-[a-z2-9]*-[a-z2-9]*-[a-z2-9]*'
+    The contents of file "$SB/qrencode-stdin" should not include 'receive with'
+    The contents of file "$SB/qrencode-stdin" should not include 'Report.pdf'
+  End
+
+  It 'falls back to a one-line stderr notice when qrencode is missing, leaving the send unchanged'
+    export SHARE_QRENCODE_BIN="$SB/bin/does-not-exist-qrencode"
+    When run script "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
+    The status should be success
+    The output should include 'receive with:  croc'
+    The stderr should include 'sending to'
+    The stderr should include 'qrencode is not installed'
+  End
+
+  It 'renders a QR code for a stored send when qrencode is present'
+    stub_qrencode STORED_QR
+    When run script "$SHARE_BIN" send --qr --store --foreground "$SB/Report.pdf"
+    The status should be success
+    The output should include 'd.example.com/s/abc'
+    The output should include 'STORED_QR'
+    The stderr should include 'sending to'
+    The contents of file "$SB/qrencode-argv" should include '-t ANSIUTF8'
+    The contents of file "$SB/qrencode-stdin" should equal 'https://d.example.com/s/abc#v1.KEY'
+  End
+
+  # The default path: no --foreground, no --store — a live send, backgrounded.
+  # The pasteable line and the QR both have to be handed over HERE, before
+  # send_background enqueues the transfer as a job (see the comment at its
+  # call site) — this is the only example in this block proving --qr reaches
+  # that path rather than just share::send's own foreground branch.
+  It 'renders a QR code for the default (backgrounded, live) send'
+    stub_qrencode BACKGROUND_QR
+    When run script "$SHARE_BIN" send --qr --to lan "$SB/Report.pdf"
+    The status should be success
+    The stderr should include 'receive with:  croc'
+    The stderr should include 'BACKGROUND_QR'
+    The output should include 'queued as job'
+    The contents of file "$SB/qrencode-argv" should include '-t ANSIUTF8'
+    The contents of file "$SB/qrencode-stdin" should match pattern 'croc [a-z2-9]*-[a-z2-9]*-[a-z2-9]*-[a-z2-9]*'
+    The contents of file "$SB/qrencode-stdin" should not include 'receive with'
+    The contents of file "$SB/qrencode-stdin" should not include 'Report.pdf'
+  End
+
+  It 'never invokes qrencode when --qr is omitted'
+    stub_qrencode SHOULD_NOT_APPEAR
+    When run script "$SHARE_BIN" send --store --foreground "$SB/Report.pdf"
+    The status should be success
+    The output should include 'd.example.com/s/abc'
+    The output should not include 'SHOULD_NOT_APPEAR'
+    The stderr should include 'sending to'
+    The path "$SB/qrencode-argv" should not be exist
+  End
 End

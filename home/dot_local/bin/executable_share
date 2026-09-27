@@ -63,6 +63,9 @@ Send options:
   --for-face            print the pasteable line on stdout and leave the
                          clipboard alone (for yazi / the picker, which must not
                          replace the file clip they were invoked on)
+  --qr                  render the receive command as a QR code (if qrencode
+                         is available; missing tool prints one line to stderr
+                         and continues)
 
 Get options:
   --out <dir>           where to write (default: ~/Downloads)
@@ -187,6 +190,8 @@ dispatch_send() {
       --for-face)   for_face=1; rest+=("$1"); shift ;;
       --watch)      watch=1; background=1; shift ;;
       --force)      force=1; shift ;;
+      # --qr takes no value and needs no CLI-level bookkeeping (unlike
+      # --for-face above) — the catch-all below already passes it through.
       *)            rest+=("$1"); shift ;;
     esac
   done

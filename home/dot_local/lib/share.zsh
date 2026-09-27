@@ -471,14 +471,62 @@ share::_validate_expiration() {
   return 0
 }
 
-# share::send [--to E] [--live] [--expiration D] [--downloads N] <path…>
+# share::render_qr <text> — render a QR code for the pasteable line.
+# Best-effort: missing qrencode tool prints one line to stderr and continues.
+# Never fails the send. Resolved through SHARE_QRENCODE_BIN rather than a bare
+# `qrencode`, so a test can point it at a path that provably does not exist —
+# asserting the fallback by stripping PATH down instead would also hide every
+# other stub (croc/pueue/…) a live send needs and risk falling through to the
+# real network.
+share::render_qr() {
+  local text="${1-}"
+  [[ -n "$text" ]] || return 0
+  local bin="${SHARE_QRENCODE_BIN:-qrencode}"
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    print -ru2 -- "share: qrencode is not installed; skipping QR code"
+    return 0
+  fi
+  printf '%s' "$text" | "$bin" -t ANSIUTF8 2>/dev/null || return 0
+}
+
+# share::_live_receive_command <blurb> — the bare `croc [--relay R] <phrase>`
+# a phone should scan, stripped of the label/prose share::blurb wraps around
+# it. Reuses share::parse_live's own regex rather than recomputing relay/code
+# from the endpoint, so it stays in lockstep with whatever that line actually
+# says. A custom `message` template that omits "croc %code" verbatim yields
+# nothing here — render_qr's own empty-text guard just skips silently.
+share::_live_receive_command() {
+  printf '%s' "${1-}" \
+    | grep -oE 'croc([[:space:]]+--relay[[:space:]]+[^[:space:]]+)?[[:space:]]+[a-z0-9]+(-[a-z0-9]+)+' \
+    | head -1
+}
+
+# share::_stored_receive_value <blurb> — the bare URL or CLI token a phone
+# should scan, stripped of the label/expiry prose share::blurb wraps around
+# it. A URL wins when both are present (kind=web); otherwise the token
+# (kind=cli). Generic patterns rather than share::croc_parse_share's
+# croc-specific `/s/<id>#v1.…` shape: an rclone endpoint's URL never matches
+# that, and this needs to work for either backend.
+share::_stored_receive_value() {
+  local text="${1-}" m
+  m="$(printf '%s' "$text" | grep -oE 'https?://[^[:space:]]+' | head -1)"
+  if [[ -n "$m" ]]; then
+    printf '%s\n' "$m"
+    return 0
+  fi
+  m="$(printf '%s' "$text" | grep -oE 'croc-store-v1\.[^[:space:]]+' | head -1)"
+  [[ -n "$m" ]] || return 1
+  printf '%s\n' "$m"
+}
+
+# share::send [--to E] [--live] [--expiration D] [--downloads N] [--qr] <path…>
 share::send() {
   # Live is the DEFAULT (amendment D1). The asynchrony this silo exists for is
   # on the SENDER's side — fire it, let the job hold the transfer open, walk
   # away — and live delivers that while escaping both the 2 GiB stored ceiling
   # and leaving a copy in anyone's custody. Stored is the explicit choice for a
   # recipient who will not be around today.
-  local endpoint="" mode=live secret_file="" mode_explicit=0 for_face=0
+  local endpoint="" mode=live secret_file="" mode_explicit=0 for_face=0 qr=0
   local expiration="$SHARE_DEFAULT_EXPIRATION" downloads="$SHARE_DEFAULT_DOWNLOADS"
   # Each value-consuming flag is guarded BEFORE the `shift 2`: with the flag
   # as the last token, `$2` is empty and `shift 2` fails in zsh (shift count
@@ -506,6 +554,7 @@ share::send() {
       # them invites someone to add the other separately and re-open the
       # conflict. You do not get the job id back; the HUD has it.
       --for-face)   for_face=1; shift ;;
+      --qr)         qr=1; shift ;;
       --expiration) [[ $# -ge 2 ]] || die "share: --expiration requires a value"
                      expiration="$2"; shift 2 ;;
       --downloads)  [[ $# -ge 2 ]] || die "share: --downloads requires a value"
@@ -608,6 +657,7 @@ share::send() {
     local live_line
     live_line="$(share::emit_live_blurb "$endpoint" "$secret_file" "$@")" || return 1
     print -r -- "$live_line"
+    (( qr )) && share::render_qr "$(share::_live_receive_command "$live_line")"
     (( for_face )) || share::clip "$live_line"
   fi
 
@@ -642,6 +692,7 @@ share::send() {
   # Stored: croc_send returns the blurb because the URL did not exist until now.
   [[ -n "$blurb" ]] || return 0
   print -r -- "$blurb"
+  (( qr )) && share::render_qr "$(share::_stored_receive_value "$blurb")"
   (( for_face )) || share::clip "$blurb"
   # share::announce is best-effort by contract (it wraps `notify`, which is
   # documented as best-effort itself): a failed RECOB bridge hop, or simply
@@ -1273,7 +1324,7 @@ share::send_background() {
   local -a paths=()
   local -i i=1 n=${#send_args[@]} no_more_flags=0
   local a to="" mode=live expiration=""
-  local -i mode_explicit=0 for_face=0
+  local -i mode_explicit=0 for_face=0 qr=0
   while (( i <= n )); do
     a="${send_args[i]}"
     if (( no_more_flags )); then paths+=("$a"); (( i += 1 )); continue; fi
@@ -1284,6 +1335,7 @@ share::send_background() {
       --live)                       mode=live;  mode_explicit=1; (( i += 1 )) ;;
       --store)                      mode=store; mode_explicit=1; (( i += 1 )) ;;
       --for-face)                   for_face=1; (( i += 1 )) ;;
+      --qr)                         qr=1; (( i += 1 )) ;;
       --)                                     no_more_flags=1; (( i += 1 )) ;;
       -*)                                     (( i += 1 )) ;;
       *)                                      paths+=("$a"); (( i += 1 )) ;;
@@ -1350,6 +1402,7 @@ share::send_background() {
         # `id="$(share::send_background …)"`. Printing the line there would
         # swallow it into the id variable and show the human neither.
         print -ru2 -- "$line"
+        (( qr )) && share::render_qr "$(share::_live_receive_command "$line")" >&2
         share::clip "$line"
       fi
       extra=(--secret-file "$sf")

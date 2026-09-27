@@ -58,6 +58,7 @@ _share() {
     '--watch[enqueue and open the jobs dashboard on it]'
     '--force[use an endpoint this profile is not allowed to use]'
     '--for-face[print the line on stdout and leave the clipboard alone]'
+    '--qr[render the receive command as a QR code]'
     '--expiration[stored-transfer lifetime]:spec:(90m 12h 3d 2w)'
     '--downloads[stored downloads allowed]:count:(1 2 5 10)'
   )
