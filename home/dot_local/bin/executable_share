@@ -13,7 +13,8 @@
 #
 # Which mechanism carries the bytes is a property of the ENDPOINT, never of the
 # command line: croc's zero-knowledge store for personal files, rclone/OneDrive
-# for work. The destination host is echoed before anything leaves.
+# for work, and (experimental, explicit --to only) an ssh copy onto your own
+# box. The destination host is echoed before anything leaves.
 #
 # Thin by design: this file only parses, dispatches to share::*, and prints.
 # Every behaviour beyond that lives in a library spec already, so it stays out
@@ -48,7 +49,9 @@ Sending is LIVE and in the BACKGROUND by default: the pasteable line is
 printed and copied straight away, and the transfer waits for the recipient.
 
 Send options:
-  --to <endpoint>       override the profile default
+  --to <endpoint>       override the profile default (an ssh endpoint is only
+                         ever used this way; it copies the files over ssh and
+                         prints their remote paths)
   --store               upload and park it instead of holding a transfer open
                          (for a recipient who will not be around today; 2 GiB
                          ceiling, and the bytes sit on a server until fetched)

@@ -3,9 +3,10 @@
 # them, hand back a link. SOURCED, never executed.
 # Spec: docs/superpowers/specs/2026-08-11-croc-file-sharing-design.md
 #
-# Two backends behind one interface: `croc` (end-to-end encrypted, personal)
-# and `rclone` (custodial, work/OneDrive). Which one an endpoint uses is a
-# property of the endpoint, never of the command line.
+# Three backends behind one interface: `croc` (end-to-end encrypted, personal),
+# `rclone` (custodial, work/OneDrive) and `ssh` (a copy onto one of your own
+# boxes, explicit --to only — the Phase 4 dev-shell experiment). Which one an
+# endpoint uses is a property of the endpoint, never of the command line.
 
 [ -n "${__SHARE_ZSH_LOADED:-}" ] && return 0
 __SHARE_ZSH_LOADED=1
@@ -21,6 +22,7 @@ source "$SHARE_LIB_SELF_DIR/share/blurb.zsh"
 source "$SHARE_LIB_SELF_DIR/share/ledger.zsh"
 source "$SHARE_LIB_SELF_DIR/share/croc.zsh"
 source "$SHARE_LIB_SELF_DIR/share/rclone.zsh"
+source "$SHARE_LIB_SELF_DIR/share/ssh.zsh"
 
 : "${SHARE_CONFIG_DIR:=${XDG_CONFIG_HOME:-$HOME/.config}/share}"
 : "${SHARE_ENDPOINTS_FILE:=$SHARE_CONFIG_DIR/endpoints.toml}"
@@ -242,6 +244,13 @@ share::destination_host() {
   remote="$(share::field "$name" remote)"
   if [[ -n "$remote" ]]; then
     printf '%s\n' "$remote"
+    return 0
+  fi
+
+  # An ssh endpoint: the host part of its target.
+  local target; target="$(share::field "$name" target)"
+  if [[ -n "$target" ]]; then
+    printf '%s\n' "${target##*@}"
     return 0
   fi
 
@@ -527,6 +536,7 @@ share::send() {
   # and leaving a copy in anyone's custody. Stored is the explicit choice for a
   # recipient who will not be around today.
   local endpoint="" mode=live secret_file="" mode_explicit=0 for_face=0 qr=0
+  local -i exp_given=0 dl_given=0
   local expiration="$SHARE_DEFAULT_EXPIRATION" downloads="$SHARE_DEFAULT_DOWNLOADS"
   # Each value-consuming flag is guarded BEFORE the `shift 2`: with the flag
   # as the last token, `$2` is empty and `shift 2` fails in zsh (shift count
@@ -556,9 +566,9 @@ share::send() {
       --for-face)   for_face=1; shift ;;
       --qr)         qr=1; shift ;;
       --expiration) [[ $# -ge 2 ]] || die "share: --expiration requires a value"
-                     expiration="$2"; shift 2 ;;
+                     expiration="$2"; exp_given=1; shift 2 ;;
       --downloads)  [[ $# -ge 2 ]] || die "share: --downloads requires a value"
-                     downloads="$2"; shift 2 ;;
+                     downloads="$2"; dl_given=1; shift 2 ;;
       --)           shift; break ;;
       -*)           die "share: unknown option: $1" ;;
       *)            break ;;
@@ -605,7 +615,29 @@ share::send() {
     [[ -e "$p" ]] || { log_error "share: no such file: $p"; return 1; }
   done
 
+  local -i to_given=0
+  [[ -n "$endpoint" ]] && to_given=1
   endpoint="$(share::resolve "$endpoint")" || return 1
+
+  # The croc default lives at the CALL SITE, not inside share::field: a
+  # key-specific default hidden in the accessor silently overrode whatever a
+  # caller passed.
+  local backend
+  backend="$(share::field "$endpoint" backend croc)" || return 1
+
+  # ssh has exactly one mode — copy and be done — and refuses everything it
+  # cannot honour here, ahead of the pre-send echo, so a misconfigured ssh
+  # endpoint is named for what it lacks rather than as "no store, remote or
+  # relay".
+  if [[ "$backend" == ssh ]]; then
+    local -a unsupported=()
+    [[ "$mode" == live ]] && (( mode_explicit )) && unsupported+=(--live)
+    (( qr )) && unsupported+=(--qr)
+    (( exp_given )) && unsupported+=(--expiration)
+    (( dl_given )) && unsupported+=(--downloads)
+    share::ssh_preflight "$endpoint" "$to_given" "${unsupported[@]}" -- "$@" || return 1
+    mode=store
+  fi
 
   # The pre-send echo. Not a nicety: it is what makes a wrong endpoint visible
   # before any bytes leave, and it names the HOST rather than the nickname.
@@ -617,12 +649,6 @@ share::send() {
   local host
   host="$(share::destination_host "$endpoint")" || return 1
   log_info "sending to $host" >&2
-
-  # The croc default lives at the CALL SITE, not inside share::field: a
-  # key-specific default hidden in the accessor silently overrode whatever a
-  # caller passed.
-  local backend
-  backend="$(share::field "$endpoint" backend croc)" || return 1
 
   # "Prioritise live, but never silently" — the endpoint has the final say,
   # because an endpoint that cannot carry a live transfer would otherwise fall
@@ -678,6 +704,9 @@ share::send() {
       [[ "$mode" == live ]] && die "share: the rclone backend has no live mode"
       blurb="$(share::rclone_send --expiration "$expiration" "$endpoint" "$@")" || return 1
       ;;
+    ssh)
+      blurb="$(share::ssh_send "$endpoint" "$@")" || return 1
+      ;;
     *) die "share: unknown backend: $backend" ;;
   esac
 
@@ -714,6 +743,7 @@ share::revoke() {
   case "$backend" in
     croc)   share::croc_revoke "$ref" || return 1 ;;
     rclone) share::rclone_revoke "$ref" || return 1 ;;
+    ssh)    share::ssh_revoke "$ref" || return 1 ;;
     # A live (peer-to-peer) croc transfer has no store-side id — it dies the
     # moment croc exits, or once the recipient completes it — so there is
     # nothing left to revoke. `ref` is empty by construction for these rows
@@ -1136,6 +1166,11 @@ share::_status_row() {
   local name="$1" backend relay store remote code
   backend="$(share::field "$name" backend croc)"
 
+  if [[ "$backend" == ssh ]]; then
+    share::ssh_status_row "$name"
+    return 0
+  fi
+
   if [[ "$backend" == rclone ]]; then
     remote="$(share::field "$name" remote)"
     local have=no
@@ -1324,14 +1359,15 @@ share::send_background() {
   local -a paths=()
   local -i i=1 n=${#send_args[@]} no_more_flags=0
   local a to="" mode=live expiration=""
-  local -i mode_explicit=0 for_face=0 qr=0
+  local -i mode_explicit=0 for_face=0 qr=0 exp_given=0 dl_given=0
   while (( i <= n )); do
     a="${send_args[i]}"
     if (( no_more_flags )); then paths+=("$a"); (( i += 1 )); continue; fi
     case "$a" in
       --to)                         to="${send_args[i+1]:-}"; (( i += 2 )) ;;
-      --expiration)                 expiration="${send_args[i+1]:-}"; (( i += 2 )) ;;
-      --downloads|--secret-file)    (( i += 2 )) ;;
+      --expiration)                 expiration="${send_args[i+1]:-}"; exp_given=1; (( i += 2 )) ;;
+      --downloads)                  dl_given=1; (( i += 2 )) ;;
+      --secret-file)                (( i += 2 )) ;;
       --live)                       mode=live;  mode_explicit=1; (( i += 1 )) ;;
       --store)                      mode=store; mode_explicit=1; (( i += 1 )) ;;
       --for-face)                   for_face=1; (( i += 1 )) ;;
@@ -1367,6 +1403,26 @@ share::send_background() {
       return 1
     }
     title="share $label"
+  fi
+
+  # An ssh endpoint is refused HERE when it would be refused at all, rather
+  # than inside the job as a failure toast minutes later — share::send runs
+  # the same preflight again when the job executes. It also has no live mode,
+  # so the live block below must not warn about downgrading it.
+  if (( ${#paths} )); then
+    local sep="$to"
+    [[ -n "$sep" ]] || sep="$(share::default_endpoint 2>/dev/null)" || sep=""
+    if [[ -n "$sep" && "$(share::field "$sep" backend croc 2>/dev/null)" == ssh ]]; then
+      local -a unsupported=()
+      [[ "$mode" == live ]] && (( mode_explicit )) && unsupported+=(--live)
+      (( qr )) && unsupported+=(--qr)
+      (( exp_given )) && unsupported+=(--expiration)
+      (( dl_given )) && unsupported+=(--downloads)
+      local -i to_given=0
+      [[ -n "$to" ]] && to_given=1
+      share::ssh_preflight "$sep" "$to_given" "${unsupported[@]}" -- "${paths[@]}" || return 1
+      mode=store
+    fi
   fi
 
   # THE POINT OF THE WHOLE FEATURE (amendment D1/D5): for a live send the

@@ -15,8 +15,8 @@
 # default because croc's store is zero-knowledge: it holds ciphertext and the
 # master key never leaves the URL fragment.
 #
-# Fields, all optional except one of `store` / `relay` / `remote`:
-#   backend      "croc" (default) or "rclone"
+# Fields, all optional except one of `store` / `relay` / `remote` / `target`:
+#   backend      "croc" (default), "rclone" or "ssh"
 #   web          true if recipients get a browser page; drives which blurb
 #                template is used. Capability, NOT profile — a self-hosted
 #                croc-web serves its own page, so a recipient needs no CLI.
@@ -88,6 +88,18 @@
 #   remote       an rclone "remote:path" (configure it with `rclone config`)
 #   link_scope   "organization" (tenant-only) or "anonymous"
 #   link_type    "view" (default), "edit", or "embed"
+#
+# ssh backend (EXPERIMENT — copies files onto one of YOUR OWN boxes):
+#   target       "user@host", or a Host alias from ~/.ssh/config. Key/agent
+#                auth only: ssh runs with BatchMode, so it never prompts.
+#   dir          where copies land on the remote: "~/…", relative (to the
+#                remote $HOME) or absolute. Each send gets its own stamped
+#                directory inside it; `share revoke` removes exactly the files
+#                that send copied, and the stamped directory once it is empty.
+#                Never `default_for` and never chosen implicitly — always
+#                `share send --to <name>`. No live mode, no web link, no --qr,
+#                no --expiration/--downloads: the pasteable line is the remote
+#                path(s), for pasting into a shell on that box.
 
 # --- home store: a container on your own server, behind a reverse proxy -----
 # Reachable on the LAN and the tailnet only, so it is NOT default_for anything:
@@ -153,6 +165,14 @@
 # relay       = "relay.home.example.com:9009"
 # web         = false            # recipients need the croc CLI
 # profiles    = ["personal", "work"]
+
+# --- your own dev box, over ssh (experiment) --------------------------------
+# [devbox]
+# description = "Dev box over ssh — explicit --to only"
+# backend  = "ssh"
+# target   = "me@devbox.example.com"
+# dir      = "~/incoming"
+# profiles = ["work"]
 
 # --- a bare relay: live transfers only, recipients need the croc CLI ---------
 # [lab]
