@@ -29,78 +29,80 @@
 # the backend directly instead of warning and falling back on every update.
 # Measured on the dev-shell only; the server keeps mise defaults.
 use_versions_host = false
-# The dev shell is Ubuntu 22.04 (glibc 2.35), older than the hosts upstreams
-# now build their gnu assets on: yazi 26.9.1 and gping want GLIBC_2.39, atuin
-# and fend 2.38, so every one of them died with a linker error rather than
-# running. The aqua registry already maps linux to unknown-linux-musl for
-# these, but mise rewrites that suffix back to -gnu whenever it detects glibc
-# (apply_aqua_libc_replacement, src/backend/aqua.rs), and the github backend
-# scores assets by the same detected libc. Declaring musl overrides the
-# detection, so both backends take the static builds and stay immune to the
-# next upstream toolchain bump.
+# The dev shell is Ubuntu 22.04 (glibc 2.35), older than the glibc many upstream
+# gnu Linux assets now target: yazi 26.9.1 and gping want GLIBC_2.39, atuin and
+# fend 2.38, so those builds fail at link/load time here. The aqua registry maps
+# linux to unknown-linux-musl for several tools, but mise rewrites that suffix
+# back to -gnu on a glibc host (apply_aqua_libc_replacement). Per-tool
+# `libc = "musl"` (see [tools] below) keeps musl/static picks for those CLI
+# tools without touching language runtimes in config.toml.
+#
+# Global `libc = "musl"` also steers core node to unofficial-builds musl
+# tarballs when node.flavor is unset (mise 2026.9.16 docs/lang/node.md). Those
+# binaries are dynamically linked against /lib/ld-musl-x86_64.so.1, which this
+# image does not ship. Use gnu here so node installs from nodejs.org/dist; leave
+# musl on individual precompiled tools only.
 #
 # Only affects tools installed AFTER this lands — mise keys installs by version
-# alone, so a tool already present is left on its gnu build until it upgrades.
-# Safe for the runtimes: go and rust carry no libc variants, python's
-# precompiled builds and node both publish musl (mise routes node to
-# unofficial-builds.nodejs.org, which nodejs.org/dist has no musl tarballs for).
-libc = "musl"
+# alone, so a tool already present is left on its prior build until it upgrades.
+libc = "gnu"
 {{- end }}
 
 [tools]
-# Registry-resolved (prebuilt binaries)
-"zellij" = "latest"
+# Registry-resolved (prebuilt binaries). Per-tool musl keeps the old global-musl
+# asset picks on this glibc-2.35 host (see [settings].libc above).
+"zellij" = { version = "latest", libc = "musl" }
 # Build tmux locally because upstream publishes source only and the Aqua
 # binaries omit native Sixel support. The asdf backend compiles the pinned
 # release and owns the resulting mise shim.
 "asdf:mise-plugins/mise-tmux" = { version = "3.7b", install_env = { TMUX_EXTRA_CONFIGURE_OPTIONS = "--enable-sixel" } }
-"neovim" = "latest"
-"bat" = "latest"
-"eza" = "latest"
-"fd" = "latest"
-"jq" = "latest"
-"yq" = "latest"
-"ripgrep" = "latest"
-"delta" = "latest"
-"bottom" = "latest"
-"duf" = "latest"
+"neovim" = { version = "latest", libc = "musl" }
+"bat" = { version = "latest", libc = "musl" }
+"eza" = { version = "latest", libc = "musl" }
+"fd" = { version = "latest", libc = "musl" }
+"jq" = { version = "latest", libc = "musl" }
+"yq" = { version = "latest", libc = "musl" }
+"ripgrep" = { version = "latest", libc = "musl" }
+"delta" = { version = "latest", libc = "musl" }
+"bottom" = { version = "latest", libc = "musl" }
+"duf" = { version = "latest", libc = "musl" }
 {{ if $traits.devTooling -}}
-"hyperfine" = "latest"
+"hyperfine" = { version = "latest", libc = "musl" }
 {{- end }}
-"jless" = "latest"
+"jless" = { version = "latest", libc = "musl" }
 # tokei is NOT here: it ships no prebuilt binaries, so it must be built from
 # source, and mise's cargo backend runs inside the same `mise install` that
 # installs Rust — before rustup has a default toolchain. It lives in the
 # Cargofile instead (built later by the cargo worker, once Rust is ready).
-"gping" = "latest"
+"gping" = { version = "latest", libc = "musl" }
 {{ if $traits.devTooling -}}
-"grex" = "latest"
+"grex" = { version = "latest", libc = "musl" }
 {{- end }}
-"gron" = "latest"
-"zoxide" = "latest"
-"yazi" = "latest"
-"lazygit" = "latest"
-"glow" = "latest"
-"gum" = "latest"
-"doggo" = "latest"
-"atuin" = "latest"
+"gron" = { version = "latest", libc = "musl" }
+"zoxide" = { version = "latest", libc = "musl" }
+"yazi" = { version = "latest", libc = "musl" }
+"lazygit" = { version = "latest", libc = "musl" }
+"glow" = { version = "latest", libc = "musl" }
+"gum" = { version = "latest", libc = "musl" }
+"doggo" = { version = "latest", libc = "musl" }
+"atuin" = { version = "latest", libc = "musl" }
 {{ if $traits.devTooling -}}
-"git-cliff" = "latest"
-"ast-grep" = "latest"
+"git-cliff" = { version = "latest", libc = "musl" }
+"ast-grep" = { version = "latest", libc = "musl" }
 {{- end }}
-"hexyl" = "latest"
+"hexyl" = { version = "latest", libc = "musl" }
 
 # Secret decryption at chezmoi apply. A headless host's secrets fragment runs
 # `output sops --decrypt` against its SOPS+age blob; age covers key rotation.
 # See `system-onboard` / `system-secrets`.
-"sops" = "latest"
-"age" = "latest"
+"sops" = { version = "latest", libc = "musl" }
+"age" = { version = "latest", libc = "musl" }
 
 # sqlite3 CLI for the clipboard store (Phase 7). MUST be mise-managed, not
 # apt: the image wipes everything outside $HOME on reboot, and the bridge
 # dispatcher + pick-clipboard shell out to sqlite3 (incl. its readfile()/
 # writefile() shell functions) on every store op.
-"sqlite" = "latest"
+"sqlite" = { version = "latest", libc = "musl" }
 
 # fzf straight from GitHub releases. The registry/apt fzf is too old
 # (0.29) for the modern --bind keys z4h's completion widgets use (e.g.
@@ -113,14 +115,15 @@ libc = "musl"
 "http:chafa" = { version = "1.18.2", url = "https://hpjansson.org/chafa/releases/static/chafa-{{`{{ version }}`}}-1-x86_64-linux-gnu.tar.gz", checksum = "sha256:deb149bc8823589f635f24db3ecc83b7daa86e4c20d8a9f58e9ce53bd97bdda9" }
 
 # Not in the registry — pinned to a GitHub-release backend.
-"aqua:dalance/procs" = "latest"
+"aqua:dalance/procs" = { version = "latest", libc = "musl" }
 # onefetch is NOT here: its single linux asset is glibc-2.39-only with no musl
-# counterpart, so the libc = "musl" above cannot reach it. It builds from source
+# counterpart, so per-tool `libc = "musl"` cannot reach it. It builds from source
 # in the Cargofile instead, alongside tokei.
-"aqua:ouch-org/ouch" = "latest"
-"aqua:imsnif/bandwhich" = "latest"
-"aqua:fujiapple852/trippy" = "latest"
-"github:printfn/fend" = "latest"
+"aqua:ouch-org/ouch" = { version = "latest", libc = "musl" }
+"aqua:imsnif/bandwhich" = { version = "latest", libc = "musl" }
+"aqua:fujiapple852/trippy" = { version = "latest", libc = "musl" }
+# GitHub backend has no per-tool libc; releases ship both gnu and musl zip names.
+"github:printfn/fend" = { version = "latest", matching = "musl" }
 "github:NerdyPepper/eva" = "latest"
 "github:Macchina-CLI/macchina" = "latest"
 "github:sibprogrammer/xq" = "latest"
