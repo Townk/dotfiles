@@ -52,9 +52,31 @@ share::_ssh_run() {
   ssh -T -e none -o BatchMode=yes -- "$target" "sh -c '$script'"
 }
 
+# share::ssh_reject_store_remote <endpoint> — an ssh endpoint speaks only to
+# its `target`; a `store` or `remote` key alongside it is a configuration
+# error, not a fallback, because share::destination_host's echo would then
+# name the store's or remote's host while the bytes actually go to `target`.
+# Called from both share::destination_host (the pre-send echo) and
+# share::ssh_check_endpoint (this backend's own resolution), so no ssh path
+# can ever echo or use the wrong host.
+share::ssh_reject_store_remote() {
+  local ep="$1" store remote
+  local -a bad=()
+  store="$(share::field "$ep" store)"
+  remote="$(share::field "$ep" remote)"
+  [[ -n "$store" ]] && bad+=(store)
+  [[ -n "$remote" ]] && bad+=(remote)
+  if (( ${#bad[@]} )); then
+    log_error "share: ssh endpoint $ep sets ${(j:, :)bad} — an ssh endpoint only ever uses target"
+    return 1
+  fi
+  return 0
+}
+
 # share::ssh_check_endpoint <endpoint> — the config an ssh endpoint needs.
 share::ssh_check_endpoint() {
   local ep="$1" target dir
+  share::ssh_reject_store_remote "$ep" || return 1
   target="$(share::field "$ep" target)" || return 1
   if [[ -z "$target" ]]; then
     log_error "share: ssh endpoint $ep has no target — set target = \"user@host\""

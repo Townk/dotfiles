@@ -231,6 +231,17 @@ share::resolve() {
 # the store origin, or the rclone remote when there is no origin.
 share::destination_host() {
   local name="${1:?share::destination_host: endpoint required}" store remote host
+
+  # An ssh endpoint speaks only to its target: check that BEFORE looking at
+  # store/remote below, so a misconfigured ssh endpoint that also sets one of
+  # those never gets to name that other host here.
+  if [[ "$(share::field "$name" backend croc)" == ssh ]]; then
+    share::ssh_reject_store_remote "$name" || return 1
+    local target; target="$(share::field "$name" target)"
+    printf '%s\n' "${target##*@}"
+    return 0
+  fi
+
   store="$(share::field "$name" store)" || return 1
   if [[ -n "$store" ]]; then
     host="${${store#*://}%%/*}"
@@ -244,13 +255,6 @@ share::destination_host() {
   remote="$(share::field "$name" remote)"
   if [[ -n "$remote" ]]; then
     printf '%s\n' "$remote"
-    return 0
-  fi
-
-  # An ssh endpoint: the host part of its target.
-  local target; target="$(share::field "$name" target)"
-  if [[ -n "$target" ]]; then
-    printf '%s\n' "${target##*@}"
     return 0
   fi
 
@@ -683,7 +687,7 @@ share::send() {
     local live_line
     live_line="$(share::emit_live_blurb "$endpoint" "$secret_file" "$@")" || return 1
     print -r -- "$live_line"
-    (( qr )) && share::render_qr "$(share::_live_receive_command "$live_line")"
+    (( qr && ! for_face )) && share::render_qr "$(share::_live_receive_command "$live_line")"
     (( for_face )) || share::clip "$live_line"
   fi
 
@@ -721,7 +725,7 @@ share::send() {
   # Stored: croc_send returns the blurb because the URL did not exist until now.
   [[ -n "$blurb" ]] || return 0
   print -r -- "$blurb"
-  (( qr )) && share::render_qr "$(share::_stored_receive_value "$blurb")"
+  (( qr && ! for_face )) && share::render_qr "$(share::_stored_receive_value "$blurb")"
   (( for_face )) || share::clip "$blurb"
   # share::announce is best-effort by contract (it wraps `notify`, which is
   # documented as best-effort itself): a failed RECOB bridge hop, or simply

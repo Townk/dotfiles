@@ -68,7 +68,8 @@ Send options:
                          replace the file clip they were invoked on)
   --qr                  render the receive command as a QR code (if qrencode
                          is available; missing tool prints one line to stderr
-                         and continues)
+                         and continues; skipped under --for-face, since a
+                         face captures stdout and would paste the QR art)
 
 Get options:
   --out <dir>           where to write (default: ~/Downloads)

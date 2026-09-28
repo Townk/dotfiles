@@ -379,6 +379,26 @@ SH
     The contents of file "$SB/qrencode-stdin" should not include 'Report.pdf'
   End
 
+  It 'skips the QR under --for-face on a foreground live send'
+    stub_qrencode SHOULD_NOT_APPEAR
+    When run script "$SHARE_BIN" send --qr --for-face --foreground --to lan "$SB/Report.pdf"
+    The status should be success
+    The output should include 'croc'
+    The output should not include 'SHOULD_NOT_APPEAR'
+    The stderr should not include 'SHOULD_NOT_APPEAR'
+    The path "$SB/qrencode-argv" should not be exist
+  End
+
+  It 'skips the QR under --for-face on a foreground stored send'
+    stub_qrencode SHOULD_NOT_APPEAR
+    When run script "$SHARE_BIN" send --qr --for-face --store --foreground "$SB/Report.pdf"
+    The status should be success
+    The output should include 'd.example.com/s/abc'
+    The output should not include 'SHOULD_NOT_APPEAR'
+    The stderr should not include 'SHOULD_NOT_APPEAR'
+    The path "$SB/qrencode-argv" should not be exist
+  End
+
   It 'never invokes qrencode when --qr is omitted'
     stub_qrencode SHOULD_NOT_APPEAR
     When run script "$SHARE_BIN" send --store --foreground "$SB/Report.pdf"

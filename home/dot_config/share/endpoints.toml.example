@@ -99,7 +99,9 @@
 #                Never `default_for` and never chosen implicitly — always
 #                `share send --to <name>`. No live mode, no web link, no --qr,
 #                no --expiration/--downloads: the pasteable line is the remote
-#                path(s), for pasting into a shell on that box.
+#                path(s), for pasting into a shell on that box. Never set
+#                `store` or `remote` on an ssh endpoint — that is a
+#                configuration error, refused before anything sends.
 
 # --- home store: a container on your own server, behind a reverse proxy -----
 # Reachable on the LAN and the tailnet only, so it is NOT default_for anything:

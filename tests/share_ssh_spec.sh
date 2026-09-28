@@ -375,6 +375,57 @@ TOML
       The value "$(ssh_calls)" should equal 0
     End
 
+    It 'refuses an ssh endpoint that also sets store'
+      add_endpoint <<'TOML'
+[withstore]
+backend = "ssh"
+target = "me@devshell.example.com"
+dir = "incoming"
+store = "https://store.example.com/drop"
+profiles = ["work"]
+TOML
+      When call share::send --to withstore "$SB/local/Report.pdf"
+      The status should be failure
+      The stderr should include 'withstore sets store'
+      The value "$(ssh_calls)" should equal 0
+    End
+
+    It 'refuses an ssh endpoint that also sets remote'
+      add_endpoint <<'TOML'
+[withremote]
+backend = "ssh"
+target = "me@devshell.example.com"
+dir = "incoming"
+remote = "onedrive:Shared/drop"
+profiles = ["work"]
+TOML
+      When call share::send --to withremote "$SB/local/Report.pdf"
+      The status should be failure
+      The stderr should include 'withremote sets remote'
+      The value "$(ssh_calls)" should equal 0
+    End
+
+    It 'never echoes the store host for an ssh endpoint that also sets store'
+      add_endpoint <<'TOML'
+[withstore2]
+backend = "ssh"
+target = "me@devshell.example.com"
+dir = "incoming"
+store = "https://wrong-host.example.com/drop"
+profiles = ["work"]
+TOML
+      When call share::destination_host withstore2
+      The status should be failure
+      The stderr should include 'withstore2 sets store'
+      The output should not include 'wrong-host.example.com'
+    End
+
+    It 'resolves destination_host to the target host for a clean ssh endpoint'
+      When call share::destination_host devbox
+      The status should be success
+      The output should equal 'devshell.example.com'
+    End
+
     It 'rejects a target that ssh would read as an option'
       add_endpoint <<'TOML'
 [dashy]
