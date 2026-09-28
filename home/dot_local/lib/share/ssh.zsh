@@ -62,8 +62,8 @@ share::_ssh_run() {
 share::ssh_reject_store_remote() {
   local ep="$1" store remote
   local -a bad=()
-  store="$(share::field "$ep" store)"
-  remote="$(share::field "$ep" remote)"
+  store="$(share::field "$ep" store)" || return 1
+  remote="$(share::field "$ep" remote)" || return 1
   [[ -n "$store" ]] && bad+=(store)
   [[ -n "$remote" ]] && bad+=(remote)
   if (( ${#bad[@]} )); then
@@ -73,15 +73,24 @@ share::ssh_reject_store_remote() {
   return 0
 }
 
-# share::ssh_check_endpoint <endpoint> — the config an ssh endpoint needs.
-share::ssh_check_endpoint() {
-  local ep="$1" target dir
-  share::ssh_reject_store_remote "$ep" || return 1
+# share::ssh_target <endpoint> — print the endpoint's non-empty `target`, or
+# fail with the missing-target error. Shared by share::ssh_check_endpoint and
+# share::destination_host, so the pre-send echo never names an empty host.
+share::ssh_target() {
+  local ep="$1" target
   target="$(share::field "$ep" target)" || return 1
   if [[ -z "$target" ]]; then
     log_error "share: ssh endpoint $ep has no target — set target = \"user@host\""
     return 1
   fi
+  printf '%s\n' "$target"
+}
+
+# share::ssh_check_endpoint <endpoint> — the config an ssh endpoint needs.
+share::ssh_check_endpoint() {
+  local ep="$1" target dir
+  share::ssh_reject_store_remote "$ep" || return 1
+  target="$(share::ssh_target "$ep")" || return 1
   # A leading `-` would be read by ssh as an option (-oProxyCommand=… runs a
   # local command); `--` already guards that, but refusing says why.
   if [[ "$target" == -* || "$target" == *[[:space:]]* ]]; then

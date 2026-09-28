@@ -426,6 +426,80 @@ TOML
       The output should equal 'devshell.example.com'
     End
 
+    It 'fails destination_host for an ssh endpoint with no target'
+      add_endpoint <<'TOML'
+[notarget2]
+backend = "ssh"
+dir = "incoming"
+profiles = ["work"]
+TOML
+      When call share::destination_host notarget2
+      The status should be failure
+      The output should equal ''
+      The stderr should include 'ssh endpoint notarget2 has no target'
+    End
+
+    It 'fails destination_host for an ssh endpoint with an empty target'
+      add_endpoint <<'TOML'
+[emptytarget]
+backend = "ssh"
+target = ""
+dir = "incoming"
+profiles = ["work"]
+TOML
+      When call share::destination_host emptytarget
+      The status should be failure
+      The output should equal ''
+      The stderr should include 'ssh endpoint emptytarget has no target'
+    End
+
+    It 'fails destination_host when reading the ssh target fails'
+      share::field() {
+        [[ "$2" == target ]] && return 1
+        case "$2" in backend) print ssh ;; *) print -r -- "${3-}" ;; esac
+      }
+      When call share::destination_host devbox
+      The status should be failure
+      The output should equal ''
+    End
+
+    It 'fails destination_host for an ssh endpoint when endpoints.toml does not parse'
+      # Only the target read goes through the real (now unparseable) file, so
+      # this reaches the ssh branch's target read rather than failing earlier.
+      printf '[devbox\nbackend = "ssh"\n' >"$SHARE_ENDPOINTS_FILE"
+      functions -c share::field share::_real_field
+      share::field() {
+        case "$2" in
+          backend) print ssh ;;
+          store|remote) print ;;
+          *) share::_real_field "$@" ;;
+        esac
+      }
+      When call share::destination_host devbox
+      The status should be failure
+      The output should equal ''
+      The stderr should be present
+    End
+
+    It 'fails the store/remote check when reading store fails'
+      share::field() { [[ "$2" == store ]] && return 1; print -r -- "${3-}"; }
+      When call share::ssh_reject_store_remote devbox
+      The status should be failure
+    End
+
+    It 'fails the store/remote check when reading remote fails'
+      share::field() { [[ "$2" == remote ]] && return 1; print -r -- "${3-}"; }
+      When call share::ssh_reject_store_remote devbox
+      The status should be failure
+    End
+
+    It 'fails the store/remote check when endpoints.toml does not parse'
+      printf '[devbox\nbackend = "ssh"\n' >"$SHARE_ENDPOINTS_FILE"
+      When call share::ssh_reject_store_remote devbox
+      The status should be failure
+      The stderr should be present
+    End
+
     It 'rejects a target that ssh would read as an option'
       add_endpoint <<'TOML'
 [dashy]

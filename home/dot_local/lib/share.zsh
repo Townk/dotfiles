@@ -237,7 +237,7 @@ share::destination_host() {
   # those never gets to name that other host here.
   if [[ "$(share::field "$name" backend croc)" == ssh ]]; then
     share::ssh_reject_store_remote "$name" || return 1
-    local target; target="$(share::field "$name" target)"
+    local target; target="$(share::ssh_target "$name")" || return 1
     printf '%s\n' "${target##*@}"
     return 0
   fi
