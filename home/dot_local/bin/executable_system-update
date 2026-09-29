@@ -432,6 +432,13 @@ finalize_session() {
   print -P -- "\n👍 System updated ${C_BWH}successfully${C_RES}!\n"
 }
 
+# Synchronous drift stamp for the zsh welcome banner (see dot_zshrc.tmpl).
+refresh_chezmoi_drift_stamp() {
+  local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}"
+  mkdir -p "$cache_dir" 2>/dev/null || true
+  chezmoi status --exclude=scripts >| "${cache_dir}/chezmoi-drift" 2>/dev/null || true
+}
+
 # publish_yazi_bump <repo> <source_rel> <target>
 # Copy the live yazi package.toml back into the chezmoi source, commit just
 # that file, and publish the bump so the next `chezmoi update` on another
@@ -702,6 +709,11 @@ if ! command -v brew >/dev/null 2>&1; then
     print -P -- "\n🔑 Sync secrets...\n"
     system-secrets sync || log_warn "secrets sync had failures (continuing)"
   fi
+  if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
+    print -P -- "\n🏠 Final chezmoi convergence pass...\n"
+    chezmoi apply || log_warn "final chezmoi apply had failures"
+  fi
+  refresh_chezmoi_drift_stamp
   finalize_session
   exit 0
 fi
@@ -875,4 +887,5 @@ if [[ -n "$chezmoi_repo" && "$running_under_chezmoi" -eq 0 ]]; then
   chezmoi apply || log_warn "final chezmoi apply had failures"
 fi
 
+refresh_chezmoi_drift_stamp
 finalize_session

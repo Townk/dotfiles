@@ -345,7 +345,7 @@ if mux::available && [[ "$(mux::pane_count)" -eq 1 ]]; then
   # excluded: plain `run_` scripts are pending on every apply by design, so
   # including them would make this fire forever.
   [[ -s ${XDG_CACHE_HOME:-$HOME/.cache}/chezmoi-drift ]] \
-    && print -P -- "%F{$C_HEX_YELLOW}↻ chezmoi drift: \$HOME differs from source — run %Bchezmoi diff%b%f"
+    && print -P -- "%F{$C_HEX_YELLOW}↻ chezmoi drift: \$HOME differs from source — run %Bchezmoi diff --exclude=scripts%b%f"
   ( chezmoi status --exclude=scripts >| ${XDG_CACHE_HOME:-$HOME/.cache}/chezmoi-drift 2>/dev/null & )
   print -P -- "                                        %F{$C_HEX_OVERLAY0}━━━━━━━━ ❖ ━━━━━━━━%f\n"
   type terminal_commands >/dev/null 2>&1 && terminal_commands
