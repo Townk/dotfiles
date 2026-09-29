@@ -164,6 +164,10 @@ Describe 'copy-pwd (clipboard shim routing)'
   End
 
   It 'falls back to /usr/bin/pbcopy when the shim is absent'
+    # Overwrites and restores the REAL clipboard (an absolute /usr/bin/pbcopy
+    # no stub can shadow): the restore alone re-copied old text into history
+    # on every `make test`. Opt-in only — see tests/spec_helper.sh.
+    Skip if 'writes the REAL clipboard (opt in: SPEC_REAL_PASTEBOARD=1)' spec_real_pasteboard_off
     # No shim in $HOME/.local/bin → copy-pwd must use the system pbcopy. Guard
     # on a working system pasteboard (a headless box has none) and preserve the
     # real clipboard around the check.

@@ -52,6 +52,26 @@ spec_helper_configure() {
 spec_helper_own_tmpbase() {
   SPEC_HELPER_TMPBASE=$(mktemp -d "${TMPDIR:-/tmp}/spec.XXXXXX") || return 1
   SHELLSPEC_TMPBASE=$SPEC_HELPER_TMPBASE
+  spec_helper_clipboard_guard
+}
+
+# No spec may write the REAL clipboard. Code under test resolves `pbcopy`
+# through PATH (share::clip, the ~/.local/bin trampoline), and before this
+# guard every `make test` left Report.pdf → *.example.com rows in the human's
+# clipboard history. A stub first on PATH swallows those writes. A spec that
+# wants to OBSERVE clipboard writes stubs pbcopy in its own setup, and that
+# prepend wins over this one. tests/spec_clipboard_guard_spec.sh pins it.
+#
+# The guard cannot shadow an ABSOLUTE /usr/bin/pbcopy, so the few examples that
+# exist to round-trip the real pasteboard are opt-in instead:
+#   Skip if 'writes the REAL clipboard (opt in: SPEC_REAL_PASTEBOARD=1)' spec_real_pasteboard_off
+spec_real_pasteboard_off() { [ "${SPEC_REAL_PASTEBOARD:-}" != 1 ]; }
+spec_helper_clipboard_guard() {
+  mkdir -p "$SPEC_HELPER_TMPBASE/.clip-guard" || return 1
+  printf '#!/bin/sh\ncat >/dev/null\n' >"$SPEC_HELPER_TMPBASE/.clip-guard/pbcopy"
+  chmod +x "$SPEC_HELPER_TMPBASE/.clip-guard/pbcopy"
+  PATH="$SPEC_HELPER_TMPBASE/.clip-guard:$PATH"
+  export PATH
 }
 spec_helper_drop_tmpbase() {
   [ -n "${SPEC_HELPER_TMPBASE:-}" ] && rm -rf "$SPEC_HELPER_TMPBASE"

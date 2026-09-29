@@ -177,6 +177,9 @@ Describe 'copy: file mode at the machine'
   # "didn't touch the bridge"): a round trip through the actual macOS pasteboard
   # via the absolute /usr/bin/pbpaste, which no stubbing here can shadow.
   It 'still delivers stdin to the real system clipboard when called with no args'
+    # Writes a sentinel to the REAL clipboard. Opt-in only — see
+    # tests/spec_helper.sh (spec_real_pasteboard_off).
+    Skip if 'writes the REAL clipboard (opt in: SPEC_REAL_PASTEBOARD=1)' spec_real_pasteboard_off
     sentinel="pbcopy-roundtrip-sentinel-$$"
     roundtrip() { "$CLIENT" copy && /usr/bin/pbpaste; }
     Data "$sentinel"
