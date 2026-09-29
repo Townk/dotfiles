@@ -31,14 +31,16 @@ __share-endpoints() {
 #
 # croc-live rows are excluded: a live transfer has no store-side object, so
 # `share revoke` refuses them by design. Offering them would complete to a
-# guaranteed error.
+# guaranteed error. share::ledger_list prints ONE JSON ARRAY, hence `.[]`:
+# without it jq fails ("Cannot index array"), the error is discarded, and
+# revoke completed to "no matches" (Mode B, 2026-09-29).
 __share-receipts() {
   local -a ids
   ids=( ${(f)"$(
     zsh -fc '
       source "${SHARE_LIB_DIR:-$HOME/.local/lib}/share.zsh" 2>/dev/null || exit 0
       share::ledger_list 2>/dev/null \
-        | jq -r "select(.backend != \"croc-live\") | \"\(.id):\(.label)\"" 2>/dev/null
+        | jq -r ".[] | select(.backend != \"croc-live\") | \"\(.id):\(.label)\"" 2>/dev/null
     ' 2>/dev/null
   )"} )
   (( ${#ids} )) && _describe -t receipts 'receipt' ids
@@ -62,6 +64,17 @@ _share() {
     '--expiration[stored-transfer lifetime]:spec:(90m 12h 3d 2w)'
     '--downloads[stored downloads allowed]:count:(1 2 5 10)'
   )
+
+  # An OPTION first (`share --to drop file`) is the implicit send: no
+  # subcommand is coming. `1: :->cmd` below only ever reads the first word as a
+  # subcommand, so options typed before one completed to nothing (Mode B,
+  # 2026-09-29).
+  if [[ "${words[2]-}" == -* ]]; then
+    _arguments \
+      '(- *)'{-h,--help}'[show help and exit]' \
+      $send_opts '*:file:_files'
+    return
+  fi
 
   _arguments -C \
     '(- *)'{-h,--help}'[show help and exit]' \
