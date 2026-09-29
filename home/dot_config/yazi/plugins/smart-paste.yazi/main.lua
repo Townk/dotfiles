@@ -511,7 +511,9 @@ local function try_share_receive(cwd)
 
 	local choice = ya.which({
 		cands = {
-			{ on = "y", desc = "Receive " .. label .. " into this folder" },
+			-- Label LAST: `which` truncates long entries, so only the label's
+			-- tail can be cut, never the verb (Mode B 2026-09-29: "into t").
+			{ on = "y", desc = "Receive here: " .. label },
 			{ on = "n", desc = "Paste normally" },
 		},
 	})

@@ -63,7 +63,10 @@ LUA
     PEEK=$'live\tReport.pdf (4.2 MB)'
     CHOICE=0
     When call run_sp
-    The output should include 'ASKED:Receive Report.pdf (4.2 MB) into this folder'
+    # The label goes LAST: yazi's `which` menu truncates a long entry, and
+    # Mode B (2026-09-29) saw "…into this folder" cut to "into t". Whatever
+    # gets cut now is the tail of the file label, never the verb.
+    The output should include 'ASKED:Receive here: Report.pdf (4.2 MB)'
     The output should not include 'RUN:share get'
     The output should include 'RESULT:false'
   End
@@ -72,7 +75,7 @@ LUA
     PEEK=$'live\tDeck.key (18.0 MB)'
     CHOICE=1
     When call run_sp
-    The output should include 'ASKED:Receive Deck.key (18.0 MB) into this folder'
+    The output should include 'ASKED:Receive here: Deck.key (18.0 MB)'
   End
 
   It 'receives into the current directory once confirmed'
@@ -105,7 +108,7 @@ LUA
     PEEK=$'stored\ta stored share'
     CHOICE=1
     When call run_sp
-    The output should include 'ASKED:Receive a stored share into this folder'
+    The output should include 'ASKED:Receive here: a stored share'
     The output should include 'RUN:share get --out /here'
   End
 
