@@ -208,3 +208,10 @@ README.md
 # (spec 2026-09-13). The old target is ignored on no host after the rename,
 # so this entry fires exactly once on the dev-shell and no-ops elsewhere.
 .config/mise/conf.d/dev-shell.toml
+
+# ── share: the laptop relay was retired (2026-09-29) ───────────────────────
+# `@self` relays and the croc-relay service could never serve colleagues (the
+# work network cannot route to a laptop). The service's plist is swept by
+# `system-service sync` as an orphan; this drops its wrapper, which every
+# profile received. .local/libexec is ignored on no profile.
+.local/libexec/croc-relay

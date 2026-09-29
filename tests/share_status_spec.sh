@@ -21,7 +21,7 @@ Describe 'share:: status'
     SHARE_PROFILE=work
     cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
 [myrelay]
-relay    = "@self:9409"
+relay    = "lappy.example-tailnet.ts.net:9409"
 web      = false
 profiles = ["work"]
 default_for = ["work"]
@@ -59,12 +59,6 @@ live     = true
 web      = true
 profiles = ["work"]
 TOML
-    cat >"$SB/bin/tailscale" <<'SH'
-#!/bin/sh
-printf '{"Self":{"DNSName":"lappy.example-tailnet.ts.net."}}\n'
-SH
-    chmod +x "$SB/bin/tailscale"
-    SHARE_TAILSCALE_BIN="$SB/bin/tailscale"; export SHARE_TAILSCALE_BIN
 
     # Stub nc: open only for the hosts named in SB_NC_OPEN.
     cat >"$SB/bin/nc" <<'SH'
@@ -100,19 +94,19 @@ SH
     The output should include 'lappy.example-tailnet.ts.net:9409'
   End
 
-  # The actionable half: OUR relay being down is fixable with a named command.
-  It 'names the command to start OUR OWN relay when it is not listening'
-    When call share::_status_row myrelay
-    The output should include 'NOT LISTENING'
-    The output should include 'system-service start croc-relay'
-  End
-
-  # Somebody else's relay being down is not something system-service can fix,
-  # so suggesting it would be actively misleading.
-  It 'does not suggest starting a service for somebody else'"'"'s relay'
+  It 'reports a relay that does not answer as not reachable'
     When call share::_status_row theirs
     The output should include 'NOT REACHABLE'
     The output should not include 'system-service'
+  End
+
+  # @self relays were retired (2026-09-29). A leftover entry is a config error
+  # to fix, not a relay to probe.
+  It 'flags a leftover @self relay as misconfigured'
+    printf '\n[stale]\nrelay = "@self:9009"\nweb = false\nprofiles = ["work"]\n' >>"$SHARE_ENDPOINTS_FILE"
+    When call share::_status_row stale
+    The output should include 'MISCONFIGURED'
+    The output should include 'retired'
   End
 
   # Mode B (2026-09-29): `public` showed as `store` although a default send

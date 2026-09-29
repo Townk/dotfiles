@@ -207,8 +207,8 @@ share::croc_argv() {
   shift 4
   local store relay
   store="$(share::field "$endpoint" store)" || return 1
-  # Resolved, not raw: an endpoint may write `relay = "@self:9009"`, and what
-  # croc dials must be the same string the recipient is told to use.
+  # Through the one resolver, so what croc dials is the same string the
+  # recipient is told to use (and a retired @self entry is refused here).
   relay="$(share::relay_address "$endpoint")" || return 1
 
   local -a cmd=(croc)
