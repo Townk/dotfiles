@@ -196,6 +196,63 @@ SH
     The output should include '"backend": "croc-live"'
   End
 
+  # Mode B (2026-09-29): a stored croc share past its expiry cannot be revoked —
+  # the store already deleted it and croc discarded its local revoke receipt,
+  # so `croc --revoke` refuses ("no unexpired local revoke receipt"). Failing
+  # there left a ledger row nothing could ever remove. Past expiry, that
+  # refusal means "already gone": forget the receipt and say so.
+  croc_refuses() {
+    cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SHARE_CALLS"
+echo "no unexpired local revoke receipt for $2" >&2
+exit 1
+SH
+    chmod +x "$SB/bin/croc"
+    SHARE_CALLS="$SB/calls"; export SHARE_CALLS
+  }
+
+  It 'forgets an EXPIRED croc receipt when croc refuses to revoke it'
+    SHARE_PROFILE=personal
+    share::ledger_add rid croc public 'Big.dmg (1 MB)' abc123 'https://x' 1
+    croc_refuses
+    When run share::revoke rid
+    The status should be success
+    The output should include 'Big.dmg (1 MB) expired on'
+    The output should include 'forgot the receipt'
+    The stderr should not include 'no unexpired local revoke receipt'
+    The path "$SB/calls" should be exist
+  End
+
+  It 'removes the expired receipt from the ledger'
+    SHARE_PROFILE=personal
+    share::ledger_add rid croc public 'Big.dmg (1 MB)' abc123 'https://x' 1
+    croc_refuses
+    share::revoke rid >/dev/null 2>&1
+    When run share::ledger_get rid
+    The status should be failure
+  End
+
+  # Before expiry a refusal may mean the file is still out there — keep failing.
+  It 'still fails, and keeps the receipt, when croc refuses an UNEXPIRED share'
+    SHARE_PROFILE=personal
+    share::ledger_add rid croc public 'R' abc123 'https://x' 9999999999
+    croc_refuses
+    check() { share::revoke rid 2>/dev/null && return 1; share::ledger_get rid >/dev/null; }
+    When call check
+    The status should be success
+  End
+
+  # expires 0 means "no recorded expiry", not "long expired".
+  It 'still fails when croc refuses a receipt with no recorded expiry'
+    SHARE_PROFILE=personal
+    share::ledger_add rid croc drop 'R' abc123 'https://x' 0
+    croc_refuses
+    When run share::revoke rid
+    The status should be failure
+    The stderr should include 'no unexpired local revoke receipt'
+  End
+
   It 'drops the receipt after a successful revoke'
     SHARE_PROFILE=personal
     share::ledger_add rid croc drop 'R' abc123 'https://x' 0

@@ -745,7 +745,7 @@ share::revoke() {
   backend="$(printf '%s' "$row" | jq -r '.backend')"
   ref="$(printf '%s' "$row" | jq -r '.ref')"
   case "$backend" in
-    croc)   share::croc_revoke "$ref" || return 1 ;;
+    croc)   share::_croc_revoke_row "$row" "$ref" || return 1 ;;
     rclone) share::rclone_revoke "$ref" || return 1 ;;
     ssh)    share::ssh_revoke "$ref" || return 1 ;;
     # A live (peer-to-peer) croc transfer has no store-side id — it dies the
@@ -763,6 +763,28 @@ share::revoke() {
   share::ledger_remove "$id"
 }
 
+# share::_croc_revoke_row <row-json> <ref>
+# Past its expiry a stored croc share is already gone: the store deleted it and
+# croc discarded its local revoke receipt, so `croc --revoke` REFUSES ("no
+# unexpired local revoke receipt"). Treating that refusal as failure left a
+# ledger row nothing could ever remove (Mode B, 2026-09-29). So past expiry a
+# refusal means "already gone" — croc's own message is swallowed and the caller
+# forgets the receipt. Before expiry, or with no recorded expiry (0), a refusal
+# may mean the file is still out there, and it still fails.
+share::_croc_revoke_row() {
+  zmodload zsh/datetime 2>/dev/null
+  local row="$1" ref="$2" label
+  local -i expires
+  expires="$(printf '%s' "$row" | jq -r '.expires // 0')"
+  if (( expires == 0 || expires >= EPOCHSECONDS )); then
+    share::croc_revoke "$ref"
+    return
+  fi
+  share::croc_revoke "$ref" 2>/dev/null && return 0
+  label="$(printf '%s' "$row" | jq -r '.label')"
+  log_ok "share: $label expired on $(strftime '%b %d, %Y' "$expires") — the store already deleted it; forgot the receipt"
+}
+
 # share::_overdue_human <expires_epoch> — how overdue, roughly ("3d", "2h",
 # "45m"): the coarsest non-zero unit, in the same m/h/d/w vocabulary
 # share::_duration_seconds already reads for --expiration.
@@ -777,11 +799,12 @@ share::_overdue_human() {
   else printf '%dm\n' $(( delta / 60 )); fi
 }
 
-# share::prune [--apply] — sweep overdue rclone shares. rclone's `expires` is
+# share::prune [--apply] — sweep overdue shares. rclone's `expires` is
 # advisory (OneDrive itself does not enforce it, see share::rclone_send) —
-# this command is what actually enforces it. croc's own store is explicitly
-# out of scope: it expires server-side, on croc's own schedule, with no
-# ledger row to sweep.
+# this command is what actually enforces it. A stored croc share expires
+# server-side on croc's own schedule, so an overdue croc row has nothing left
+# to purge; prune only FORGETS its receipt and never calls croc (which would
+# refuse anyway — see share::_croc_revoke_row).
 #
 # Dry run by default — lists what WOULD be purged and touches neither the
 # ledger nor any remote object. `--apply` purges the remote object via
@@ -797,14 +820,15 @@ share::prune() {
   esac
 
   local -a rows
-  rows=("${(@f)$(share::ledger_overdue_rows rclone)}")
+  rows=("${(@f)$(share::ledger_overdue_rows)}")
 
-  local row id label endpoint ref expires overdue_for
-  local -i purged=0 failed=0 total=0
+  local row id label endpoint ref expires overdue_for backend
+  local -i purged=0 forgot=0 failed=0 total=0 total_croc=0
 
   for row in "${rows[@]}"; do
     [[ -n "$row" ]] || continue
-    total=$(( total + 1 ))
+    backend="$(printf '%s' "$row" | jq -r '.backend')"
+    [[ "$backend" == (rclone|croc) ]] || continue
     id="$(printf '%s' "$row" | jq -r '.id')"
     label="$(printf '%s' "$row" | jq -r '.label')"
     endpoint="$(printf '%s' "$row" | jq -r '.endpoint')"
@@ -812,6 +836,19 @@ share::prune() {
     expires="$(printf '%s' "$row" | jq -r '.expires')"
     overdue_for="$(share::_overdue_human "$expires")"
 
+    if [[ "$backend" == croc ]]; then
+      total_croc=$(( total_croc + 1 ))
+      if (( apply )); then
+        share::ledger_remove "$id"
+        forgot=$(( forgot + 1 ))
+        log_ok "share prune: forgot $id ($label, $endpoint) — expired $overdue_for ago, the store already deleted it"
+      else
+        printf '%s\t%s\t%s\t%s\n' "$id" "$label" "$endpoint" "$overdue_for"
+      fi
+      continue
+    fi
+
+    total=$(( total + 1 ))
     if (( apply )); then
       if share::rclone_revoke "$ref"; then
         share::ledger_remove "$id"
@@ -827,12 +864,14 @@ share::prune() {
   done
 
   if (( apply )); then
-    printf 'share prune: purged %d, failed %d\n' "$purged" "$failed"
+    printf 'share prune: purged %d, forgot %d, failed %d\n' "$purged" "$forgot" "$failed"
     (( failed == 0 ))
-  elif (( total == 0 )); then
+  elif (( total + total_croc == 0 )); then
     printf 'share prune: nothing overdue\n'
   else
-    printf 'share prune: %d overdue rclone share(s) would be purged\n' "$total"
+    (( total )) && printf 'share prune: %d overdue rclone share(s) would be purged\n' "$total"
+    (( total_croc )) && printf 'share prune: %d expired croc receipt(s) would be forgotten\n' "$total_croc"
+    return 0
   fi
 }
 

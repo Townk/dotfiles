@@ -78,7 +78,7 @@ _share() {
         'list:receipts, newest first'
         'revoke:kill a link and forget the receipt'
         'endpoints:endpoints this profile may use'
-        'prune:sweep overdue rclone shares'
+        'prune:sweep overdue shares'
       )
       _describe -t commands 'command' cmds
       # The bare-path shorthand: `share <file>` is a send.
