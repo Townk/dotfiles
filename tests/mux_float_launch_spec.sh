@@ -26,7 +26,10 @@ run_and_report() {
   local secs="$1"; shift
   local tmpin outf
   tmpin=$(mktemp "$TEST_TMP/guardin.XXXXXX")
-  cat >"$tmpin"                      # stage stdin (async jobs default to /dev/null)
+  # Stage stdin (async jobs default to /dev/null) — but never from a TERMINAL:
+  # an example with no piped rows then waited on the tty forever, hanging the
+  # whole suite whenever it ran with one attached (e.g. under `script`).
+  if [ -t 0 ]; then : >"$tmpin"; else cat >"$tmpin"; fi
   outf=$(mktemp "$TEST_TMP/guardout.XXXXXX")
 
   # stderr -> /dev/null so that if a regression hangs the float, the reader it
