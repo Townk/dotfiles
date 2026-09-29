@@ -177,6 +177,18 @@ SH
   # silent downgrade would be worse than a refusal — and it must refuse BEFORE
   # enqueuing, or the error surfaces as a failure toast minutes later instead
   # of immediately.
+  # The DEFAULT live mode downgrades instead, and the warning must LEAD with the
+  # outcome: a face shows it as a wrapped toast, and Mode B found the "sending
+  # stored" tail on a second line was read past.
+  It 'leads the default-mode downgrade warning with the outcome'
+    When call share::send_background --to drop "$SB/Report.pdf"
+    The status should be success
+    The stderr should include 'share: sending stored, not live, via drop'
+    The stderr should include 'cannot carry a live transfer'
+    The stderr should include 'the link arrives when the upload finishes'
+    The stdout should not equal ''
+  End
+
   It 'refuses an explicit --live to a store-only endpoint without enqueuing'
     When run share::send_background --live --to drop "$SB/Report.pdf"
     The status should be failure

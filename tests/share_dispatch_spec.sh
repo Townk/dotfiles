@@ -341,7 +341,8 @@ SH
     When run share::send --to drop "$SB/Report.pdf"
     The status should be success
     The stderr should include 'cannot carry a live transfer'
-    The stderr should include 'sending stored instead'
+    The stderr should include 'sending stored, not live, via drop'
+    The stderr should include 'the link arrives when the upload finishes'
     The stdout should include 'drop.example.com/s/abc123'
   End
 

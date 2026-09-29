@@ -138,7 +138,7 @@ LUA
   # says so on stderr, producing no line. Reporting "copied" would be false.
   It 'reports the fallback instead of claiming it copied something'
     STDOUT_LINE=''
-    STDERR_LINE='share: drop cannot carry a live transfer — sending stored instead'
+    STDERR_LINE='share: sending stored, not live, via drop — it cannot carry a live transfer (no relay, not LAN-only); the link arrives when the upload finishes'
     When call run_share live /tmp/a.pdf
     The output should not include 'SPAWN:pbcopy'
     The output should include 'cannot carry a live transfer'

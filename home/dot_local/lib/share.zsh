@@ -670,7 +670,7 @@ share::send() {
       log_error "share: $endpoint cannot carry a live transfer — $why"
       return 1
     fi
-    log_warn "share: $endpoint cannot carry a live transfer ($why) — sending stored instead"
+    log_warn "share: sending stored, not live, via $endpoint — it cannot carry a live transfer ($why); the link arrives when the upload finishes"
     mode=store
   fi
 
@@ -1475,7 +1475,7 @@ share::send_background() {
     else
       # Warn HERE, not from inside the job, where the message would land in a
       # log nobody is reading.
-      log_warn "share: $ep cannot carry a live transfer (no relay, not LAN-only) — sending stored instead"
+      log_warn "share: sending stored, not live, via $ep — it cannot carry a live transfer (no relay, not LAN-only); the link arrives when the upload finishes"
     fi
   fi
 
