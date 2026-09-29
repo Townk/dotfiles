@@ -79,7 +79,7 @@ LUA
   # F1: the UNMARKED key does the default thing. Shift must not silently change
   # which of two transfer models you get.
   It 'shares live by default, asking for the line on stdout'
-    STDOUT_LINE='R.pdf (1 B) — receive with:  croc aaaa-bbbb'
+    STDOUT_LINE='R.pdf (1 B) — receive with: croc aaaa-bbbb'
     When call run_share live /tmp/a.pdf
     The output should include 'RUN:share send --background --for-face -- /tmp/a.pdf'
   End
@@ -93,13 +93,13 @@ LUA
   End
 
   It 'shares the selection when there is one'
-    STDOUT_LINE='2 files (2 B) — receive with:  croc aaaa-bbbb'
+    STDOUT_LINE='2 files (2 B) — receive with: croc aaaa-bbbb'
     When call run_share live '/tmp/a.pdf|/tmp/b.pdf'
     The output should include '-- /tmp/a.pdf /tmp/b.pdf'
   End
 
   It 'falls back to the hovered file when nothing is selected'
-    STDOUT_LINE='h.pdf (1 B) — receive with:  croc aaaa-bbbb'
+    STDOUT_LINE='h.pdf (1 B) — receive with: croc aaaa-bbbb'
     When call run_share live '' /tmp/hovered.pdf
     The output should include '-- /tmp/hovered.pdf'
   End
@@ -107,7 +107,7 @@ LUA
   # A selection can contain anything, and a filename beginning with `-` must
   # never be read as an option.
   It 'terminates options before the paths'
-    STDOUT_LINE='x (1 B) — receive with:  croc aaaa-bbbb'
+    STDOUT_LINE='x (1 B) — receive with: croc aaaa-bbbb'
     When call run_share live -- '/tmp/-weird.pdf'
     The output should include ' -- '
   End
@@ -122,10 +122,10 @@ LUA
   # does is paste into a chat. share itself is told not to write it
   # (--for-face), so the plugin does it deliberately.
   It 'puts the live line on the clipboard'
-    STDOUT_LINE='R.pdf (1 B) — receive with:  croc aaaa-bbbb'
+    STDOUT_LINE='R.pdf (1 B) — receive with: croc aaaa-bbbb'
     When call run_share live /tmp/a.pdf
     The output should include 'SPAWN:pbcopy'
-    The output should include 'CLIP:R.pdf (1 B) — receive with:  croc aaaa-bbbb'
+    The output should include 'CLIP:R.pdf (1 B) — receive with: croc aaaa-bbbb'
   End
 
   # Nothing to copy yet, so copying would be a lie.

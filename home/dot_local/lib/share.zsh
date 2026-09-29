@@ -995,7 +995,7 @@ share::peek() {
   case "$kind" in
     live)
       # The label is already in the line share::blurb composed — "Report.pdf
-      # (4.2 MB) — receive with:  croc …" — so a confirmation can name the file
+      # (4.2 MB) — receive with: croc …" — so a confirmation can name the file
       # and its size without asking anyone.
       local label="${value%%— receive with:*}"
       label="${${label##[[:space:]]##}%%[[:space:]]##}"

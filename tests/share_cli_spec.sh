@@ -253,13 +253,13 @@ SH
   # captured share::send_background's stdout (which under --for-face is the
   # LINE, not a job id) and wrapped it in `log_ok "queued as job $id"`. log_ok
   # writes to STDOUT, so the picker injected
-  #   "✓ queued as job R.pdf (1 B) — receive with:  croc …"
+  #   "✓ queued as job R.pdf (1 B) — receive with: croc …"
   # into the pane instead of the line.
 
   It 'prints the bare pasteable line for a face, with no decoration'
     When run script "$SHARE_BIN" send --for-face --to lan "$SB/Report.pdf"
     The status should be success
-    The output should include 'receive with:  croc'
+    The output should include 'receive with: croc'
     The output should not include 'queued as job'
     The lines of output should equal 1
   End
@@ -332,7 +332,7 @@ SH
     stub_qrencode QR_CODE_OUTPUT
     When run script "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
     The status should be success
-    The output should include 'receive with:  croc'
+    The output should include 'receive with: croc'
     The output should include 'QR_CODE_OUTPUT'
     The stderr should include 'sending to'
     The contents of file "$SB/qrencode-argv" should include '-t ANSIUTF8'
@@ -345,7 +345,7 @@ SH
     export SHARE_QRENCODE_BIN="$SB/bin/does-not-exist-qrencode"
     When run script "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
     The status should be success
-    The output should include 'receive with:  croc'
+    The output should include 'receive with: croc'
     The stderr should include 'sending to'
     The stderr should include 'qrencode is not installed'
   End
@@ -370,7 +370,7 @@ SH
     stub_qrencode BACKGROUND_QR
     When run script "$SHARE_BIN" send --qr --to lan "$SB/Report.pdf"
     The status should be success
-    The stderr should include 'receive with:  croc'
+    The stderr should include 'receive with: croc'
     The stderr should include 'BACKGROUND_QR'
     The output should include 'queued as job'
     The contents of file "$SB/qrencode-argv" should include '-t ANSIUTF8'

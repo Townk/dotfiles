@@ -116,7 +116,7 @@ SH
 
   It 'advertises the resolved address in the pasteable line'
     When call share::blurb worklan live 'R.pdf (1 B)' 'aaaa-bbbb-cccc-dddd' '' ''
-    The output should equal 'R.pdf (1 B) — receive with:  croc --relay lappy.example-tailnet.ts.net:9009 aaaa-bbbb-cccc-dddd'
+    The output should equal 'R.pdf (1 B) — receive with: croc --relay lappy.example-tailnet.ts.net:9009 aaaa-bbbb-cccc-dddd'
   End
 
   It 'echoes the resolved host before a byte leaves'

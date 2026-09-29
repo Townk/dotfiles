@@ -135,7 +135,7 @@ SH
 
   It 'hands over the pasteable line before the job is even enqueued'
     When call share::send_background --to lan "$SB/Report.pdf"
-    The stderr should include 'receive with:  croc'
+    The stderr should include 'receive with: croc'
     The output should not equal ''
   End
 
@@ -152,7 +152,7 @@ SH
   It 'puts the pasteable line on the clipboard'
     share::send_background --to lan "$SB/Report.pdf" >/dev/null 2>&1
     When call cat "$SB/clip.txt"
-    The output should include 'receive with:  croc'
+    The output should include 'receive with: croc'
     The lines of output should equal 1
   End
 
@@ -253,7 +253,7 @@ SH
 
   It 'gives a face the pasteable line on stdout'
     When call share::send_background --for-face --to lan "$SB/Report.pdf"
-    The output should include 'receive with:  croc'
+    The output should include 'receive with: croc'
   End
 
   It 'leaves the clipboard untouched for a face'
@@ -267,7 +267,7 @@ SH
   It 'still writes the clipboard when NOT called by a face'
     share::send_background --to lan "$SB/Report.pdf" >/dev/null 2>&1
     When call cat "$SB/clip.txt"
-    The output should include 'receive with:  croc'
+    The output should include 'receive with: croc'
   End
 
   # stdout is the LINE here, not the job id — the one caller for which that is

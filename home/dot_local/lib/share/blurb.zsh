@@ -24,13 +24,13 @@ SHARE_TEMPLATE_CLI='%name → %token · get croc: %crocurl · expires %expires'
 # too late: it printed AFTER croc had exited, i.e. after the transfer it claimed
 # to be holding open had already closed. The blurb is now emitted before the
 # transfer starts (share::send), which is the only time it is any use.
-SHARE_TEMPLATE_LIVE='%name — receive with:  croc %code'
+SHARE_TEMPLATE_LIVE='%name — receive with: croc %code'
 
 # A self-hosted relay MUST be named. The phrase alone suffices only on croc's
 # built-in relay and on a multicast LAN (`local_only`); for any other relay the
 # recipient has no way to find the sender, and the transfer simply never
 # happens. Selected automatically by share::blurb on the endpoint's `relay`.
-SHARE_TEMPLATE_LIVE_RELAY='%name — receive with:  croc --relay %relay %code'
+SHARE_TEMPLATE_LIVE_RELAY='%name — receive with: croc --relay %relay %code'
 
 # share::human_size <bytes>
 share::human_size() {

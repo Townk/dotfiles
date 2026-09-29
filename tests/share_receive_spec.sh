@@ -69,18 +69,26 @@ SH
   # a bare value end to end.
 
   It 'classifies the line share puts on the clipboard as live'
-    When call share::classify 'Report.pdf (4.2 MB) — receive with:  croc f6n4-e36v-tjpj-s93k'
+    When call share::classify 'Report.pdf (4.2 MB) — receive with: croc f6n4-e36v-tjpj-s93k'
     The output should equal 'live'
   End
 
+  # Lines composed before 2026-09-29 carried a stray double space
+  # ("receive with:  croc"), and some are already sitting in chat history.
+  # They must keep parsing.
+  It 'still parses a line with the legacy double space'
+    When call share::parse_live 'R.pdf (1 B) — receive with:  croc f6n4-e36v-tjpj-s93k'
+    The output should include 'f6n4-e36v-tjpj-s93k'
+  End
+
   It 'pulls the phrase out of a line buried in chat prose'
-    When call share::parse_live 'hey! sending the deck: Deck.key (18 MB) — receive with:  croc f6n4-e36v-tjpj-s93k  — shout if it stalls'
+    When call share::parse_live 'hey! sending the deck: Deck.key (18 MB) — receive with: croc f6n4-e36v-tjpj-s93k  — shout if it stalls'
     The output should equal 'f6n4-e36v-tjpj-s93k	'
   End
 
   It 'pulls BOTH the relay and the phrase when the sender named one'
-    When call share::parse_live 'R.pdf (1 B) — receive with:  croc --relay 192.168.1.50:9009 f6n4-e36v-tjpj-s93k'
-    The output should equal 'f6n4-e36v-tjpj-s93k	192.168.1.50:9009'
+    When call share::parse_live 'R.pdf (1 B) — receive with: croc --relay 192.0.2.50:9009 f6n4-e36v-tjpj-s93k'
+    The output should equal 'f6n4-e36v-tjpj-s93k	192.0.2.50:9009'
   End
 
   # THE regression this project has already paid for once. The phase-1 live
@@ -91,7 +99,7 @@ SH
   # flag can satisfy it no matter where it sits in the line.
   It 'never returns --relay as the phrase'
     parsed_phrase() {
-      share::parse_live 'R.pdf — receive with:  croc --relay lab.example.com:9009 8878-salary-courage-roger' \
+      share::parse_live 'R.pdf — receive with: croc --relay lab.example.com:9009 8878-salary-courage-roger' \
         | cut -f1
     }
     When call parsed_phrase
@@ -107,9 +115,9 @@ SH
 
   It 'passes the sender'"'"'s relay to croc, without which the recipient cannot connect'
     share::get --foreground --out "$SB/out" \
-      'R.pdf (1 B) — receive with:  croc --relay 192.168.1.50:9009 f6n4-e36v-tjpj-s93k'
+      'R.pdf (1 B) — receive with: croc --relay 192.0.2.50:9009 f6n4-e36v-tjpj-s93k'
     When call grep '^argv:' "$SB/calls"
-    The output should include '--relay 192.168.1.50:9009'
+    The output should include '--relay 192.0.2.50:9009'
   End
 
   # Backgrounded by default: a live receive blocks until the sender is
@@ -119,7 +127,7 @@ SH
   # strips of exactly these names (commit 7e72661c).
   It 'receives in the background, carrying the phrase in a secret file'
     share::get --out "$SB/out" \
-      'R.pdf (1 B) — receive with:  croc --relay 192.168.1.50:9009 f6n4-e36v-tjpj-s93k' >/dev/null 2>&1
+      'R.pdf (1 B) — receive with: croc --relay 192.0.2.50:9009 f6n4-e36v-tjpj-s93k' >/dev/null 2>&1
     off_argv() {
       grep -q -- '--secret-file' "$SB/pueue-calls" || return 1
       grep -q -- 'f6n4-e36v-tjpj-s93k' "$SB/pueue-calls" && return 1

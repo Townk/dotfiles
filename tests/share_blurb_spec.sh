@@ -85,7 +85,7 @@ TOML
   It 'renders the live line as a runnable croc command'
     When call share::blurb withweb live 'Report.pdf (4.2 MB)' \
       '7-truck-mango-basil' '' ''
-    The output should equal 'Report.pdf (4.2 MB) — receive with:  croc 7-truck-mango-basil'
+    The output should equal 'Report.pdf (4.2 MB) — receive with: croc 7-truck-mango-basil'
   End
 
   # A self-hosted relay MUST appear in the line. The phrase alone is enough
@@ -95,7 +95,7 @@ TOML
   It 'names a self-hosted relay in the live line, or the recipient cannot connect'
     When call share::blurb noweb live 'Report.pdf (4.2 MB)' \
       '7-truck-mango-basil' '' ''
-    The output should equal 'Report.pdf (4.2 MB) — receive with:  croc --relay lab.example.com:9009 7-truck-mango-basil'
+    The output should equal 'Report.pdf (4.2 MB) — receive with: croc --relay lab.example.com:9009 7-truck-mango-basil'
   End
 
   It 'always emits exactly one line'
