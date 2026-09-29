@@ -17,8 +17,14 @@ ya = {
 
 local sel  = os.getenv("SHARE_TEST_SELECTED") or ""
 local hov  = os.getenv("SHARE_TEST_HOVERED")  or ""
+-- Mirrors yazi 26.9: `cx.active.selected` yields File objects, not Urls, and a
+-- File stringifies to "File: 0x…" rather than its path. Plain strings here once
+-- let `tostring(u)` pass while the real selection sent `share` garbage.
+local file_mt = { __tostring = function() return "File: 0xdeadbeef" end }
 local selected = {}
-for p in sel:gmatch("[^|]+") do selected[#selected + 1] = p end
+for p in sel:gmatch("[^|]+") do
+  selected[#selected + 1] = setmetatable({ url = p }, file_mt)
+end
 
 cx = {
   active = {

@@ -37,8 +37,10 @@ end
 -- selection and `b s` on nothing shares what you are looking at.
 local selected_or_hovered = ya.sync(function()
 	local paths = {}
-	for _, u in pairs(cx.active.selected) do
-		paths[#paths + 1] = tostring(u)
+	-- yazi 26.9 yields File objects here (stringifying to "File: 0x…"); older
+	-- releases yielded Urls. `v.url or v` takes either, as nice-sidebar does.
+	for _, v in pairs(cx.active.selected) do
+		paths[#paths + 1] = tostring(v.url or v)
 	end
 	if #paths == 0 then
 		local h = cx.active.current.hovered
