@@ -205,7 +205,9 @@ SH
     cat >"$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_CALLS"
-echo "no unexpired local revoke receipt for $2" >&2
+# The real croc prints this on STDOUT (Mode B 2026-09-29: the stderr-only
+# fake let it leak through a 2>/dev/null).
+echo "no unexpired local revoke receipt for $2"
 exit 1
 SH
     chmod +x "$SB/bin/croc"
@@ -220,6 +222,7 @@ SH
     The status should be success
     The output should include 'Big.dmg (1 MB) expired on'
     The output should include 'forgot the receipt'
+    The output should not include 'no unexpired local revoke receipt'
     The stderr should not include 'no unexpired local revoke receipt'
     The path "$SB/calls" should be exist
   End
@@ -238,7 +241,7 @@ SH
     SHARE_PROFILE=personal
     share::ledger_add rid croc public 'R' abc123 'https://x' 9999999999
     croc_refuses
-    check() { share::revoke rid 2>/dev/null && return 1; share::ledger_get rid >/dev/null; }
+    check() { share::revoke rid >/dev/null 2>&1 && return 1; share::ledger_get rid >/dev/null; }
     When call check
     The status should be success
   End
@@ -250,7 +253,7 @@ SH
     croc_refuses
     When run share::revoke rid
     The status should be failure
-    The stderr should include 'no unexpired local revoke receipt'
+    The output should include 'no unexpired local revoke receipt'
   End
 
   It 'drops the receipt after a successful revoke'

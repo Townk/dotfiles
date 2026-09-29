@@ -783,7 +783,8 @@ share::_croc_revoke_row() {
     share::croc_revoke "$ref"
     return
   fi
-  share::croc_revoke "$ref" 2>/dev/null && return 0
+  # Both streams: croc prints its refusal on STDOUT.
+  share::croc_revoke "$ref" >/dev/null 2>&1 && return 0
   label="$(printf '%s' "$row" | jq -r '.label')"
   log_ok "share: $label expired on $(strftime '%b %d, %Y' "$expires") — the store already deleted it; forgot the receipt"
 }
