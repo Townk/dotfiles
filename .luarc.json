@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "Lua 5.4",
+  "workspace.checkThirdParty": false,
+  "workspace.library": [
+    "/opt/homebrew/share/nvim/runtime/lua",
+    "${3rd}/luv/library",
+    "${3rd}/busted/library"
+  ],
+  "diagnostics.globals": [
+    "vim", "Snacks", "LazyVim", "jit", "bit", "bit32",
+    "hs", "spoon",
+    "ya", "cx", "rt", "ui", "th", "Command", "Url", "ps", "fs", "Progress",
+    "wezterm",
+    "describe", "it", "before_each", "after_each", "pending"
+  ]
+}
