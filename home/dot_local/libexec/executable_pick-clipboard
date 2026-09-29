@@ -1786,6 +1786,22 @@ clip::markdown_image() {
 # the upload finishes. Live mode — the default since the live-first amendment —
 # mints the code phrase BEFORE the transfer, so there is nothing to wait for.
 
+# clip::share_say <alert|info> <message> -- a Ctrl-S outcome the human can SEE.
+# Ctrl-S is accept-and-DISMISS, so by the time any of this runs the popup is
+# closing and its stderr dies with it: Mode B (2026-09-29) pressed Ctrl-S on a
+# text row and the picker simply closed. So every outcome goes to stderr (a
+# terminal caller still sees it) AND to the notify front-end — best-effort,
+# exactly like clip::copy_toast: no front-end is a silent no-op.
+clip::share_say() {
+  local icon="glyph:nf-md-alert" msg="$2"
+  [[ "$1" == info ]] && icon="glyph:nf-md-share_variant"
+  print -ru2 -- "pick-clipboard: $msg"
+  local notify_bin="${PICK_CLIPBOARD_NOTIFY:-$HOME/.local/bin/notify}"
+  [[ -x "$notify_bin" ]] || return 0
+  "$notify_bin" --icon "$icon" "$msg" >/dev/null 2>&1 || true
+  return 0
+}
+
 # clip::share_paths <path…> -- run the share, print the pasteable line.
 clip::share_paths() {
   (( $# )) || return 1
@@ -1793,14 +1809,14 @@ clip::share_paths() {
   # --background: the picker must never hold the terminal open for a transfer.
   # --for-face:  line on stdout, clipboard untouched (see above).
   line="$(share send --background --for-face -- "$@" 2>/dev/null)" || {
-    print -ru2 -- "pick-clipboard: share failed"
+    clip::share_say alert "share failed"
     return 1
   }
   [[ -n "$line" ]] || {
     # A live send to an endpoint that cannot carry one falls back to stored,
     # whose link does not exist yet — the completion toast carries it. Injecting
     # an empty line would look like success.
-    print -ru2 -- "pick-clipboard: shared — the link will arrive in a toast"
+    clip::share_say info "shared — the link will arrive in a toast"
     return 0
   }
   print -r -- "$line"
@@ -1820,10 +1836,10 @@ clip::share_existing() {
     if [[ -e "$p" ]]; then here+=("$p"); else missing+=("$p"); fi
   done
   if (( ${#here} == 0 )); then
-    print -ru2 -- "pick-clipboard: those files are not on this machine — press Ctrl-Y first to bring them local, then Ctrl-S"
+    clip::share_say alert "those files are not on this machine — press Ctrl-Y first to bring them local, then Ctrl-S"
     return 1
   fi
-  (( ${#missing} )) && print -ru2 -- "pick-clipboard: sharing ${#here} of $#; ${#missing} not on this machine"
+  (( ${#missing} )) && clip::share_say alert "sharing ${#here} of $#; ${#missing} not on this machine"
   clip::share_paths "${here[@]}"
 }
 
@@ -1834,7 +1850,7 @@ clip::share_by_id() {
   # File rows only. A code phrase for three lines of text is worse than just
   # pasting the text, and an image row is already deliverable by Ctrl-Y.
   if [[ "$kind" != (files|file|directory) ]]; then
-    print -ru2 -- "pick-clipboard: Ctrl-S shares files — this row is ${kind:-unknown}"
+    clip::share_say alert "Ctrl-S shares files — this row is ${kind:-unknown}"
     return 1
   fi
   # Same blob precedence as clip::copy_files_by_id: a multi-path manifest first,
@@ -1849,7 +1865,7 @@ clip::share_by_id() {
   fi
   rm -f "$blobtmp"
   (( ${#paths} )) || {
-    print -ru2 -- "pick-clipboard: no file paths recorded for row $id"
+    clip::share_say alert "no file paths recorded for row $id"
     return 1
   }
   clip::share_existing "${paths[@]}"
@@ -1858,7 +1874,7 @@ clip::share_by_id() {
 # clip::share_live_files -- the LIVEF pseudo-row (what is on the clipboard now).
 clip::share_live_files() {
   [[ -n "$LIVEF_PATHS_FILE" && -s "$LIVEF_PATHS_FILE" ]] || {
-    print -ru2 -- "pick-clipboard: no files on the clipboard to share"
+    clip::share_say alert "no files on the clipboard to share"
     return 1
   }
   local blob; blob="$(<"$LIVEF_PATHS_FILE")"
@@ -2682,7 +2698,7 @@ case "$selected" in
     ;;
   MD:LIVEF) clip::deliver_live_files; clip::materialize_live_files ;;
   LIVEF)    clip::deliver_live_files; clip::materialize_live_files ;;
-  SH:LIVE)  print -ru2 -- "pick-clipboard: Ctrl-S shares files — this row is text" ;;
+  SH:LIVE)  clip::share_say alert "Ctrl-S shares files — this row is text" ;;
   SH:LIVEF) clip::share_live_files ;;
   SH:*)    clip::share_by_id "${selected#SH:}" ;;
   CP:*)    clip::copy_by_id "${selected#CP:}" ;;
