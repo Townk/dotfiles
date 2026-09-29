@@ -50,6 +50,14 @@ profiles = ["work"]
 store    = "https://other.example.com"
 web      = true
 profiles = ["personal"]
+
+# The built-in `public` shape: a store AND live = true, whose rendezvous is
+# croc's OWN default relay (no `relay` field).
+[pub]
+store    = "https://pubstore.example.com"
+live     = true
+web      = true
+profiles = ["work"]
 TOML
     cat >"$SB/bin/tailscale" <<'SH'
 #!/bin/sh
@@ -105,6 +113,43 @@ SH
     When call share::_status_row theirs
     The output should include 'NOT REACHABLE'
     The output should not include 'system-service'
+  End
+
+  # Mode B (2026-09-29): `public` showed as `store` although a default send
+  # through it is LIVE. Probed the way a send would go: croc's own default
+  # relay, read from THIS croc's --help (the default has changed between croc
+  # versions, which is how a send once hung on the wrong relay).
+  croc_help_stub() {
+    printf '#!/bin/sh\nprintf "   --relay value   address of the relay (default: \\"%s\\") [\\$CROC_RELAY]\\n"\n' "$1" >"$SB/bin/croc"
+    chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"; export PATH
+  }
+
+  It 'reports a live = true endpoint as live, probing croc'"'"'s built-in relay'
+    croc_help_stub relay.croc.example:9009
+    SB_NC_OPEN="relay.croc.example"
+    When call share::_status_row pub
+    The output should start with 'live'
+    The output should include 'relay.croc.example:9009'
+    The output should include 'listening'
+    The output should not include 'pubstore'
+  End
+
+  It 'reports croc'"'"'s built-in relay as unreachable without suggesting a service'
+    croc_help_stub relay.croc.example:9009
+    When call share::_status_row pub
+    The output should start with 'live'
+    The output should include 'relay.croc.example:9009'
+    The output should include 'NOT REACHABLE'
+    The output should not include 'system-service'
+  End
+
+  It 'still says live when it cannot tell which relay croc would use'
+    printf '#!/bin/sh\nexit 0\n' >"$SB/bin/croc"; chmod +x "$SB/bin/croc"
+    PATH="$SB/bin:$PATH"; export PATH
+    When call share::_status_row pub
+    The output should start with 'live'
+    The output should include 'cannot probe'
   End
 
   It 'reports a reachable store with its status code'

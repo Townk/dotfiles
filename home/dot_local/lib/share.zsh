@@ -1203,6 +1203,16 @@ share::_probe_http() {
   [[ "$code" == [23]* ]]
 }
 
+# share::croc_default_relay → "host:port" of the relay croc uses when none is
+# named, read from THIS croc's --help. Asked, not hardcoded: the default has
+# changed between croc versions, and a send once hung on exactly that. Empty
+# when croc is missing or does not say.
+share::croc_default_relay() {
+  command -v croc >/dev/null 2>&1 || return 0
+  croc --help 2>/dev/null \
+    | sed -nE 's/.*--relay value.*\(default: "([^"]+)"\).*/\1/p' | head -n1
+}
+
 # share::_status_row <endpoint> → "mode\tdestination\tstate"
 #
 # One endpoint is probed ONE way, chosen the way a send would choose: a
@@ -1249,6 +1259,23 @@ share::_status_row() {
       else
         printf 'live\t%s\tNOT REACHABLE\n' "$relay"
       fi
+    fi
+    return 0
+  fi
+
+  # live = true with no `relay`: the rendezvous is croc's OWN default relay (the
+  # built-in `public`). A default send through it is live, so it is probed as
+  # live, not by its store (Mode B 2026-09-29 showed `public` as `store`).
+  if [[ "$(share::field "$name" live false)" == true ]]; then
+    local def; def="$(share::croc_default_relay)"
+    if [[ -z "$def" ]]; then
+      printf 'live\tcroc public relay\tcannot probe (croc did not name its default)\n'
+    elif share::_probe_tcp "${def%:*}" "${def##*:}"; then
+      printf 'live\t%s\tlistening\n' "$def"
+    elif (( $? == 2 )); then
+      printf 'live\t%s\tcannot probe (no nc)\n' "$def"
+    else
+      printf 'live\t%s\tNOT REACHABLE\n' "$def"
     fi
     return 0
   fi
