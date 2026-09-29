@@ -148,6 +148,10 @@ start_calendar_interval = {Hour = 3, Minute = 17}
 [classic]
 cmd = ["/bin/echo", "hi"]
 keep_alive = true
+
+[onfail]
+cmd = ["/bin/echo", "hi"]
+keep_alive = "on-failure"
 EOF
     }
     BeforeEach 'setup_svc'
@@ -172,6 +176,20 @@ EOF
       The line 5 should equal "/Volumes,$HOME/Library/CloudStorage"
       The line 6 should equal 3
       The line 7 should equal 17
+    End
+
+    # keep_alive = "on-failure": restart only after a FAILED exit, so a
+    # service that exits 0 on purpose ("not configured here") stays down
+    # instead of respawning every 10s (Mode B 2026-09-29: croc-relay, 1822 runs).
+    It 'renders keep_alive = "on-failure" as KeepAlive {SuccessfulExit = false}'
+      When call render_json onfail
+      The output should include '"SuccessfulExit":false'
+    End
+
+    It 'still renders keep_alive = true as a plain KeepAlive true'
+      ka() { render_json classic | jq -c '.KeepAlive'; }
+      When call ka
+      The output should equal 'true'
     End
 
     It 'renders none of them when absent (classic entries unchanged)'

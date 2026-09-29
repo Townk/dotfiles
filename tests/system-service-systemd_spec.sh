@@ -126,6 +126,17 @@ TOML
       The output should include "WantedBy=default.target"
     End
 
+    It 'renders keep_alive = "on-failure" as Restart=on-failure'
+      cat >"$SVCFILE" <<'TOML'
+[onfail]
+cmd = ["/bin/true"]
+keep_alive = "on-failure"
+TOML
+      When run zsh "$SYSTEMD_BIN" render onfail
+      The output should include "Restart=on-failure"
+      The output should not include "Restart=always"
+    End
+
     It 'renders optional keys only when present'
       cat >"$SVCFILE" <<'TOML'
 [minimal]

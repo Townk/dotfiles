@@ -150,7 +150,11 @@ svc::render_unit() {
   printf '[Unit]\nDescription=%s\n\n' "$desc"
   printf '[Service]\n'
   printf 'ExecStart=%s\n' "$exec_start"
-  if [[ "$keep" == true ]]; then printf 'Restart=always\n'; else printf 'Restart=no\n'; fi
+  case "$keep" in
+    true)       printf 'Restart=always\n' ;;
+    on-failure) printf 'Restart=on-failure\n' ;;   # a deliberate exit 0 stays down
+    *)          printf 'Restart=no\n' ;;
+  esac
   [[ -n "$wd" ]] && printf 'WorkingDirectory=%s\n' "$wd"
   [[ -n "$lp" ]] && printf 'StandardOutput=append:%s\n' "$(printf '%s' "$lp" | sed 's/%/%%/g')"
   [[ -n "$elp" ]] && printf 'StandardError=append:%s\n' "$(printf '%s' "$elp" | sed 's/%/%%/g')"

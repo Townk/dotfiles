@@ -379,8 +379,11 @@ share::relay_endpoint() {
   done
   case ${#matches} in
     1) printf '%s\n' "${matches[1]}" ;;
+    # 3, not 1: "nothing to relay for" is a configuration STATE, not a fault.
+    # libexec/croc-relay exits 0 on it so its service stays down instead of
+    # respawning every 10s (Mode B 2026-09-29: 1822 runs on a work laptop).
     0) log_error "share: no endpoint on this profile declares relay = \"@self:<port>\""
-       return 1 ;;
+       return 3 ;;
     *) log_error "share: ${#matches} endpoints declare @self (${matches[*]}) — set SHARE_RELAY_ENDPOINT"
        return 1 ;;
   esac

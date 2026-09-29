@@ -67,7 +67,11 @@ svc::render_json() {
       | {
           Label: $label,
           ProgramArguments: ([$cmd0] + ($s.cmd[1:] // [])),
-          KeepAlive: ($s.keep_alive // false),
+          # "on-failure": restart only after a FAILED exit, so a service
+          # that exits 0 on purpose stays down (launchd SuccessfulExit).
+          KeepAlive: (if $s.keep_alive == "on-failure"
+                      then {SuccessfulExit: false}
+                      else ($s.keep_alive // false) end),
           RunAtLoad:  ($s.run_at_load // false)
         }
       | if $s.working_dir    then . + {WorkingDirectory:    ($s.working_dir    | detilde)} else . end

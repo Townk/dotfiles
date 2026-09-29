@@ -133,10 +133,12 @@ SH
     The output should equal 'worklan'
   End
 
-  It 'fails when no endpoint on this profile declares @self'
+  # Status 3, distinct from a real failure: "nothing to relay for" is a
+  # configuration state the service wrapper exits 0 on (see libexec/croc-relay).
+  It 'fails with status 3 when no endpoint on this profile declares @self'
     SHARE_PROFILE=personal
     When run share::relay_endpoint
-    The status should be failure
+    The status should equal 3
     The stderr should include '@self'
   End
 
@@ -218,6 +220,22 @@ SH
 
     # Personal live transfers rendezvous through croc's own public relay, which
     # is what lets them reach someone on no tailnet at all. No relay needed.
+    # Mode B (2026-09-29): on a work laptop with no @self endpoint the wrapper
+    # exited 1 and keep_alive = true respawned it 1822 times. It now exits 0
+    # when unconfigured, and the service restarts only on a FAILED exit.
+    It 'restarts the relay only after a failed exit'
+      relay_keep() {
+        local out="$SHELLSPEC_TMPBASE/relay-render-keep"
+        rm -rf "$out"
+        "$SHELLSPEC_PROJECT_ROOT/tests/render-matrix.sh" \
+          --source "$SHELLSPEC_PROJECT_ROOT/home" --profile work --out "$out" >/dev/null || return $?
+        awk '/^\[croc-relay\]/{f=1;next} /^\[/{f=0} f && /^keep_alive/' \
+          "$out/rendered/dot_config__packages__services.toml.tmpl"
+      }
+      When call relay_keep
+      The output should include '"on-failure"'
+    End
+
     It 'renders nothing on personal'
       When call render_profile personal
       The output should equal '0'
@@ -271,6 +289,36 @@ SH
     # 9009 is the rendezvous the pasted line names; the rest carry the
     # transfer. Advertising 9009 alone and firewalling the others fails only
     # once a real transfer starts, which is the worst time to find out.
+    It 'exits 0 without starting croc when this profile declares no @self endpoint'
+      unconfigured() {
+        cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+echo started > "$CROC_FAKE_LOG"
+SH
+        chmod +x "$SB/bin/croc"
+        export CROC_FAKE_LOG="$SB/croc.log" PATH="$SB/bin:$PATH"
+        export SHARE_CONFIG_DIR SHARE_ENDPOINTS_FILE SHARE_TAILSCALE_BIN
+        SHARE_PROFILE=personal "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_croc-relay"
+      }
+      When run unconfigured
+      The status should be success
+      The output should include 'not configured'
+      The stderr should include '@self'
+      The path "$SB/croc.log" should not be exist
+    End
+
+    It 'still fails (so it is restarted) when the configuration is ambiguous'
+      printf '\n[second]\nrelay = "@self:9109"\nweb = false\nprofiles = ["work"]\n' \
+        >>"$SHARE_ENDPOINTS_FILE"
+      ambiguous() {
+        export PATH="$SB/bin:$PATH" SHARE_CONFIG_DIR SHARE_ENDPOINTS_FILE SHARE_PROFILE SHARE_TAILSCALE_BIN
+        "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_croc-relay"
+      }
+      When run ambiguous
+      The status should be failure
+      The stderr should include 'SHARE_RELAY_ENDPOINT'
+    End
+
     It 'opens croc'"'"'s full port spread, not just the rendezvous port'
       wrapper_setup
       When call grep '^argv:' "$SB/croc.log"

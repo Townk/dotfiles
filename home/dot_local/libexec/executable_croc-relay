@@ -27,7 +27,16 @@ source "${0:A:h}/../lib/share.zsh" || {
 
 endpoint="${SHARE_RELAY_ENDPOINT:-}"
 if [[ -z "$endpoint" ]]; then
-  endpoint="$(share::relay_endpoint)" || exit 1
+  rc=0
+  endpoint="$(share::relay_endpoint)" || rc=$?
+  if (( rc == 3 )); then
+    # Not configured on this machine: exit 0, which the service's
+    # keep_alive = "on-failure" treats as "stay down". Exiting 1 here made
+    # launchd respawn the relay every 10s, indefinitely.
+    print -r -- "croc-relay: not configured — add an endpoint with relay = \"@self:<port>\" to endpoints.toml, then: system-service start croc-relay"
+    exit 0
+  fi
+  (( rc == 0 )) || exit 1
 fi
 
 # Ports: croc's own default spread. 9009 is the rendezvous the pasted line

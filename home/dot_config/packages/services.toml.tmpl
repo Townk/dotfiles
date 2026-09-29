@@ -5,7 +5,9 @@
 #
 # Schema (per `[<name>]` section, all keys optional except `cmd`):
 #   cmd            = ["bin", "args..."]      → ProgramArguments
-#   keep_alive     = true|false              → KeepAlive
+#   keep_alive     = true|false|"on-failure"  → KeepAlive ("on-failure":
+#                                               {SuccessfulExit=false} /
+#                                               systemd Restart=on-failure)
 #   run_at_load    = true|false              → RunAtLoad
 #   working_dir    = "~/path"                → WorkingDirectory
 #   log_path       = "~/path/out.log"        → StandardOutPath
@@ -218,7 +220,7 @@ PATH = "~/.local/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/u
 [croc-relay]
 description    = "croc relay: rendezvous for live shares"
 cmd            = ["{{ .chezmoi.homeDir }}/.local/libexec/croc-relay"]
-keep_alive     = true
+keep_alive     = "on-failure"   # exits 0 when no @self endpoint: stay down
 run_at_load    = true
 log_path       = "~/.cache/share/croc-relay.log"
 error_log_path = "~/.cache/share/croc-relay.log"
