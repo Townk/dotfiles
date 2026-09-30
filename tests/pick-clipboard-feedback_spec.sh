@@ -575,5 +575,28 @@ EOF
       When call preview_src
       The output should include "WHEN 'work-laptop' THEN 'peer-laptop'"
     End
+
+    # Text alone proves nothing about the SQL: run the generated script the way
+    # fzf does and read the label it renders.
+    It 'renders the alias in the Origin line when the preview script runs'
+      printf 'peer-key-01 desk\n' >"$SHELLSPEC_TMPBASE/host-aliases"
+      export HOST_ALIASES_FILE="$SHELLSPEC_TMPBASE/host-aliases"
+      id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, len, source_host, last_ts) VALUES ('text','hello',5,'peer-key-01',100); SELECT last_insert_rowid();")
+      run_preview() {
+        zsh -f -c 'source "$SCRIPT_PATH"; FZF_PREVIEW_COLUMNS=60 FZF_PREVIEW_LINES=12 bash "$preview_script" "$1"' _ "$id"
+      }
+      When call run_preview
+      The output should include 'remote (desk)'
+    End
+
+    It 'renders the raw key when the map does not know the host'
+      export HOST_ALIASES_FILE="$SHELLSPEC_TMPBASE/no-such-map"
+      id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, len, source_host, last_ts) VALUES ('text','hello',5,'peer-9','100'); SELECT last_insert_rowid();")
+      run_preview() {
+        zsh -f -c 'source "$SCRIPT_PATH"; FZF_PREVIEW_COLUMNS=60 FZF_PREVIEW_LINES=12 bash "$preview_script" "$1"' _ "$id"
+      }
+      When call run_preview
+      The output should include 'remote (peer-9)'
+    End
   End
 End
