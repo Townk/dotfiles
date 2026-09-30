@@ -132,6 +132,37 @@ export PATH
 # layer. Hence POSIX `[` + string concatenation, not the zsh-only `[[ ]]`. Keep
 # the triple in sync.
 if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
+  # Learn the connecting machine's friendly name (peer-alias spec H4). Its ssh
+  # sends LC_ORIGIN_HOST=<clipboard key> LC_ORIGIN_ALIAS=<~/.hostname-alias>
+  # (a loose ~/.ssh/config.d/00-self-identity.conf); host::display turns that
+  # key into the alias wherever a message names another machine. Hostnames and
+  # aliases never enter the repo, so this map is the only place the pairing
+  # lives. Both values must match ^[A-Za-z0-9._-]{1,64}$ or nothing is written.
+  # Cheap on the common path (one grep); writes only when the line is new or
+  # changed, atomically, mode 600; silent and never fatal. A pair relayed
+  # through a hop is still a true key -> alias fact, so it is recorded too.
+  if [ -n "${LC_ORIGIN_HOST:-}" ] && [ -n "${LC_ORIGIN_ALIAS:-}" ] &&
+    [ "${#LC_ORIGIN_HOST}" -le 64 ] && [ "${#LC_ORIGIN_ALIAS}" -le 64 ]; then
+    case "$LC_ORIGIN_HOST$LC_ORIGIN_ALIAS" in
+      *[!A-Za-z0-9._-]*) ;;
+      *)
+        _origin_map="$XDG_STATE_HOME/hosts/aliases"
+        if ! grep -qxF "$LC_ORIGIN_HOST $LC_ORIGIN_ALIAS" "$_origin_map" 2>/dev/null; then
+          (
+            umask 077
+            mkdir -p "$XDG_STATE_HOME/hosts" &&
+              {
+                awk -v k="$LC_ORIGIN_HOST" '$1 != k' "$_origin_map" 2>/dev/null
+                printf '%s %s\n' "$LC_ORIGIN_HOST" "$LC_ORIGIN_ALIAS"
+              } >"$_origin_map.$$" &&
+              mv -f "$_origin_map.$$" "$_origin_map"
+          ) >/dev/null 2>&1 || rm -f "$_origin_map.$$" 2>/dev/null
+        fi
+        unset _origin_map
+        ;;
+    esac
+  fi
+
   # Steer gpg-agent's pinentry to the terminal. gpg forwards this to the agent,
   # which hands it to our pinentry-auto dispatcher; USE_CURSES is the value
   # pinentry-mac honors too. Unset locally so Touch ID stays the default.
