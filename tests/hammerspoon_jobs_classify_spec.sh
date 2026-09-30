@@ -53,6 +53,13 @@ Describe 'jobs HUD classify'
     The output should equal 'waiting,nil,nil'
   End
 
+  # The tmux status reader compares `$(<phase)` (trailing newlines stripped,
+  # nothing else) to the word: padding must read as "no phase" here too.
+  It 'treats padded phase content as no phase, like the tmux reader'
+    When call lua 'tostring(c.readPhase(" waiting")) .. "," .. tostring(c.readPhase("\twaiting")) .. "," .. tostring(c.readPhase("waiting ")) .. "," .. tostring(c.readPhase("waiting\n\n"))'
+    The output should equal 'nil,nil,nil,waiting'
+  End
+
   It 'formats elapsed time in minutes, hours, then days'
     When call lua 'c.elapsed(1000, 1030) .. "," .. c.elapsed(1000, 1000 + 12*60) .. "," .. c.elapsed(1000, 1000 + 3*3600) .. "," .. c.elapsed(1000, 1000 + 50*3600) .. "," .. c.elapsed(nil, 5)'
     The output should equal '1m,12m,3h,2d,'

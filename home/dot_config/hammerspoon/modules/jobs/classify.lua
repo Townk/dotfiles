@@ -9,16 +9,18 @@ local M = {}
 M.STALL_SECS = 6
 
 -- The `phase` sidecar's content → "waiting", or nil. Only the exact word
--- counts; any other content is "no phase" (forward compatibility).
+-- counts, optionally followed by newlines (what the tmux reader's `$(<file)`
+-- tolerates); any other content is "no phase" (forward compatibility).
 function M.readPhase(raw)
-	if raw and raw:match("^%s*waiting%s*$") then return "waiting" end
+	if raw and raw:match("^waiting\n*$") then return "waiting" end
 	return nil
 end
 
 -- job: { phase, pct, epoch, reportsProgress }; kind: pueue status or nil.
 -- A waiting job (phase set, no real percent yet: job::progress writes the
--- percent before removing `phase`, so a real percent always wins) is never preparing or stalled: it legitimately waits (a live
--- share, up to a day) and must not look like dying.
+-- percent before removing `phase`, so a real percent always wins) is never
+-- preparing or stalled: it legitimately waits (a live share, up to a day)
+-- and must not look like dying.
 function M.classify(job, kind, now, stallSecs)
 	if job.phase == "waiting" and (job.pct or -1) < 0 then return "waiting" end
 	if (job.pct or -1) < 0 or kind == "queued" then return "preparing" end
