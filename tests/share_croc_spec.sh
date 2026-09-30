@@ -549,6 +549,118 @@ SH
     When call share::ledger_list
     The output should include '"expires": 0'
   End
+  # --- croc's output as progress (spec 2026-09-29-job-waiting-phase, W3) ----
+  # Driven by the REAL croc 11.2.1 sender capture in tests/fixtures/croc/ (see
+  # its README): before a peer connects croc prints a "Hashing <file> NN% |…|"
+  # bar, the connect signal is a "Sending (->[peer]:port)" record, and only the
+  # "<file> NN% |…|" records after it are transfer progress.
+  Describe 'share::croc_pct (against the captured croc 11.2.1 output)'
+    FIX="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1"
+
+    # Nothing croc prints before the peer connects is a transfer percent.
+    It 'finds no percent in any pre-connect record'
+      pre_pcts() { while IFS= read -r r; do share::croc_pct "$r"; done <"$FIX.pre"; }
+      When call pre_pcts
+      The output should equal ''
+    End
+
+    It 'reads the percents of the transfer, ending at 100'
+      xfer_pcts() { while IFS= read -r r; do share::croc_pct "$r"; done <"$FIX.transfer" | tail -1; }
+      When call xfer_pcts
+      The output should equal '100'
+    End
+
+    It 'only ever yields integers from 0 to 100'
+      in_range() {
+        while IFS= read -r r; do share::croc_pct "$r"; done <"$FIX.transfer" \
+          | awk '!/^[0-9]+$/ || $1 > 100 { bad++ } END { print bad + 0 }'
+      }
+      When call in_range
+      The output should equal '0'
+    End
+
+    It 'reads a single transfer record'
+      When call share::croc_pct 'payload.bin  45% |█████      | (7.6/17 MB, 2.1 MB/s) [3s:4s]'
+      The output should equal '45'
+    End
+
+    # Review focus 2: a filename with a percent sign is not progress.
+    It 'ignores a percent sign inside a filename'
+      When call share::croc_pct "Sending '100% final.pdf' (1.2 MB)"
+      The output should equal ''
+    End
+
+    It 'ignores the pre-connect hashing bar'
+      When call share::croc_pct 'Hashing payload.bin  50% |██        | (8.8 GB/s) [0s:0s]'
+      The output should equal ''
+      The status should be success
+    End
+
+    It 'ignores a whitespace-only redraw record'
+      When call share::croc_pct '                                        '
+      The output should equal ''
+      The status should be success
+    End
+  End
+
+  Describe 'share::_croc_tap'
+    FIX="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1"
+    # Record every progress report instead of writing a job's sidecars.
+    tap_setup() {
+      CALLS="$SB/calls"; : >"$CALLS"
+      share::_progress() { print -r -- "$*" >>"$CALLS"; }
+    }
+
+    It 'reports nothing while croc only hashes and waits (the .pre records)'
+      tap_setup
+      tap() { share::_croc_tap "$SB/cap" 'payload.bin (16 MB)' live <"$FIX.pre" 2>/dev/null; cat "$CALLS"; }
+      When call tap
+      The output should equal ''
+    End
+
+    It 'switches to sending at the connect record, then climbs to 100'
+      tap_setup
+      tap() {
+        cat "$FIX.pre" "$FIX.transfer" | share::_croc_tap "$SB/cap" 'payload.bin (16 MB)' live 2>/dev/null
+        # first call, whether the percents only climb, the last call
+        sed -n 1p "$CALLS"
+        awk '{ if (NR > 1 && $1 <= prev) bad++; prev = $1 } END { print "non-increasing:", bad + 0 }' "$CALLS"
+        tail -1 "$CALLS"
+      }
+      When call tap
+      The line 1 of output should equal '0 sending payload.bin (16 MB)'
+      The line 2 of output should equal 'non-increasing: 0'
+      The line 3 of output should equal '100 sending payload.bin (16 MB)'
+    End
+
+    It 'ignores transfer percents seen before any connect record'
+      tap_setup
+      tap() { sed 1d "$FIX.transfer" | share::_croc_tap "$SB/cap" L live 2>/dev/null; cat "$CALLS"; }
+      When call tap
+      The output should equal ''
+    End
+
+    # Review focus 5: stored uploads mirror, never report.
+    It 'never reports progress in stored mode'
+      tap_setup
+      tap() { share::_croc_tap "$SB/cap" L store <"$FIX.raw" 2>/dev/null; cat "$CALLS"; }
+      When call tap
+      The output should equal ''
+    End
+
+    It 'mirrors every byte, CRs included, to stderr and the capture file'
+      tap_setup
+      tap() {
+        share::_croc_tap "$SB/cap" L live <"$FIX.raw" 2>"$SB/err"
+        cmp -s "$FIX.raw" "$SB/cap" && echo "capture identical"
+        cmp -s "$FIX.raw" "$SB/err" && echo "stderr identical"
+      }
+      When call tap
+      The output should equal 'capture identical
+stderr identical'
+    End
+  End
+
   # --- the waiting phase (spec 2026-09-29-job-waiting-phase, W2) ------------
   Describe 'the waiting phase'
     # A real job dir + job.zsh, so share::_waiting reaches job::waiting. The
@@ -617,6 +729,102 @@ SH
       When call share::_waiting "waiting for recipient"
       The status should be success
       The output should equal ''
+    End
+
+    It 'switches to real progress once croc starts transferring'
+      wait_setup
+      SB_FIX="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.raw"; export SB_FIX
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+cat "$SB_FIX"
+exit 0
+SH
+      chmod +x "$SB/bin/croc"
+      JOB_ID=fake-job share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>&1
+      after() {
+        [ -e "$JOB_STATE_ROOT/fake-job/phase" ] && echo "phase still present"
+        sed 's/^[0-9]* //' "$JOB_STATE_ROOT/fake-job/progress"
+      }
+      When call after
+      The output should equal '100 sending Report.pdf (1 B)'
+    End
+
+    # Hashing percents before the connect are not the recipient arriving.
+    It 'stays waiting through croc'"'"'s pre-connect output'
+      wait_setup
+      SB_FIX="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.pre"; export SB_FIX
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+cat "$SB_FIX"
+exit 0
+SH
+      chmod +x "$SB/bin/croc"
+      JOB_ID=fake-job share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>&1
+      after() {
+        printf '%s|%s' "$(cat "$JOB_STATE_ROOT/fake-job/phase")" \
+          "$(sed 's/^[0-9]* //' "$JOB_STATE_ROOT/fake-job/progress")"
+      }
+      When call after
+      The output should equal 'waiting|-1 waiting for recipient'
+    End
+
+    # Review focus 1: a progress bar redrawn with CR and never LF must still
+    # be read as it arrives, not only at EOF. The fake croc prints the connect
+    # record and one CR-terminated transfer record from the capture, then
+    # waits (up to ~3 s) for the job's progress to show it before exiting.
+    It 'reads CR-only redraws as they arrive'
+      wait_setup
+      SB_TRANSFER="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.transfer"; export SB_TRANSFER
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+sed -n 1p "$SB_TRANSFER"
+printf '%s\r' "$(grep -m1 ' 13% ' "$SB_TRANSFER")"
+i=0
+while [ "$i" -lt 30 ]; do
+  grep -q ' 13 ' "$JOB_STATE_ROOT/fake-job/progress" 2>/dev/null && break
+  sleep 0.1; i=$((i + 1))
+done
+cp "$JOB_STATE_ROOT/fake-job/progress" "$SB_SNAP.mid"
+exit 0
+SH
+      chmod +x "$SB/bin/croc"
+      JOB_ID=fake-job share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>&1
+      mid() { sed 's/^[0-9]* //' "$SB_SNAP.mid"; }
+      When call mid
+      The output should equal '13 sending Report.pdf (1 B)'
+    End
+
+    # Review focus 5: stored uploads print percents too; they are not "sending
+    # to a recipient" and must not touch the job's progress this way.
+    It 'does not turn a stored upload into sending progress'
+      wait_setup
+      SB_FIX="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.raw"; export SB_FIX
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+cat "$SB_FIX"
+echo "https://drop.example.com/s/abc#v1.KEY"
+echo "croc-store-v1.b64.abc.KEY"
+exit 0
+SH
+      chmod +x "$SB/bin/croc"
+      JOB_ID=fake-job share::croc_send drop store 3d 1 "$SB/Report.pdf" >/dev/null 2>&1
+      When call ls "$JOB_STATE_ROOT/fake-job"
+      The output should not include 'progress'
+    End
+
+    It 'still mirrors croc output to stderr and keeps croc'"'"'s exit status'
+      wait_setup
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+echo "could not connect to lab.example.com:9009: bad response: bad password"
+exit 1
+SH
+      chmod +x "$SB/bin/croc"
+      fatal() { JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 SHARE_LIVE_DEADLINE=2 share::croc_send lab live '' '' "$SB/Report.pdf"; }
+      When run fatal
+      The status should be failure
+      The stderr should include 'bad password'
+      The stdout should equal ''
     End
   End
 End

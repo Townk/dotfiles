@@ -273,6 +273,82 @@ share::croc_revoke() {
   croc --revoke "$1"
 }
 
+# share::croc_pct <record> — the transfer percent in ONE croc output record
+# (a record is text between CR/LF), or nothing; rc 0 either way. Written
+# against the captured croc 11.2.1 sender output in tests/fixtures/croc/: the
+# percent is the number immediately before "%" and the progress bar's opening
+# "|". Requiring the bar is what keeps a filename like "100% final.pdf" in the
+# "Sending '…'" line from reading as progress. croc also draws that same bar
+# while HASHING the file at startup — before any peer connects — so a record
+# starting with "Hashing " is never a transfer percent.
+share::croc_pct() {
+  local rec="$1"
+  [[ "$rec" =~ '^[[:space:]]*Hashing ' ]] && return 0
+  if [[ "$rec" =~ '(^|[^0-9])([0-9]{1,3})%[[:space:]]*\|' ]]; then
+    local -i pct=$match[2]
+    (( pct <= 100 )) && print -r -- "$pct"
+  fi
+  return 0
+}
+
+# share::_croc_tap <capture-file> <label> <mode> — sits where `tee "$tmp" >&2`
+# used to: every byte croc prints still reaches stderr and the capture file
+# (the post-exit checks read it), but it is read AS IT ARRIVES. Records are
+# split on CR as well as LF because croc redraws its bar with CR (and pads
+# with whitespace-only records, which are skipped).
+#
+# In live mode it is a two-state machine. croc prints a "Sending (->[peer]:port)"
+# record the moment the recipient connects: that ends the waiting phase at
+# once (`0 sending <label>`), not at the first percent. Percent records count
+# only after it — on top of croc_pct's own "Hashing" exclusion — and each NEW
+# percent moves the bar. If a future croc stops printing "Sending (->", the job
+# simply stays "waiting" until it ends: acceptable, never a false "sending".
+# Stored uploads are mirrored only: they are not a recipient connecting (spec
+# 2026-09-29-job-waiting-phase, W3 and its out-of-scope note).
+share::_croc_tap() {
+  zmodload zsh/system 2>/dev/null
+  local cap="$1" label="$2" mode="$3" chunk buf="" rec pct last=""
+  local -i connected=0
+  : >"$cap"
+  while sysread -s 4096 chunk; do
+    print -rn -- "$chunk" >>"$cap"
+    print -rn -- "$chunk" >&2
+    [[ "$mode" == live ]] || continue
+    buf+="$chunk"
+    # Each record is complete once its CR/LF arrives; a trailing partial one
+    # waits in $buf for the next chunk (or EOF, below).
+    while [[ "$buf" == *[$'\r\n']* ]]; do
+      rec="${buf%%[$'\r\n']*}"
+      buf="${buf#*[$'\r\n']}"
+      share::_croc_tap_record
+    done
+  done
+  if [[ "$mode" == live && -n "$buf" ]]; then
+    rec="$buf"
+    share::_croc_tap_record
+  fi
+  return 0
+}
+
+# One record through share::_croc_tap's state machine. Uses (and updates) the
+# caller's locals rec, connected, pct, last and label — zsh's dynamic scope.
+share::_croc_tap_record() {
+  [[ "$rec" == *[^[:space:]]* ]] || return 0
+  if (( ! connected )); then
+    if [[ "$rec" =~ '^[[:space:]]*Sending \(->' ]]; then
+      connected=1 last=0
+      share::_progress 0 "sending $label"
+    fi
+    return 0
+  fi
+  pct="$(share::croc_pct "$rec")"
+  if [[ -n "$pct" && "$pct" != "$last" ]]; then
+    share::_progress "$pct" "sending $label"
+    last="$pct"
+  fi
+  return 0
+}
+
 # share::croc_send <endpoint> <mode> <expiration> <downloads> <path…>
 # Runs the transfer, records a receipt, prints the blurb on stdout. croc's own
 # progress goes to the terminal untouched, and a non-zero croc exit fails this
@@ -286,8 +362,8 @@ share::croc_revoke() {
 # `$pipestatus` right after the assignment would not see it: that array lives
 # in the subshell that already exited. Running the pipeline directly (writing
 # to a temp file instead of through `$(...)`) keeps it in THIS shell, so
-# `$pipestatus[1]` is croc's real exit code, and `tee` still mirrors every byte
-# to the terminal (>&2) as it happens.
+# `$pipestatus[1]` is croc's real exit code, and share::_croc_tap mirrors every
+# byte to the terminal (>&2) as it happens and reads it for progress.
 share::croc_send() {
   zmodload zsh/datetime 2>/dev/null
   # --secret-file is a LEADING flag rather than a positional so every existing
@@ -402,10 +478,10 @@ share::croc_send() {
     attempt=$(( attempt + 1 ))
     started=$EPOCHSECONDS
     if (( ${#envp} )); then
-      env "${envp[@]}" "${cmd[@]}" 2>&1 | tee "$tmp" >&2
+      env "${envp[@]}" "${cmd[@]}" 2>&1 | share::_croc_tap "$tmp" "$label" "$mode"
       rc=${pipestatus[1]}
     else
-      "${cmd[@]}" 2>&1 | tee "$tmp" >&2
+      "${cmd[@]}" 2>&1 | share::_croc_tap "$tmp" "$label" "$mode"
       rc=${pipestatus[1]}
     fi
     out="$(<"$tmp")"
