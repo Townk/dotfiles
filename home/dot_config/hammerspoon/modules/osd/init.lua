@@ -58,7 +58,9 @@ M.fadeSteps = 15
 
 local OSD_WIDTH    = 210
 local OSD_HEIGHT   = 130
-local TEXT_CHAR_WIDTH = 7.2
+local TEXT_CHAR_WIDTH = 7.2        -- fallback estimate only (see osdWidthForText)
+local TEXT_MEASURE_SLACK = 4       -- measurement vs canvas rendering rounding
+local TEXT_FONT = { name = ".AppleSystemUIFont", size = 14 }
 local TEXT_MAX_SCREEN_RATIO = 0.75
 local CORNER_RADIUS = 16
 local ICON_SIZE    = 68
@@ -328,6 +330,14 @@ local function resolveIcon(iconOrIcons, percent, direction)
   return icon
 end
 
+--- Paragraph style for the toast label. `truncateTail` because the label box
+--- is one line high: a label that still overflows must show "…", never wrap
+--- onto a hidden second line (Mode B 2026-09-29: "Copied from peer-laptop"
+--- wrapped at its hyphen and rendered as "Copied from peer-").
+local function textParagraphStyle()
+	return { alignment = "center", lineBreak = "truncateTail" }
+end
+
 --- Build the ordered list of canvas element tables for the current OSD state.
 --- @param icon    hs.image|table|nil
 --- @param percent number
@@ -422,14 +432,14 @@ local function buildElements(icon, percent, text, width)
 	if text then
 		local textValue = (type(text) == "table" and text.type == "ansiText")
 			and hs.styledtext.ansi(text.value, {
-				font = { name = ".AppleSystemUIFont", size = 14 },
+				font = TEXT_FONT,
 				color = BAR_ON,
-				paragraphStyle = { alignment = "center" },
+				paragraphStyle = textParagraphStyle(),
 			})
 			or hs.styledtext.new(text, {
-				font = { name = ".AppleSystemUIFont", size = 14 },
+				font = TEXT_FONT,
 				color = BAR_ON,
-				paragraphStyle = { alignment = "center" },
+				paragraphStyle = textParagraphStyle(),
 			})
 		elements[#elements + 1] = {
 			type = "text",
@@ -460,7 +470,22 @@ local function buildElements(icon, percent, text, width)
 	return elements
 end
 
-local function osdWidthForText(text, screenFrame)
+--- Width of `raw` as the label will render it (same font), or nil.
+--- @param raw string
+--- @return table|nil  { w = number, h = number }
+local function measureText(raw)
+	local ok, size = pcall(function()
+		return hs.drawing.getTextDrawingSize(hs.styledtext.new(raw, { font = TEXT_FONT }))
+	end)
+	return ok and size or nil
+end
+
+--- Toast width for `text`: its MEASURED width plus padding, clamped between
+--- OSD_WIDTH and TEXT_MAX_SCREEN_RATIO of the screen. The old per-character
+--- estimate (TEXT_CHAR_WIDTH) is only the fallback when measuring fails — it
+--- under-sized proportional text, and the label then wrapped out of sight.
+--- @param measure? fun(raw: string): table|nil  injectable for specs; defaults to measureText
+local function osdWidthForText(text, screenFrame, measure)
 	if not text then
 		return OSD_WIDTH
 	end
@@ -468,8 +493,10 @@ local function osdWidthForText(text, screenFrame)
 	local maxWidth = math.floor(screenFrame.w * TEXT_MAX_SCREEN_RATIO)
 	local rawText = (type(text) == "table" and text.value) or text
 	rawText = rawText:gsub("\27%[[%d;]*m", "")
-	local estimated = math.ceil(PADDING_H * 2 + #rawText * TEXT_CHAR_WIDTH)
-	return math.max(OSD_WIDTH, math.min(maxWidth, estimated))
+	local size = (measure or measureText)(rawText)
+	local contentW = (size and size.w) and (size.w + TEXT_MEASURE_SLACK) or (#rawText * TEXT_CHAR_WIDTH)
+	local wanted = math.ceil(PADDING_H * 2 + contentW)
+	return math.max(OSD_WIDTH, math.min(maxWidth, wanted))
 end
 
 --- Get the screen that should display the OSD.
@@ -652,6 +679,8 @@ end
 -- cannot drift apart on look or glyph plumbing. jobs owns its own layout;
 -- these are the pieces that must stay single-source.
 M.resolveNamedIcon = resolveNamedIcon
+M._osdWidthForText = osdWidthForText
+M._textParagraphStyle = textParagraphStyle
 M.NERD_FONT_NAME = NERD_FONT_NAME
 M.capsuleTheme = {
 	bg = BG_COLOR,
