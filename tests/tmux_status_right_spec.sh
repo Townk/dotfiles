@@ -463,7 +463,50 @@ EOS
       [ -n "${2-}" ] && echo "100 $2 msg" > "$TEST_TMP/jobs/$1/progress"
       :
     }
+    WG=$'\U000F0150'
+    seed_waiting() {  # seed_waiting <name> [phase-content]
+      seed_job "$1" -1
+      printf '%s\n' "${2-waiting}" > "$TEST_TMP/jobs/$1/phase"
+    }
     bar() { JOB_STATE_ROOT="$TEST_TMP/jobs" NOTIFY_UNACKED_FILE="$TEST_TMP/unacked" zsh "$W" root 0 main 0; }
+
+    It 'counts a waiting job on its own, outside the running mean'
+      jobs_wait() { seed_job run 40; seed_waiting w; bar; }
+      When call jobs_wait
+      The output should include "$JG 1 (40%)"
+      The output should include "$WG 1 waiting"
+    End
+
+    It 'shows only the waiting element when every job waits'
+      jobs_only_wait() { seed_waiting w1; seed_waiting w2; bar; }
+      When call jobs_only_wait
+      The output should include "$WG 2 waiting"
+      The output should not include "$JG"
+    End
+
+    # Review focus 3: only the exact word counts.
+    It 'treats unknown phase content as no phase'
+      jobs_odd() { seed_waiting odd "paused"; bar; }
+      When call jobs_odd
+      The output should include "$JG 1"
+      The output should not include "waiting"
+    End
+
+    # Review focus 4: a crashed sender's leftover phase is not a waiting job.
+    It 'ignores the phase of a finished job'
+      jobs_done() { seed_waiting gone; echo done > "$TEST_TMP/jobs/gone/result"; bar; }
+      When call jobs_done
+      The output should not include "waiting"
+    End
+
+    # job::progress writes the percent before removing phase: a real percent
+    # beside a leftover phase means the job is running.
+    It 'lets a real percent win over a leftover waiting phase'
+      jobs_race() { seed_job r 40; printf 'waiting\n' > "$TEST_TMP/jobs/r/phase"; bar; }
+      When call jobs_race
+      The output should include "$JG 1 (40%)"
+      The output should not include "waiting"
+    End
 
     It 'shows the tasks glyph, count, and mean percent of running jobs'
       jobs_pct() { seed_job a 10.6; seed_job b 30; bar; }

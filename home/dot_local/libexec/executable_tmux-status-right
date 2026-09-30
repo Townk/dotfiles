@@ -246,6 +246,7 @@ I_WIFI_ON=$'\U000F05A9' I_WIFI_OFF=$'\U000F092E'
 I_HOST=$'\U000F048D'
 # phase 3 UI rev (user mock): the jobs tally and the acknowledgable bell
 I_JOBS=$'\uF0AE'
+I_WAIT=$'\U000F0150'   # nf-md-clock_outline: a live share waiting for its recipient
 I_BELL=$'\uF0F3'
 I_BATT=( $'\U000F008E' $'\U000F12A1' $'\U000F12A2' $'\U000F12A3' )
 
@@ -453,8 +454,11 @@ fi
 # (indeterminate/-1 and no-progress jobs are excluded); no known pct at
 # all → count only, no parens. Formatting follows the dashboard's decision
 # (b): integer percents drop the decimal, others keep one.
+# Jobs in the waiting phase are counted in their own element, never in the
+# running count or the mean.
 jobs_state="${JOB_STATE_ROOT:-$HOME/.local/state/jobs}"
 jobs_running=0
+jobs_waiting=0
 jobs_pct_sum=0.0
 jobs_pct_n=0
 for _jd in "$jobs_state"/*(N/); do
@@ -462,14 +466,24 @@ for _jd in "$jobs_state"/*(N/); do
   [[ -e "$_jd/result" ]] && continue
   _fresh=("$_jd"/meta.json(N.md-1))
   (( ${#_fresh} )) || continue
-  (( jobs_running += 1 ))
+  _pct=""
   if [[ -f "$_jd/progress" ]]; then
     _pline="$(<"$_jd/progress")"
     _pct="${${(s: :)_pline}[2]:-}"
-    if [[ "$_pct" == (<->|<->.<->) ]] && (( _pct >= 0 )); then
-      (( jobs_pct_sum += _pct, jobs_pct_n += 1 ))
-    fi
   fi
+  _real=0
+  [[ "$_pct" == (<->|<->.<->) ]] && (( _pct >= 0 )) && _real=1
+  # A job WAITING on something outside it (a live share and its recipient)
+  # is its own element: counting it as running with no percent is exactly the
+  # "stuck" look it replaces (spec 2026-09-29-job-waiting-phase, W5). Only the
+  # exact word counts; anything else in `phase` is no phase. A real percent
+  # always wins: job::progress writes it before removing a leftover phase.
+  if (( ! _real )) && [[ -f "$_jd/phase" && "$(<"$_jd/phase")" == waiting ]]; then
+    (( jobs_waiting += 1 ))
+    continue
+  fi
+  (( jobs_running += 1 ))
+  (( _real )) && (( jobs_pct_sum += _pct, jobs_pct_n += 1 ))
 done
 if (( jobs_running > 0 )); then
   jobs_body="${I_JOBS} ${jobs_running}"
@@ -482,6 +496,9 @@ if (( jobs_running > 0 )); then
     jobs_body+=" (${_avg_fmt}%)"
   fi
   bodies+=("$jobs_body"); kinds+=(jobs)
+fi
+if (( jobs_waiting > 0 )); then
+  bodies+=("${I_WAIT} ${jobs_waiting} waiting"); kinds+=(jobs)
 fi
 
 # The notification bell (phase 3 UI rev, user mock: " 1"): unacknowledged
