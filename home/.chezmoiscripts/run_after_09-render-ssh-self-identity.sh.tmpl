@@ -33,7 +33,9 @@ core="${SELF_IDENTITY_CORE_LIB:-$HOME/.local/lib/clipboard-store-core.zsh}"
 # The one value rule, shared with environment.sh and host.zsh.
 valid() {
   case "$1" in
-    '' | *[!A-Za-z0-9._-]*) return 1 ;;
+    # Class spelled out: bash 3.2 (/bin/sh) matches A-Za-z by collation under a
+    # UTF-8 locale, which would admit accented letters.
+    '' | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 1 ;;
   esac
   [ "${#1}" -le 64 ]
 }
@@ -60,9 +62,11 @@ if [ -f "$frag" ] && [ "$(cat "$frag")" = "$want" ]; then
   exit 0
 fi
 
+umask 077
 mkdir -p "$HOME/.ssh/config.d"
 chmod 700 "$HOME/.ssh"
-umask 077
+# A leftover temp inside config.d would be parsed by `Include config.d/*`.
+trap 'rm -f "$frag.tmp.$$"' EXIT
 printf '%s\n' "$want" >"$frag.tmp.$$"
 mv -f "$frag.tmp.$$" "$frag"
 echo "ssh-self-identity: wrote $frag" >&2

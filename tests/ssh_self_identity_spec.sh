@@ -45,6 +45,34 @@ Describe 'ssh self-identity sender'
     The output should equal 'SetEnv LC_ORIGIN_HOST=peer-key-01 LC_ORIGIN_ALIAS=peer-laptop'
   End
 
+  # Under a UTF-8 locale bash 3.2 (macOS /bin/sh) matches A-Za-z by collation.
+  It 'refuses a non-ASCII alias under a UTF-8 locale'
+    printf 'péer\n' >"$HOME/.hostname-alias"
+    printf 'stale\n' >"$FRAG"
+    LC_ALL=en_US.UTF-8 "$RENDERED" 2>/dev/null
+    When call test -e "$FRAG"
+    The status should be failure
+  End
+
+  # A leftover temp file inside config.d would be parsed by `Include config.d/*`.
+  It 'leaves no temp file behind when the final move fails'
+    printf 'peer-laptop\n' >"$HOME/.hostname-alias"
+    mkdir -p "$TEST_TMP/failbin"
+    printf '#!/bin/sh\nexit 1\n' >"$TEST_TMP/failbin/mv"
+    chmod +x "$TEST_TMP/failbin/mv"
+    PATH="$TEST_TMP/failbin:$PATH" "$RENDERED" 2>/dev/null || true
+    When call ls -A "$HOME/.ssh/config.d"
+    The output should equal ''
+  End
+
+  It 'creates config.d private (0700) when it is missing'
+    printf 'peer-laptop\n' >"$HOME/.hostname-alias"
+    rm -rf "$HOME/.ssh"
+    "$RENDERED" 2>/dev/null
+    When call sh -c 'ls -ld "$1" | cut -c1-10' _ "$HOME/.ssh/config.d"
+    The output should equal 'drwx------'
+  End
+
   It 'removes the fragment when there is no alias file'
     printf 'stale\n' >"$FRAG"
     "$RENDERED" 2>/dev/null
