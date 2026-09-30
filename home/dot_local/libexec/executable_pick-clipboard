@@ -77,6 +77,16 @@ source "${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}" ||
   { print -ru2 -- "pick-clipboard: cannot source pick-common.zsh from $PICK_LIB_DIR"; exit 1; }
 source "${PICK_BRIDGE_CLIENT_LIB:-$PICK_LIB_DIR/clipboard-bridge-client.zsh}" ||
   { print -ru2 -- "pick-clipboard: cannot source clipboard-bridge-client.zsh from $PICK_LIB_DIR"; exit 1; }
+# host::display / host::sql_case — other machines named by their alias
+# (peer-alias spec H6). Resolved BESIDE pick-common so every harness that points
+# PICK_COMMON_LIB at the repo's lib finds it too; missing (a partial install)
+# degrades to raw keys rather than aborting the picker.
+_host_lib="${PICK_HOST_LIB:-${${PICK_COMMON_LIB:-$PICK_LIB_DIR/pick-common.zsh}:h}/host.zsh}"
+if ! source "$_host_lib" 2>/dev/null; then
+  host::display() { print -rn -- "${1-}"; }
+  host::sql_case() { print -rn -- "$1"; }
+fi
+unset _host_lib
 
 DB_FILE="${PICK_CLIPBOARD_DB:-${XDG_DATA_HOME:-$HOME/.local/share}/pick-clipboard/history.db}"
 CORE_LIB="${PICK_CLIPBOARD_CORE_LIB:-$PICK_LIB_DIR/clipboard-store-core.zsh}"
@@ -518,7 +528,7 @@ clip::toast_spec() {
     files)     icon="glyph:nf-md-file_multiple" ;;
     *)         icon="glyph:nf-md-text_box" ;;
   esac
-  print -rn -- "${icon}${us}Copied from ${host}"
+  print -rn -- "${icon}${us}Copied from $(host::display "$host" "$MY_HOST")"
 }
 
 # Fire the standard notify OSD for a completed Ctrl-Y copy. Best-effort by
@@ -588,6 +598,7 @@ clip::progress_pct() {
 clip::progress_label() {
   local -i total=$1
   local host=$2 first=$3
+  host="$(host::display "$host" "$MY_HOST")"
   if (( total > 1 )); then
     print -rn -- "Copying ${total} files from ${host}…"
   else
@@ -1836,6 +1847,7 @@ clip::share_paths() {
 # enforces — while the human is sitting at the machine that has them.
 clip::share_refuse_remote() {
   local host=$1; shift
+  host="$(host::display "$host" "$MY_HOST")"
   if (( $# == 1 )); then
     clip::share_say alert "${1:t} is on $host — share it from there"
   else
@@ -2607,6 +2619,11 @@ cat > "$pin_script" <<EOF
 id=\${1%%\$(printf '\036')*}
 sqlite3 '$DB_FILE' "UPDATE clips SET pinned=1-pinned WHERE id=\$id;"
 EOF
+# Origin names in the preview are computed INSIDE sqlite, which cannot call
+# host::display — bake the learned aliases in as a CASE (host::sql_case inlines
+# only validated values) and resolve the live peer's name up front.
+origin_name_expr="$(host::sql_case source_host)"
+live_host_shown="$(host::display "$LIVE_HOST" "$MY_HOST")"
 cat > "$preview_script" <<EOF
 #!/bin/sh
 # fzf sets FZF_PREVIEW_COLUMNS / FZF_PREVIEW_LINES to the preview pane's exact
@@ -2620,7 +2637,7 @@ vw=\$((pc - lw)); [ \$vw -lt 4 ] && vw=4
 # from the fetched peer clipboard (LIVE_TEXT_FILE via readfile). Same layout as
 # a stored row; Source/Origin badge the peer host, Copied reads 'live'.
 if [ "\$id" = LIVE ]; then
-  sqlite3 -escape off '$DB_FILE' "WITH d AS (SELECT CAST(readfile('$LIVE_TEXT_FILE') AS TEXT) AS body) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - (CASE WHEN body IS NULL OR body='' THEN 1 ELSE length(body)-length(replace(body,char(10),''))+1 END) - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr('—',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr('text',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr('remote ('||(CASE WHEN length('$LIVE_HOST')>9 THEN substr('$LIVE_HOST',1,4)||'…'||substr('$LIVE_HOST',-3) ELSE '$LIVE_HOST' END)||')',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(length(body),1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(CASE WHEN body IS NULL OR body='' THEN 0 ELSE length(trim(replace(body,char(10),' '))) - length(replace(trim(replace(body,char(10),' ')),' ','')) + 1 END,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr('live',1,\$vw)) || char(27)||'[0m' FROM d;"
+  sqlite3 -escape off '$DB_FILE' "WITH d AS (SELECT CAST(readfile('$LIVE_TEXT_FILE') AS TEXT) AS body) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - (CASE WHEN body IS NULL OR body='' THEN 1 ELSE length(body)-length(replace(body,char(10),''))+1 END) - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr('—',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr('text',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr('remote ('||(CASE WHEN length('$live_host_shown')>9 THEN substr('$live_host_shown',1,4)||'…'||substr('$live_host_shown',-3) ELSE '$live_host_shown' END)||')',1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(length(body),1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(CASE WHEN body IS NULL OR body='' THEN 0 ELSE length(trim(replace(body,char(10),' '))) - length(replace(trim(replace(body,char(10),' ')),' ','')) + 1 END,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr('live',1,\$vw)) || char(27)||'[0m' FROM d;"
   exit 0
 fi
 # X8: a files/file/directory row's body is a path (or a newline-joined
@@ -2638,11 +2655,11 @@ if [ "\$kind" = files ] || [ "\$kind" = file ] || [ "\$kind" = directory ]; then
   printf '%s\n' "\$raw" | fold -w "\$pc" > "\$wrapfile"
   nlines=\$(wc -l < "\$wrapfile" | tr -d ' ')
   [ "\$nlines" -lt 1 ] && nlines=1
-  sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT CAST(readfile('\$wrapfile') AS TEXT) AS body, \$nlines AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||(CASE WHEN length(source_host)>9 THEN substr(source_host,1,4)||'…'||substr(source_host,-3) ELSE source_host END)||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
+  sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT CAST(readfile('\$wrapfile') AS TEXT) AS body, \$nlines AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||(CASE WHEN length(${origin_name_expr})>9 THEN substr(${origin_name_expr},1,4)||'…'||substr(${origin_name_expr},-3) ELSE ${origin_name_expr} END)||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
   rm -f "\$wrapfile"
   exit 0
 fi
-sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,text_preview,'['||type_kind||']') AS body, CASE WHEN COALESCE(text_plain,text_preview) IS NULL OR COALESCE(text_plain,text_preview)='' THEN 1 ELSE length(COALESCE(text_plain,text_preview))-length(replace(COALESCE(text_plain,text_preview),char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||(CASE WHEN length(source_host)>9 THEN substr(source_host,1,4)||'…'||substr(source_host,-3) ELSE source_host END)||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
+sqlite3 -escape off '$DB_FILE' "WITH c AS (SELECT COALESCE(text_plain,text_preview,'['||type_kind||']') AS body, CASE WHEN COALESCE(text_plain,text_preview) IS NULL OR COALESCE(text_plain,text_preview)='' THEN 1 ELSE length(COALESCE(text_plain,text_preview))-length(replace(COALESCE(text_plain,text_preview),char(10),''))+1 END AS nlines, COALESCE(IFNULL(source_app,'?'),'?') AS app, COALESCE(type_kind,'text') AS kind, COALESCE(len,0) AS len, (${words_expr}) AS words, (${age_expr})||' ago' AS age, CASE WHEN ${remote_when} THEN 'remote ('||(CASE WHEN length(${origin_name_expr})>9 THEN substr(${origin_name_expr},1,4)||'…'||substr(${origin_name_expr},-3) ELSE ${origin_name_expr} END)||')' ELSE 'local' END AS origin_label FROM clips WHERE id=\$id) SELECT body || char(10) || replace(printf('%*s', MAX(0, \$ph - nlines - 6), ' '), ' ', char(10)) || char(27)||'[38;2;127;132;156m' || printf('%-\${lw}s%!\${vw}s' || char(10), 'Source:', substr(app,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Content Type:', substr(kind,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Origin:', substr(origin_label,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Characters:', substr(len,1,\$vw)) || printf('%-\${lw}s%!\${vw}s' || char(10), 'Words:', substr(words,1,\$vw)) || printf('%-\${lw}s%!\${vw}s', 'Copied:', substr(age,1,\$vw)) || char(27)||'[0m' FROM c;"
 EOF
 
 # --- run --------------------------------------------------------------------

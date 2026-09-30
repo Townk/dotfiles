@@ -188,6 +188,13 @@ EOF
       The status should be success
     End
 
+    It 'remote row with a learned alias -> Copied from <alias>'
+      printf 'work-laptop peer-laptop\n' >"$SHELLSPEC_TMPBASE/host-aliases"
+      export HOST_ALIASES_FILE="$SHELLSPEC_TMPBASE/host-aliases"
+      When call check_toast_spec text work-laptop glyph:nf-md-text_box "Copied from peer-laptop"
+      The status should be success
+    End
+
     It 'remote files row -> file_multiple glyph'
       When call check_toast_spec files work-laptop glyph:nf-md-file_multiple "Copied from work-laptop"
       The status should be success
@@ -523,6 +530,13 @@ EOF
       The output should equal 'Copying big-clip.bin from work-laptop…'
     End
 
+    It 'names the source machine by its learned alias'
+      printf 'work-laptop peer-laptop\n' >"$SHELLSPEC_TMPBASE/host-aliases"
+      export HOST_ALIASES_FILE="$SHELLSPEC_TMPBASE/host-aliases"
+      When call run_fn clip::progress_label 1 work-laptop /remote/src/big-clip.bin
+      The output should equal 'Copying big-clip.bin from peer-laptop…'
+    End
+
     It 'multi path -> Copying N files from <host>…'
       When call run_fn clip::progress_label 3 work-laptop /remote/src/first.txt
       The output should equal 'Copying 3 files from work-laptop…'
@@ -548,6 +562,18 @@ EOF
     It 'exports GUM_STYLE_* set to the canonical danger accent'
       When call render_uses_shared_env
       The status should be success
+    End
+  End
+
+  # The preview's Origin label is computed INSIDE sqlite by the generated
+  # preview script, so host::sql_case's CASE must be baked into it.
+  Describe 'preview Origin label'
+    It 'bakes the learned aliases into the generated preview script'
+      printf 'work-laptop peer-laptop\n' >"$SHELLSPEC_TMPBASE/host-aliases"
+      export HOST_ALIASES_FILE="$SHELLSPEC_TMPBASE/host-aliases"
+      preview_src() { zsh -f -c 'source "$SCRIPT_PATH"; cat "$preview_script"'; }
+      When call preview_src
+      The output should include "WHEN 'work-laptop' THEN 'peer-laptop'"
     End
   End
 End

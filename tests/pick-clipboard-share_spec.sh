@@ -133,4 +133,11 @@ EOF
     When call run_fn clip::share_by_id 1
     The stderr should include 'Ctrl-S shares files — this row is text'
   End
+
+  It 'names the other machine by its learned alias'
+    printf 'work-laptop peer-laptop\n' >"$SB/host-aliases"
+    export HOST_ALIASES_FILE="$SB/host-aliases"
+    When call run_fn clip::share_by_id 2
+    The stderr should include 'gone.pdf is on peer-laptop — share it from there'
+  End
 End
