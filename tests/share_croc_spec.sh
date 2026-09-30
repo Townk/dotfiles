@@ -549,4 +549,74 @@ SH
     When call share::ledger_list
     The output should include '"expires": 0'
   End
+  # --- the waiting phase (spec 2026-09-29-job-waiting-phase, W2) ------------
+  Describe 'the waiting phase'
+    # A real job dir + job.zsh, so share::_waiting reaches job::waiting. The
+    # fake croc snapshots the job's sidecars the moment it starts: that is the
+    # state the HUD would show while croc waits for the recipient.
+    wait_setup() {
+      JOB_STATE_ROOT="$SB/jobs"; export JOB_STATE_ROOT
+      mkdir -p "$JOB_STATE_ROOT/fake-job"
+      source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
+      SB_SNAP="$SB/snap"; export SB_SNAP
+      PATH="$SB/bin:$PATH"
+    }
+
+    It 'declares waiting before the first live attempt'
+      wait_setup
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+cp "$JOB_STATE_ROOT/fake-job/phase" "$SB_SNAP.phase" 2>/dev/null
+cp "$JOB_STATE_ROOT/fake-job/progress" "$SB_SNAP.progress" 2>/dev/null
+echo "Sending 'Report.pdf' (1 B)"
+exit 0
+SH
+      chmod +x "$SB/bin/croc"
+      JOB_ID=fake-job share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>&1
+      snap() { printf '%s|%s' "$(cat "$SB_SNAP.phase")" "$(sed 's/^[0-9]* //' "$SB_SNAP.progress")"; }
+      When call snap
+      The output should equal 'waiting|-1 waiting for recipient'
+    End
+
+    It 'names the attempt about to run when it re-arms after a failure'
+      wait_setup
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+n=$(cat "$SB_SNAP.n" 2>/dev/null || echo 0); n=$((n + 1)); printf '%s' "$n" >"$SB_SNAP.n"
+if [ "$n" -ge 2 ]; then
+  cp "$JOB_STATE_ROOT/fake-job/progress" "$SB_SNAP.progress"
+  cp "$JOB_STATE_ROOT/fake-job/phase" "$SB_SNAP.phase"
+  exit 0
+fi
+echo "connection lost"; exit 1
+SH
+      chmod +x "$SB/bin/croc"
+      JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 SHARE_LIVE_MIN_RUN=0 SHARE_LIVE_DEADLINE=30 \
+        share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>&1
+      snap() { printf '%s|%s' "$(cat "$SB_SNAP.phase")" "$(sed 's/^[0-9]* //' "$SB_SNAP.progress")"; }
+      When call snap
+      The output should equal 'waiting|-1 waiting for recipient (attempt 2)'
+    End
+
+    # Review focus 5: a STORED send is an upload, not a wait.
+    It 'never declares waiting for a stored send'
+      wait_setup
+      cat >"$SB/bin/croc" <<'SH'
+#!/bin/sh
+echo "https://drop.example.com/s/abc#v1.KEY"
+echo "croc-store-v1.b64.abc.KEY"
+exit 0
+SH
+      chmod +x "$SB/bin/croc"
+      JOB_ID=fake-job share::croc_send drop store 3d 1 "$SB/Report.pdf" >/dev/null 2>&1
+      When call ls "$JOB_STATE_ROOT/fake-job"
+      The output should not include 'phase'
+    End
+
+    It 'is a silent no-op outside a job'
+      When call share::_waiting "waiting for recipient"
+      The status should be success
+      The output should equal ''
+    End
+  End
 End

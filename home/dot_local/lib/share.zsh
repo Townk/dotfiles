@@ -104,6 +104,17 @@ share::_progress() {
   job::progress "$@" 2>/dev/null || return 0
 }
 
+# share::_waiting [msg…] — the waiting-phase sibling of share::_progress, and
+# guarded the same way: a no-op unless we are inside a job:: job with job.zsh
+# loaded. A live send calls it before each croc attempt, so the status bar and
+# HUD say "waiting for recipient" instead of looking stuck (spec
+# 2026-09-29-job-waiting-phase, W2).
+share::_waiting() {
+  [ -n "${JOB_ID:-}" ] || return 0
+  (( $+functions[job::waiting] )) || return 0
+  job::waiting "$@" 2>/dev/null || return 0
+}
+
 # share::field <endpoint> <key> [default] — one scalar. Arrays come back as a
 # newline-joined list so callers can iterate without a second jq. A missing key
 # always yields the caller's [default] — uniformly, for every key including

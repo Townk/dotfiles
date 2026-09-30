@@ -391,6 +391,9 @@ share::croc_send() {
     deadline=$(( EPOCHSECONDS + SHARE_LIVE_DEADLINE ))
   fi
 
+  # W2: say "waiting" BEFORE the first attempt — that is where the user looks.
+  [[ "$mode" == live ]] && share::_waiting "waiting for recipient"
+
   while :; do
     # `attempt=$(( ... ))`, never `(( attempt++ ))`: post-increment EVALUATES
     # to the old value, so on the first pass the arithmetic command yields 0 —
@@ -436,7 +439,8 @@ share::croc_send() {
     fi
     wait_s=$(( attempt * SHARE_LIVE_BACKOFF_BASE ))
     (( wait_s > 60 )) && wait_s=60
-    share::_progress -1 "waiting for the recipient (attempt $attempt)"
+    # Names the attempt ABOUT to run; the loop increments at its top.
+    share::_waiting "waiting for recipient (attempt $(( attempt + 1 )))"
     sleep "$wait_s"
   done
   rm -f -- "$tmp"
