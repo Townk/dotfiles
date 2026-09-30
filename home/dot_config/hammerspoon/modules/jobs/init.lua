@@ -10,8 +10,8 @@
 --     whole system reads dead -> capsule removed. Disappearing means
 --     done-or-dead, never waiting.
 --   * in-place element repaint; :show() only on hidden->visible.
---   * stall rendering must never do cold glyph I/O (resolver cache is
---     shared with osd, which pre-warms the hourglass).
+--   * stall/waiting rendering must never do cold glyph I/O (the resolver
+--     cache is shared with osd; M.setup warms the stall and waiting glyphs).
 --   * the cancel affordance never dims.
 -- KNOWN ISSUE (observed live 2026-08-19, hardened 2026-08-20): capsules
 -- could fail to appear for a fresh job. Two mechanisms are closed:
@@ -519,9 +519,10 @@ function M.setup()
 	watcher = hs.pathwatcher.new(STATE_ROOT, function()
 		armTimer()
 	end)
-	-- Warm the waiting glyph like osd warms the hourglass: repaint must never
-	-- do cold glyph I/O (module header invariant).
+	-- Warm the waiting and stall glyphs: repaint must never do cold glyph I/O
+	-- (module header invariant).
 	osd.resolveNamedIcon(WAIT_ICON)
+	osd.resolveNamedIcon(theme.stallIcon)
 	watcher:start()
 	armTimer() -- pick up jobs already running at HS (re)load
 end
