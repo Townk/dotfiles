@@ -37,6 +37,7 @@
 -- automatically when a NEW job starts.
 
 local osd = require("osd")
+local classify = require("jobs.classify")
 
 local M = {}
 
@@ -47,9 +48,7 @@ local TICK_SECS = 0.25
 local PUEUE_EVERY = 8 -- ticks between pueue polls (~2 s)
 local PUEUE_DEAD_AFTER = 3 -- consecutive failed polls -> treat system dead
 local PUEUE_POLL_TIMEOUT = 10 -- seconds an outstanding poll may run before we count it as failed and retire it
-local STALL_SECS = 6 -- x265 legitimately gaps a few seconds between progress
--- updates on hard scenes; 3s flickered the hourglass on healthy encodes
--- (live 2026-08-21). 6s still surfaces a genuinely wedged job fast.
+local STALL_SECS = classify.STALL_SECS
 local GHOST_GRACE = 30 -- pre-first-poll: seconds of silence before a job dir is presumed a leaked ghost
 -- pueue's `status --json` embeds every task's full captured environment;
 -- past a handful of finished tasks that tops the 64KB pipe buffer, and
@@ -128,6 +127,7 @@ local function scanJobs()
 								job.msg = m
 							end
 						end
+						job.phase = classify.readPhase(readFile(dir .. "/phase"))
 						jobs[#jobs + 1] = job
 					end
 				end
@@ -387,11 +387,9 @@ local function repaint(job, index, now)
 	local x = frame.x + frame.w - CAP_W - MARGIN
 	local y = frame.y + MARGIN + (index - 1) * (CAP_H + GAP)
 	local kind = pueueByLabel and pueueByLabel["job:" .. job.id] or nil
-	local preparing = (job.pct or -1) < 0 or kind == "queued"
-	local stalled = false
-	if job.reportsProgress and job.epoch and kind == "running" then
-		stalled = (now - job.epoch) > STALL_SECS and not preparing
-	end
+	local state = classify.classify(job, kind, now, STALL_SECS)
+	local preparing = state == "preparing" or state == "waiting" -- W4 lands in Task 7
+	local stalled = state == "stalled"
 	local c = capsuleFor(job.id, x, y)
 	if not c then return end
 	local elements = buildElements(job, stalled, preparing)
