@@ -316,14 +316,17 @@ share::_croc_pct_reply() {
 # record the moment the recipient connects: that ends the waiting phase at
 # once (`0 sending <label>`), not at the first percent. Percent records count
 # only after it — on top of croc_pct's own "Hashing" exclusion — and each NEW
-# percent moves the bar. If a future croc stops printing "Sending (->", the job
+# percent moves the bar; an unchanged percent is re-reported every
+# $SHARE_TAP_HEARTBEAT_SECS (default 2) so a slow-moving bar on a big file is
+# not mistaken for a stall by the HUD. If a future croc stops printing "Sending (->", the job
 # simply stays "waiting" until it ends: acceptable, never a false "sending".
 # Stored uploads are mirrored only: they are not a recipient connecting (spec
 # 2026-09-29-job-waiting-phase, W3 and its out-of-scope note).
 share::_croc_tap() {
   zmodload zsh/system 2>/dev/null
+  zmodload zsh/datetime 2>/dev/null   # EPOCHSECONDS, for the heartbeat
   local cap="$1" label="$2" mode="$3" chunk buf="" rec pct last=""
-  local -i connected=0
+  local -i connected=0 lastw=0 beat=${SHARE_TAP_HEARTBEAT_SECS:-2}
   : >"$cap"
   while sysread -s 4096 chunk; do
     print -rn -- "$chunk" >>"$cap"
@@ -346,7 +349,7 @@ share::_croc_tap() {
 }
 
 # One record through share::_croc_tap's state machine. Uses (and updates) the
-# caller's locals rec, connected, pct, last and label — zsh's dynamic scope.
+# caller's locals rec, connected, pct, last, lastw, beat and label — zsh's dynamic scope.
 # No `$(…)` and no external command here: it runs once per croc redraw.
 share::_croc_tap_record() {
   # C locale: see share::_croc_pct_reply — a non-UTF-8 filename must not make
@@ -355,16 +358,17 @@ share::_croc_tap_record() {
   [[ "$rec" == *[^[:space:]]* ]] || return 0
   if (( ! connected )); then
     if [[ "$rec" =~ '^[[:space:]]*Sending \(->' ]]; then
-      connected=1 last=0
+      connected=1 last=0 lastw=EPOCHSECONDS
       share::_progress 0 "sending $label"
     fi
     return 0
   fi
   share::_croc_pct_reply "$rec"
   pct=$REPLY
-  if [[ -n "$pct" && "$pct" != "$last" ]]; then
+  # A multi-file send restarts the bar per file; that is just a new percent.
+  if [[ -n "$pct" ]] && { [[ "$pct" != "$last" ]] || (( EPOCHSECONDS - lastw >= beat )); }; then
     share::_progress "$pct" "sending $label"
-    last="$pct"
+    last="$pct" lastw=EPOCHSECONDS
   fi
   return 0
 }

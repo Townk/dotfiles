@@ -681,6 +681,39 @@ stderr identical'
 100 sending L'
     End
 
+    # A healthy send whose percent moves slowly (1% of a big file can take
+    # longer than the HUD's stall window) must keep reporting: croc redraws
+    # ~12x/s, so repeated identical percents are proof of life. The interval is
+    # injectable so no spec sleeps.
+    It 'heartbeats an unchanged percent once the interval has elapsed'
+      tap_setup
+      tap() {
+        SHARE_TAP_HEARTBEAT_SECS=0
+        printf 'Sending (->[2001:db8::2]:9009)\rf  10%% |█ |\rf  10%% |█ |\rf  10%% |█ |\n' \
+          | share::_croc_tap "$SB/cap" L live 2>/dev/null
+        cat "$CALLS"
+      }
+      When call tap
+      The output should equal '0 sending L
+10 sending L
+10 sending L
+10 sending L'
+    End
+
+    It 'reports an unchanged percent only when it changes before the interval'
+      tap_setup
+      tap() {
+        SHARE_TAP_HEARTBEAT_SECS=3600
+        printf 'Sending (->[2001:db8::2]:9009)\rf  10%% |█ |\rf  10%% |█ |\rf  20%% |█ |\rf  20%% |█ |\n' \
+          | share::_croc_tap "$SB/cap" L live 2>/dev/null
+        cat "$CALLS"
+      }
+      When call tap
+      The output should equal '0 sending L
+10 sending L
+20 sending L'
+    End
+
     # The tap runs for hours at ~12 redraws/s on a live send: no subshell per
     # record. A counter bumped inside the percent helper only survives in this
     # shell if the tap called it without forking, and the printing wrapper
