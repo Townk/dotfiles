@@ -1,0 +1,70 @@
+{{- /*
+
+  ~/.ssh/config.d/00-self-identity.conf — tell every peer who this machine is.
+  Spec: docs/superpowers/specs/2026-09-29-peer-alias-display-design.md (H2, H3).
+
+  Renders, ON THIS MACHINE, the one line other machines use to learn this one's
+  friendly name at SSH login:
+
+    SetEnv LC_ORIGIN_HOST=<clipboard key> LC_ORIGIN_ALIAS=<~/.hostname-alias>
+
+  The receiving side records the pair (environment.sh, H4) and host::display
+  shows the alias instead of the raw key. LOOSE file: the values come from local
+  files at apply time and are never in the source tree or chezmoi's target state
+  — hostnames and aliases must not reach this public repo.
+
+  LC_* because both ends already pass them: macOS ssh_config.d `SendEnv LC_*`,
+  macOS and stock Debian sshd `AcceptEnv LANG LC_*`. A server that refuses them
+  drops them silently and names stay raw.
+
+  Every apply (run_after): cheap, idempotent (rewrites only on change), and it
+  self-heals a deleted fragment. No alias file, or an invalid value → the
+  fragment is removed. POSIX sh; zsh only for clip::self_host, in its own
+  `zsh -f` so the core's file-scope setopt/export side effects die with it.
+
+*/ -}}
+#!/bin/sh
+set -eu
+
+frag="$HOME/.ssh/config.d/00-self-identity.conf"
+alias_file="$HOME/.hostname-alias"
+core="${SELF_IDENTITY_CORE_LIB:-$HOME/.local/lib/clipboard-store-core.zsh}"
+
+# The one value rule, shared with environment.sh and host.zsh.
+valid() {
+  case "$1" in
+    '' | *[!A-Za-z0-9._-]*) return 1 ;;
+  esac
+  [ "${#1}" -le 64 ]
+}
+
+alias_name=""
+if [ -r "$alias_file" ]; then
+  alias_name=$(sed -n '1p' "$alias_file" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+fi
+
+key=""
+if command -v zsh >/dev/null 2>&1 && [ -r "$core" ]; then
+  key=$(zsh -fc '. "$1" >/dev/null 2>&1 && clip::self_host' _ "$core" 2>/dev/null) || key=""
+fi
+
+if ! valid "$alias_name" || ! valid "$key"; then
+  rm -f "$frag"
+  exit 0
+fi
+
+want="# Written by chezmoi run_after_09 from ~/.hostname-alias — do not edit.
+SetEnv LC_ORIGIN_HOST=$key LC_ORIGIN_ALIAS=$alias_name"
+
+if [ -f "$frag" ] && [ "$(cat "$frag")" = "$want" ]; then
+  exit 0
+fi
+
+mkdir -p "$HOME/.ssh/config.d"
+chmod 700 "$HOME/.ssh"
+umask 077
+printf '%s\n' "$want" >"$frag.tmp.$$"
+mv -f "$frag.tmp.$$" "$frag"
+echo "ssh-self-identity: wrote $frag" >&2
+
+# vim:ft=sh
