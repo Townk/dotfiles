@@ -42,3 +42,18 @@ Describe 'spec_helper real-pasteboard opt-in'
     The status should be failure
   End
 End
+
+# The alias map is another piece of real state pick-clipboard reads at load time
+# (host::sql_case while building its preview script). Every spec gets a
+# HOST_ALIASES_FILE inside its own tmpbase, so none reads the human's map.
+Describe 'spec_helper host-alias map pin'
+  It 'points HOST_ALIASES_FILE inside the spec tmpbase'
+    When call printf '%s' "${HOST_ALIASES_FILE:-}"
+    The output should equal "$SHELLSPEC_TMPBASE/no-host-aliases"
+  End
+
+  It 'names no file that exists'
+    When call test -e "${HOST_ALIASES_FILE:-/nonexistent-unset}"
+    The status should be failure
+  End
+End

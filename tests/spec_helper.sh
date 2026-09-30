@@ -53,6 +53,11 @@ spec_helper_own_tmpbase() {
   SPEC_HELPER_TMPBASE=$(mktemp -d "${TMPDIR:-/tmp}/spec.XXXXXX") || return 1
   SHELLSPEC_TMPBASE=$SPEC_HELPER_TMPBASE
   spec_helper_clipboard_guard
+  # pick-clipboard reads the alias map while it loads (host::sql_case), so no
+  # spec may see the human's real one. Per-file tmpbase; specs that need a map
+  # export their own. HOST_SELF_ALIAS_FILE is NOT pinned (it follows HOME).
+  HOST_ALIASES_FILE="$SPEC_HELPER_TMPBASE/no-host-aliases"
+  export HOST_ALIASES_FILE
 }
 
 # No spec may write the REAL clipboard. Code under test resolves `pbcopy`
