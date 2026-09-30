@@ -123,11 +123,12 @@ function _cockpit() {
 
   lhead=$'\U000F0493'" MANAGE THIS MACHINE" rhead=$'\U000F030C'" AT THE PROMPT"
   # Each underline is as wide as the header it sits under, in display cells,
-  # except the left one, which is a cell shorter by choice.
+  # except that both are a cell shorter, and the gap between them a cell narrower,
+  # by choice.
   _motd_width "$lhead"; lul="${(l:$(( REPLY - 1 ))::─:)}"
-  _motd_width "$rhead"; rul="${(l:$REPLY::─:)}"
+  _motd_width "$rhead"; rul="${(l:$(( REPLY - 1 ))::─:)}"
   _motd_pad "$lhead" $lw; lhead="$REPLY"
-  _motd_pad "$lul" $lw; lul="$REPLY"
+  _motd_pad "$lul" $(( lw - 1 )); lul="$REPLY"
   print -P -- "  ${P_YEL}${lhead}${rhead}${P_RES}"
   print -P -- "  ${P_GRA}${lul}${rul}${P_RES}"
 
