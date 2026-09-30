@@ -40,6 +40,10 @@ host::display() {
     local own="${HOST_SELF_ALIAS_FILE:-$HOME/.hostname-alias}"
     if [[ -r "$own" ]]; then
       IFS= read -r a <"$own" || true
+      # Trim exactly like the ssh sender: drop every CR, then outer whitespace.
+      a="${a//$'\r'/}"
+      a="${a##[[:space:]]#}"
+      a="${a%%[[:space:]]#}"
       if host::_valid "$a"; then print -rn -- "$a"; return 0; fi
     fi
     print -rn -- "$key"

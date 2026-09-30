@@ -38,6 +38,10 @@ function M.display(key, self_key)
   if key == nil or key == "" then return key end
   if self_key ~= nil and self_key ~= "" and key == self_key then
     local own = first_line(nonempty(os.getenv("HOST_SELF_ALIAS_FILE")) or ((os.getenv("HOME") or "") .. "/.hostname-alias"))
+    if own then
+      -- Trim exactly like the ssh sender: drop every CR, then outer whitespace.
+      own = own:gsub("\r", ""):match("^%s*(.-)%s*$")
+    end
     if valid(own) then return own end
     return key
   end

@@ -60,6 +60,21 @@ LUA
     The output should equal "${ok64}|${ok64}"
   End
 
+  # bothself <key> — same, with <key> as this machine's own key
+  bothself() { disp "$1" "$1"; printf '|'; zdisp "$1" "$1"; }
+
+  It 'trims a CRLF own-alias file like host.zsh'
+    printf '  desk-box \t\r\n' >"$SB/home/.hostname-alias"
+    When call bothself self-key
+    The output should equal 'desk-box|desk-box'
+  End
+
+  It 'keeps the key for an own alias with inner whitespace, as host.zsh does'
+    printf 'desk box\n' >"$SB/home/.hostname-alias"
+    When call bothself self-key
+    The output should equal 'self-key|self-key'
+  End
+
   It 'trims surrounding spaces like host.zsh'
     When call disp peer-key-05
     The output should equal 'spaced'

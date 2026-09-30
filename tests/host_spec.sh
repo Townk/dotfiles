@@ -29,6 +29,19 @@ Describe 'host.zsh'
     The output should equal 'desk-box'
   End
 
+  # The sender strips CR and outer whitespace; the reader must agree.
+  It 'trims CRLF and outer whitespace from the own-alias file'
+    printf '  desk-box \t\r\n' >"$HOST_SELF_ALIAS_FILE"
+    When call host::display self-key self-key
+    The output should equal 'desk-box'
+  End
+
+  It 'keeps the key for an own alias with inner whitespace'
+    printf 'desk box\n' >"$HOST_SELF_ALIAS_FILE"
+    When call host::display self-key self-key
+    The output should equal 'self-key'
+  End
+
   It 'keeps an unknown key as it is'
     When call host::display stranger-9
     The output should equal 'stranger-9'
