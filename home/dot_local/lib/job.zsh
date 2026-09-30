@@ -6,6 +6,7 @@
 #
 # State per job:  $JOB_STATE_ROOT/<id>/meta.json   (identity, pueue task id)
 #                 $JOB_STATE_ROOT/<id>/progress    (one line: epoch pct msg)
+#                 $JOB_STATE_ROOT/<id>/phase       (optional: "waiting")
 #                 $JOB_STATE_ROOT/<id>/result      (written by job-callback)
 # The progress sidecar is the whole progress wire: writers write at their own
 # cadence, the Hammerspoon reader owns display cadence and derives staleness
@@ -181,7 +182,8 @@ job::start() {
 
 # job::progress <pct> [message…] — called INSIDE a running task ($JOB_ID is
 # injected by job::start). Atomic single-line rewrite: write-then-rename, so
-# the reader can never see a torn line. pct -1 = indeterminate.
+# the reader can never see a torn line. pct -1 = indeterminate. Any report
+# ends a waiting phase (see job::waiting).
 job::progress() {
   [ -n "${JOB_ID:-}" ] || return 1
   local dir="$JOB_STATE_ROOT/$JOB_ID"
@@ -189,7 +191,24 @@ job::progress() {
   local pct="${1:--1}"
   (($#)) && shift
   local tmp="$dir/.progress.tmp"
-  print -r -- "$EPOCHSECONDS $pct $*" > "$tmp" && mv -f -- "$tmp" "$dir/progress"
+  print -r -- "$EPOCHSECONDS $pct $*" > "$tmp" && mv -f -- "$tmp" "$dir/progress" || return 1
+  rm -f -- "$dir/phase"
+}
+
+# job::waiting [message…] — the task is legitimately WAITING on something
+# outside it (a live share waits minutes to a day for its recipient). Writes
+# the same "-1" line job::progress would, so readers that do not know phases
+# keep today's indeterminate look, PLUS a one-word `phase` sidecar the HUD and
+# the status bar render as "waiting" — never as stalled. The next
+# job::progress call removes it. Spec:
+# docs/superpowers/specs/2026-09-29-job-waiting-phase-design.md (W1).
+job::waiting() {
+  [ -n "${JOB_ID:-}" ] || return 1
+  local dir="$JOB_STATE_ROOT/$JOB_ID"
+  [ -d "$dir" ] || return 1
+  local tmp="$dir/.progress.tmp" ptmp="$dir/.phase.tmp"
+  print -r -- "$EPOCHSECONDS -1 $*" > "$tmp" && mv -f -- "$tmp" "$dir/progress" || return 1
+  print -r -- waiting > "$ptmp" && mv -f -- "$ptmp" "$dir/phase"
 }
 
 # job::cancel <id> — signal the task's whole process group via pueue kill.

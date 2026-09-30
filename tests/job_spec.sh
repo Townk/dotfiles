@@ -387,6 +387,50 @@ FAKE
       When call run_job job::progress 10 "orphan"
       The status should equal 1
     End
+
+    # W1: any progress report ends a waiting phase.
+    It 'removes a waiting phase'
+      cleared() {
+        id=$(run_job job::start -- true) || return 1
+        JOB_ID="$id" run_job job::waiting "waiting for recipient" || return 2
+        JOB_ID="$id" run_job job::progress 40 "sending x" || return 3
+        [ ! -e "$JOB_STATE_ROOT/$id/phase" ] && sed 's/^[0-9][0-9]* //' "$JOB_STATE_ROOT/$id/progress"
+      }
+      When call cleared
+      The output should equal '40 sending x'
+    End
+  End
+
+  Describe 'job::waiting'
+    # W1: the SAME -1 line phase-unaware readers already understand, plus a
+    # one-word phase sidecar the new readers render as "waiting".
+    It 'writes the indeterminate line and a waiting phase'
+      waited() {
+        id=$(run_job job::start -- true) || return 1
+        JOB_ID="$id" run_job job::waiting "waiting for recipient" || return 2
+        printf '%s|%s' \
+          "$(sed 's/^[0-9][0-9]* //' "$JOB_STATE_ROOT/$id/progress")" \
+          "$(cat "$JOB_STATE_ROOT/$id/phase")"
+      }
+      When call waited
+      The output should equal '-1 waiting for recipient|waiting'
+    End
+
+    It 'leaves no temp files behind'
+      tidy() {
+        id=$(run_job job::start -- true) || return 1
+        JOB_ID="$id" run_job job::waiting "w" || return 2
+        # grep -c exits 1 on a zero count; the count is the assertion.
+        ls -A "$JOB_STATE_ROOT/$id" | grep -c '\.tmp$' || true
+      }
+      When call tidy
+      The output should equal '0'
+    End
+
+    It 'returns 1 and writes nothing with no JOB_ID in the environment'
+      When call run_job job::waiting "orphan"
+      The status should equal 1
+    End
   End
 
   Describe 'job::cancel'
