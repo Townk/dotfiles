@@ -100,6 +100,10 @@ share::endpoint_names() {
 # not found" mid-pipeline.
 share::_progress() {
   [ -n "${JOB_ID:-}" ] || return 0
+  # Inside a real job nothing has loaded job.zsh yet (only the enqueuing side
+  # calls share::_load_jobs), so load it on first use — without this both
+  # guards were silent no-ops in every real job (Mode B 2026-09-29).
+  (( $+functions[job::progress] )) || share::_load_jobs 2>/dev/null || return 0
   (( $+functions[job::progress] )) || return 0
   job::progress "$@" 2>/dev/null || return 0
 }
@@ -111,6 +115,10 @@ share::_progress() {
 # 2026-09-29-job-waiting-phase, W2).
 share::_waiting() {
   [ -n "${JOB_ID:-}" ] || return 0
+  # Inside a real job nothing has loaded job.zsh yet (only the enqueuing side
+  # calls share::_load_jobs), so load it on first use — without this both
+  # guards were silent no-ops in every real job (Mode B 2026-09-29).
+  (( $+functions[job::waiting] )) || share::_load_jobs 2>/dev/null || return 0
   (( $+functions[job::waiting] )) || return 0
   job::waiting "$@" 2>/dev/null || return 0
 }
