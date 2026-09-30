@@ -122,12 +122,13 @@ function _cockpit() {
   print -P -- "${P_GRA}${rule}${P_RES}"
 
   lhead=$'\U000F0493'" MANAGE THIS MACHINE" rhead=$'\U000F030C'" AT THE PROMPT"
-  # Each underline is exactly as wide as the header it sits under, in display
-  # cells (the glyph counts as 2).
-  _motd_width "$lhead"; lul="${(l:$REPLY::─:)}"
-  _motd_width "$rhead"; rul="${(l:$REPLY::─:)}"
+  # Each underline is as wide as the header it sits under, in display cells,
+  # except that both are a cell shorter, and the gap between them a cell narrower,
+  # by choice.
+  _motd_width "$lhead"; lul="${(l:$(( REPLY - 1 ))::─:)}"
+  _motd_width "$rhead"; rul="${(l:$(( REPLY - 1 ))::─:)}"
   _motd_pad "$lhead" $lw; lhead="$REPLY"
-  _motd_pad "$lul" $lw; lul="$REPLY"
+  _motd_pad "$lul" $(( lw - 1 )); lul="$REPLY"
   print -P -- "  ${P_YEL}${lhead}${rhead}${P_RES}"
   print -P -- "  ${P_GRA}${lul}${rul}${P_RES}"
 
@@ -138,7 +139,9 @@ function _cockpit() {
     # Blurbs are plain text, so their length is their width.
     lcell="${P_BWH}${lname}${P_RES}  ${P_GRA}${lblurb}${P_RES}${(l:$(( lw - 16 - ${#lblurb} )):: :)}"
     if [[ -n "$rkey" ]]; then
-      _motd_pad "$rkey" 10; rkey="$REPLY"
+      # A key with a single modifier glyph pulls its blurb one cell closer.
+      local pua="${rkey//[^$'\U000F0000'-$'\U000FFFFD']/}"
+      _motd_pad "$rkey" $(( ${#pua} == 1 ? 9 : 10 )); rkey="$REPLY"
       print -P -- "  ${lcell}${P_BWH}${rkey}${P_RES}${P_GRA}${rblurb}${P_RES}"
     else
       print -P -- "  ${lcell}"
