@@ -30,90 +30,121 @@ function system-update() {
   exec zsh
 }
 
-# I decide to make my MOTD screen a function to allow me to call it
-# arbitrarially if I wanted.
+# The welcome screen: macchina, the chezmoi drift line when there is drift, a
+# heavy rule, then the cockpit — two columns, MANAGE THIS MACHINE (the
+# system-* front doors, from commands.tsv) and AT THE PROMPT (the key bindings
+# people forget, from keys.tsv). It is a function so it can be called
+# arbitrarily; the first pane of a session (dot_zshrc.tmpl) just calls it.
 function motd() {
   macchina
+
+  # chezmoi drift warning — silent when there is nothing to say. `chezmoi
+  # status` costs ~0.9s even with scripts excluded, far too slow for the
+  # startup path, so print the *previous* run's verdict from a stamp and
+  # refresh it in the background for the next new window. Scripts must be
+  # excluded: plain `run_` scripts are pending on every apply by design, so
+  # including them would make this fire forever.
+  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/chezmoi-drift"
+  [[ -s "$stamp" ]] \
+    && print -P -- "%F{$C_HEX_YELLOW}↻ chezmoi drift: \$HOME differs from source — run %Bchezmoi diff --exclude=scripts%b%f"
+  ( chezmoi status --exclude=scripts >| "$stamp" 2>/dev/null & )
+
+  _cockpit
 }
 
-# The tool index behind the welcome screen and `cmds` is data, not code: see
-# ../commands.tsv for the format, and tests/commands-index_spec.sh for the
-# geometry it has to respect. Resolved here because `$0` inside a function is
-# the function's name, not this file.
+# The data behind the cockpit is data, not code: see ../commands.tsv.tmpl and
+# ../keys.tsv.tmpl for the formats, and tests/commands-index_spec.sh for the
+# geometry they have to respect. Resolved here because `$0` inside a function
+# is the function's name, not this file.
 #
-# Overridable because the source of that file is a chezmoi TEMPLATE, gated per
-# profile: the spec has to render it and point this at the result, the way
-# spec_helper does with THEME_PALETTE_FILE.
+# Overridable because the sources are chezmoi TEMPLATES, gated per profile: the
+# spec has to render them and point these at the result, the way spec_helper
+# does with THEME_PALETTE_FILE.
 typeset -g _CMDS_INDEX="${_CMDS_INDEX:-${0:A:h:h}/commands.tsv}"
+typeset -g _KEYS_INDEX="${_KEYS_INDEX:-${0:A:h:h}/keys.tsv}"
 
-# Column headings are chrome rather than per-command data, so they stay here.
-typeset -ga _CMDS_GROUPS=(
-  " SYSTEM & NETWORK"
-  "󰇺 DATA & TEXT"
-  " FILES & MISC"
-)
-# Load the three fields the screen needs into parallel arrays. The group and
-# description fields are the picker's business (see ~/.local/libexec/pick-command).
-#
-# Tab is an IFS *whitespace* character, so `IFS=$'\t' read -r a b c` silently
-# collapses runs of tabs: on a picker-only row, whose blurb is empty, the
-# description would land in the blurb. Hence whole-line reads split with
+# Display cells of a string, the way the terminal draws it, returned in $REPLY.
+# zsh's own (m) flag knows wide CJK and emoji but counts a Nerd Font glyph — a
+# private-use codepoint — as one cell, while tmux draws it in two, so each of
+# those is added back. ${#str} would be wrong twice over: it counts codepoints,
+# not cells.
+function _motd_width() {
+  local pua="${1//[^$''-$''$'\U000F0000'-$'\U000FFFFD']/}"
+  REPLY=$(( ${(m)#1} + ${#pua} ))
+}
+
+# `text` padded with spaces to `width` display cells, in $REPLY. Padding with
+# ${(r:N:)} would count the glyph as one cell and leave the next column short.
+function _motd_pad() {
+  _motd_width "$1"
+  local -i gap=$(( $2 - REPLY ))
+  (( gap < 0 )) && gap=0
+  REPLY="${1}${(l:$gap:: :)}"
+}
+
+# Rows of a data file, comments and blanks skipped. Tab is an IFS *whitespace*
+# character, so `read -r a b c` silently collapses runs of tabs and an empty
+# blurb would slide the description into it; whole lines are split with
 # `(@ps)`, which preserves empty fields.
-typeset -ga _cmds_name _cmds_col _cmds_blurb
-function _cmds_read() {
+typeset -ga _cockpit_left _cockpit_right
+function _cockpit_load() {
   local line
   local -a field
-  _cmds_name=() _cmds_col=() _cmds_blurb=()
+  _cockpit_left=() _cockpit_right=()
   while IFS= read -r line; do
     [[ -z "$line" || "$line" == '#'* ]] && continue
     field=("${(@ps:\t:)line}")
-    _cmds_name+=("$field[1]")
-    _cmds_col+=("$field[3]")
-    _cmds_blurb+=("$field[4]")
+    [[ "$field[3]" == 1 ]] && _cockpit_left+=("$field[1]"$'\t'"$field[4]")
   done < "$_CMDS_INDEX"
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == '#'* ]] && continue
+    field=("${(@ps:\t:)line}")
+    _cockpit_right+=("$field[1]"$'\t'"$field[2]")
+  done < "$_KEYS_INDEX"
 }
 
-# The static index the welcome screen prints: 7 lines, never past 78 columns.
-function terminal_commands() {
-  local -a c1 c2 c3
-  local -i i row col
-  local line entry name blurb title
+# The rule and the two columns, never past 78 columns. Left cell 38 wide (a
+# 14-wide name, two spaces, up to 22 of blurb), right cell a 10-wide key then up
+# to 26 of blurb. The last cell of a row is never padded: trailing blanks would
+# push a full row to the edge and wrap a terminal exactly that wide.
+function _cockpit() {
+  local -i i rows lw=38
+  local rule="${(l:78::━:)}" lhead rhead lul rul lname lblurb rkey rblurb lcell
+  local -a left right
 
-  _cmds_read
-  for (( i = 1; i <= ${#_cmds_name[@]}; i++ )); do
-    case "${_cmds_col[i]}" in
-      1) c1+=("${_cmds_name[i]}"$'\t'"${_cmds_blurb[i]}") ;;
-      2) c2+=("${_cmds_name[i]}"$'\t'"${_cmds_blurb[i]}") ;;
-      3) c3+=("${_cmds_name[i]}"$'\t'"${_cmds_blurb[i]}") ;;
-    esac
-  done
+  _cockpit_load
+  rows=$(( ${#_cockpit_left[@]} > ${#_cockpit_right[@]} ? ${#_cockpit_left[@]} : ${#_cockpit_right[@]} ))
 
-  # The third column is never padded — trailing blanks would push every line to
-  # a full 78 and wrap a terminal exactly that wide.
-  line=""
-  for col in 1 2 3; do
-    title="${_CMDS_GROUPS[col]}"
-    (( col < 3 )) && title="${(r:26:)title}"
-    line+="${P_YEL}${title}${P_RES}"
-  done
-  print -P -- "$line"
+  print -P -- "${P_GRA}${rule}${P_RES}"
 
-  for (( row = 1; row <= ${#c1[@]}; row++ )); do
-    line=""
-    for col in 1 2 3; do
-      entry="${${(P)${:-c$col}}[row]}"
-      name="${entry%%$'\t'*}"
-      blurb="${entry#*$'\t'}"
-      (( col < 3 )) && blurb="${(r:16:)blurb}"
-      line+="${P_BWH}${(r:9:)name}${P_RES} ${P_GRA}${blurb}${P_RES}"
-    done
-    print -P -- "$line"
+  lhead=$'\U000F0493'" MANAGE THIS MACHINE" rhead=$'\U000F030C'" AT THE PROMPT"
+  # Each underline is as wide as the header it sits under, in display cells.
+  _motd_width "$lhead"; lul="${(l:$REPLY::─:)}"
+  _motd_width "$rhead"; rul="${(l:$REPLY::─:)}"
+  _motd_pad "$lhead" $lw; lhead="$REPLY"
+  _motd_pad "$lul" $lw; lul="$REPLY"
+  print -P -- "  ${P_YEL}${lhead}${rhead}${P_RES}"
+  print -P -- "  ${P_GRA}${lul}${rul}${P_RES}"
+
+  for (( i = 1; i <= rows; i++ )); do
+    left=("${(@ps:\t:)_cockpit_left[i]}") right=("${(@ps:\t:)_cockpit_right[i]}")
+    lname="$left[1]" lblurb="$left[2]" rkey="$right[1]" rblurb="$right[2]"
+    _motd_pad "$lname" 14; lname="$REPLY"
+    # Blurbs are plain text, so their length is their width.
+    lcell="${P_BWH}${lname}${P_RES}  ${P_GRA}${lblurb}${P_RES}${(l:$(( lw - 16 - ${#lblurb} )):: :)}"
+    if [[ -n "$rkey" ]]; then
+      _motd_pad "$rkey" 10; rkey="$REPLY"
+      print -P -- "  ${lcell}${P_BWH}${rkey}${P_RES}${P_GRA}${rblurb}${P_RES}"
+    else
+      print -P -- "  ${lcell}"
+    fi
   done
 }
 
-# `cmds` searches the whole index rather than printing the shortlist of it. The
-# grid is for glancing; this is for what the grid is worst at — you remember
-# what a tool does but not what it is called, so you search the descriptions.
+# `cmds` searches the whole index rather than the handful of rows the cockpit
+# lists. The cockpit is for glancing; this is for what it is worst at — you
+# remember what a tool does but not what it is called, so you search the
+# descriptions.
 #
 # The picker itself is pick-command, in the same engine as every other picker
 # here. This stays a function only because it writes the edit buffer, which a

@@ -1,23 +1,23 @@
 {{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
 # The curated command index behind the welcome screen and `cmds`.
 #
-# Tab-separated, five fields: COMMAND, GROUP, COLUMN, BLURB, DESCRIPTION.
+# Tab-separated, five fields: COMMAND, GROUP, WELCOME, BLURB, DESCRIPTION.
 #
 #   GROUP        which icon and colour `cmds` shows the row with. One of the
 #                keys in pick-command's table: system, data, files, shell,
 #                code, secrets, agents, ops, shortcuts. The section comments
 #                below mirror it for readability, but the field is what counts.
-#   COLUMN       0 = `cmds` only. 1-3 = also printed on the welcome screen, in
-#                that column, in the order the lines appear below.
-#   BLURB        the welcome screen cell text. Empty when COLUMN is 0.
+#   WELCOME      0 = `cmds` only. 1 = also listed in the welcome screen's
+#                MANAGE THIS MACHINE column, in the order the rows appear below.
+#   BLURB        that column's cell text. Empty when WELCOME is 0.
 #   DESCRIPTION  what `cmds` searches, and its preview fallback.
 #
-# One file so the screen cannot drift from the picker: the screen is a view of
+# One file so the screen cannot drift from the picker: the column is a view of
 # this list, not a second copy of it. The screen's geometry is a hard budget —
-# 7 lines by 78 columns, three cells of 26 (a 9-wide name, a space, a 16-wide
-# blurb) — so a fourth entry in any column, a name past 9 characters or a blurb
-# past 16 silently overflows it. tests/commands-index_spec.sh pins all of that,
-# and that every command here still resolves.
+# the cell is 38 columns (a 14-wide name, two spaces, a blurb of up to 22) —
+# so a name past 14 characters or a blurb past 22 silently overflows it.
+# tests/commands-index_spec.sh pins that, and that every command here still
+# resolves. The other column, AT THE PROMPT, is keys.tsv.tmpl, next to this.
 #
 # What belongs here: anything you would type at a prompt and might forget the
 # name of. Not servers, LSPs or GUI apps; not libraries or the plumbing behind
@@ -33,37 +33,34 @@
 # condition from the manifest rather than inventing one — if they disagree, the
 # row is offered on a box where the command does not exist.
 #
-# The welcome-screen rows (columns 1-3) are deliberately never gated: that
-# keeps the 7-line by 78-column budget identical on every profile, so the
-# geometry test on one machine speaks for all of them.
+# The welcome rows are gated exactly like the rest: a command absent on this
+# profile or OS never shows on the screen either.
 
-# ─── the welcome screen: column 1, system & network ───────────────────────────
-procs	system	1	'ps'	Process list as a readable table, with tree view and colour
-duf	system	1	disk usage	Disk usage and free space per mount, as a table
-bandwhich	system	1	net usage	Live per-process network bandwidth (needs sudo on macOS)
-doggo	system	1	DNS lookup	DNS lookup with readable output — a modern dig
-gping	system	1	ping graph	Ping as a live graph, several hosts at once
+# ─── everyday tools, formerly the welcome grid (picker-only now) ─────────────
+procs	system	0		Process list as a readable table, with tree view and colour
+duf	system	0		Disk usage and free space per mount, as a table
+bandwhich	system	0		Live per-process network bandwidth (needs sudo on macOS)
+doggo	system	0		DNS lookup with readable output — a modern dig
+gping	system	0		Ping as a live graph, several hosts at once
 {{ if $traits.devTooling -}}
-hyperfine	system	1	benchmark	Benchmark a command with warmups, statistics and comparison
+hyperfine	system	0		Benchmark a command with warmups, statistics and comparison
 
 {{ end -}}
-# ─── the welcome screen: column 2, data & text ────────────────────────────────
-jq	data	2	JSON	Query and transform JSON
-gron	data	2	JSON to lines	Flatten JSON into grep-able lines, and rebuild it after
-jless	data	2	JSON viewer	Page, fold and search large JSON interactively
-tv	data	2	view CSV	Pretty-print CSV and TSV as an aligned table (tidy-viewer)
+jq	data	0		Query and transform JSON
+gron	data	0		Flatten JSON into grep-able lines, and rebuild it after
+jless	data	0		Page, fold and search large JSON interactively
+tv	data	0		Pretty-print CSV and TSV as an aligned table (tidy-viewer)
 {{ if $traits.devTooling -}}
-tokei	data	2	code stats	Count lines of code per language across a tree
-grex	data	2	regex builder	Build a regex from example strings it has to match
+tokei	data	0		Count lines of code per language across a tree
+grex	data	0		Build a regex from example strings it has to match
 
 {{ end -}}
-# ─── the welcome screen: column 3, files & misc ───────────────────────────────
-7zz	files	3	7-Zip	Create and extract 7z archives, and most other formats
-unrar	files	3	.rar archives	Extract .rar archives
-eva	data	3	calculator	Evaluate arithmetic at the prompt, with variables and units
-fend	data	3	unit convert	Convert between units and currencies, with arithmetic
-gh	code	3	GitHub	GitHub from the terminal: PRs, issues, releases, CI runs
-t-rec	files	3	term recorder	Record the terminal to an animated GIF
+7zz	files	0		Create and extract 7z archives, and most other formats
+unrar	files	0		Extract .rar archives
+eva	data	0		Evaluate arithmetic at the prompt, with variables and units
+fend	data	0		Convert between units and currencies, with arithmetic
+gh	code	0		GitHub from the terminal: PRs, issues, releases, CI runs
+t-rec	files	0		Record the terminal to an animated GIF
 
 # ─── system & network ─────────────────────────────────────────────────────────
 btm	system	0		Graphical process and system monitor — a better top
@@ -195,14 +192,21 @@ mlx_vlm.convert	agents	0		Convert a model to MLX format
 # ─── ops: this machine's own control surface ──────────────────────────────────
 chezmoi	ops	0		Manage these dotfiles: diff, apply, resolve source paths
 chezmoi-reverse	ops	0		Propagate edits made in $HOME back into the chezmoi source
-system-update	ops	0		Bring every externally-managed tool up to its latest version
-system-package	ops	0		Sync installed packages against the per-ecosystem manifests
-system-service	ops	0		Manage the services declared in services.toml
-system-secrets	ops	0		Manage this machine's secret values
+system-update	ops	1	update everything	Bring every externally-managed tool up to its latest version
+system-package	ops	1	add/remove packages	Sync installed packages against the per-ecosystem manifests
+system-service	ops	1	start/stop daemons	Manage the services declared in services.toml
+system-secrets	ops	1	secrets & slots	Manage this machine's secret values
 system-onboard	ops	0		Reconcile a machine into this dotfiles system
-system-backup	ops	0		Tiered, encrypted restic backups of this machine
-system-images	ops	0		Create, mount and manage the local sparse disk images
-tm	ops	0		Terminal Time Machine: browse and diff snapshots of this directory
+{{ if not $traits.headless -}}
+system-backup	ops	1	snapshots · tm scrub	Tiered, encrypted restic backups of this machine
+{{ end -}}
+{{ if eq .chezmoi.os "darwin" -}}
+system-images	ops	1	disk images	Create, mount and manage the local sparse disk images
+{{ end -}}
+share	ops	1	send a file	Hand a file to another person, asynchronously: a link, a receipt, revocable
+{{ if not $traits.headless -}}
+tm	ops	1	browse/diff snapshots	Terminal Time Machine: browse and diff snapshots of this directory
+{{ end -}}
 {{ if $traits.aiTooling -}}
 ai-commit	ops	0		Group the working tree into logical Conventional Commits
 {{ end -}}
@@ -213,12 +217,11 @@ theme-reset	ops	0		Drop this session's tint override, back to the canonical them
 wait-until	ops	0		Poll a command until it succeeds or the timeout elapses
 
 # ─── shortcuts: my own shell functions ────────────────────────────────────────
-y	shortcuts	0		Yazi file manager; the shell follows its cwd on exit
+y	shortcuts	1	yazi, follows cwd	Yazi file manager; the shell follows its cwd on exit
 g	shortcuts	0		Short form of git; bare g runs git status
 gg	shortcuts	0		Gradle wrapper that prefers the project's own gradlew
 take	shortcuts	0		Create a directory and cd into it in one step
 super-cd	shortcuts	0		cd that falls back to zoxide when the path is not literal
 cmds	shortcuts	0		This picker
-motd	shortcuts	0		Reprint the welcome screen's machine summary
-terminal_commands	shortcuts	0		Reprint the welcome screen's tool index
+motd	shortcuts	0		Reprint the welcome screen: machine summary plus the cockpit
 lolbanner	shortcuts	0		Print a big, hard-to-miss banner between long commands

@@ -1,0 +1,29 @@
+{{- $traits := includeTemplate "profile-traits.tmpl" . | fromJson -}}
+# The key bindings behind the welcome screen's AT THE PROMPT column.
+#
+# Tab-separated, three fields: KEYS, BLURB, WIDGETS.
+#
+#   KEYS     what to press, as shown. Symbols, not spellings: ⌃ Ctrl, ⌥ Alt,
+#            ⇧ Shift. Up to 9 display cells.
+#   BLURB    what it does, up to 26 characters.
+#   WIDGETS  the ZLE widget(s) the keys are bound to in keybindings.sh, space
+#            separated, in the order the keys appear. A key the multiplexer owns
+#            rather than zsh is written tmux:<key> and checked against
+#            keymap-base.conf.tmpl. tests/commands-index_spec.sh checks that each
+#            one is really bound, so a key that is rebound or dropped cannot
+#            stay on the screen.
+#
+# Rows print in file order. Rows for a tool only some profiles install are gated
+# on the same trait its install uses, so a key never shows for a widget that is
+# not there.
+⌥X	pick a curated command	command-pick
+⌃R	search history (atuin)	atuin-search
+⌥P	smart paste (text/files)	smart-paste
+⌃⇧U	glyph picker	tmux:C-S-u
+{{ if $traits.aiTooling -}}
+⌃⌥A	ask ai-assist	ai-assist-trigger
+⌃⌥P	run a saved playbook	ai-playbook-pick
+{{ end -}}
+⇧← ⇧→	back/forward dir ring	cd-back cd-forward
+⇧↑ ⇧↓	parent / pick child dir	cd-up cd-down
+⌃Space	accept suggestion	autosuggest-accept

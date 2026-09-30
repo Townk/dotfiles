@@ -3,7 +3,7 @@
 #
 # The index is ~/.config/zsh/commands.tsv (rendered from commands.tsv.tmpl, so
 # it holds only the commands THIS machine's profile installs). The welcome
-# screen prints 18 of its rows; this picker offers all of them, with the long
+# screen's MANAGE THIS MACHINE column lists a few of its rows; this picker offers all of them, with the long
 # description as the searchable text. Two front ends put the result on the edit
 # buffer: the `cmds` function inline, and the Alt+x ZLE widget (command-pick)
 # with --float.
@@ -66,8 +66,7 @@ typeset -a launch=( pick::start )
 # One icon + colour per GROUP key in the index. Written as codepoint escapes
 # rather than literal glyphs: the name in the comment is the only readable
 # form of a Private Use Area character, and an escape survives an editor or a
-# patch that would mangle the glyph itself. The first two match the welcome
-# screen's own column headings.
+# patch that would mangle the glyph itself.
 typeset -A GROUP_ICON=(
   system    $'\uec19'    # nf-cod-chip
   data      $'\U0F01FA'  # nf-md-engine
