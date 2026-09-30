@@ -22,6 +22,7 @@ Describe 'environment.sh peer-alias recorder'
     set -- PATH="/usr/bin:/bin:/usr/sbin:/sbin" HOME="$ISO_HOME" TMPDIR="$ISO_HOME/tmp" SSH_CONNECTION="$_c"
     [ -n "$_h" ] && set -- "$@" "LC_ORIGIN_HOST=$_h"
     [ -n "$_a" ] && set -- "$@" "LC_ORIGIN_ALIAS=$_a"
+    [ -n "${LOGIN_LOCALE:-}" ] && set -- "$@" "LC_ALL=$LOGIN_LOCALE"
     env -i "$@" sh -c 'mkdir -p "$TMPDIR" 2>/dev/null; . '"$ENV_SH"
   }
   login_q() { login "$@" >/dev/null 2>&1; }
@@ -77,6 +78,27 @@ Describe 'environment.sh peer-alias recorder'
       When call test -e "$MAP"
       The status should be failure
     End
+  End
+
+  # Under a UTF-8 locale bash 3.2 (macOS /bin/sh) matches [A-Za-z] by collation,
+  # so accented letters slipped through the value rule.
+  It 'rejects non-ASCII letters under a UTF-8 locale'
+    LOGIN_LOCALE=en_US.UTF-8
+    login_q "$SSHC" 'péer-key' peer-laptop
+    login_q "$SSHC" peer-key-01 'Ärger'
+    LOGIN_LOCALE=
+    When call test -e "$MAP"
+    The status should be failure
+  End
+
+  # grep would read a key starting with '-' as an option without -e.
+  It 'leaves the map untouched on an identical login with a dash-leading key'
+    login_q "$SSHC" -v-key peer-laptop
+    touch -t 200001010000 "$MAP"
+    touch -t 200001010001 "$ISO_HOME/ref"
+    login_q "$SSHC" -v-key peer-laptop
+    When call find "$MAP" -newer "$ISO_HOME/ref"
+    The output should equal ''
   End
 
   It 'ignores a lone LC_ORIGIN_HOST'

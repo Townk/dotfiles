@@ -144,10 +144,12 @@ if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
   if [ -n "${LC_ORIGIN_HOST:-}" ] && [ -n "${LC_ORIGIN_ALIAS:-}" ] &&
     [ "${#LC_ORIGIN_HOST}" -le 64 ] && [ "${#LC_ORIGIN_ALIAS}" -le 64 ]; then
     case "$LC_ORIGIN_HOST$LC_ORIGIN_ALIAS" in
-      *[!A-Za-z0-9._-]*) ;;
+      # Class spelled out: bash 3.2 (/bin/sh) matches A-Za-z by collation under
+      # a UTF-8 locale, which would admit accented letters.
+      *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) ;;
       *)
         _origin_map="$XDG_STATE_HOME/hosts/aliases"
-        if ! grep -qxF "$LC_ORIGIN_HOST $LC_ORIGIN_ALIAS" "$_origin_map" 2>/dev/null; then
+        if ! grep -qxF -e "$LC_ORIGIN_HOST $LC_ORIGIN_ALIAS" "$_origin_map" 2>/dev/null; then
           (
             umask 077
             mkdir -p "$XDG_STATE_HOME/hosts" &&
