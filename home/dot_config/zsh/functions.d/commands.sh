@@ -37,6 +37,10 @@ function system-update() {
 # arbitrarily; the first pane of a session (dot_zshrc.tmpl) just calls it.
 function motd() {
   macchina
+  # macchina ends with a blank line of its own; step back onto it so the next
+  # line (drift or rule) sits directly under the block. Only on a terminal:
+  # piped, there is no cursor to move.
+  [[ -t 1 ]] && print -n -- $'\e[1A'
 
   # chezmoi drift warning — silent when there is nothing to say. `chezmoi
   # status` costs ~0.9s even with scripts excluded, far too slow for the
@@ -118,8 +122,9 @@ function _cockpit() {
   print -P -- "${P_GRA}${rule}${P_RES}"
 
   lhead=$'\U000F0493'" MANAGE THIS MACHINE" rhead=$'\U000F030C'" AT THE PROMPT"
-  # Each underline is as wide as the header it sits under, in display cells.
-  _motd_width "$lhead"; lul="${(l:$REPLY::─:)}"
+  # Each underline is as wide as the header it sits under, in display cells,
+  # except the left one, which is a cell shorter by choice.
+  _motd_width "$lhead"; lul="${(l:$(( REPLY - 1 ))::─:)}"
   _motd_width "$rhead"; rul="${(l:$REPLY::─:)}"
   _motd_pad "$lhead" $lw; lhead="$REPLY"
   _motd_pad "$lul" $lw; lul="$REPLY"

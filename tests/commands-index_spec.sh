@@ -219,7 +219,7 @@ Describe 'zsh/commands.tsv and keys.tsv — the welcome screen data'
       The output should equal ''
     End
 
-    It 'underlines each header exactly as wide as the header, glyph as 2 cells'
+    It 'underlines each header as wide as the header, glyph as 2 cells (the left one a cell shorter)'
       # Lines 3 and 4 (after the stub and the rule) are the headers and their
       # underlines. Each header is a glyph, a space and a title; the glyph is 2
       # cells, so a header is the title's length plus 3.
@@ -235,7 +235,7 @@ Describe 'zsh/commands.tsv and keys.tsv — the welcome screen data'
         '
       }
       When call underlines
-      The line 1 of output should equal 'left 22 22'
+      The line 1 of output should equal 'left 22 21'
       The line 2 of output should equal 'right 16 16'
     End
 
