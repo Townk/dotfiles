@@ -33,6 +33,7 @@ local M = {}
 
 local sqlite3 = require("hs.sqlite3")
 local history = require("apps.clipboard-history")
+local hostdisplay = require("system.host-display")
 local dismissOnBlur = require("system.dismiss-on-blur")
 local osd = require("osd")
 
@@ -599,7 +600,7 @@ local function copy_toast(id)
   db:close()
   local my_host = history._my_host()
   if host ~= nil and host ~= "" and host ~= my_host then
-    osd.notify(TOAST_GLYPHS[kind] or "glyph:nf-md-text_box", "Copied from " .. host, "Frog")
+    osd.notify(TOAST_GLYPHS[kind] or "glyph:nf-md-text_box", "Copied from " .. hostdisplay.display(host, my_host), "Frog")
   else
     osd.notify("glyph:fa-clipboard-list", "Clipboard moved to top", "Frog")
   end
