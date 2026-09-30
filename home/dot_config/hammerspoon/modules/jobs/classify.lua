@@ -33,11 +33,12 @@ function M.classify(job, kind, now, stallSecs)
 end
 
 -- Time since `created` (epoch seconds) as the HUD shows it where the percent
--- would go: "12m", "3h", "2d". Minutes never read 0.
+-- would go: "<1m" for the first minute, then "12m", "3h", "2d".
 function M.elapsed(created, now)
 	if not created then return "" end
 	local s = math.max(0, now - created)
-	if s < 3600 then return string.format("%dm", math.max(1, math.floor(s / 60))) end
+	if s < 60 then return "<1m" end
+	if s < 3600 then return string.format("%dm", math.floor(s / 60)) end
 	if s < 48 * 3600 then return string.format("%dh", math.floor(s / 3600)) end
 	return string.format("%dd", math.floor(s / 86400))
 end

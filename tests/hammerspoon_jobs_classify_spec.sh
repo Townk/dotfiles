@@ -62,6 +62,14 @@ Describe 'jobs HUD classify'
 
   It 'formats elapsed time in minutes, hours, then days'
     When call lua 'c.elapsed(1000, 1030) .. "," .. c.elapsed(1000, 1000 + 12*60) .. "," .. c.elapsed(1000, 1000 + 3*3600) .. "," .. c.elapsed(1000, 1000 + 50*3600) .. "," .. c.elapsed(nil, 5)'
-    The output should equal '1m,12m,3h,2d,'
+    The output should equal '<1m,12m,3h,2d,'
+  End
+
+  # The first minute reads "<1m" (Mode B 2026-09-29: "1m" from second 0 read as
+  # a minute already gone). Boundaries pinned, including a clock that runs
+  # backwards (created in the future).
+  It 'shows <1m for the first minute, then whole minutes'
+    When call lua 'c.elapsed(1000, 1000) .. "," .. c.elapsed(1000, 1059) .. "," .. c.elapsed(1000, 1060) .. "," .. c.elapsed(1000, 900) .. "," .. c.elapsed(1000, 1000 + 3599) .. "," .. c.elapsed(1000, 1000 + 3600)'
+    The output should equal '<1m,<1m,1m,<1m,59m,1h'
   End
 End
