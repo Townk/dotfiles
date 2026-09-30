@@ -49,6 +49,7 @@ local PUEUE_EVERY = 8 -- ticks between pueue polls (~2 s)
 local PUEUE_DEAD_AFTER = 3 -- consecutive failed polls -> treat system dead
 local PUEUE_POLL_TIMEOUT = 10 -- seconds an outstanding poll may run before we count it as failed and retire it
 local STALL_SECS = classify.STALL_SECS
+local WAIT_ICON = "glyph:nf-md-clock_outline" -- a live share waiting for its recipient (W4); never the hourglass
 local GHOST_GRACE = 30 -- pre-first-poll: seconds of silence before a job dir is presumed a leaked ghost
 -- pueue's `status --json` embeds every task's full captured environment;
 -- past a handful of finished tasks that tops the 64KB pipe buffer, and
@@ -202,11 +203,15 @@ local function cancelJob(id)
 	hs.task.new("/bin/zsh", nil, { "-c", JOB_BIN .. " cancel " .. id }):start()
 end
 
-local function buildElements(job, stalled, preparing)
+local function buildElements(job, state, now)
+	local stalled = state == "stalled"
+	local waiting = state == "waiting"
 	local fillOn = stalled and { white = 1, alpha = theme.stallAlpha }
 		or theme.barOn
 	local resolved
-	if stalled or preparing then
+	if waiting then
+		resolved = osd.resolveNamedIcon(WAIT_ICON)
+	elseif stalled or state == "preparing" then
 		resolved = osd.resolveNamedIcon(theme.stallIcon)
 	elseif type(job.icon) == "string" and job.icon ~= "" then
 		resolved = osd.resolveNamedIcon(job.icon)
@@ -258,7 +263,12 @@ local function buildElements(job, stalled, preparing)
 	end
 	local contentX = PAD_H + ICON_SIZE + 10
 	local label = job.title
-	if job.msg and job.msg ~= "" then label = job.msg end
+	if waiting then
+		local what = (job.msg and job.msg ~= "") and job.msg or "waiting for recipient"
+		label = what .. " — " .. (job.title or "")
+	elseif job.msg and job.msg ~= "" then
+		label = job.msg
+	end
 	elements[#elements + 1] = {
 		type = "text",
 		frame = { x = contentX, y = 9, w = CAP_W - contentX - PAD_H - CANCEL_RESERVE, h = 16 },
@@ -286,7 +296,8 @@ local function buildElements(job, stalled, preparing)
 	elements[#elements + 1] = {
 		type = "text",
 		frame = { x = CAP_W - PCT_W - PAD_H - CANCEL_RESERVE + 4, y = barY - 4, w = PCT_W, h = 16 },
-		text = hs.styledtext.new(indeterminate and "…" or string.format("%d%%", pct), {
+		text = hs.styledtext.new(waiting and classify.elapsed(job.created, now)
+			or (indeterminate and "…" or string.format("%d%%", pct)), {
 			font = { name = ".AppleSystemUIFont", size = 12 },
 			color = fillOn,
 			paragraphStyle = { alignment = "right" },
@@ -388,11 +399,9 @@ local function repaint(job, index, now)
 	local y = frame.y + MARGIN + (index - 1) * (CAP_H + GAP)
 	local kind = pueueByLabel and pueueByLabel["job:" .. job.id] or nil
 	local state = classify.classify(job, kind, now, STALL_SECS)
-	local preparing = state == "preparing" or state == "waiting" -- W4 lands in Task 7
-	local stalled = state == "stalled"
 	local c = capsuleFor(job.id, x, y)
 	if not c then return end
-	local elements = buildElements(job, stalled, preparing)
+	local elements = buildElements(job, state, now)
 	-- In-place repaint, :show() only on hidden->visible (osd.progress's
 	-- hard-won pattern; a remove-all/re-show cycle drops frames and asks
 	-- AppKit to key a non-keyable canvas every tick).
@@ -510,6 +519,9 @@ function M.setup()
 	watcher = hs.pathwatcher.new(STATE_ROOT, function()
 		armTimer()
 	end)
+	-- Warm the waiting glyph like osd warms the hourglass: repaint must never
+	-- do cold glyph I/O (module header invariant).
+	osd.resolveNamedIcon(WAIT_ICON)
 	watcher:start()
 	armTimer() -- pick up jobs already running at HS (re)load
 end
