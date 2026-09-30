@@ -140,7 +140,7 @@ config.command_palette_font_size = 18
 config.char_select_font_size = 18
 config.unicode_version = 17
 
-config.initial_rows = 30
+config.initial_rows = 35
 config.initial_cols = 130
 
 config.front_end = "WebGpu"

@@ -106,7 +106,7 @@ font-feature = liga
 # Window
 # ---------------------------------------------------------------
 window-width = 130
-window-height = 30
+window-height = 35
 window-padding-x = 10
 window-padding-y = 0
 window-padding-balance = true
