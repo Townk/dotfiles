@@ -659,6 +659,48 @@ SH
       The output should equal 'capture identical
 stderr identical'
     End
+
+    # A filename that is not valid UTF-8 (a Latin-1 "café") must not make the
+    # regex engine print errors into the user's stream, nor freeze the bar.
+    It 'reads records with an invalid byte sequence under a UTF-8 locale'
+      tap_setup
+      tap() {
+        local LC_ALL=en_US.UTF-8
+        { printf 'Sending (->[2001:db8::2]:9009)\n'
+          printf 'caf\351.bin  45%% |\342\226\210\342\226\210 | (7/17 MB)\r'
+          printf 'caf\351.bin 100%% |\342\226\210\342\226\210\342\226\210| (17/17 MB)\r'
+        } >"$SB/in"
+        share::_croc_tap "$SB/cap" L live <"$SB/in" 2>"$SB/err"
+        cmp -s "$SB/in" "$SB/err" && echo "stderr identical"
+        cat "$CALLS"
+      }
+      When call tap
+      The output should equal 'stderr identical
+0 sending L
+45 sending L
+100 sending L'
+    End
+
+    # The tap runs for hours at ~12 redraws/s on a live send: no subshell per
+    # record. A counter bumped inside the percent helper only survives in this
+    # shell if the tap called it without forking, and the printing wrapper
+    # (which a caller can only use through $(…)) must never be called.
+    It 'reads each record without forking a subshell'
+      tap_setup
+      functions[share::_orig_pct_reply]=$functions[share::_croc_pct_reply]
+      share::_croc_pct_reply() { N=$(( N + 1 )); share::_orig_pct_reply "$@"; }
+      share::croc_pct() { W=$(( W + 1 )); }
+      tap() {
+        N=0 W=0
+        printf 'Sending (->[2001:db8::2]:9009)\rf  10%% |█ |\r   \rf  20%% |██|\rf  30%% |██|\n' \
+          | share::_croc_tap "$SB/cap" L live 2>/dev/null
+        echo "helper=$N wrapper=$W"
+        tail -1 "$CALLS"
+      }
+      When call tap
+      The output should equal 'helper=3 wrapper=0
+30 sending L'
+    End
   End
 
   # --- the waiting phase (spec 2026-09-29-job-waiting-phase, W2) ------------

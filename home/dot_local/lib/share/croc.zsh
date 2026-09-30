@@ -282,11 +282,26 @@ share::croc_revoke() {
 # while HASHING the file at startup — before any peer connects — so a record
 # starting with "Hashing " is never a transfer percent.
 share::croc_pct() {
-  local rec="$1"
+  local REPLY
+  share::_croc_pct_reply "$1"
+  [[ -n "$REPLY" ]] && print -r -- "$REPLY"
+  return 0
+}
+
+# share::_croc_pct_reply <record> — share::croc_pct's work, returned in REPLY
+# (empty when the record carries no transfer percent). The tap calls this one:
+# a live send redraws ~12 times a second for hours, and a `$(…)` fork per
+# record there is ~8x the cost. LC_ALL=C because croc prints filenames as-is:
+# under a UTF-8 locale a non-UTF-8 name (a Latin-1 "café") makes `=~` print
+# "illegal byte sequence" into the mirrored stream and fail the match. Every
+# pattern here is ASCII, so byte matching is exact.
+share::_croc_pct_reply() {
+  local LC_ALL=C rec="$1"
+  REPLY=""
   [[ "$rec" =~ '^[[:space:]]*Hashing ' ]] && return 0
   if [[ "$rec" =~ '(^|[^0-9])([0-9]{1,3})%[[:space:]]*\|' ]]; then
     local -i pct=$match[2]
-    (( pct <= 100 )) && print -r -- "$pct"
+    (( pct <= 100 )) && REPLY=$pct
   fi
   return 0
 }
@@ -332,7 +347,11 @@ share::_croc_tap() {
 
 # One record through share::_croc_tap's state machine. Uses (and updates) the
 # caller's locals rec, connected, pct, last and label — zsh's dynamic scope.
+# No `$(…)` and no external command here: it runs once per croc redraw.
 share::_croc_tap_record() {
+  # C locale: see share::_croc_pct_reply — a non-UTF-8 filename must not make
+  # these matches print errors into the stream or fail.
+  local LC_ALL=C REPLY
   [[ "$rec" == *[^[:space:]]* ]] || return 0
   if (( ! connected )); then
     if [[ "$rec" =~ '^[[:space:]]*Sending \(->' ]]; then
@@ -341,7 +360,8 @@ share::_croc_tap_record() {
     fi
     return 0
   fi
-  pct="$(share::croc_pct "$rec")"
+  share::_croc_pct_reply "$rec"
+  pct=$REPLY
   if [[ -n "$pct" && "$pct" != "$last" ]]; then
     share::_progress "$pct" "sending $label"
     last="$pct"
