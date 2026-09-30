@@ -93,14 +93,16 @@ Describe 'environment.sh peer-alias recorder'
     The status should be failure
   End
 
-  # Review Focus: an unwritable state dir must not break or pollute the login.
-  It 'stays silent when the map cannot be written'
+  # Review Focus: an unwritable state dir must not break or pollute the login,
+  # even for a sourcing shell running under `set -e`.
+  It 'stays silent and non-fatal when the map cannot be written'
     mkdir -p "$ISO_HOME/.local/state"
     : >"$ISO_HOME/.local/state/hosts"
-    When call login "$SSHC" peer-key-01 peer-laptop
+    When call env -i PATH="/usr/bin:/bin:/usr/sbin:/sbin" HOME="$ISO_HOME" \
+      SSH_CONNECTION="$SSHC" LC_ORIGIN_HOST=peer-key-01 LC_ORIGIN_ALIAS=peer-laptop \
+      sh -c 'set -e; . '"$ENV_SH"'; echo reached'
     The status should be success
-    The output should not include 'aliases'
-    The stderr should not include 'aliases'
-    The stderr should not include 'hosts'
+    The output should equal 'reached'
+    The stderr should equal ''
   End
 End

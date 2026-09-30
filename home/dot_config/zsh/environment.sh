@@ -156,7 +156,7 @@ if [ -n "${SSH_TTY:-}${SSH_CONNECTION:-}${SSH_CLIENT:-}" ]; then
                 printf '%s %s\n' "$LC_ORIGIN_HOST" "$LC_ORIGIN_ALIAS"
               } >"$_origin_map.$$" &&
               mv -f "$_origin_map.$$" "$_origin_map"
-          ) >/dev/null 2>&1 || rm -f "$_origin_map.$$" 2>/dev/null
+          ) >/dev/null 2>&1 || rm -f "$_origin_map.$$" 2>/dev/null || :
         fi
         unset _origin_map
         ;;
