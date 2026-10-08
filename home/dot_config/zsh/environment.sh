@@ -66,6 +66,13 @@ export GOPROXY='https://proxy.golang.org,direct'
 # installs (uv tool, project venvs, the nerd-font build) keep working.
 export PIP_REQUIRE_VIRTUALENV=true
 
+# gcloud's interpreter: the uv-managed 3.13 that system-package-uv links here
+# (gcloud breaks on 3.14). Only set when present — gcloud fails outright on a
+# CLOUDSDK_PYTHON that doesn't exist instead of falling back.
+if [ -x "$HOME/.local/bin/python3.13" ]; then
+  export CLOUDSDK_PYTHON="$HOME/.local/bin/python3.13"
+fi
+
 # Homebrew. The macOS GUI/launchd session PATH is the bare system one (no
 # /opt/homebrew), and we skip /etc/zprofile's path_helper (no_global_rcs in
 # ~/.zshenv), so nothing else puts Homebrew on PATH. A login shell that starts

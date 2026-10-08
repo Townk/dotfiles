@@ -105,6 +105,15 @@ do_sync() {
       uv tool upgrade --all --reinstall "${uv_quiet[@]}" || true
   fi
 
+  # gcloud's interpreter (CLOUDSDK_PYTHON in environment.sh). An explicit
+  # `uv python install` — unlike the implicit fetch a `--python` tool install
+  # does — links ~/.local/bin/python3.13 to the minor-version dir, a path that
+  # survives patch upgrades. 3.13, not latest: gcloud breaks on 3.14.
+  local -a uv_quiet=(-q)
+  ((PKG_VERBOSE)) && uv_quiet=()
+  pkg::run_tool "uv: ensuring Python 3.13" uv python install 3.13 "${uv_quiet[@]}" ||
+    log_warn "failed to install Python 3.13 (gcloud's CLOUDSDK_PYTHON)"
+
   # Each Uvfile line is `<tool> [uv-tool-install-args...]`. The first
   # word is the canonical tool name (matched against `uv tool list` for
   # install/uninstall diff); the rest of the line is passed straight to

@@ -23,6 +23,17 @@ rust = [{ version = "latest", components = "rust-analyzer,rust-src,rustfmt,clipp
 # /usr/local, and no shared Python. Versions track aws/aws-cli git tags.
 aws-cli = "latest"
 cargo-binstall = "latest"  # prebuilt-binary installer; lets the Cargofile worker skip source builds
+# gcloud — Google's official Cloud SDK tarball, via the asdf plugin rather than
+# the registry default (vfox:jdx/vfox-gcloud). Both fetch the same release from
+# the cloud-sdk-release bucket; they differ in what install.sh does on macOS.
+# The vfox plugin hands install.sh any interpreter matching the SDK's pinned
+# Python minor, probing /opt/homebrew/bin/python3.X first, so it builds
+# gcloud's virtenv on a brew `python@` keg (and the installer itself falls back
+# to `brew install python@3.X`). The asdf plugin always passes
+# --install-python=false: no virtenv, no brew, no sudo. gcloud then runs on
+# CLOUDSDK_PYTHON (environment.sh), a uv-managed 3.13 provisioned by
+# system-package-uv.
+"asdf:mise-plugins/mise-gcloud" = "latest"
 # croc — the transfer engine behind `share`. mise (aqua:schollz/croc) rather
 # than Homebrew so every profile including Linux gets the same static binary
 # from one declaration; the upstream release is a single CGO-free executable.
