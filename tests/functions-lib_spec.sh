@@ -1,7 +1,7 @@
 # Tests for functions.d/_lib.sh — the zsh PROMPT-escape palette.
 #
 # _lib.sh defines a Catppuccin palette as zsh PROMPT escapes (`%F{…}` / `%f`),
-# consumed by interactive functions in commands.sh via `print -P` and `die`.
+# consumed by interactive functions in commands.sh via `print -P` and `zfn::die`.
 # These MUST live under the P_* namespace, NOT the C_* names common.zsh uses for
 # its RAW SGR palette: a scope sourcing both would otherwise get one vocabulary
 # under the other's names — `printf '%s' "$C_RED"` emitting a literal `%F{…}`,
@@ -64,14 +64,14 @@ Describe 'functions.d/_lib.sh — prompt-escape palette (P_*)'
     The output should not include '%F{'
   End
 
-  # die is _lib.sh's own: return 1 (never exit) so it is safe inside the
+  # zfn::die is _lib.sh's own: return 1 (never exit) so it is safe inside the
   # interactive cd wrappers in commands.sh — an `exit 1` there would kill the
-  # user's login shell. common.zsh's die (exit 1) must never reach this scope.
-  Describe 'die returns 1 (does not exit the shell)'
+  # user's login shell. common.zsh's zfn::die (exit 1) must never reach this scope.
+  Describe 'zfn::die returns 1 (does not exit the shell)'
     check_die() {
       zsh -f -c '
         source "'"$_lib"'"
-        die "boom" 2>/dev/null
+        zfn::die "boom" 2>/dev/null
         print -r -- "rc=$?; survived"
       '
     }

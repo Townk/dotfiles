@@ -247,16 +247,16 @@ function super-cd {
   local next_dir=""
   if [[ $# -eq 0 ]]; then
     # cd with no parameter should change to $HOME dir
-    \builtin cd ~ || die "${P_RED}Error${P_RES}: Failed to change current directory to '$HOME'" || return
+    \builtin cd ~ || zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$HOME'" || return
   elif [[ "$1" == "-/" ]]; then
     # cd with a '-' parameter plus a '/' at the end skips the "super-cd
     # previous dir" mechanism
-    \builtin cd - || die "${P_RED}Error${P_RES}: Failed to change current directory to the previous one" || return
+    \builtin cd - || zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to the previous one" || return
   elif [[ "$1" == "-" ]]; then
     # cd with a '-' parameter allows the user to select the previous directory
     # among the dirstack plus the zoxide last accessed
     if ! command -v fzf >/dev/null 2>&1; then
-      die "${P_RED}Error${P_RES}: fzf is required for this operation"
+      zfn::die "${P_RED}Error${P_RES}: fzf is required for this operation"
       return 1
     fi
     typeset -a prev_stack
@@ -267,7 +267,7 @@ function super-cd {
     prev_stack=(${(u)prev_stack[@]})
 
     if [[ "${#prev_stack[@]}" -eq 0 ]]; then
-      die "${P_YEL}No previous directories available${P_RES}"
+      zfn::die "${P_YEL}No previous directories available${P_RES}"
       return 1
     elif [[ "${#prev_stack[@]}" -gt 1 ]]; then
       # Inherit FZF_DEFAULT_OPTS (glyph prompt, colours, binds) so this matches
@@ -281,17 +281,17 @@ function super-cd {
       next_dir="${prev_stack[1]}"
     fi
     if [[ -n "$next_dir" ]]; then
-      \builtin cd "$next_dir" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
+      \builtin cd "$next_dir" || zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
     fi
   elif [[ "$1" == ".." ]]; then
     # cd with a '..' parameter allows the user to select anyone of the parent
     # directories to go
     if [[ "$PWD" == "/" ]]; then
-      die "${P_YEL}Already at root directory${P_RES}"
+      zfn::die "${P_YEL}Already at root directory${P_RES}"
       return 0
     fi
     if ! command -v fzf >/dev/null 2>&1; then
-      die "${P_RED}Error${P_RES}: fzf is required for this operation"
+      zfn::die "${P_RED}Error${P_RES}: fzf is required for this operation"
       return 1
     fi
     typeset -a dir_stack
@@ -305,7 +305,7 @@ function super-cd {
     next_dir=$(print -l -- "${dir_stack[@]}" | fzf --preview-window=hidden)
     next_dir="${(MS)next_dir##[[:graph:]]*[[:graph:]]}"
     if [[ -n "$next_dir" ]]; then
-      \builtin cd "$next_dir" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
+      \builtin cd "$next_dir" || zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
     fi
   elif [[ ${#all_dots} -gt 2 ]] && [[ ${#1} -eq ${#all_dots} ]]; then
     # cd with 3 or more consecutive '.' characters as parameter will traverse
@@ -315,19 +315,19 @@ function super-cd {
     for ((i = 2; i < ${#1}; i++)); do
       next_dir="${next_dir}../"
     done
-    \builtin cd "$next_dir" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
+    \builtin cd "$next_dir" || zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
   elif [[ -d "$*" ]]; then
     # when the parameter given to `super-cd` is a known directory, we use the
     # builtin `cd` command to go there
-    \builtin cd "$@" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$*'" || return
+    \builtin cd "$@" || zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$*'" || return
   else
     # when the given parameter was not match by any of the previous criterias,
     # we fallback to use Zoxide to try to change directories
     next_dir="$(\command zoxide query --exclude "$PWD" -- "$@" 2>/dev/null)"
     if [[ -n "$next_dir" ]]; then
-      \builtin cd "$next_dir" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
+      \builtin cd "$next_dir" || zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$next_dir'" || return
     else
-      die "${P_RED}Error${P_RES}: Failed to change current directory to '$*'"
+      zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$*'"
       return 1
     fi
   fi
@@ -336,7 +336,7 @@ compdef _directories super-cd
 
 # Helper function to create a directory and enter on it with one command
 function take() {
-  [[ $# == 1 ]] && mkdir -p -- "$1" && cd -- "$1" || die "${P_RED}Error${P_RES}: Failed to change current directory to '$1'" || return
+  [[ $# == 1 ]] && mkdir -p -- "$1" && cd -- "$1" || zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$1'" || return
 }
 compdef _directories take
 
@@ -385,7 +385,7 @@ function y() {
   rm -f -- "$tmp"
   if [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
     \builtin cd -- "$cwd" ||
-      die "${P_RED}Error${P_RES}: Failed to change current directory to '$cwd'" ||
+      zfn::die "${P_RED}Error${P_RES}: Failed to change current directory to '$cwd'" ||
       return
   fi
 }

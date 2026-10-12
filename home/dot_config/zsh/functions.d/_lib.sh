@@ -3,7 +3,7 @@
 # (guarded + fork-free, a no-op if .zshrc already did) so these resolve even when
 # _lib.sh is pulled in outside an interactive shell.
 #
-# These are zsh PROMPT escapes (`%F{…}` / `%f`), for `print -P` and `die` — NOT
+# These are zsh PROMPT escapes (`%F{…}` / `%f`), for `print -P` and `zfn::die` — NOT
 # the RAW SGR sequences common.zsh publishes. They live under the P_* namespace
 # precisely so the two vocabularies can never collide under one name: a scope
 # that sourced both must still get raw SGR from C_* and prompt tokens from P_*.
@@ -24,7 +24,7 @@ typeset -g P_PUR="%F{$C_HEX_LAVENDER}"
 typeset -g P_BLA="%F{$C_HEX_CRUST}"
 typeset -g P_RES="%f"
 
-function die {
+function zfn::die {
   if [[ $# -ne 0 ]]; then
     print -P -- "$*" >&2
   fi
