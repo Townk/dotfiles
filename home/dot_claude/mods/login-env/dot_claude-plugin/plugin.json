@@ -1,0 +1,1 @@
+{ "name": "login-env", "version": "0.1.0", "description": "Gives Bash and MCP children the PATH and toolchain variables an interactive login shell sets, for sessions the desktop app starts" }

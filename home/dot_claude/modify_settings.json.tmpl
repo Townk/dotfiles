@@ -1,8 +1,10 @@
 #!/bin/sh
 # chezmoi modify_ script — ~/.claude/settings.json.
 # Claude Code rewrites settings.json at runtime (plugin toggles, permissions,
-# model, /theme). We declaratively OWN only `theme`, forcing it to the generated
-# chezmoi-system custom theme; Claude keeps everything else it last wrote.
+# model, /theme). We declaratively OWN `theme`, forcing it to the generated
+# chezmoi-system custom theme, and `env.CLAUDE_CODE_PLUGIN_DIRS`, which loads
+# the login-env mod (~/.claude/mods/login-env, also chezmoi-managed) into
+# sessions the desktop app starts. Claude keeps everything else it last wrote.
 #
 # `theme` must be FORCED (not seed-if-absent): the key already exists on disk as
 # "auto", so a seed would never take effect. To switch themes, edit
@@ -35,7 +37,8 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 cat > "$tmp"
 [ -s "$tmp" ] || printf '{}' > "$tmp"
-merged="$(jq '.theme = "custom:chezmoi-system"' "$tmp")"
+merged="$(jq '.theme = "custom:chezmoi-system"
+  | .env.CLAUDE_CODE_PLUGIN_DIRS = "~/.claude/mods/login-env"' "$tmp")"
 if jq -e --argjson m "$merged" '. == $m' "$tmp" >/dev/null 2>&1; then
   cat "$tmp"
 else
