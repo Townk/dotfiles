@@ -9,6 +9,7 @@ export const MARK = '__LOGIN_ENV_START__'
 export const NAMES = [
   'PATH', 'JAVA_HOME', 'GOROOT', 'CARGO_HOME', 'RUSTUP_HOME', 'RUSTUP_TOOLCHAIN',
   'KOTLIN_HOME', 'LUA_INIT', 'EDITOR', 'MANPAGER', 'HOMEBREW_NO_ENV_HINTS',
+  'CLOUDSDK_PYTHON',
 ] as const
 
 export const parseEnv = (stdout: string): Map<string, string> => {
@@ -39,6 +40,7 @@ export const register: Register = on => {
         case 'EDITOR': return $.env.set('EDITOR', v)
         case 'MANPAGER': return $.env.set('MANPAGER', v)
         case 'HOMEBREW_NO_ENV_HINTS': return $.env.set('HOMEBREW_NO_ENV_HINTS', v)
+        case 'CLOUDSDK_PYTHON': return $.env.set('CLOUDSDK_PYTHON', v)
       }
     }
 
