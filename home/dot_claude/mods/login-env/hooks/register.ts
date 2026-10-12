@@ -12,6 +12,16 @@ export const NAMES = [
   'CLOUDSDK_PYTHON',
 ] as const
 
+// Runs its arguments in a new session with no controlling terminal. An
+// interactive shell on the terminal Claude Code draws on takes its foreground
+// group (Claude Code drops to the background) and leaves its modes changed
+// (Ctrl-C and Backspace stop working). The fork makes the child a non-leader,
+// which setsid needs.
+export const DETACH = [
+  '/usr/bin/perl', '-MPOSIX', '-e',
+  'if (my $p = fork) { waitpid($p, 0); exit($? >> 8) } POSIX::setsid(); exec @ARGV',
+] as const
+
 export const parseEnv = (stdout: string): Map<string, string> => {
   const vars = new Map<string, string>()
   const at = stdout.indexOf(MARK)
@@ -46,7 +56,7 @@ export const register: Register = on => {
 
     const shell = (await $.env.get('SHELL')) ?? '/bin/zsh'
     const { exitCode, stdout, stderr } = await $.process.run(
-      [shell, '-l', '-i', '-c', `printf %s ${MARK}; env -0`],
+      [...DETACH, shell, '-l', '-i', '-c', `printf %s ${MARK}; env -0`],
       { env: { TERM: 'dumb' }, timeoutMs: 20_000 },
     )
     const vars = parseEnv(stdout)

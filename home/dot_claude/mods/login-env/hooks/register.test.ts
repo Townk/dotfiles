@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { MARK } from './register'
+import { DETACH, MARK } from './register'
 
 const ENV = ['PATH=/mise/node/bin:/usr/bin', 'JAVA_HOME=/mise/java', 'SECRET_TOKEN=nope', ''].join('\0')
 
@@ -16,7 +16,9 @@ test('copies the listed variables from the interactive login shell', async ($, o
 
   await $.session.start({ cwd: '/tmp', surface: null, isInteractive: false })
 
-  expect(argv.slice(0, 3)).toEqual(['/bin/zsh', '-l', '-i'])
+  // Detached from the terminal first: an interactive shell on it takes it over.
+  expect(argv.slice(0, DETACH.length)).toEqual([...DETACH])
+  expect(argv.slice(DETACH.length, DETACH.length + 3)).toEqual(['/bin/zsh', '-l', '-i'])
   expect(set).toEqual({ PATH: '/mise/node/bin:/usr/bin', JAVA_HOME: '/mise/java' })
 })
 
