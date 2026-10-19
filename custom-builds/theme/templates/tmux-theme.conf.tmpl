@@ -67,6 +67,10 @@ set -g status-style "bg=#{{ index $p $r.ui.bg }},fg=#{{ index $p $r.ui.fg_dim }}
 # that expanded them during tmux startup.
 setw -g window-status-format "$win_pill"
 setw -g window-status-current-format "$win_pill_current"
+# The pills carry all their own styling. Pin the base style the current pill
+# inherits: tmux 3.8 changed its default to `underscore`, which underlined
+# the active tab.
+setw -g window-status-current-style default
 
 # Command prompt / messages (mirrors the dialog canvas).
 set -g message-style "bg=#{{ index $p $r.ui.dialog_bg }},fg=#{{ index $p $r.ui.fg }}"
