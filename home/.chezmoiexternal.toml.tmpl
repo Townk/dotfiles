@@ -1,0 +1,40 @@
+{{- /*
+  Files pulled from elsewhere rather than kept in this repo.
+
+  svaloverlay — the Svalboard layer overlay that Hammerspoon's `svalboard`
+  module runs (modules/svalboard). Built by the keyboard userspace's CI
+  (Townk/qmk-config, tools/svalwatch) and attached to every firmware release
+  as one archive: svaloverlay and svalwatch (universal, ad-hoc signed) at its
+  root, the overlay page under share/svaloverlay. `latest` follows the newest
+  firmware release, so the overlay's layers always match the firmware's
+  keymap; refreshPeriod makes `chezmoi apply` look for a new one weekly
+  (`chezmoi apply --refresh-externals` for now).
+
+  Every Mac gets it: the overlay stays hidden until a Svalboard is plugged in,
+  so a Mac without one never sees it. Files fetched this way carry no
+  quarantine flag, so Gatekeeper does not ask for a Developer ID.
+*/ -}}
+{{- if eq .chezmoi.os "darwin" }}
+{{-   $overlay := "https://github.com/Townk/qmk-config/releases/latest/download/svaloverlay-macos.tar.gz" }}
+[".local/bin/svaloverlay"]
+    type = "archive-file"
+    url = {{ $overlay | quote }}
+    path = "svaloverlay"
+    executable = true
+    refreshPeriod = "168h"
+
+[".local/bin/svalwatch"]
+    type = "archive-file"
+    url = {{ $overlay | quote }}
+    path = "svalwatch"
+    executable = true
+    refreshPeriod = "168h"
+
+[".local/share/svaloverlay"]
+    type = "archive"
+    url = {{ $overlay | quote }}
+    include = ["share/svaloverlay/**"]
+    stripComponents = 2
+    exact = true
+    refreshPeriod = "168h"
+{{- end }}
