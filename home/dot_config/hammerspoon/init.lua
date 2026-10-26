@@ -18,6 +18,7 @@ local jobsHud = require("jobs")
 local middleClick = require("apps.middle-click-paste")
 local ripper = require("ripper")
 local sd = require("streamdeck")
+local svalboard = require("svalboard")
 local vncCompanion = require("system.vnc-companion")
 local windows = require("windows")
 local windowDrag = require("windows.drag")
@@ -34,6 +35,7 @@ lifecycle.registerCleanup(clipPicker.cleanup)
 lifecycle.registerCleanup(jobsHud.cleanup)
 lifecycle.registerCleanup(middleClick.cleanup)
 lifecycle.registerCleanup(ripper.cleanup)
+lifecycle.registerCleanup(svalboard.cleanup)
 vncCompanion.setup()
 lifecycle.registerCleanup(vncCompanion.cleanup)
 
@@ -50,6 +52,7 @@ clipHistory.setup()
 jobsHud.setup()
 middleClick.setup()
 ripper.start()
+svalboard.setup()
 
 -- Cmd+drag anywhere on a window to move it; plain Cmd+click is preserved
 -- via replay so apps that use it (Ghostty URL opening, etc.) keep working.
@@ -190,6 +193,7 @@ kb.setup({
 						{ key = "d", icon = "󰔎", desc = "Dark/Light mode", action = controls.toggleDarkMode },
 						{ key = "f", icon = "󰪑", desc = "Do not disturb", action = controls.toggleDoNotDisturb },
 						{ key = "j", icon = "󰜎", desc = "Jobs progress HUD", action = jobsHud.toggle },
+						{ key = "k", icon = "󰌌", desc = "Keyboard overlay (off/bg/top)", action = svalboard.cycle, sticky = true },
 					},
 				},
 				{
