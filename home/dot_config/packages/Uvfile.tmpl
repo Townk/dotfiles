@@ -31,7 +31,10 @@ rich-cli --with catppuccin[pygments]
 # ansible-core — drives the fleet repo's playbooks (~/Projects/platforms/fleet).
 # Core (not the `ansible` bundle): ansible-playbook is a core entry point and
 # the fleet playbooks use only ansible.builtin.
-ansible-core
+# Pinned to 3.14: ansible-core 2.21.5 patches dataclasses._is_type, which
+# Python 3.15 removed (AttributeError at import). Drop the pin once a
+# release supports 3.15.
+ansible-core --python 3.14
 
 # No awscli here: PyPI's `awscli` is v1 only (1.x) and we need v2's SSO / IAM
 # Identity Center auth. It's declared in dot_config/mise/config.toml instead —
