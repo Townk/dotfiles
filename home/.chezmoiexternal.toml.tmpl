@@ -5,9 +5,12 @@
   module runs (modules/svalboard). Built by the keyboard userspace's CI
   (Townk/qmk-config, tools/svalwatch) and attached to every firmware release
   as one archive: svaloverlay and svalwatch (universal, ad-hoc signed) at its
-  root, the overlay page under share/svaloverlay. The URL names the newest
-  firmware release's tag, so the overlay's layers always match the firmware's
-  keymap. A versioned URL, not releases/latest/download: chezmoi caches an
+  root, the overlay's default page and its render bundle (render/) under
+  share/svaloverlay (the include below covers both). The page itself follows
+  the keyboard, not the release: the overlay reads the keymap off the board
+  on connect and renders its layers with the bundle, so a flash needs no
+  reinstall. The URL names the newest firmware release's tag, which keeps the
+  bundle in step with the overlay binary. A versioned URL, not releases/latest/download: chezmoi caches an
   external by its URL, so a fixed `latest` URL kept serving the cached
   archive until refreshPeriod ran out, and an apply on a Mac that already
   had it put back the previous release's overlay. Each tag's archive never
