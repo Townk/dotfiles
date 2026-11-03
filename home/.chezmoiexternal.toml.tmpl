@@ -10,13 +10,14 @@
   the keyboard, not the release: the overlay reads the keymap off the board
   on connect and renders its layers with the bundle, so a flash needs no
   reinstall. The URL names the newest firmware release's tag, which keeps the
-  bundle in step with the overlay binary. A versioned URL, not releases/latest/download: chezmoi caches an
-  external by its URL, so a fixed `latest` URL kept serving the cached
-  archive until refreshPeriod ran out, and an apply on a Mac that already
-  had it put back the previous release's overlay. Each tag's archive never
-  changes, so it needs no refreshPeriod; a new release is a new URL and the
-  next `chezmoi apply` fetches it. gitHubLatestRelease is one small API call,
-  cached by chezmoi (github.refreshPeriod).
+  bundle in step with the overlay binary. A versioned URL, not
+  releases/latest/download: chezmoi caches an external by its URL, so a fixed
+  `latest` URL kept serving the cached archive until refreshPeriod ran out,
+  and an apply on a Mac that already had it put back the previous release's
+  overlay. Each tag's archive never changes, so it needs no refreshPeriod; a
+  new release is a new URL and the next `chezmoi apply` fetches it.
+  gitHubLatestRelease is one small API call, cached by chezmoi
+  (github.refreshPeriod).
 
   Every Mac gets it: the overlay stays hidden until a Svalboard is plugged in,
   so a Mac without one never sees it. Files fetched this way carry no
