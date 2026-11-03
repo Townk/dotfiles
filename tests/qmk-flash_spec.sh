@@ -3,7 +3,7 @@
 # updater (sval_update.py through uv) or, as the fallback, with picotool.
 #
 # Nothing here touches a board, and it must stay that way: picotool, diskutil,
-# uv and hs are ALWAYS stubbed, so an example that finds a real bootloader drive
+# uv, gh and hs are ALWAYS stubbed, so an example that finds a real bootloader drive
 # (a half left in BOOTSEL while the suite runs) still cannot write to it, and no
 # example can reach the updater of the board that is plugged into this Mac. The
 # examples that wait for a drive use --timeout 1 to keep that wait to a second.
@@ -30,7 +30,7 @@ Describe 'qmk-flash'
     # list — the same trap the script's own remote listing avoids.
     rm -f -- "$CONFIG" "$CALLS" "$FW"/*.uf2(N) "$FW"/*.svup(N) "$FW"/*.py(N)
     unset FAKE_VERSION_LEFT FAKE_VERSION_RIGHT FAKE_INFO FAKE_INFO_AFTER \
-      FAKE_INFO_RC FAKE_PAIR_RC FAKE_PAIR_SIGNAL
+      FAKE_INFO_RC FAKE_PAIR_RC FAKE_PAIR_SIGNAL FAKE_GH_RC FAKE_GH_NO_SVUP
 
     # notify must not paint on a real screen, and must not dial the clipboard
     # bridge because the suite happens to be running over ssh.
@@ -49,6 +49,28 @@ Describe 'qmk-flash'
     # back to the `hs` on PATH when $HS is not executable, and that must be this
     # stub rather than the real one, which would paint on this screen.
     printf '#!/bin/sh\necho "hs $*" >> "%s"\nexit 0\n' "$CALLS" > "$STUBS/hs"
+
+    # gh stands in for the release download: it logs its arguments and writes
+    # release-named fixtures into the -D directory, as the assets of a real
+    # release are named. FAKE_GH_NO_SVUP leaves the .svup files out, like a
+    # release from before the updater builds; FAKE_GH_RC makes it fail.
+    sed "s|@CALLS@|$CALLS|g" > "$STUBS/gh" <<'GH'
+#!/bin/sh
+echo "gh $*" >> "@CALLS@"
+[ -n "${FAKE_GH_RC:-}" ] && exit "$FAKE_GH_RC"
+while [ $# -gt 0 ]; do
+  [ "$1" = -D ] && dest=$2
+  shift
+done
+for h in left right; do
+  printf '\x55\x46\x32\x0a\x57\x51\x5d\x9e' > "$dest/svalboard-colemak-dh-townk-1.0.35.$h.uf2"
+  head -c 504 /dev/zero >> "$dest/svalboard-colemak-dh-townk-1.0.35.$h.uf2"
+  [ -n "${FAKE_GH_NO_SVUP:-}" ] || : > "$dest/svalboard-colemak-dh-townk-1.0.35.$h.svup"
+done
+: > "$dest/sval_update.py"
+: > "$dest/make_update.py"
+exit 0
+GH
 
     # uv stands in for every updater call, told apart by its arguments: `-c`
     # is svup_version reading a .svup's build version (the left or right file
@@ -100,7 +122,7 @@ esac
 exit 0
 STUB
     chmod +x "$STUBS/ssh" "$STUBS/rsync" "$STUBS/picotool" "$STUBS/diskutil" \
-      "$STUBS/hs" "$STUBS/uv"
+      "$STUBS/hs" "$STUBS/uv" "$STUBS/gh"
   }
   BeforeEach 'setup'
 
@@ -442,6 +464,68 @@ STUB
       The output should include "sval_update.py pair"
       The stderr should include "zzz"
       The stderr should include "abc1234-120000"
+    End
+  End
+
+  Describe 'a GitHub release (--release)'
+    updater_setup() { export HS="$STUBS/hs"; }
+    BeforeEach 'updater_setup'
+
+    It 'downloads the latest release and pairs it'
+      When call calls --release
+      The status should be success
+      # No tag: the download is of whatever the latest release is.
+      The output should include "CALL: gh release download -R Townk/qmk-config -p *.svup -p *.uf2 -p sval_update.py -p make_update.py -D "
+      The output should not include "CALL: gh release download v"
+      The output should match pattern "*sval_update.py pair *svalboard-colemak-dh-townk-1.0.35.left.svup *svalboard-colemak-dh-townk-1.0.35.right.svup --yes*"
+    End
+
+    It 'downloads the tag it is given'
+      When call calls --release v1.0.35
+      The status should be success
+      The output should include "CALL: gh release download v1.0.35 -R Townk/qmk-config"
+      The output should include "sval_update.py pair"
+    End
+
+    It 'takes --release=TAG too'
+      When call calls --release=v1.0.35
+      The status should be success
+      The output should include "CALL: gh release download v1.0.35 -R Townk/qmk-config"
+    End
+
+    It 'is refused together with --host'
+      When call calls --release --host build.example
+      The status should be failure
+      The stderr should include "--release and --host are exclusive"
+      The output should not include "CALL: gh"
+    End
+
+    It 'names the tag when the release has no .svup files'
+      export FAKE_GH_NO_SVUP=1
+      When call calls --release v1.0.30
+      The status should be failure
+      The stderr should include "v1.0.30"
+      The stderr should include "no .svup"
+      The output should not include "sval_update.py pair"
+    End
+
+    It 'reports a failed download'
+      export FAKE_GH_RC=1
+      When call calls --release v9.9.9
+      The status should be failure
+      The output should include "CALL: gh release download v9.9.9"
+      The stderr should include "could not download"
+      The stderr should include "v9.9.9"
+    End
+
+    It 'falls back to the downloaded .uf2 files over BOOTSEL'
+      export FAKE_INFO_RC=1
+      When call calls --release --timeout 1
+      The status should be failure
+      The output should include "using BOOTSEL"
+      The output should include "left: svalboard-colemak-dh-townk-1.0.35.left.uf2"
+      The output should include "right: svalboard-colemak-dh-townk-1.0.35.right.uf2"
+      The stderr should include "no bootloader drive appeared"
     End
   End
 End

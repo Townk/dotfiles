@@ -55,8 +55,13 @@
 # in how the files are obtained: locally they are globbed and used in place,
 # with no ssh hop and no copy.
 #
+# A MAC WITH NO BUILD OF ITS OWN takes its firmware from a GitHub release
+# instead (`--release [TAG]`): the release carries the same .svup, .uf2 and
+# updater files the build produces, so once downloaded into a scratch directory
+# the rest of the run treats that directory as the local firmware dir.
+#
 # Usage: qmk-flash [left|right|both] [--bootsel] [--host HOST] [--dir DIR]
-#                  [--timeout SECS]
+#                  [--release [TAG]] [--timeout SECS]
 emulate -L zsh
 set -uo pipefail
 zmodload zsh/datetime
@@ -77,7 +82,7 @@ CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/qmk-flash/config.toml"
 usage() {
   cat <<EOF
 Usage: qmk-flash [left|right|both] [--bootsel] [--host HOST] [--dir DIR]
-                 [--timeout SECS]
+                 [--release [TAG]] [--timeout SECS]
 
 Resolve the newest matching firmware and install it on the keyboard.
 
@@ -99,6 +104,9 @@ to flash a single half — which must end up on the same build as the other.
                    reads it straight off this machine with no ssh hop
   --dir DIR        firmware directory, absolute or relative to HOME on whichever
                    machine --host names
+  --release [TAG]  take the firmware from a GitHub release of Townk/qmk-config
+                   (the latest, or TAG such as v1.0.35) instead of a build;
+                   needs gh, and excludes --host
   --timeout SECS   how long to wait for a bootloader drive, or for the board to
                    answer again after an update
   -h, --help       show this help
@@ -118,6 +126,8 @@ Current effective defaults: host=${host} dir=${firmware_dir} timeout=${timeout}
 
 Examples:
   qmk-flash
+  qmk-flash --release
+  qmk-flash --release v1.0.35
   qmk-flash --bootsel both
   qmk-flash --bootsel right --timeout 300
 EOF
@@ -166,6 +176,8 @@ SSH=(ssh -o LogLevel=ERROR)
 # inline snippet in svup_version says so explicitly.
 UVPY=(uv run --no-project --quiet --with hidapi python -I)
 
+RELEASE_REPO=Townk/qmk-config
+
 is_local() { [[ "$host" == localhost ]] }
 
 # uf2_drive — the mount point of an attached UF2 bootloader drive, if any.
@@ -207,13 +219,14 @@ firmware_path() {
 # recognised: FW_GLOB for the local directory, FW_REGEX (an ERE) for the remote
 # listing. The .svup pattern also takes `.<half>.`, the spelling of the release
 # assets (svalboard-…-v1.0.35.left.svup), next to the local build's
-# `_<half>_`; the .uf2 one is unchanged.
+# `_<half>_`; the .uf2 one takes both spellings too, so a downloaded release
+# can feed the BOOTSEL fallback.
 fw_pattern() {
   local half=$1
   case $2 in
     uf2)
-      FW_GLOB="*_${half}_*.uf2"
-      FW_REGEX="_${half}_.*[.]uf2"
+      FW_GLOB="*[_.]${half}(_*|).uf2"
+      FW_REGEX="[_.]${half}(_.*)?[.]uf2"
       ;;
     svup)
       FW_GLOB="*[_.]${half}(_*|).svup"
@@ -390,6 +403,25 @@ overlay_resume() {
   ((OVERLAY_PAUSED)) || return 0
   OVERLAY_PAUSED=0
   overlay 'resume()' resume
+}
+
+# fetch_release [TAG] — download a release's update files, firmware and updater
+# scripts into a scratch directory (the exit sweep takes it along, as with
+# pull_updates), then point the run at it as if it were a local firmware dir:
+# every resolver below then globs it with no further special case. Without a
+# tag, gh takes the latest release.
+fetch_release() {
+  local tag=$1 label=${1:-the latest release}
+  local -a tagarg=()
+  [[ -n $tag ]] && tagarg=("$tag")
+  UP_DIR=$(common::tmpfile) && rm -f -- "$UP_DIR" && mkdir -- "$UP_DIR" ||
+    die "cannot create a scratch directory"
+  log_info "downloading ${label} of ${RELEASE_REPO}…"
+  gh release download "${tagarg[@]}" -R "$RELEASE_REPO" \
+    -p '*.svup' -p '*.uf2' -p 'sval_update.py' -p 'make_update.py' -D "$UP_DIR" ||
+    die "could not download ${label} of ${RELEASE_REPO} — is the tag right, and is gh logged in?"
+  host=localhost
+  firmware_dir=$UP_DIR
 }
 
 # pull_updates <left.svup> <right.svup> — copy both update files and both
@@ -643,6 +675,9 @@ config_load
 
 halves=()
 bootsel=0
+release=0
+release_tag=
+host_given=0
 while (($#)); do
   case "$1" in
     left | l)
@@ -664,10 +699,26 @@ while (($#)); do
     --host)
       [[ -n ${2:-} ]] || die "--host needs a value"
       host=$2
+      host_given=1
       shift 2
       ;;
     --host=*)
       host=${1#--host=}
+      host_given=1
+      shift
+      ;;
+    --release)
+      release=1
+      # A value that is not a flag is the tag; a bare --release is "latest".
+      if [[ -n ${2:-} && $2 != -* ]]; then
+        release_tag=$2
+        shift
+      fi
+      shift
+      ;;
+    --release=*)
+      release=1
+      release_tag=${1#--release=}
       shift
       ;;
     --dir)
@@ -708,9 +759,13 @@ done
 ((bootsel)) || both_named ||
   die "the updater always installs both halves (both must run the same build); use BOOTSEL for one half: --bootsel ${halves[1]}"
 
-is_local || require_cmd ssh rsync
+((release && host_given)) && die "--release and --host are exclusive"
+((release)) && require_cmd gh
+((release)) || is_local || require_cmd ssh rsync
 
 # --- run --------------------------------------------------------------------
+
+((release)) && fetch_release "$release_tag"
 
 if ((bootsel)); then
   run_bootsel
@@ -720,6 +775,13 @@ fi
 # uv runs the updater scripts; jq reads their JSON. picotool and friends are
 # required only once the run actually falls back to BOOTSEL.
 require_cmd uv jq
+# A release from before the updater builds has no .svup files; say so by tag
+# rather than letting the glob in resolve_local report a bare missing file.
+if ((release)); then
+  local_svups=("$UP_DIR"/*.svup(N))
+  (($#local_svups)) ||
+    die "${release_tag:-the latest release} of ${RELEASE_REPO} has no .svup files (it predates the in-firmware updater) — pick a newer release, or flash over BOOTSEL: qmk-flash --release ${release_tag} --bootsel"
+fi
 resolve_updates
 
 # The overlay is paused BEFORE the probe, not just for the install: svalwatch
