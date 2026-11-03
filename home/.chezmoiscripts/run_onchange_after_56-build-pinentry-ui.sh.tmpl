@@ -62,6 +62,24 @@ fi
 echo "[pinentry-ui] building → ~/.local/libexec/pinentry-ui"
 # Soft: a compile error must not fail the whole apply, for the same reason the
 # missing toolchain does not. The previous binary, if any, stays in place.
-make -C "$SRC" install || echo "[pinentry-ui] build failed; leaving the installed binary alone" >&2
+if ! make -C "$SRC" install; then
+  echo "[pinentry-ui] build failed; leaving the installed binary alone" >&2
+  exit 0
+fi
+{{- if eq .chezmoi.os "darwin" }}
+
+# A fresh binary has lost every keychain consent: macOS keys the grant to the
+# binary's content hash, not its signing identity. Re-converge right here —
+# re-sign, then raise one "Always Allow" dialog per signing grip — instead of
+# waiting for the next system-update, so a plain `chezmoi apply` that rebuilds
+# does not leave keychain serving (silent VNC/remote signing) dormant. The
+# setup gates itself on presence (no dialog for an SSH/headless apply) and
+# bounds each dialog with a timeout; under system-update its own later call
+# is then a no-op. Soft, like the build.
+setup="$HOME/.local/bin/system-pinentry-setup"
+if [ -x "$setup" ]; then
+  "$setup" || echo "[pinentry-ui] keychain re-approval incomplete — run system-pinentry-setup at the console" >&2
+fi
+{{- end }}
 
 # vim:ft=sh

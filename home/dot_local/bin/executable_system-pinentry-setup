@@ -33,8 +33,11 @@
 #
 # What this deliberately does NOT do: create the GnuPG keychain item. The
 # passphrase has no source in this repo; the item is born from one console
-# signature through pinentry-mac ("Save in Keychain"), and the grip that
-# lacks one is named in the log so that is a 30-second errand, not a hunt.
+# signature through pinentry-touchid (which stores it after the pinentry-mac
+# fallback asks — pinentry-mac's own "Save in Keychain" is disabled by
+# run_after_26 because its item collides with pinentry-touchid's), and the
+# grip that lacks one is named in the log so that is a 30-second errand, not
+# a hunt.
 #
 # Gated on presence (touchid/gui/vnc): the consent and codesign dialogs need
 # a human looking at the console, and a headless or SSH run must never hang
@@ -177,7 +180,7 @@ for grip in ${(f)"$(gpg --list-secret-keys --with-colons --with-keygrip 2>/dev/n
   # nothing is an unset parameter reference, which would abort the script.
   [[ -n "${unprotected[(r)$grip]:-}" ]] && continue
   if ! security find-generic-password -s GnuPG -a "$grip" >/dev/null 2>&1; then
-    log_info "pinentry: no stored passphrase for grip ${grip:0:8}… — sign once at the console (pinentry-mac, Save in Keychain), then re-run"
+    log_info "pinentry: no stored passphrase for grip ${grip:0:8}… — sign once at the console with Touch ID (pinentry-touchid stores it), then re-run"
     continue
   fi
   "$UI" --keychain-check "$grip" >/dev/null 2>&1 && continue
