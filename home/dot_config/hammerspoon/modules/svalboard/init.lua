@@ -21,6 +21,11 @@
 -- hs.task keeps stdin open only for tasks with a streaming callback, which
 -- is why the task below has one even though the overlay prints nothing on
 -- stdout.
+--
+-- pause(secs)/resume() exist for qmk-flash: flashing over the in-firmware
+-- updater needs the keyboard's raw-HID interface, which the overlay holds
+-- open, so qmk-flash pauses the overlay first and resumes it afterwards. The
+-- pause lifts itself after `secs` in case qmk-flash dies before resuming.
 
 local M = {}
 
@@ -39,6 +44,8 @@ local task = nil ---@type hs.task|nil
 local restartTimer = nil ---@type hs.timer|nil
 local startedAt = 0
 local quickExits = 0
+local paused = false
+local pauseTimer = nil ---@type hs.timer|nil
 
 local start
 
@@ -75,7 +82,7 @@ local function scheduleRestart()
 end
 
 start = function()
-	if task or mode == "off" then return end
+	if task or paused or mode == "off" then return end
 	if not hs.fs.attributes(BIN) then
 		log.w("not installed: " .. BIN .. " (run `make install` in qmk-config/tools/svalwatch)")
 		return
@@ -97,9 +104,39 @@ start = function()
 	task:start()
 end
 
+local function clearPause()
+	paused = false
+	if pauseTimer then
+		pauseTimer:stop()
+		pauseTimer = nil
+	end
+end
+
+--- Stop the overlay (the saved mode is untouched) and bring it back by itself
+--- after `maxSecs`. Pausing again while paused only resets the timer.
+---@param maxSecs number
+function M.pause(maxSecs)
+	if pauseTimer then pauseTimer:stop() end
+	paused = true
+	stop()
+	pauseTimer = hs.timer.doAfter(maxSecs, function()
+		pauseTimer = nil
+		M.resume()
+	end)
+end
+
+--- End a pause and start the overlay again (if the mode wants it on).
+function M.resume()
+	if not paused then return end
+	clearPause()
+	quickExits = 0
+	start()
+end
+
 --- Switch the overlay to `newMode` and remember it across reloads.
 ---@param newMode SvalboardOverlayMode
 function M.setMode(newMode)
+	clearPause()
 	mode = newMode
 	hs.settings.set(SETTINGS_KEY, mode)
 	if mode == "off" then
