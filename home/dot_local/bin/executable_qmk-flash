@@ -105,7 +105,7 @@ to flash a single half — which must end up on the same build as the other.
   --dir DIR        firmware directory, absolute or relative to HOME on whichever
                    machine --host names
   --release [TAG]  take the firmware from a GitHub release of Townk/qmk-config
-                   (the latest, or TAG such as v1.0.35) instead of a build;
+                   (the latest, or TAG written as v1.0.35) instead of a build;
                    needs gh, and excludes --host
   --timeout SECS   how long to wait for a bootloader drive, or for the board to
                    answer again after an update
@@ -709,8 +709,10 @@ while (($#)); do
       ;;
     --release)
       release=1
-      # A value that is not a flag is the tag; a bare --release is "latest".
-      if [[ -n ${2:-} && $2 != -* ]]; then
+      # Only something that looks like a tag (v1.0.35) is taken as one, so
+      # `--release both` is the latest release with both halves; a bare
+      # --release is "latest". --release=TAG takes any tag.
+      if [[ ${2:-} == v<->* ]]; then
         release_tag=$2
         shift
       fi
@@ -780,7 +782,7 @@ require_cmd uv jq
 if ((release)); then
   local_svups=("$UP_DIR"/*.svup(N))
   (($#local_svups)) ||
-    die "${release_tag:-the latest release} of ${RELEASE_REPO} has no .svup files (it predates the in-firmware updater) — pick a newer release, or flash over BOOTSEL: qmk-flash --release ${release_tag} --bootsel"
+    die "${release_tag:-the latest release} of ${RELEASE_REPO} has no .svup files (it predates the in-firmware updater) — pick a newer release, or flash over BOOTSEL: qmk-flash --release${release_tag:+ $release_tag} --bootsel"
 fi
 resolve_updates
 

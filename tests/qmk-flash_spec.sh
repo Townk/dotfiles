@@ -487,6 +487,20 @@ STUB
       The output should include "sval_update.py pair"
     End
 
+    It 'does not mistake a half name for a tag'
+      When call calls --release both
+      The status should be success
+      The output should include "CALL: gh release download -R Townk/qmk-config"
+      The output should include "sval_update.py pair"
+    End
+
+    It 'leaves a single half after --release to the usual refusal'
+      When call calls --release left
+      The status should be failure
+      The stderr should include "--bootsel"
+      The output should not include "CALL: gh release download left"
+    End
+
     It 'takes --release=TAG too'
       When call calls --release=v1.0.35
       The status should be success
