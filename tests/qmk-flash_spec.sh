@@ -78,6 +78,15 @@ case " $* " in
     exit "${FAKE_INFO_RC:-0}"
     ;;
   *" pair "*)
+    # Record whether pair was started with SIGINT ignored, which is what a
+    # background job of a non-interactive shell gets (and a Ctrl-C would then
+    # orphan it). A signal ignored on entry cannot be trapped in sh, so the
+    # trap below fires only for a foreground pair.
+    got=ignored
+    trap 'got=caught' INT
+    kill -INT $$
+    trap - INT
+    echo "pair SIGINT $got" >> "@CALLS@"
     # FAKE_PAIR_SIGNAL stands in for a Ctrl-C mid-update: interrupt the
     # script (this stub's parent, the backgrounded job having exec'd it), then
     # linger so the signal lands while the script still waits on us.
@@ -407,7 +416,11 @@ STUB
       The status should eq 130
       The output should include "sval_update.py pair"
       The output should include "resume()"
+      # pair ran in the foreground, where the Ctrl-C reaches it too.
+      The output should include "CALL: pair SIGINT caught"
       The stderr should include "may now run different builds"
+      The stderr should include "rerun"
+      The stderr should include "--bootsel"
     End
 
     It 'flashes when hs is unavailable'

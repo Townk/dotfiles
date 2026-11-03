@@ -523,20 +523,31 @@ updater_failed() {
 # 300s cap AND drop the one message that matters: once pair has started, the
 # halves may be on different builds. Exits 130/143, the shell's own codes.
 #
+# PAIR_STATE says which message is true: 1 while pair runs, 2 once it has
+# returned (the read-back). An interrupted pair does not ABORT its session
+# (sval_update.py only does that for its own errors, not a KeyboardInterrupt),
+# and the board refuses a new one as BUSY until the stalled session times out,
+# which it does after 30 s with no op (docs/updater.md) — hence the wait
+# before the rerun.
+#
 # Everything it says goes to SIGNAL_STDERR, a copy of the real stderr taken
-# when the traps are armed: the signal is usually taken while a builtin with
-# its own `2>/dev/null` is running (spin::stream's `kill -0` probe), and a
-# trap inherits that redirection, so a plain log_error would vanish.
-PAIR_STARTED=0
+# when the traps are armed: the signal can be taken while a builtin with its
+# own `2>/dev/null` is running (the spinners' `kill -0` probe, during the
+# probe and the read-back), and a trap inherits that redirection, so a plain
+# log_error would vanish.
+PAIR_STATE=0
 on_signal() {
   {
     print
     overlay_resume
-    if ((PAIR_STARTED)); then
+    if ((PAIR_STATE)); then
       notify --icon glyph:nf-md-alert --sound Basso "Svalboard update interrupted" \
         >/dev/null 2>&1 || true
-      log_error "interrupted during the update — ${UPDATER_SPLIT}"
     fi
+    case $PAIR_STATE in
+      1) log_error "the update was interrupted mid-install — the halves may now run different builds and cannot talk to each other; wait 30s for the board to drop the interrupted session, then rerun qmk-flash to finish, and a half that shows up as RPI-RP2 goes through BOOTSEL: qmk-flash --bootsel <half>" ;;
+      2) log_error "interrupted before the build could be read back — ${UPDATER_SPLIT}" ;;
+    esac
   } 2>&$SIGNAL_STDERR
   exit "$1"
 }
@@ -550,21 +561,30 @@ flash_updater() {
   # pair updates the other half first (relayed over the split link), then the
   # USB half, then waits for both to report the same release; --yes because
   # the only question it asks is about images built for another pointing
-  # device, and these were built for this board. Streamed, so its progress
-  # shows live once it starts talking.
+  # device, and these were built for this board.
+  #
+  # Run in the FOREGROUND, not behind spin::streamed: a spinner's command is a
+  # background job, and a non-interactive shell starts background jobs with
+  # SIGINT ignored, so a Ctrl-C would end qmk-flash while pair carried on
+  # flashing, orphaned, against an overlay that was already resumed. In the
+  # foreground it gets the Ctrl-C itself and stops (KeyboardInterrupt); the
+  # shell holds its own INT trap until pair has exited, and on_signal then
+  # says what was left behind. No spinner is lost that matters: pair prints
+  # its own progress from the first chunk.
   #
   # The resume sits in an `always` block so a failed pair still gives the
   # overlay back. Nothing in the try block may exit (zsh skips `always` on
   # exit), hence the status is carried out in rc and acted on after. Signals
   # skip `always` too; on_signal covers those, and a SIGKILL, which nothing
   # can catch, is covered by the pause itself lifting on its own after 300s.
-  PAIR_STARTED=1
+  log_info "updating both halves over the updater (left ${UP_LEFT:t}, right ${UP_RIGHT:t})…"
+  PAIR_STATE=1
   {
-    spin::streamed "updating both halves…" \
-      "${UVPY[@]}" "$UP_DIR/sval_update.py" pair "$UP_LEFT" "$UP_RIGHT" --yes || rc=$?
+    "${UVPY[@]}" "$UP_DIR/sval_update.py" pair "$UP_LEFT" "$UP_RIGHT" --yes || rc=$?
   } always {
     overlay_resume
   }
+  PAIR_STATE=2
   ((rc == 0)) || updater_failed "sval_update.py pair failed (exit ${rc})"
 
   readback || updater_failed "the board did not answer within ${timeout}s after the update"
