@@ -24,6 +24,17 @@
   script via `chezmoi apply`, right after the source sync. Inspect the managed
   symlink directly instead, and only shell out to `-fix` (bounded by a timeout,
   stdin closed) when it actually points at the wrong backend.
+
+  Second repair: pinentry-mac must never write to the keychain itself.
+  pinentry-touchid owns the item (service `GnuPG`, account = keygrip). When that
+  item is missing it falls back to pinentry-mac, and if pinentry-mac's "Save in
+  Keychain" checkbox is ticked (it remembers the last state) pinentry-mac writes
+  an item under the SAME service/account, readable only by pinentry-mac.app.
+  pinentry-touchid's own store then fails with -25299 "already exists" and gpg
+  reports "signing failed: Operation cancelled" — on every retry, because each
+  retry recreates the item. `DisableKeychain` in org.gpgtools.common hides the
+  checkbox and stops pinentry-mac from saving, so only pinentry-touchid ever
+  writes the item. Hit for real on 2026-11-02 after deleting a stale item.
 */ -}}
 #!/bin/sh
 set -eu
@@ -33,6 +44,13 @@ command -v pinentry-touchid >/dev/null 2>&1 || exit 0
 
 mac="$(command -v pinentry-mac 2>/dev/null || true)"
 [ -n "$mac" ] || exit 0
+
+# Keep pinentry-mac out of the keychain (see header). Idempotent: write only
+# when the preference is not already on.
+if [ "$(defaults read org.gpgtools.common DisableKeychain 2>/dev/null || true)" != 1 ]; then
+  defaults write org.gpgtools.common DisableKeychain -bool yes
+  echo "pinentry-touchid: disabled pinentry-mac's own keychain saving" >&2
+fi
 
 # The backend symlink pinentry-touchid resolves via gpgconf; fall back to the
 # well-known Homebrew keg path if gpgconf can't report it.
