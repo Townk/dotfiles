@@ -207,6 +207,18 @@ human_age() {
   print -r -- "$(((secs + 43200) / 86400))d ago"
 }
 
+# provenance — what the "<half>: <file>" line says about where the file came
+# from: its age for a build (the forgotten rebuild is the failure that age
+# catches), but the release tag for a download, whose mtime is only the moment
+# gh fetched it and would read as "built just now" for any release at all.
+provenance() {
+  if ((release)); then
+    print -r -- "release ${release_tag}"
+  else
+    print -r -- "built $(human_age "$FW_EPOCH")"
+  fi
+}
+
 # firmware_path — $firmware_dir as an absolute path.
 firmware_path() {
   case "$firmware_dir" in
@@ -301,7 +313,7 @@ fetch() {
   else
     resolve_remote "$half"
   fi
-  log_info "${half}: ${C_BWH}${FW_NAME}${C_RES} ${C_DIM}(built $(human_age "$FW_EPOCH"))${C_RES}"
+  log_info "${half}: ${C_BWH}${FW_NAME}${C_RES} ${C_DIM}($(provenance))${C_RES}"
   is_local || pull_remote
   check_uf2
 }
@@ -384,9 +396,12 @@ flash() {
 # from undoing the kill, or counting it as a crash. Best effort on purpose: an
 # overlay that could not be paused is a risk to the flash, not a reason to
 # refuse it, and an `hs` that is missing (or a Hammerspoon that is not running)
-# must not stand between the owner and a flash. -t 3 bounds the IPC round trip.
+# must not stand between the owner and a flash. -t 3 bounds the IPC round trip,
+# and stdin comes from /dev/null because `hs` treats a piped stdin as more
+# commands to execute after -c (hs -h), so a qmk-flash fed through a pipe would
+# have its input eaten, or run, by Hammerspoon.
 overlay() {
-  "${HS:-hs}" -t 3 -c "require(\"svalboard\").$1" >/dev/null 2>&1 ||
+  "${HS:-hs}" -t 3 -c "require(\"svalboard\").$1" </dev/null >/dev/null 2>&1 ||
     log_warn "could not ${2} the overlay (svalwatch) through Hammerspoon"
 }
 
@@ -409,17 +424,24 @@ overlay_resume() {
 # scripts into a scratch directory (the exit sweep takes it along, as with
 # pull_updates), then point the run at it as if it were a local firmware dir:
 # every resolver below then globs it with no further special case. Without a
-# tag, gh takes the latest release.
+# tag, the latest release's tag is looked up first and then downloaded BY that
+# tag: the run can then name what it flashes (a download's mtime says nothing
+# about how old a release is), and a release published between the lookup and
+# the download cannot slip in under the name of another. Sets release_tag.
 fetch_release() {
-  local tag=$1 label=${1:-the latest release}
-  local -a tagarg=()
-  [[ -n $tag ]] && tagarg=("$tag")
+  local tag=$1
+  if [[ -z $tag ]]; then
+    tag=$(gh release view -R "$RELEASE_REPO" --json tagName --jq .tagName) &&
+      [[ -n $tag ]] ||
+      die "could not find the latest release of ${RELEASE_REPO} — is gh logged in?"
+  fi
+  release_tag=$tag
   UP_DIR=$(common::tmpfile) && rm -f -- "$UP_DIR" && mkdir -- "$UP_DIR" ||
     die "cannot create a scratch directory"
-  log_info "downloading ${label} of ${RELEASE_REPO}…"
-  gh release download "${tagarg[@]}" -R "$RELEASE_REPO" \
+  log_info "downloading ${tag} of ${RELEASE_REPO}…"
+  gh release download "$tag" -R "$RELEASE_REPO" \
     -p '*.svup' -p '*.uf2' -p 'sval_update.py' -p 'make_update.py' -D "$UP_DIR" ||
-    die "could not download ${label} of ${RELEASE_REPO} — is the tag right, and is gh logged in?"
+    die "could not download ${tag} of ${RELEASE_REPO} — is the tag right, and is gh logged in?"
   host=localhost
   firmware_dir=$UP_DIR
 }
@@ -471,7 +493,7 @@ resolve_updates() {
     else
       resolve_remote "$half" svup
     fi
-    log_info "${half}: ${C_BWH}${FW_NAME}${C_RES} ${C_DIM}(built $(human_age "$FW_EPOCH"))${C_RES}"
+    log_info "${half}: ${C_BWH}${FW_NAME}${C_RES} ${C_DIM}($(provenance))${C_RES}"
     name[$half]=$FW_NAME
   done
   if is_local; then
@@ -484,6 +506,18 @@ resolve_updates() {
   for f in sval_update.py make_update.py; do
     [[ -r "$UP_DIR/$f" ]] ||
       die "no ${f} beside the update files in ${UP_DIR} — the build puts it there, so rebuild"
+  done
+
+  # Each file checked offline the way the firmware checks it before it erases
+  # anything, by the make_update.py beside it. --build plain because these are
+  # SVAL_UPDATER builds with diagnostic images, not SVAL_UPDATE_RELEASE ones.
+  # Its own output is shown only when it refuses, since that is the reason.
+  local out
+  for f in "$UP_LEFT" "$UP_RIGHT"; do
+    out=$("${UVPY[@]}" "$UP_DIR/make_update.py" verify "$f" --build plain 2>&1) || {
+      [[ -n $out ]] && print -ru2 -- "$out"
+      die "${f:t} fails make_update.py verify — refusing to send it to the board"
+    }
   done
 
   left=$(svup_version "$UP_LEFT") && [[ -n $left ]] ||
@@ -541,7 +575,10 @@ readback() {
 # updater_failed <what> — the loud failure for anything that went wrong once
 # the install had started: by then either half may have taken the new build,
 # so what it says is what the keyboard may be left as and how to finish.
-UPDATER_SPLIT="the halves may now run different builds and cannot talk to each other; rerun qmk-flash to finish, or flash over BOOTSEL: qmk-flash --bootsel both"
+# A rerun is the first thing to try, but not the only one: pair can also fail
+# before sending a byte (the other half still on pre-updater firmware after an
+# interrupted migration, say), and then a rerun fails the same way every time.
+UPDATER_SPLIT="the halves may now run different builds and cannot talk to each other; rerun qmk-flash to finish, and if it fails the same way, flash both halves over BOOTSEL: qmk-flash --bootsel both"
 updater_failed() {
   notify --icon glyph:nf-md-alert --sound Basso "Svalboard update NOT finished" \
     >/dev/null 2>&1 || true
@@ -587,7 +624,7 @@ on_signal() {
 # flash_updater — install both halves over the updater, then confirm the build
 # the board reports is the one that was sent.
 flash_updater() {
-  local rc=0 got
+  local rc=0 rb=0 got
   # The overlay is already paused: the run paused it before the probe.
   #
   # pair updates the other half first (relayed over the split link), then the
@@ -604,22 +641,27 @@ flash_updater() {
   # says what was left behind. No spinner is lost that matters: pair prints
   # its own progress from the first chunk.
   #
-  # The resume sits in an `always` block so a failed pair still gives the
-  # overlay back. Nothing in the try block may exit (zsh skips `always` on
-  # exit), hence the status is carried out in rc and acted on after. Signals
-  # skip `always` too; on_signal covers those, and a SIGKILL, which nothing
-  # can catch, is covered by the pause itself lifting on its own after 300s.
+  # The read-back runs inside the paused window too, for the reason the pause
+  # comes before the probe: it opens the same raw-HID interface, and a
+  # svalwatch restarting at that moment would be competing for it.
+  #
+  # The resume sits in an `always` block so a failed pair or read-back still
+  # gives the overlay back. Nothing in the try block may exit (zsh skips
+  # `always` on exit), hence the statuses are carried out in rc/rb and acted
+  # on after. Signals skip `always` too; on_signal covers those (PAIR_STATE 2
+  # is the read-back), and a SIGKILL, which nothing can catch, is covered by
+  # the pause itself lifting on its own after 300s.
   log_info "updating both halves over the updater (left ${UP_LEFT:t}, right ${UP_RIGHT:t})…"
   PAIR_STATE=1
   {
     "${UVPY[@]}" "$UP_DIR/sval_update.py" pair "$UP_LEFT" "$UP_RIGHT" --yes || rc=$?
+    PAIR_STATE=2
+    ((rc == 0)) && { readback || rb=$?; }
   } always {
     overlay_resume
   }
-  PAIR_STATE=2
   ((rc == 0)) || updater_failed "sval_update.py pair failed (exit ${rc})"
-
-  readback || updater_failed "the board did not answer within ${timeout}s after the update"
+  ((rb == 0)) || updater_failed "the board did not answer within ${timeout}s after the update"
   got=$(jq -r '.version // empty' <<<"$INFO_JSON")
   [[ $got == "$UP_VERSION" ]] ||
     updater_failed "the board reports build ${got:-(none)} after the update, not ${UP_VERSION}"
@@ -782,7 +824,7 @@ require_cmd uv jq
 if ((release)); then
   local_svups=("$UP_DIR"/*.svup(N))
   (($#local_svups)) ||
-    die "${release_tag:-the latest release} of ${RELEASE_REPO} has no .svup files (it predates the in-firmware updater) — pick a newer release, or flash over BOOTSEL: qmk-flash --release${release_tag:+ $release_tag} --bootsel"
+    die "${release_tag} of ${RELEASE_REPO} has no .svup files (it predates the in-firmware updater) — pick a newer release, or flash over BOOTSEL: qmk-flash --release ${release_tag} --bootsel"
 fi
 resolve_updates
 

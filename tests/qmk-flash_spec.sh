@@ -30,7 +30,8 @@ Describe 'qmk-flash'
     # list — the same trap the script's own remote listing avoids.
     rm -f -- "$CONFIG" "$CALLS" "$FW"/*.uf2(N) "$FW"/*.svup(N) "$FW"/*.py(N)
     unset FAKE_VERSION_LEFT FAKE_VERSION_RIGHT FAKE_INFO FAKE_INFO_AFTER \
-      FAKE_INFO_RC FAKE_PAIR_RC FAKE_PAIR_SIGNAL FAKE_GH_RC FAKE_GH_NO_SVUP
+      FAKE_INFO_RC FAKE_PAIR_RC FAKE_PAIR_SIGNAL FAKE_GH_RC FAKE_GH_NO_SVUP \
+      FAKE_VERIFY_FAIL
 
     # notify must not paint on a real screen, and must not dial the clipboard
     # bridge because the suite happens to be running over ssh.
@@ -54,10 +55,15 @@ Describe 'qmk-flash'
     # release-named fixtures into the -D directory, as the assets of a real
     # release are named. FAKE_GH_NO_SVUP leaves the .svup files out, like a
     # release from before the updater builds; FAKE_GH_RC makes it fail.
+    # `release view` answers the latest release's tag, v1.0.35.
     sed "s|@CALLS@|$CALLS|g" > "$STUBS/gh" <<'GH'
 #!/bin/sh
 echo "gh $*" >> "@CALLS@"
 [ -n "${FAKE_GH_RC:-}" ] && exit "$FAKE_GH_RC"
+if [ "$1 $2" = "release view" ]; then
+  echo v1.0.35
+  exit 0
+fi
 while [ $# -gt 0 ]; do
   [ "$1" = -D ] && dest=$2
   shift
@@ -74,7 +80,9 @@ GH
 
     # uv stands in for every updater call, told apart by its arguments: `-c`
     # is svup_version reading a .svup's build version (the left or right file
-    # is the last argument), `info` is the probe, `pair` is the install. The
+    # is the last argument), `verify` is make_update.py's offline check (it
+    # passes unless FAKE_VERIFY_FAIL names the half whose file it refuses),
+    # `info` is the probe, `pair` is the install. The
     # `info` after a `pair` is the read-back, which FAKE_INFO_AFTER can answer
     # differently from the probe; "after a pair" is read off the call log
     # itself, so the stub needs no state of its own.
@@ -87,6 +95,15 @@ case " $* " in
     case "$last" in
       *left*) echo "${FAKE_VERSION_LEFT:-abc1234-120000}" ;;
       *right*) echo "${FAKE_VERSION_RIGHT:-abc1234-120000}" ;;
+    esac
+    exit 0
+    ;;
+  *" verify "*)
+    case " $* " in
+      *"_${FAKE_VERIFY_FAIL:-no-such-half}_"*)
+        echo "INVALID: image hash mismatch" >&2
+        exit 1
+        ;;
     esac
     exit 0
     ;;
@@ -351,6 +368,44 @@ STUB
       The output should not include "sval_update.py pair"
     End
 
+    It 'verifies both update files offline before touching the board'
+      svup left
+      svup right
+      When call calls --host localhost --dir "$FW"
+      The status should be success
+      The output should include "make_update.py verify $FW/svalboard_trackball_pmw3389_left_townk.svup --build plain"
+      The output should include "make_update.py verify $FW/svalboard_trackball_pmw3389_right_townk.svup --build plain"
+    End
+
+    It 'refuses a .svup that fails verify'
+      svup left
+      svup right
+      export FAKE_VERIFY_FAIL=right
+      When call calls --host localhost --dir "$FW"
+      The status should be failure
+      The stderr should include "svalboard_trackball_pmw3389_right_townk.svup fails make_update.py verify"
+      The stderr should include "image hash mismatch"
+      # Refused before the board is asked anything: no overlay, probe or pair.
+      The output should not include "CALL: hs"
+      The output should not include "sval_update.py info"
+      The output should not include "sval_update.py pair"
+    End
+
+    It 'reads the build back before resuming the overlay'
+      svup left
+      svup right
+      # The read-back opens the same raw-HID interface as the probe, so it
+      # must run while the overlay is still paused: pair, then the info after
+      # it, then the resume.
+      ordered() {
+        act --host localhost --dir "$FW"
+        awk '/ pair /{if(!p)p=NR} /sval_update.py info/{if(p && !i)i=NR} /resume\(\)/{if(!r)r=NR}
+             END{if (p && p<i && i<r) print "ORDERED"; else printf "p=%d i=%d r=%d\n", p, i, r}' "$CALLS"
+      }
+      When call ordered
+      The output should include "ORDERED"
+    End
+
     It 'falls back to BOOTSEL when the probe fails'
       svup left
       svup right
@@ -414,6 +469,9 @@ STUB
       The output should include "sval_update.py pair"
       The stderr should include "may now run different builds"
       The stderr should include "rerun"
+      # pair may have refused before sending anything, where a rerun loops.
+      The stderr should include "if it fails the same way"
+      The stderr should include "qmk-flash --bootsel both"
     End
 
     It 'resumes the overlay when pair fails'
@@ -474,9 +532,12 @@ STUB
     It 'downloads the latest release and pairs it'
       When call calls --release
       The status should be success
-      # No tag: the download is of whatever the latest release is.
-      The output should include "CALL: gh release download -R Townk/qmk-config -p *.svup -p *.uf2 -p sval_update.py -p make_update.py -D "
-      The output should not include "CALL: gh release download v"
+      # No tag: the latest release's tag is looked up, then downloaded by name.
+      The output should include "CALL: gh release view -R Townk/qmk-config --json tagName --jq .tagName"
+      The output should include "CALL: gh release download v1.0.35 -R Townk/qmk-config -p *.svup -p *.uf2 -p sval_update.py -p make_update.py -D "
+      # The files are named by their release, not by a download's mtime.
+      The output should include "(release v1.0.35)"
+      The output should not include "(built "
       The output should match pattern "*sval_update.py pair *svalboard-colemak-dh-townk-1.0.35.left.svup *svalboard-colemak-dh-townk-1.0.35.right.svup --yes*"
     End
 
@@ -484,13 +545,14 @@ STUB
       When call calls --release v1.0.35
       The status should be success
       The output should include "CALL: gh release download v1.0.35 -R Townk/qmk-config"
+      The output should not include "CALL: gh release view"
       The output should include "sval_update.py pair"
     End
 
     It 'does not mistake a half name for a tag'
       When call calls --release both
       The status should be success
-      The output should include "CALL: gh release download -R Townk/qmk-config"
+      The output should include "CALL: gh release download v1.0.35 -R Townk/qmk-config"
       The output should include "sval_update.py pair"
     End
 
