@@ -377,6 +377,21 @@ overlay() {
     log_warn "could not ${2} the overlay (svalwatch) through Hammerspoon"
 }
 
+# overlay_pause / overlay_resume — overlay, plus the bookkeeping that lets
+# every way out of the paused window (success, failure, the BOOTSEL fallback,
+# a signal) resume exactly once. The flag is raised BEFORE the hs call, so a
+# Ctrl-C landing during the pause itself still resumes.
+OVERLAY_PAUSED=0
+overlay_pause() {
+  OVERLAY_PAUSED=1
+  overlay 'pause(300)' pause
+}
+overlay_resume() {
+  ((OVERLAY_PAUSED)) || return 0
+  OVERLAY_PAUSED=0
+  overlay 'resume()' resume
+}
+
 # pull_updates <left.svup> <right.svup> — copy both update files and both
 # updater scripts from the build host into ONE scratch directory, the layout
 # the scripts expect (sval_update.py imports make_update.py from its own
@@ -494,17 +509,44 @@ readback() {
 # updater_failed <what> — the loud failure for anything that went wrong once
 # the install had started: by then either half may have taken the new build,
 # so what it says is what the keyboard may be left as and how to finish.
+UPDATER_SPLIT="the halves may now run different builds and cannot talk to each other; rerun qmk-flash to finish, or flash over BOOTSEL: qmk-flash --bootsel both"
 updater_failed() {
   notify --icon glyph:nf-md-alert --sound Basso "Svalboard update NOT finished" \
     >/dev/null 2>&1 || true
-  die "${1} — the halves may now run different builds and cannot talk to each other; rerun qmk-flash to finish, or flash over BOOTSEL: qmk-flash --bootsel both"
+  die "${1} — ${UPDATER_SPLIT}"
+}
+
+# on_signal <status> — the INT/TERM handler for the whole paused window, from
+# the pause before the probe to the end of the read-back. zsh runs neither an
+# `always` block nor (on TERM) the EXIT trap when a signal ends the script, so
+# without this a Ctrl-C mid-update would leave the overlay paused until its
+# 300s cap AND drop the one message that matters: once pair has started, the
+# halves may be on different builds. Exits 130/143, the shell's own codes.
+#
+# Everything it says goes to SIGNAL_STDERR, a copy of the real stderr taken
+# when the traps are armed: the signal is usually taken while a builtin with
+# its own `2>/dev/null` is running (spin::stream's `kill -0` probe), and a
+# trap inherits that redirection, so a plain log_error would vanish.
+PAIR_STARTED=0
+on_signal() {
+  {
+    print
+    overlay_resume
+    if ((PAIR_STARTED)); then
+      notify --icon glyph:nf-md-alert --sound Basso "Svalboard update interrupted" \
+        >/dev/null 2>&1 || true
+      log_error "interrupted during the update — ${UPDATER_SPLIT}"
+    fi
+  } 2>&$SIGNAL_STDERR
+  exit "$1"
 }
 
 # flash_updater — install both halves over the updater, then confirm the build
 # the board reports is the one that was sent.
 flash_updater() {
   local rc=0 got
-  overlay 'pause(300)' pause
+  # The overlay is already paused: the run paused it before the probe.
+  #
   # pair updates the other half first (relayed over the split link), then the
   # USB half, then waits for both to report the same release; --yes because
   # the only question it asks is about images built for another pointing
@@ -513,14 +555,15 @@ flash_updater() {
   #
   # The resume sits in an `always` block so a failed pair still gives the
   # overlay back. Nothing in the try block may exit (zsh skips `always` on
-  # exit), hence the status is carried out in rc and acted on after. A kill
-  # that skips even this is covered by the pause itself, which lifts on its
-  # own after 300s.
+  # exit), hence the status is carried out in rc and acted on after. Signals
+  # skip `always` too; on_signal covers those, and a SIGKILL, which nothing
+  # can catch, is covered by the pause itself lifting on its own after 300s.
+  PAIR_STARTED=1
   {
     spin::streamed "updating both halves…" \
       "${UVPY[@]}" "$UP_DIR/sval_update.py" pair "$UP_LEFT" "$UP_RIGHT" --yes || rc=$?
   } always {
-    overlay 'resume()' resume
+    overlay_resume
   }
   ((rc == 0)) || updater_failed "sval_update.py pair failed (exit ${rc})"
 
@@ -658,9 +701,29 @@ fi
 # required only once the run actually falls back to BOOTSEL.
 require_cmd uv jq
 resolve_updates
+
+# The overlay is paused BEFORE the probe, not just for the install: svalwatch
+# holds the board's raw-HID interface open, and if that handle keeps the probe
+# from opening the device, the probe would fail and send a perfectly good
+# updater build down the BOOTSEL path. The halves' version check above stays
+# ahead of the pause, so a refused run never touches the overlay at all.
+#
+# The traps are armed here, at the top level, because this script runs under
+# `emulate -L zsh` (LOCAL_TRAPS): a trap set inside a function would be undone
+# the moment that function returned.
+exec {SIGNAL_STDERR}>&2
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
+overlay_pause
 if probe; then
   flash_updater
+  trap - INT TERM
 else
+  # Resumed before the fallback, so the overlay is back while the owner is
+  # busy with the reset button, and the BOOTSEL path runs exactly as it does
+  # without an updater in the picture (a Ctrl-C there is today's behaviour).
+  overlay_resume
+  trap - INT TERM
   log_info "the board is not on updater firmware (or not reachable): using BOOTSEL"
   run_bootsel
 fi

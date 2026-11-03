@@ -30,7 +30,7 @@ Describe 'qmk-flash'
     # list — the same trap the script's own remote listing avoids.
     rm -f -- "$CONFIG" "$CALLS" "$FW"/*.uf2(N) "$FW"/*.svup(N) "$FW"/*.py(N)
     unset FAKE_VERSION_LEFT FAKE_VERSION_RIGHT FAKE_INFO FAKE_INFO_AFTER \
-      FAKE_INFO_RC FAKE_PAIR_RC
+      FAKE_INFO_RC FAKE_PAIR_RC FAKE_PAIR_SIGNAL
 
     # notify must not paint on a real screen, and must not dial the clipboard
     # bridge because the suite happens to be running over ssh.
@@ -77,7 +77,16 @@ case " $* " in
     fi
     exit "${FAKE_INFO_RC:-0}"
     ;;
-  *" pair "*) exit "${FAKE_PAIR_RC:-0}" ;;
+  *" pair "*)
+    # FAKE_PAIR_SIGNAL stands in for a Ctrl-C mid-update: interrupt the
+    # script (this stub's parent, the backgrounded job having exec'd it), then
+    # linger so the signal lands while the script still waits on us.
+    if [ -n "${FAKE_PAIR_SIGNAL:-}" ]; then
+      kill -INT "$PPID"
+      sleep 1
+    fi
+    exit "${FAKE_PAIR_RC:-0}"
+    ;;
 esac
 exit 0
 STUB
@@ -322,6 +331,27 @@ STUB
       The output should include "using BOOTSEL"
       The output should include "Double-click the RESET button"
       The output should not include "sval_update.py pair"
+      The output should not include "may now run different builds"
+      The stderr should not include "may now run different builds"
+      The stderr should include "no bootloader drive appeared"
+    End
+
+    It 'pauses the overlay for the probe and resumes it before BOOTSEL'
+      svup left
+      svup right
+      uf2 left
+      uf2 right
+      export FAKE_INFO_RC=1
+      # pause, then the probe, then the resume, then the reset prompt (whose
+      # notification goes through the hs stub too) — in that order.
+      ordered() {
+        act --host localhost --dir "$FW" --timeout 1
+        awk '/pause\(/{if(!p)p=NR} /sval_update.py info/{if(!i)i=NR} /resume\(\)/{if(!r)r=NR}
+             /Double-click RESET/{if(!d)d=NR}
+             END{if (p && p<i && i<r && r<d) print "ORDERED"; else printf "p=%d i=%d r=%d d=%d\n", p, i, r, d}' "$CALLS"
+      }
+      When call ordered
+      The output should include "ORDERED"
       The stderr should include "no bootloader drive appeared"
     End
 
@@ -366,6 +396,17 @@ STUB
       }
       When call resumed_after_pair
       The output should include "RESUMED AFTER PAIR"
+      The stderr should include "may now run different builds"
+    End
+
+    It 'resumes the overlay and explains when interrupted during pair'
+      svup left
+      svup right
+      export FAKE_PAIR_SIGNAL=1
+      When call calls --host localhost --dir "$FW"
+      The status should eq 130
+      The output should include "sval_update.py pair"
+      The output should include "resume()"
       The stderr should include "may now run different builds"
     End
 
