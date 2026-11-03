@@ -17,14 +17,15 @@
 # cannot masquerade as the setting quietly having no effect.
 #
 #   host     machine holding the built firmware. The default, "localhost", reads
-#            it straight off this machine — no ssh hop, no copy, the file goes
-#            directly to picotool. Any other value is an ssh destination, so a
+#            it straight off this machine — no ssh hop, no copy, the files are
+#            used where the build left them. Any other value is an ssh destination, so a
 #            Host alias from ~/.ssh/config works.
 #   dir      firmware directory, absolute or relative to HOME on whichever
 #            machine `host` names.
 #            Default: "Projects/platforms/keyboards/qmk-config".
 #   timeout  seconds to wait for a half's UF2 bootloader drive after the reset
-#            prompt. Default: 120.
+#            prompt, and for the board to answer again after an update over
+#            the in-firmware updater. Default: 120.
 
 host = "buildbox.local"
 # dir     = "Projects/keyboards/qmk-config"

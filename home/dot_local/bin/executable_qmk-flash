@@ -1,14 +1,40 @@
 #!/usr/bin/env zsh
-# qmk-flash — pick up a keyboard half's freshly built firmware and flash it over
-# USB once the half has been dropped into its UF2 bootloader.
+# qmk-flash — pick up the keyboard's freshly built firmware and install it on
+# both halves, over the in-firmware updater when the board runs one and over
+# USB in the UF2 bootloader when it does not.
 #
 # The successor to the hand-run `wait-until … && scp` snippet. What it adds is
 # mostly about knowing what you are about to flash BEFORE you touch the board:
-# it resolves the NEWEST matching *.uf2 and reports its age (a forgotten rebuild
-# is the failure this catches), then checks the UF2 magic — only then does it ask
-# for the reset. With `both`, the firmware for BOTH halves is resolved and
-# validated up front, so the hands-on part (reset, then swap the USB cables over
-# for the left half) is one uninterrupted stretch with no waiting mixed in.
+# it resolves the NEWEST matching build and reports its age (a forgotten
+# rebuild is the failure this catches), then validates it — only then does it
+# go near the board.
+#
+# THE UPDATER (the default). The firmware is an updater build: a running half
+# takes a new image over raw HID, and the half with USB relays the other half's
+# image over the split cable, so one `sval_update.py pair LEFT.svup RIGHT.svup`
+# installs both halves with no reset button and no cable swap. It ALWAYS
+# installs both, and that is upstream's constraint rather than a preference:
+# updater builds of different commits cannot talk over the split link, so a
+# keyboard with one half updated types on one side only. Hence the checks that
+# bracket the install. Before it, both .svup files must carry the SAME build
+# version string — the firmware's own presence check compares only the upstream
+# release, which two different builds of this repo share. After it, the version
+# the board reports must be the one that was sent. A failure in between is
+# reported as what it may have left behind: halves on different builds, with
+# the way out (rerun, or BOOTSEL).
+#
+# The updater scripts belong to the firmware they talk to, so they are taken
+# from beside the .svup files (the build copies them out of the same upstream
+# checkout) rather than from a copy of their own. They run through uv with
+# hidapi, so no Mac needs a Python package installed by hand.
+#
+# BOOTSEL (the fallback, and `--bootsel`). When the board does not answer as an
+# updater build — the one-time migration from older firmware, a half left in
+# BOOTSEL by an interrupted update — the .uf2 images go over the RP2040's UF2
+# bootloader instead, one half at a time. The firmware for every half is
+# resolved and validated up front, so the hands-on part (reset, then swap the
+# USB cables over for the left half) is one uninterrupted stretch with no
+# waiting mixed in.
 #
 # The image is NOT copied onto the bootloader drive. The drive is unmounted and
 # the flash goes over the RP2040's PICOBOOT interface via picotool, which buys
@@ -26,10 +52,11 @@
 # The firmware comes from THIS machine by default (host `localhost`), which is
 # the machine that builds it. A machine that flashes a board while building
 # elsewhere says so in its config file — see `--help`. The two paths differ only
-# in how the file is obtained: locally it is globbed and handed straight to
-# picotool, with no ssh hop and no copy.
+# in how the files are obtained: locally they are globbed and used in place,
+# with no ssh hop and no copy.
 #
-# Usage: qmk-flash [left|right|both] [--host HOST] [--dir DIR] [--timeout SECS]
+# Usage: qmk-flash [left|right|both] [--bootsel] [--host HOST] [--dir DIR]
+#                  [--timeout SECS]
 emulate -L zsh
 set -uo pipefail
 zmodload zsh/datetime
@@ -49,22 +76,36 @@ CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/qmk-flash/config.toml"
 
 usage() {
   cat <<EOF
-Usage: qmk-flash [left|right|both] [--host HOST] [--dir DIR] [--timeout SECS]
+Usage: qmk-flash [left|right|both] [--bootsel] [--host HOST] [--dir DIR]
+                 [--timeout SECS]
 
-Resolve the newest matching firmware and flash it onto the half you reset.
-Halves are flashed in the order given. Defaults to \`right\`, the half normally
-cabled to this machine; \`both\` means right then left, so the wait for the left
-half's drive is where you swap the USB cables over. Flashing the left half is
-only needed for board configuration changes, not for keymaps.
+Resolve the newest matching firmware and install it on the keyboard.
 
+By default both halves are updated in place over the in-firmware updater, with
+no reset button and no cable swap. The updater always installs both: halves on
+different builds cannot talk to each other, so naming one half is refused
+there. Close any raw-HID app that talks to the board, such as Keybard, first:
+the updater's replies go to every open handle. (The overlay's own reader,
+svalwatch, is paused and resumed for you through Hammerspoon.)
+
+When the board does not answer as an updater build (older firmware, a half
+stuck in BOOTSEL), it falls back to the UF2 bootloader: double-click RESET on
+each half, right then left, so the wait for the left half's drive is where you
+swap the USB cables over. \`--bootsel\` goes straight there, and is the one way
+to flash a single half — which must end up on the same build as the other.
+
+  --bootsel        skip the updater and flash over the UF2 bootloader
   --host HOST      machine holding the firmware; \`localhost\` (the default)
                    reads it straight off this machine with no ssh hop
   --dir DIR        firmware directory, absolute or relative to HOME on whichever
                    machine --host names
-  --timeout SECS   how long to wait for a bootloader drive
+  --timeout SECS   how long to wait for a bootloader drive, or for the board to
+                   answer again after an update
   -h, --help       show this help
 
-The firmware for a half is the newest file matching *_<half>_*.uf2 in DIR.
+The update for a half is the newest file matching *_<half>_*.svup (or
+*.<half>.svup) in DIR, with sval_update.py and make_update.py beside it; its
+BOOTSEL firmware is the newest *_<half>_*.uf2 there.
 
 Defaults come from \$XDG_CONFIG_HOME/qmk-flash/config.toml when it exists, and
 flags override it. Every key is optional:
@@ -76,9 +117,9 @@ flags override it. Every key is optional:
 Current effective defaults: host=${host} dir=${firmware_dir} timeout=${timeout}
 
 Examples:
-  qmk-flash right
-  qmk-flash both
-  qmk-flash left --timeout 300
+  qmk-flash
+  qmk-flash --bootsel both
+  qmk-flash --bootsel right --timeout 300
 EOF
 }
 
@@ -115,6 +156,15 @@ config_load() {
 # forwarding failed for listen port …"), and that warning is pure noise here —
 # left in, it reads like the transfer failed.
 SSH=(ssh -o LogLevel=ERROR)
+
+# The updater scripts' Python. `--no-project` because they are run from a
+# firmware checkout (or a scratch dir) whose own pyproject, if any, is not
+# theirs; `--with hidapi` is their one dependency, resolved into uv's cache on
+# first use so no Mac needs it installed by hand; `-I` keeps the current
+# directory and PYTHON* variables out of their import path. sval_update.py
+# finds make_update.py on its own (it puts its directory on sys.path); the
+# inline snippet in svup_version says so explicitly.
+UVPY=(uv run --no-project --quiet --with hidapi python -I)
 
 is_local() { [[ "$host" == localhost ]] }
 
@@ -153,35 +203,58 @@ firmware_path() {
   esac
 }
 
-# resolve_local <half> — newest matching .uf2 in the local firmware dir. Sets
-# FW_NAME, FW_EPOCH and FW_LOCAL (the file itself: nothing needs copying).
+# fw_pattern <half> <ext> — how one half's file of type <ext> (uf2 or svup) is
+# recognised: FW_GLOB for the local directory, FW_REGEX (an ERE) for the remote
+# listing. The .svup pattern also takes `.<half>.`, the spelling of the release
+# assets (svalboard-…-v1.0.35.left.svup), next to the local build's
+# `_<half>_`; the .uf2 one is unchanged.
+fw_pattern() {
+  local half=$1
+  case $2 in
+    uf2)
+      FW_GLOB="*_${half}_*.uf2"
+      FW_REGEX="_${half}_.*[.]uf2"
+      ;;
+    svup)
+      FW_GLOB="*[_.]${half}(_*|).svup"
+      FW_REGEX="[_.]${half}(_.*)?[.]svup"
+      ;;
+  esac
+}
+
+# resolve_local <half> [ext] — newest matching .uf2 (or .svup) in the local
+# firmware dir. Sets FW_NAME, FW_EPOCH and FW_LOCAL (the file itself: nothing
+# needs copying).
 resolve_local() {
-  local half=$1 dir
+  local half=$1 ext=${2:-uf2} dir
   dir=$(firmware_path)
   [[ -d "$dir" ]] || die "no such directory: ${dir}"
-  # (N) nullglob, (.) regular files only, (om) newest first.
-  local -a hits=("$dir"/*_${half}_*.uf2(N.om))
-  (($#hits)) || die "no ${half}-half firmware (*_${half}_*.uf2) in ${dir}"
+  fw_pattern "$half" "$ext"
+  # (N) nullglob, (.) regular files only, (om) newest first; ${~…} so the
+  # pattern held in a variable is globbed rather than taken literally.
+  local -a hits=("$dir"/${~FW_GLOB}(N.om))
+  (($#hits)) || die "no ${half}-half firmware (*_${half}_*.${ext}) in ${dir}"
   FW_LOCAL=${hits[1]}
   FW_NAME=${FW_LOCAL:t}
   FW_EPOCH=$(zstat +mtime -- "$FW_LOCAL")
 }
 
-# resolve_remote <half> — same, over ssh. Sets FW_NAME and FW_EPOCH.
+# resolve_remote <half> [ext] — same, over ssh. Sets FW_NAME and FW_EPOCH.
 resolve_remote() {
-  local half=$1 line rc=0
+  local half=$1 ext=${2:-uf2} line rc=0
+  fw_pattern "$half" "$ext"
   # Filtered with grep rather than a remote glob: the build host's login shell
   # is zsh, where an unmatched glob is an error raised BEFORE ls runs — so `ls
   # … 2>/dev/null` cannot swallow it and "no matches found" leaks into our own
   # error path. Listing the directory and filtering never expands a pattern.
   line=$("${SSH[@]}" "$host" "cd ${(q)firmware_dir} 2>/dev/null || exit 3
-f=\$(ls -t | grep -E '_${half}_.*[.]uf2\$' | head -1)
+f=\$(ls -t | grep -E '${FW_REGEX}\$' | head -1)
 [ -n \"\$f\" ] || exit 4
 printf '%s\t%s\n' \"\$(date -r \"\$f\" +%s)\" \"\$f\"") || rc=$?
   case $rc in
     0) ;;
     3) die "no such directory on ${host}: ${firmware_dir}" ;;
-    4) die "no ${half}-half firmware (*_${half}_*.uf2) in ${host}:${firmware_dir}" ;;
+    4) die "no ${half}-half firmware (*_${half}_*.${ext}) in ${host}:${firmware_dir}" ;;
     *) die "cannot reach ${host} (ssh exit ${rc})" ;;
   esac
   FW_EPOCH=${line%%$'\t'*}
@@ -289,6 +362,209 @@ flash() {
     >/dev/null 2>&1 || true
 }
 
+# --- the in-firmware updater -----------------------------------------------
+
+# overlay <call> <verb> — pause or resume the overlay's raw-HID reader
+# (svalwatch) through Hammerspoon. It holds the board's raw-HID interface open
+# all the time, and the updater's replies go to every open handle; going
+# through Hammerspoon rather than killing it is what keeps its restart logic
+# from undoing the kill, or counting it as a crash. Best effort on purpose: an
+# overlay that could not be paused is a risk to the flash, not a reason to
+# refuse it, and an `hs` that is missing (or a Hammerspoon that is not running)
+# must not stand between the owner and a flash. -t 3 bounds the IPC round trip.
+overlay() {
+  "${HS:-hs}" -t 3 -c "require(\"svalboard\").$1" >/dev/null 2>&1 ||
+    log_warn "could not ${2} the overlay (svalwatch) through Hammerspoon"
+}
+
+# pull_updates <left.svup> <right.svup> — copy both update files and both
+# updater scripts from the build host into ONE scratch directory, the layout
+# the scripts expect (sval_update.py imports make_update.py from its own
+# directory). Sets UP_DIR. The directory is carved out of common.zsh's
+# per-run scratch dir, so the exit sweep takes it along; a tmpfile name is
+# swapped for a directory of the same name because that dir is private to
+# this process and nothing can race for the name in between.
+pull_updates() {
+  local f
+  local -a src=()
+  UP_DIR=$(common::tmpfile) && rm -f -- "$UP_DIR" && mkdir -- "$UP_DIR" ||
+    die "cannot create a scratch directory"
+  for f in "$@" sval_update.py make_update.py; do
+    src+=("${host}:${firmware_dir}/${f}")
+  done
+  # One rsync for all four, so one ssh connection; -s as in pull_remote.
+  rsync -s -e "${SSH[*]}" --info=progress2 --human-readable -- \
+    "${src[@]}" "$UP_DIR/" ||
+    die "could not fetch the update files (and sval_update.py, make_update.py) from ${host}"
+}
+
+# svup_version <file> — the build version string a .svup carries in its
+# manifest, read offline with the make_update.py that sits beside it. Parsing
+# the file this far doubles as the check that it IS an update file at all.
+svup_version() {
+  "${UVPY[@]}" -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import make_update as m
+print(m.manifest_version(m.parse_manifest(m.parse_svup(open(sys.argv[2], "rb").read())[0])))' \
+    "$UP_DIR" "$1"
+}
+
+# resolve_updates — the newest .svup for each half, both updater scripts, and
+# the build version both halves are about to get. Sets UP_DIR (the ONE
+# directory holding all four: the firmware dir itself locally, a scratch copy
+# with --host), UP_LEFT, UP_RIGHT and UP_VERSION. Everything here happens
+# before the board is touched, and a mismatch between the halves stops it
+# right here — after the probe would already be too late to be cheap.
+resolve_updates() {
+  local half f left right
+  local -A name
+  for half in left right; do
+    if is_local; then
+      resolve_local "$half" svup
+    else
+      resolve_remote "$half" svup
+    fi
+    log_info "${half}: ${C_BWH}${FW_NAME}${C_RES} ${C_DIM}(built $(human_age "$FW_EPOCH"))${C_RES}"
+    name[$half]=$FW_NAME
+  done
+  if is_local; then
+    UP_DIR=$(firmware_path)
+  else
+    pull_updates "${name[left]}" "${name[right]}"
+  fi
+  UP_LEFT=$UP_DIR/${name[left]}
+  UP_RIGHT=$UP_DIR/${name[right]}
+  for f in sval_update.py make_update.py; do
+    [[ -r "$UP_DIR/$f" ]] ||
+      die "no ${f} beside the update files in ${UP_DIR} — the build puts it there, so rebuild"
+  done
+
+  left=$(svup_version "$UP_LEFT") && [[ -n $left ]] ||
+    die "cannot read the build version of ${name[left]} — is it an update file?"
+  right=$(svup_version "$UP_RIGHT") && [[ -n $right ]] ||
+    die "cannot read the build version of ${name[right]} — is it an update file?"
+  # The board's own presence check would let two different builds of the same
+  # upstream release through, so this is the check that keeps a stale .svup
+  # (only one half rebuilt) from splitting the keyboard.
+  [[ $left == "$right" ]] ||
+    die "the halves are from different builds (left ${left}, right ${right}) — rebuild so both come from the same build"
+  UP_VERSION=$left
+}
+
+# updater_info — ask the USB half for its updater INFO. Succeeds, setting
+# INFO_JSON, only when sval_update.py exits 0 AND reports protocol 4 or later:
+# earlier updaters lack the INFO page that carries the version string, so the
+# read-back could never confirm what they installed. stderr is dropped because
+# a board on non-updater firmware answers with a traceback, and that is the
+# normal case the BOOTSEL fallback exists for, not an error to show.
+updater_info() {
+  local json
+  json=$("${UVPY[@]}" "$UP_DIR/sval_update.py" info 2>/dev/null) || return 1
+  jq -e '(.protocol // 0) >= 4' <<<"$json" >/dev/null 2>&1 || return 1
+  INFO_JSON=$json
+}
+
+# probe — updater_info behind a spinner (uv's first run resolves hidapi, which
+# takes long enough to look like a hang). The subshell is what lets the
+# spinner animate here; nothing from INFO_JSON is needed yet.
+probe() {
+  local pid
+  (updater_info) &
+  pid=$!
+  spin::wait $pid "asking the board whether it runs the updater…"
+  wait $pid
+}
+
+# readback — wait, up to --timeout, for the board to answer again after the
+# install, and set INFO_JSON from that answer. `pair` already waited for both
+# halves to report the same release, so this normally answers at once; the
+# bound is for a USB re-enumeration that is slow to settle. Polled in a
+# subshell for the spinner (as await_drive does), so the answer comes back
+# through a scratch file.
+readback() {
+  local pid out
+  out=$(common::tmpfile) || return 1
+  (poll::until "$timeout" 1 updater_info && print -r -- "$INFO_JSON" >"$out") &
+  pid=$!
+  spin::wait $pid "reading the build back from the board…"
+  wait $pid || return 1
+  INFO_JSON=$(<"$out")
+}
+
+# updater_failed <what> — the loud failure for anything that went wrong once
+# the install had started: by then either half may have taken the new build,
+# so what it says is what the keyboard may be left as and how to finish.
+updater_failed() {
+  notify --icon glyph:nf-md-alert --sound Basso "Svalboard update NOT finished" \
+    >/dev/null 2>&1 || true
+  die "${1} — the halves may now run different builds and cannot talk to each other; rerun qmk-flash to finish, or flash over BOOTSEL: qmk-flash --bootsel both"
+}
+
+# flash_updater — install both halves over the updater, then confirm the build
+# the board reports is the one that was sent.
+flash_updater() {
+  local rc=0 got
+  overlay 'pause(300)' pause
+  # pair updates the other half first (relayed over the split link), then the
+  # USB half, then waits for both to report the same release; --yes because
+  # the only question it asks is about images built for another pointing
+  # device, and these were built for this board. Streamed, so its progress
+  # shows live once it starts talking.
+  #
+  # The resume sits in an `always` block so a failed pair still gives the
+  # overlay back. Nothing in the try block may exit (zsh skips `always` on
+  # exit), hence the status is carried out in rc and acted on after. A kill
+  # that skips even this is covered by the pause itself, which lifts on its
+  # own after 300s.
+  {
+    spin::streamed "updating both halves…" \
+      "${UVPY[@]}" "$UP_DIR/sval_update.py" pair "$UP_LEFT" "$UP_RIGHT" --yes || rc=$?
+  } always {
+    overlay 'resume()' resume
+  }
+  ((rc == 0)) || updater_failed "sval_update.py pair failed (exit ${rc})"
+
+  readback || updater_failed "the board did not answer within ${timeout}s after the update"
+  got=$(jq -r '.version // empty' <<<"$INFO_JSON")
+  [[ $got == "$UP_VERSION" ]] ||
+    updater_failed "the board reports build ${got:-(none)} after the update, not ${UP_VERSION}"
+
+  log_ok "both halves updated — running ${UP_VERSION}"
+  notify --icon glyph:nf-md-check --sound Glass "Svalboard updated (${UP_VERSION})" \
+    >/dev/null 2>&1 || true
+}
+
+# --- BOOTSEL ----------------------------------------------------------------
+
+# both_named — true when the halves to flash include both (`both`, or `left
+# right` spelt out in either order).
+both_named() { ((${halves[(I)left]} && ${halves[(I)right]})) }
+
+# run_bootsel — today's path: every half's .uf2 resolved and validated, then
+# one reset-and-flash per half.
+run_bootsel() {
+  local half
+  require_cmd picotool diskutil xxd
+  # A single half is the recovery case (one half stuck as RPI-RP2), and it is
+  # allowed only because the owner named it; the keyboard works again only
+  # once the other half runs the same build.
+  both_named ||
+    log_warn "the other half must end up on this same build, or the halves cannot talk"
+
+  # Resolve everything first: nothing asks for a button press until every
+  # image is on this machine and known good.
+  typeset -A fw_file fw_name
+  for half in $halves; do
+    fetch "$half"
+    fw_file[$half]=$FW_LOCAL
+    fw_name[$half]=$FW_NAME
+  done
+
+  for half in $halves; do
+    flash "$half" "${fw_file[$half]}" "${fw_name[$half]}"
+  done
+}
+
 # --- arguments --------------------------------------------------------------
 
 # The config is read BEFORE help is answered, because usage() reports the
@@ -303,6 +579,7 @@ config_load
 }
 
 halves=()
+bootsel=0
 while (($#)); do
   case "$1" in
     left | l)
@@ -315,6 +592,10 @@ while (($#)); do
       ;;
     both | all)
       halves=(right left)
+      shift
+      ;;
+    --bootsel)
+      bootsel=1
       shift
       ;;
     --host)
@@ -353,22 +634,33 @@ while (($#)); do
 done
 
 [[ $timeout == <-> ]] || die "--timeout takes whole seconds, got: ${timeout}"
-((${#halves})) || halves=(right)
+# Both halves by default, on either path: the updater installs both anyway,
+# and over BOOTSEL a single half is the exception you name. Right first, so the
+# BOOTSEL wait for the left half's drive is where the cables get swapped.
+((${#halves})) || halves=(right left)
 
-require_cmd picotool diskutil xxd
+# Refused up front, before the probe: one half is a BOOTSEL-only operation, so
+# it is asked for by name (--bootsel) rather than reached by the accident of a
+# probe that happened to fail, and saying so costs nothing on the board.
+((bootsel)) || both_named ||
+  die "the updater always installs both halves (both must run the same build); use BOOTSEL for one half: --bootsel ${halves[1]}"
+
 is_local || require_cmd ssh rsync
 
 # --- run --------------------------------------------------------------------
 
-# Resolve everything first: nothing asks for a button press until every image is
-# on this machine and known good.
-typeset -A fw_file fw_name
-for half in $halves; do
-  fetch "$half"
-  fw_file[$half]=$FW_LOCAL
-  fw_name[$half]=$FW_NAME
-done
+if ((bootsel)); then
+  run_bootsel
+  exit
+fi
 
-for half in $halves; do
-  flash "$half" "${fw_file[$half]}" "${fw_name[$half]}"
-done
+# uv runs the updater scripts; jq reads their JSON. picotool and friends are
+# required only once the run actually falls back to BOOTSEL.
+require_cmd uv jq
+resolve_updates
+if probe; then
+  flash_updater
+else
+  log_info "the board is not on updater firmware (or not reachable): using BOOTSEL"
+  run_bootsel
+fi
