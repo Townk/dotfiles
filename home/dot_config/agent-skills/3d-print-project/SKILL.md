@@ -43,7 +43,7 @@ template.
    (`--coupons all`: every one), drafted leaner and faster than the final print (`COUPON_PROCESS`,
    `COUPON_SLICER`: 0.24 mm layers, 10% lightning infill, thin skins), the outer wall untouched. Done when the
    coupons' project slices with no warnings and you have given the user its path and `PRINT-coupons.md`.
-6. **The model**, test first (below). Then export, slice, hand over the print project.
+6. **The model**, test first (below). Then export, slice, hand over the print project and the assembly guide.
 
 ### Moving an existing project onto the pattern
 
@@ -75,6 +75,27 @@ hand slicer runs to a background agent, and run one slicer at a time.
 A change to a printed part sets it to `reprint` with the reason, in the same commit. A design change worth
 asking about comes with a render. Done when the suite passes `--all`, the print project is rebuilt, and
 `PRINT.md` shows no slicer warning.
+
+### The assembly guide
+
+An IKEA-style picture book per variant, that anyone can build the product from without knowing the design (the
+user, 2026-11-08): `scripts/guide/build.py` writes `renders/guide/<variant>/index.html`. Copy the templates'
+`scripts/guide/build.py` and `test/test_guide.py`; write the project's own:
+
+- `scripts/guide/guide.scad`: every piece as `piece(id, p)`, pulled out by `p` along its way in; the hardware
+  (inserts, screws, springs) modelled at each hole, with a line back to it; the points the close-ups look at as
+  `FOCUS` (echoed); a `flip` (the product turned over for the steps from below), cut-away close-ups (`crop`: the
+  model cut to a box round the point, so no wall hides it) and sections. kids-charger's is the reference.
+- `scripts/guide/steps.py`: `STATIONS` (a guide per variant), `WORDS` (what changes between them), `TITLE`, `INTRO`
+  (the tools), `ACCENT`, `FINISHED`, and `STEPS`, each its pieces (label, count, thumbnail id, part or hardware name, a part
+  named where it first appears only), its pictures and a few plain words. **3 kinds of piece a step at most; a
+  screw or an insert from 2 angles or more** (an overview and close-ups). Order the steps by what the assembly
+  needs, not by part: the piece a screw goes into before the screw; what blocks a cable after the cable.
+
+`test/test_guide.py` checks those rules, that every printed part is in it as often as it prints, that the hardware
+is `docs/build/`'s table, and that every piece and close-up the steps name exists. Then look at every picture (a
+contact sheet: `magick montage`): a close-up whose camera sits in a wall or behind one renders blank or as a wall;
+cut it (`top`: just above the floor it looks into) or turn it. Rebuild the guide with the design.
 
 ### The user reports a print
 
@@ -129,6 +150,7 @@ rebuild the queue and the print project. Photos go in `references/photos/YYYY-MM
 - `docs/design/` is the design now, `docs/build/` how to print and assemble; `test/test_layout.py` checks every
   link and every path they name. Write tersely: plain declarative sentences, reasons after a colon, dates on
   decisions.
+- The assembly guide is built output, like the print project: rebuilt when a part, a screw or a step changes.
 - Conventional commits scoped by part (`feat(tray): …`), a `## Changes Description` body, the suite's result.
   `stl/`, `renders/`, `references/`, `.superpowers/` are not in git.
 
