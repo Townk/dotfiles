@@ -1278,6 +1278,21 @@ bkp::restic() {
   RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD_COMMAND="$pwcmd" "${guard[@]}" restic "$@"
 }
 
+# bkp::restic::unlock_stale <repo>
+# Stale-lock recovery before any lock-taking op on <repo>. A restic killed
+# mid-op (timeout SIGKILL, sleep, crash) leaves its lock file behind, and
+# every later EXCLUSIVE op (forget, prune, rewrite) then fails "repository
+# is already locked" until someone clears it — on 2026-11-07 three dead-PID
+# locks had blocked the iCloud mirror's retention since Oct 18. `restic
+# unlock` WITHOUT --remove-all only drops stale locks (unrefreshed for 30
+# min, or same host + dead PID); live ops refresh theirs every 5 min, so a
+# concurrent op is never cut off. Best-effort: a failed unlock (repo
+# unreachable, iCloud evicted) must never abort the op it guards — that op
+# reports its own failure.
+bkp::restic::unlock_stale() {
+  bkp::restic "$1" unlock >/dev/null 2>&1 || :
+}
+
 # bkp::capture::ensure_repo <repo>
 # First-run init. Encrypted by construction: restic init with a passphrase
 # from password_command — there is no unencrypted path through here.
@@ -1475,7 +1490,7 @@ bkp::capture::run() {
     nfiles=$(( $(wc -l < "$files_from") ))
     log_info "bkp: capturing $nfiles files ($nrepos git repos) -> $staging"
 
-    bkp::restic "$staging" unlock >/dev/null 2>&1 || :   # stale-lock recovery
+    bkp::restic::unlock_stale "$staging"
     # -verbatim is load-bearing: plain --files-from glob-expands every line,
     # so a captured file named "[.md" (tldr pages ship one) aborts the whole
     # backup with Go's "syntax error in pattern". Our list is literal paths.
@@ -1555,6 +1570,9 @@ bkp::reconcile::ensure_target() {
 bkp::reconcile::one() {
   local staging="$1" name="$2" tpath="$3" role="$4" manifest="$5"
   bkp::reconcile::ensure_target "$staging" "$tpath" || return 1
+  # Copy locks both ends; the mirror's forget below is exclusive. Capture
+  # already healed staging this tick — the target never got that.
+  bkp::restic::unlock_stale "$tpath"
   local s_keys t_keys plan
   s_keys=$(bkp::restic::snapshot_keys "$staging") || return 1
   t_keys=$(bkp::restic::snapshot_keys "$tpath") || return 1
@@ -2185,6 +2203,7 @@ bkp::reconcile::prune() {
   local staging targets rc=0
   staging=$(bkp::config::staging_path) || return 2
   targets=$(bkp::config::targets) || return 2
+  bkp::restic::unlock_stale "$staging"
   bkp::restic "$staging" prune --quiet || rc=1
   local name tpath role
   while IFS=$'\t' read -r name tpath role; do
@@ -2192,6 +2211,7 @@ bkp::reconcile::prune() {
     [[ "$role" == master ]] && continue
     bkp::target::present "$tpath" || continue
     bkp::restic "$tpath" cat config >/dev/null 2>&1 || continue
+    bkp::restic::unlock_stale "$tpath"
     bkp::restic "$tpath" prune --quiet || rc=1
   done <<<"$targets"
   bkp::drift::stamp prune "$rc"
@@ -2286,6 +2306,7 @@ bkp::reclaim::run() {
     else
       bkp::ux::_dirsize "$rpath"; before="$REPLY"
       log_info "bkp: reclaim ($rname) — rewrite + prune ($before on disk)"
+      bkp::restic::unlock_stale "$rpath"
       # rewrite MUST stay -q (its per-file flood is unusable), so spin over
       # it. prune has a usable native progress bar — show it interactively,
       # stay --quiet when scheduled/piped.

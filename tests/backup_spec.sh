@@ -1699,6 +1699,64 @@ EOF
       The line 3 should equal "$FIX/tgt prune --quiet"
     End
 
+    # Stale-lock recovery (2026-11-07): three dead-PID locks sat on the iCloud
+    # mirror from Oct 18 on, so every exclusive op there (forget, prune) failed
+    # "repository is already locked" for weeks. Capture already self-healed
+    # staging; mirrors never did. `restic unlock` (no --remove-all) drops only
+    # stale locks, so it is safe before every lock-taking op on a repo.
+    It 'clears stale locks on a mirror before copying into / thinning it'
+      heals_mirror() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        bkp::reconcile::one "$FIX/stg" tgt "$FIX/tgt" mirror "$FIX/m.toml" >/dev/null || return 1
+        # First call that touches the target after it exists = the unlock,
+        # and it precedes the first copy into it.
+        local first_unlock first_copy
+        first_unlock=$(grep -n -- "^$FIX/tgt unlock$" "$FIX/calls" | head -1 | cut -d: -f1)
+        first_copy=$(grep -n -- " copy --from-repo $FIX/stg" "$FIX/calls" | head -1 | cut -d: -f1)
+        [ -n "$first_unlock" ] && [ -n "$first_copy" ] && [ "$first_unlock" -lt "$first_copy" ] && echo ordered
+      }
+      When run heals_mirror
+      The output should equal "ordered"
+    End
+
+    It 'clears stale locks on every repo right before pruning it'
+      heals_prune() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        : > "$FIX/has-tgt"
+        cat >> "$FIX/c.toml" <<EOF
+[[target]]
+name = "tgt"
+path = "$FIX/tgt"
+EOF
+        bkp::reconcile::prune "$FIX/c.toml" >/dev/null || return 1
+        grep -E ' (unlock|prune --quiet)$' "$FIX/calls"
+      }
+      When run heals_prune
+      The line 1 should equal "$FIX/stg unlock"
+      The line 2 should equal "$FIX/stg prune --quiet"
+      The line 3 should equal "$FIX/tgt unlock"
+      The line 4 should equal "$FIX/tgt prune --quiet"
+    End
+
+    It 'a failing unlock never aborts the op it guards'
+      unlock_fails() {
+        source "$LIB/backup.zsh"
+        stub_restic
+        # Wrap the stub: unlock always fails (e.g. repo unreachable mid-call).
+        functions[_stub_inner]=$functions[bkp::restic]
+        bkp::restic() {
+          [ "${2:-}" = unlock ] && { print -r -- "$1 unlock" >> "$FIX/calls"; return 1; }
+          _stub_inner "$@"
+        }
+        bkp::reconcile::prune "$FIX/c.toml" >/dev/null || return 1
+        grep -c -- "$FIX/stg prune --quiet" "$FIX/calls"
+      }
+      When run unlock_fails
+      The output should equal 1
+    End
+
     It 'prune waits out a running capture instead of racing it'
       prune_waits() {
         source "$LIB/backup.zsh"
