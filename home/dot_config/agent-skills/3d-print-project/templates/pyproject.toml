@@ -1,0 +1,28 @@
+[project]
+name = "PROJECT"
+version = "0"
+description = "WHAT IT IS"
+requires-python = ">=3.13"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "networkx",
+    "numpy",
+    "pillow",
+    "pytest",
+    "pytest-xdist",
+    "rtree",
+    "scipy",
+    "shapely",
+    "trimesh",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+pythonpath = [".", "test"]
+addopts = "-q"
+markers = ["slow: minutes each; skipped by scripts/test.sh unless --all"]

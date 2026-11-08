@@ -11,7 +11,8 @@
 #     only if it is missing (nvim lualine, the file viewers, the viewers' shared
 #     theme_palette.py loader, wezterm.lua, yazi init.lua);
 #   * NON-theme subsystems (Hammerspoon Stream Deck, the notify swatch, icon
-#     assets) that are not terminal-theme surfaces;
+#     assets, the 3d-print-project skill's filament/render colours — physical
+#     print colours, not terminal surfaces) that are not terminal-theme surfaces;
 #   * COMMENTS/examples that merely mention a hex (theme-apply override example,
 #     a couple of explanatory comments).
 # theme.yaml itself stores hex WITHOUT a leading '#', so it never matches.
@@ -38,6 +39,7 @@ matches=$(rg -n '#[0-9a-fA-F]{6}' home/ \
   -g '!**/bin/executable_ai-commit' \
   -g '!**/bin/executable_notify' \
   -g '!**/libexec/executable_theme-apply' \
+  -g '!**/agent-skills/3d-print-project/**' \
   2>/dev/null)
 
 if [ -n "$matches" ]; then

@@ -1,0 +1,6 @@
+# Every printable part's print status (scripts/print_parts.py; a companion follows its part).
+# status: "to-print" (never printed), "reprint" (printed, then changed: why), "printing" (on the printer now),
+#         "printed" (date), "hold" (not yet: why), "unknown" (to confirm: why)
+# next = N: its place in the queue (the user's order)
+# scripts/export.py builds stl/queue/ and stl/QUEUE.md from it, scripts/slice.py the print project. When a
+# change means a reprint, the part goes to "reprint" with the reason, in the same commit.

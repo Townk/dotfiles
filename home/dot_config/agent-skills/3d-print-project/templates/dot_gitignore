@@ -1,0 +1,17 @@
+# Third-party reference material and our measurement photos (not ours to redistribute)
+references/
+
+# Generated outputs (rebuilt by scripts/)
+stl/
+renders/
+*.3mf
+
+# Executor scratch (plan ledgers, briefs)
+.superpowers/
+
+# Local tool state
+.claude/
+.venv/
+.pytest_cache/
+__pycache__/
+.DS_Store

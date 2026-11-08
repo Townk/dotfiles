@@ -14,6 +14,7 @@ configuration directory.
 
 The shared skills are:
 
+- `3d-print-project`
 - `code-commit`
 - `code-review`
 - `code-simplifier`
