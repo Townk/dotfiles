@@ -49,7 +49,8 @@ restic restore latest --target ~
 ```
 
 This brings back `~/.ssh` private keys, `~/.config/gnupg/private-keys-v1.d`,
-the Atuin history DB + encryption key, unmanaged app config and live state,
+the Atuin history DB + encryption key, the Zen browser profile (tabs,
+extensions, logins, history), unmanaged app config and live state,
 project working trees, and `~/.local/state/terminal-backup/wip/` — the git
 sidecar directory the next step needs. Partial restores work too
 (`--include ~/.ssh`, etc.).
@@ -112,8 +113,19 @@ system-backup status                 # ● targets, fresh snapshot within 30 min
 | Recover deleted files here | `tm --deleted` |
 | Restore paths in place | `system-backup restore --snapshot <id> [--force] <path>…` |
 | Revert a bad restore | `system-backup undo` |
+| Zen came up blank (profile reset) | Quit Zen, then `system-backup restore --snapshot <id> --force ~/Library/Application\ Support/zen` |
 | Force a capture now | `system-backup now` |
 | Health check | `system-backup verify` / `system-backup status` |
 
 Restores are undoable by construction: any `--force` overwrite first snapshots
 the live state (tag `bkp-undo`), and `undo` peels it back.
+
+**Zen profile reset.** A Zen upgrade can relaunch into a blank profile. Firefox's
+"refresh" moves the old one to `~/Desktop/Old Zen Data/` — check there first
+and move it back. Otherwise pick a snapshot taken *before* the reset
+(`system-backup browse ~/Library/Application\ Support/zen`) and restore the
+whole `zen` dir as above: that brings back the old profile *and* the
+`profiles.ini`/`installs.ini` pointing at it. The blank profile Zen created
+stays on disk, unused. Live SQLite files are captured while Zen runs; if one
+restores torn, use an earlier rung — or Zen's own
+`zen-sessions-backup/` (tabs) and `bookmarkbackups/` (bookmarks).

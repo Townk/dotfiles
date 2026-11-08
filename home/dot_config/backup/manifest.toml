@@ -23,6 +23,15 @@ roots = [
   # skipped, so machine-specific entries are safe to list.
   "~/Library/Application Support/Code/User",
   "~/Library/Application Support/JetBrains",
+  # Zen browser: the whole profile (prefs, extensions + their storage, logins,
+  # history, open tabs/workspaces). `system-update` upgrades the cask, which
+  # quits Zen mid-session; on 2026-11-07 the relaunch reset the profile to a
+  # blank one (old data moved to ~/Desktop/Old Zen Data). This is the safety
+  # net. Live SQLite files may be captured mid-write — restore from an earlier
+  # rung if one is torn; Zen's own zen-sessions-backup/ + bookmarkbackups/
+  # (atomically written, kept below) are the consistent fallbacks for tabs and
+  # bookmarks.
+  "~/Library/Application Support/zen",
   "~/Projects",
 ]
 
@@ -40,6 +49,17 @@ deny = [
   "~/.gradle",
   "~/Library/Caches",
   "~/Library/Application Support/JetBrains/*/plugins",  # ~1 GB/IDE, marketplace-regenerable
+  # Zen profile: regenerable/downloaded parts only (site CacheStorage is
+  # already covered by **/cache/**). storage/ stays — extension data lives there.
+  "~/Library/Application Support/zen/Profiles/*/gmp-*",              # DRM/codec plugins (Widevine, OpenH264), re-downloaded
+  "~/Library/Application Support/zen/Profiles/*/storage/temporary",
+  "~/Library/Application Support/zen/Profiles/*/security_state",     # cert revocation data, re-fetched
+  "~/Library/Application Support/zen/Profiles/*/datareporting",      # telemetry
+  "~/Library/Application Support/zen/Profiles/*/saved-telemetry-pings",
+  "~/Library/Application Support/zen/Profiles/*/crashes",
+  "~/Library/Application Support/zen/Profiles/*/minidumps",
+  "~/Library/Application Support/zen/Profiles/*/.parentlock",        # live-instance lock; restoring it is meaningless
+  "~/Library/Application Support/zen/restore-backup-*",              # one-off manual-recovery leftovers
   "~/.local/state/terminal-backup",     # the backup's OWN staging/wip — never self-ingest
   "~/.local/state/images",              # system-images backing store — live .sparseimage files (18+ GB, churn); mounted contents already skipped as a separate fs
   "~/.config/cursor/chats",             # Cursor agent chat DBs (store.db): multi-GB, high churn, regenerable
