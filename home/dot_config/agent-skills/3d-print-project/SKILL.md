@@ -6,7 +6,7 @@ description: Runs a 3D-printed design project in OpenSCAD, from idea to a print-
 # 3D print project
 
 A project is a parametric OpenSCAD model, a pytest suite that proves every part fits and prints, and a print
-queue that ends in one Bambu Studio project (`stl/print/<project>.3mf`): every plate, filament and setting
+queue that ends in one Bambu Studio project (`stl/print/<project>.3mf`): every part, printed or not, every plate, filament and setting
 already set, so the user opens it and prints. The user prints on a Bambu Lab H2S and reviews visually.
 
 The user's standing goal for every part: **the best quality and strength, the least material, the fastest print,
@@ -64,7 +64,8 @@ Test first: write the test, watch it fail for the right reason, then change the 
 ```bash
 bash scripts/test.sh                 # without the slow tests; --all (the slicer too) before a merge
 uv run python scripts/export.py      # stl/<group>/, stl/queue/, stl/QUEUE.md
-uv run python scripts/slice.py       # stl/print/<project>.3mf and PRINT.md; queued coupons: <project>-coupons.3mf
+uv run python scripts/slice.py       # stl/print/<project>.3mf (every part) and PRINT.md; the queue: <project>-queue.3mf;
+                                     # queued coupons: <project>-coupons.3mf
 ```
 
 **Before anything runs the slicer** (`slice.py`, `test.sh --all`, a comparison), ask the user to quit Bambu Studio
@@ -104,6 +105,8 @@ rebuild the queue and the print project. Photos go in `references/photos/YYYY-MM
 - The slicer has the last word. `test/test_slice.py` slices the whole product and reads each plate's G-code: its
   filaments loaded at their temperatures, no warnings, support only where allowed. A part the box checks can't
   clear but the slicer prints cleanly goes in `SLICER_JUDGED` with why.
+- The project is the build's output: every part, whatever its print status (kids-charger dropped a dock that was
+  printing, and the user asked for it back, 2026-11-07). What is still to print is `<project>-queue.3mf` beside it.
 - Slicer settings are data in `scripts/print_parts.py` (printer, process, the user's calibrated filament presets,
   colours, per-part settings), never set by hand in the project.
 - Coupons are drafted, the product is not: a coupon is read once and thrown away, so it gets the least material and

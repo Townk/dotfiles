@@ -170,6 +170,17 @@ def test_only_the_parts_allowed_support_get_any(project):
     assert not bad, "\n".join(bad)
 
 
+def test_the_project_holds_every_part_printed_or_not():
+    # the project is the build's output, every part in it whatever its status; what is still to print is the
+    # queue's project (kids-charger's printing dock had dropped out of it, 2026-11-07)
+    from scripts.slice import is_coupon, projects
+    product = [n for n in hosts() if not is_coupon(n)]
+    status = {n: {"status": "printed"} for n in hosts()} | {product[0]: {"status": "printing"},
+                                                            product[-1]: {"status": "to-print"}}
+    p = projects(status=status)
+    assert p["product"] == product and p["queue"] == [product[-1]] and p["coupons"] == []
+
+
 def test_the_coupons_are_drafted_leaner_than_the_product():
     # the coupons are thrown away once read: thicker layers, less infill and skin than the final print, the outer
     # wall untouched (what a fit across the bed is)
