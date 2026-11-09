@@ -84,8 +84,10 @@ def jobs(side):
     sc, built = scenes()
     for i, (s, (scene, new)) in enumerate(zip(STEPS, sc), 1):
         for j, v in enumerate(s["views"], 1):
-            fresh = [n for n in new if n not in v.get("placed", ())]
-            todo.append((out / f"step{i:02d}-{j}.png", camera(v, pts, hand) + defines(side, scene, fresh, v, pts)
+            later = v.get("later", ())             # not drawn yet in this view (the keeper while its clip goes in)
+            fresh = [n for n in new if n not in v.get("placed", ()) and n not in later]
+            todo.append((out / f"step{i:02d}-{j}.png", camera(v, pts, hand)
+                         + defines(side, [n for n in scene if n not in later], fresh, v, pts)
                          + ["--size", "1200x900"]))
     thumbs = {p[2] for s in STEPS for p in s["pieces"] if p[2]}
     for t in sorted(thumbs):

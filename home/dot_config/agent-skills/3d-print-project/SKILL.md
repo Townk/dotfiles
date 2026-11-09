@@ -91,6 +91,10 @@ user, 2026-11-08): `scripts/guide/build.py` writes `renders/guide/<variant>/inde
   named where it first appears only), its pictures and a few plain words. **3 kinds of piece a step at most; a
   screw or an insert from 2 angles or more** (an overview and close-ups). Order the steps by what the assembly
   needs, not by part: the piece a screw goes into before the screw; what blocks a cable after the cable.
+  **Draw pieces in the order the hands put them in.** When one piece holds another down (a keeper over a clip, a
+  lid over a part), show the held piece going in alone first (`later`: pieces not drawn yet in a view), then that
+  piece in place (`placed`) with the holder above it and its screws above the holder: an explode stacked out of
+  order reads as the wrong assembly (kids-charger's clips once floated over their keepers: the user, 2026-11-09).
 
 `test/test_guide.py` checks those rules, that every printed part is in it as often as it prints, that the hardware
 is `docs/build/`'s table, and that every piece and close-up the steps name exists. Then look at every picture (a
