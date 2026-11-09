@@ -2,6 +2,7 @@
 scripts/guide/steps.py from scripts/guide/guide.scad and writes renders/guide/<side>/index.html, an IKEA-style sheet
 per station: each step's pieces with their counts and pictures, then its pictures (screws and inserts from 2 angles or
 more), then a few plain words. Opens in a browser, offline; prints one step per page."""
+import functools
 import html
 import json
 import re
@@ -13,11 +14,71 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from scripts.guide.steps import ACCENT, FINISHED, INTRO, STATIONS, STEPS, TITLE, WORDS  # noqa: E402
+from scripts.guide.steps import (ACCENT, FINISHED, INTRO, SAME, STATIONS, STEPS, TELL, THUMB_PART, TITLE,  # noqa: E402
+                                 WORDS)
+from scripts.print_parts import base, hosts  # noqa: E402
 
 SCAD = ROOT / "scripts/guide/guide.scad"
 RENDER = ["uv", "run", "-q", "--with", "pyrender", "--with", "trimesh", "--with", "numpy", "--with", "pillow",
           "python", str(ROOT / "scripts/render.py")]
+
+
+def part_of(p):
+    """The part or hardware a step's piece is: by its name, or by its picture where a step brings it back."""
+    label, n, thumb, name = p
+    k = name or THUMB_PART.get(thumb)
+    return SAME.get(k, k) if k else None
+
+
+@functools.cache
+def codes():
+    """{part or hardware name: its code}: printed pieces numbered, bought ones lettered, in the order the steps
+    first bring them; pieces that print the same share one."""
+    first = next(iter(STATIONS)) + "_"                # one variant's parts (a project's naming)
+    printed = {base(n) for n in hosts() if n.startswith(first) or len(STATIONS) == 1}
+    num, let = {}, {}
+    for s in STEPS:
+        for p in s["pieces"]:
+            k = part_of(p)
+            if k in printed:
+                num.setdefault(k, str(len(num) + 1))
+            elif k:
+                let.setdefault(k, chr(ord("A") + len(let)))
+    return {**num, **let, **{a: num[b] for a, b in SAME.items()}}
+
+
+def code_of(p):
+    k = part_of(p)
+    return codes().get(k) if k else None
+
+
+def size(side, name):
+    """A printed piece's size, longest first, in mm, from its exported STL."""
+    import trimesh
+    stl = ROOT / "stl" / side / f"{side}_{name}.stl"
+    if not stl.exists():
+        raise SystemExit(f"{stl.relative_to(ROOT)} is missing: run scripts/export.py first")
+    return " × ".join(f"{v:.0f}" for v in sorted(trimesh.load_mesh(stl).extents, reverse=True)) + " mm"
+
+
+def inventory():
+    """[(code, label, count, thumb, name)] for every coded piece, by code: its labels where it first shows
+    (joined where pieces share a code), its count over the whole build."""
+    seen = {}
+    for s in STEPS:
+        for p in s["pieces"]:
+            label, n, thumb, name = p
+            c = code_of(p)
+            if c is None:
+                continue
+            e = seen.setdefault(c, {"labels": [], "n": 0, "thumb": thumb, "name": part_of(p)})
+            if name:                                     # counted where it's brought, not where it comes back
+                e["n"] += n
+                lab = label.removesuffix(", with its cable")
+                if lab not in e["labels"]:
+                    e["labels"].append(lab)
+    key = lambda c: (not c.isdigit(), int(c) if c.isdigit() else c)
+    return [(c, " or ".join(e["labels"]), e["n"], e["thumb"], e["name"]) for c, e in sorted(seen.items(), key=lambda i: key(i[0]))]
 
 
 def focus(side):
@@ -108,26 +169,30 @@ def render(job):
 def page(side):
     w = {**WORDS[side], "kid": STATIONS[side]}
     fill = lambda t: html.escape(t.format(**w))
-    hw_total = {}
-    for s in STEPS:
-        for label, n, thumb, name in s["pieces"]:
-            if thumb and thumb.startswith("one_"):
-                hw_total[(label, thumb)] = hw_total.get((label, thumb), 0) + n
     steps = []
     for i, s in enumerate(STEPS, 1):
         pieces = "".join(
-            f'<div class="pc">{f'<img src="piece-{t}.png" alt="">' if t else '<div class="noimg"></div>'}'
-            f'<span class="n">{n}×</span><span class="l">{html.escape(label)}</span></div>' for label, n, t, _ in s["pieces"])
+            f'<div class="pc">{f'<img src="piece-{p[2]}.png" alt="">' if p[2] else '<div class="noimg"></div>'}'
+            f'<span class="n">{f'<b class="code">{c}</b>' if (c := code_of(p)) else ""}{p[1]}×</span>'
+            f'<span class="l">{html.escape(p[0])}</span></div>' for p in s["pieces"])
+        cs = list(dict.fromkeys(c for p in s["pieces"] if (c := code_of(p))))
+        used = f'<p class="uses">Pieces {", ".join(cs[:-1]) + " and " + cs[-1] if len(cs) > 1 else cs[0]}</p>' if cs else ""
         figs = "".join(f'<img src="step{i:02d}-{j}.png" alt="Step {i}, view {j}" loading="lazy">' for j in range(1, len(s["views"]) + 1))
         words = "".join(f"<li>{fill(t)}</li>" for t in s["text"])
         steps.append(f'''<section class="step" id="s{i}">
-  <div class="head"><span class="num">{i}</span><h2>{fill(s["title"])}</h2></div>
+  <div class="head"><span class="num">{i}</span><div><h2>{fill(s["title"])}</h2>{used}</div></div>
   <div class="pieces">{pieces}</div>
   <div class="views v{min(len(s["views"]), 3)}">{figs}</div>
   <ol class="words">{words}</ol>
 </section>''')
-    bag = "".join(f'<div class="pc"><img src="piece-{t}.png" alt=""><span class="n">{n}×</span><span class="l">{html.escape(l)}</span></div>'
-                  for (l, t), n in sorted(hw_total.items()))
+    def card(c, label, n, thumb, name):
+        sz = f'<span class="sz">{size(side, name)}</span>' if c.isdigit() else ""
+        tell = f'<span class="tell">{html.escape(TELL[name])}</span>' if name in TELL else ""
+        return (f'<div class="part"><b class="code big">{c}</b><img src="piece-{thumb}.png" alt="">'
+                f'<div><span class="n">{n}×</span> <span class="l">{html.escape(label)}</span>{sz}{tell}</div></div>')
+    inv = inventory()
+    made = "".join(card(*e) for e in inv if e[0].isdigit())
+    bought = "".join(card(*e) for e in inv if not e[0].isdigit())
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{fill(TITLE)}</title>
@@ -146,6 +211,16 @@ h1 {{ font-size: clamp(30px, 5vw, 44px); margin: 0; line-height: 1.1; }}
 .pc .noimg {{ background: transparent; width: 0; }}
 .pc .n {{ font-size: 26px; font-weight: 800; line-height: 1; }}
 .pc .l {{ font-size: 14px; color: var(--muted); line-height: 1.25; }}
+.code {{ display: inline-grid; place-items: center; min-width: 1.6em; height: 1.6em; padding: 0 4px; margin-right: 6px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-size: 15px; font-weight: 800; vertical-align: 3px; }}
+.code.big {{ font-size: 24px; margin: 0; }}
+.parts {{ display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }}
+.part {{ display: grid; grid-template-columns: auto auto 1fr; gap: 10px; align-items: center; background: var(--chip); border-radius: 10px; padding: 8px; }}
+.part img {{ width: 96px; height: 77px; object-fit: contain; border-radius: 6px; background: #596b80; }}
+.part .n {{ font-weight: 800; }}
+.part .sz, .part .tell {{ display: block; font-size: 14px; color: var(--muted); line-height: 1.3; }}
+.part .tell {{ color: var(--ink); }}
+.uses {{ margin: 2px 0 0; color: var(--muted); font-weight: 600; }}
 .step {{ display: grid; gap: 16px; border-top: 3px solid var(--ink); padding-top: 16px; break-inside: avoid; }}
 .head {{ display: flex; align-items: center; gap: 16px; }}
 .num {{ font-size: 56px; font-weight: 800; line-height: 1; color: var(--accent); min-width: 1.2em; }}
@@ -164,7 +239,9 @@ nav a {{ color: var(--ink); text-decoration: none; border: 1px solid var(--rule)
   <h1>{fill(TITLE)}</h1>
   <p class="lede">{len(STEPS)} steps. {fill(INTRO)} Each step shows its pieces first, then where they go: a piece drawn away from the rest moves along the line into its place.</p>
 </header>
-<section><h2>Hardware for the whole station</h2><div class="bag">{bag}</div></section>
+<section><h2>Every piece</h2><p class="lede">Each piece has a code: a number for what you printed, a letter for what you bought. Each step names its pieces by code. Sort them before you start: the clips look alike, so tell them by their length.</p>
+<h3>Printed</h3><div class="parts">{made}</div>
+<h3>Bought, for the whole station</h3><div class="parts">{bought}</div></section>
 <nav>{"".join(f'<a href="#s{i}">{i}</a>' for i in range(1, len(STEPS) + 1))}</nav>
 {"".join(steps)}
 <section class="step done"><div class="head"><span class="num">✓</span><h2>Done</h2></div><img src="finished.png" alt="Finished"></section>

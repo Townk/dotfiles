@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.guide.build import SCAD, focus, scenes
-from scripts.guide.steps import STATIONS, STEPS, WORDS
-from scripts.print_parts import QTY, base, hosts
+from scripts.guide.build import SCAD, code_of, codes, focus, scenes
+from scripts.guide.steps import SAME, STATIONS, STEPS, TELL, WORDS
+from scripts.print_parts import PRINT_PARTS, QTY, base, hosts
+from test.scad import is_empty
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -70,3 +71,28 @@ def test_the_words_fit_both_stations():
         for s in STEPS:
             for t in s["text"] + [s["title"]]:
                 t.format(**WORDS[side], kid=STATIONS[side])
+
+
+def test_every_piece_has_a_code_of_its_own():
+    # off the plate, like pieces look alike: the guide names every piece by a code, printed ones a number and
+    # bought ones a letter, and each step lists its pieces by code (the user, 2026-11-09)
+    c = codes()
+    printed = {base(n) for n in hosts() if n.startswith(next(iter(STATIONS)) + "_") or len(STATIONS) == 1}
+    assert printed <= set(c), printed - set(c)
+    assert all(c[n].isdigit() for n in printed) and all(not v.isdigit() for n, v in c.items() if n not in printed)
+    distinct = {n: v for n, v in c.items() if n not in SAME}
+    assert len(set(distinct.values())) == len(distinct), distinct
+    # a piece drawn is a piece coded: by its part name, or by its picture (THUMB_PART) where a step brings it back
+    missing = [(s["title"], p[0]) for s in STEPS for p in s["pieces"] if p[2] and not p[0].startswith("any ") and code_of(p) is None]
+    assert not missing, missing
+
+
+def test_pieces_sharing_a_code_are_the_same(tmp_path):
+    # either goes in either place: the same shape, as printed
+    pre = next(iter(STATIONS)) + "_" if len(STATIONS) > 1 else ""
+    for a, b in SAME.items():
+        src, call_a, defs = PRINT_PARTS[pre + a]
+        call_b = PRINT_PARTS[pre + b][1]
+        kw = dict(includes=[src], defines={k: f'"{v}"' for k, v in defs.items()})
+        assert is_empty(f"difference() {{ {call_a} {call_b} }}", tmp_path, **kw)
+        assert is_empty(f"difference() {{ {call_b} {call_a} }}", tmp_path, **kw)

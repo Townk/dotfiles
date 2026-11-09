@@ -91,6 +91,10 @@ user, 2026-11-08): `scripts/guide/build.py` writes `renders/guide/<variant>/inde
   named where it first appears only), its pictures and a few plain words. **3 kinds of piece a step at most; a
   screw or an insert from 2 angles or more** (an overview and close-ups). Order the steps by what the assembly
   needs, not by part: the piece a screw goes into before the screw; what blocks a cable after the cable.
+  **Every piece has a code** (the user, 2026-11-09: off the plate, the clips looked alike): printed pieces a
+  number, bought ones a letter, in the order the steps bring them; the page opens with every piece, its code,
+  count, size and how to tell it from the ones like it (`TELL`), and each step says "Pieces 4, 5 and D".
+  `THUMB_PART` codes a piece a step brings back by its picture; `SAME` gives pieces that print the same one code.
   **Draw pieces in the order the hands put them in.** When one piece holds another down (a keeper over a clip, a
   lid over a part), show the held piece going in alone first (`later`: pieces not drawn yet in a view), then that
   piece in place (`placed`) with the holder above it and its screws above the holder: an explode stacked out of
