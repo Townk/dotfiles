@@ -207,6 +207,16 @@ rebuild the queue and the print project. Photos go in `references/photos/YYYY-MM
   `support_style` default) were the fastest and sturdiest of six setups (+133 g, -2 h); thick organic trees the
   middle ground. `test/test_slice.py` measures the support's pieces in the G-code: a median over 100 mm² at
   20, 30 and 40 mm.
+- **Block supports from the plate beat organic trees on a big PETG box.** kids-charger's dock: the trees' feet let
+  go and printed strings (2026-11-07); normal block supports from the build plate only came out sturdier and peeled
+  cleaner (2026-11-09).
+- **What stands free between openings needs more than the skin.** The wall between two vent slots is a strip held
+  only above and below; at 1.6 (the hollow's skin) one per row broke mid-print, a missing tooth (kids-charger,
+  2026-11-09). Thicken the wall behind an opening row inside (45° above and below), and check it in a test.
+- **A pocket in an upright face has a ceiling.** A flat one 2.5 deep printed as strings; slope it 45° up into the face
+  and shape the part that goes in to match (a glued badge: its back edge chamfered).
+- **Screw a box's every corner.** A corner with no screw within ~100 mm opens when the box is handled or loaded
+  (kids-charger's tower, on a shelf): a boss in each corner, even inside a mechanism's room, with its swing tested.
 - **A part printed on its side has no base line on its bed face.** A plinth set-in or a channel's flat end facing
   the bed becomes a ledge in mid-air; end channels on a 45° plane they share.
 - **The person reviews by eye.** Renders inside the project, project-relative paths in the reply; a design
