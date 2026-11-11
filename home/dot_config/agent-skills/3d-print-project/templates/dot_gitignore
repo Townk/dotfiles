@@ -5,6 +5,7 @@ references/
 stl/
 renders/
 *.3mf
+result.json          # Bambu Studio's CLI drops one in its cwd
 
 # Executor scratch (plan ledgers, briefs)
 .superpowers/

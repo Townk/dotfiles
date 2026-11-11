@@ -175,6 +175,8 @@ def test_the_project_holds_every_part_printed_or_not():
     # queue's project (kids-charger's printing dock had dropped out of it, 2026-11-07)
     from scripts.slice import is_coupon, projects
     product = [n for n in hosts() if not is_coupon(n)]
+    if len(product) < 2:
+        pytest.skip("fewer than two parts yet")
     status = {n: {"status": "printed"} for n in hosts()} | {product[0]: {"status": "printing"},
                                                             product[-1]: {"status": "to-print"}}
     p = projects(status=status)

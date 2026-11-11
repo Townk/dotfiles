@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("scripts.guide.steps", reason="no assembly guide yet (scripts/guide/steps.py)")
+
 from scripts.guide.build import SCAD, code_of, codes, focus, scenes
 from scripts.guide.steps import SAME, STATIONS, STEPS, TELL, WORDS
 from scripts.print_parts import PRINT_PARTS, QTY, base, hosts

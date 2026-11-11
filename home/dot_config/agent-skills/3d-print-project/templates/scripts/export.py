@@ -48,6 +48,7 @@ def bed_offset(mesh):
 
 SLIVER_MM3 = 0.01   # the most a dropped sliver may hold (drop_slivers)
 SLIVER_MM2 = 0.5    # ... and its area
+VOID_MM3 = 5        # the most a filled sealed void may hold
 
 
 def drop_slivers(mesh):
@@ -56,7 +57,9 @@ def drop_slivers(mesh):
     pieces = mesh.split(only_watertight=False)
     if len(pieces) == 1:
         return mesh
-    keep = [p for p in pieces if abs(p.volume) >= SLIVER_MM3 or p.area >= SLIVER_MM2]
+    # and sealed hairline voids (an inside-out piece under VOID_MM3): filled, as the slicer would. kids-charger's
+    # tower left one (0.2 wide, 1.7 mm3) where infill closed a gap that was open to the hollow (2026-11-07)
+    keep = [p for p in pieces if (abs(p.volume) >= SLIVER_MM3 or p.area >= SLIVER_MM2) and not -VOID_MM3 < p.volume < 0]
     import trimesh
     return trimesh.util.concatenate(keep) if len(keep) != len(pieces) else mesh
 

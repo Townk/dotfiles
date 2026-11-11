@@ -13,3 +13,4 @@ Calipers, in mm. A coupon's verdict goes in its row, in words.
 
 | Param | Value | What | Set by |
 |---|---|---|---|
+| `fit` | 0.3 | a part in its pocket, per side | a fit coupon |
