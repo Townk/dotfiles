@@ -340,6 +340,10 @@ if mux::available && [[ "$(mux::pane_count)" -eq 1 ]]; then
   type motd >/dev/null 2>&1 && motd
 fi
 
+# One warning per tmux server when macOS has cut it off from the LAN (the
+# terminal app that started it is gone). See functions.d/mux-lan-check.sh.
+type mux_lan_check >/dev/null 2>&1 && mux_lan_check
+
 # Run unalias -a when starting a shell session within OpenCode
 if [[ -n "$OPENCODE" ]]; then
   unalias -a
