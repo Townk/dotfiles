@@ -188,6 +188,10 @@ rebuild the queue and the print project. Photos go in `references/photos/YYYY-MM
   compare hours, grams and support; find where the slicer puts support (`scripts/support_map.py`) before
   redesigning. kids-charger's dock went from 34h46 and 347 g of support to about 24 h and 139 g by limiting its
   hollow to a 40° roof over the tray (the rest infill); a guessed fix for the arm missed the real overhang.
+- **Lightning infill is for short parts.** Its branches rise free from the floor to the surfaces they hold; in a
+  solid PETG bin 49 tall they stood ~40 tall, the nozzle knocked them over and the pocket floors printed in mid-air
+  (alex-gridfinity's ratchets bin, 2026-11-13: plate cancelled). The slicer calls it clean. Over ~15 mm use a
+  self-supporting infill (adaptive cubic, gyroid); `test/test_print.py` checks.
 - **Ribs don't buy back support in Bambu's tree(auto).** Walls under a floor still leave the floor between them
   supported (kids-charger's tray ribs: +44 min, +50 g, -6 g of support; `bridge_no_support` changed nothing).
   What removes support is material that rises to the ceiling at 40-45° (a roof), or a shape with no ceiling.
