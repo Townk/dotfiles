@@ -514,3 +514,47 @@ wrong thing.
 | the fix is to spell the SAME key two ways. tmux binds three encodings of every MEH chord (see the MEH block in `keymap-base.conf`), so the arrows keep kitty `CSI <cp>;8u` and the letter twins take modifyOtherKeys `CSI 27;8;<cp>~` | different bytes, same `C-M-S-b`/`C-M-S-f` — verified by writing both forms into a real tmux client through a pty and watching the bind fire, not inferred from the comment. Any terminal that gives one mux action two chords needs this; it is the price of the letter/arrow twins existing at all |
 | `stringInput` is NOT what makes an entry work — it is just what Blink writes when a shortcut is entered through the string-sequence path rather than the hex one | 39 of 41 hex entries on a working device have no `stringInput` at all. It looked causal because hand-adding a shortcut fixed it, but the hand-added entry worked by being the ONLY claimant of those bytes at that moment. A correlation that survives one test and dies on the second |
 | one entry (`⌃⇧J`) went missing from an export with unique bytes and no collision, and came back on re-import | UNEXPLAINED. Left as a ledger row rather than folded into the dedup rule above — the rule accounts for every other case exactly, and a rule stretched to cover its one counter-example stops being predictive |
+
+## Rex — the third backend, seam only (2026-11-26)
+
+Rex is a terminal AND a multiplexer, so it is a backend of the `mux::` shim
+but not of the config plane above: no key tables, status ribbon or which-key
+panel are generated for it yet. This section is the ledger for what the shim
+answers in a Rex pane (`lib/mux/rex.zsh`, one `_mux_rx_*` per `_mux_tx_*`).
+Vocabulary: tmux window = Rex window, tmux pane = Rex **block**, tmux popup =
+Rex floating **layer**.
+
+| Verb | tmux impl | Rex impl | Status | Notes |
+|---|---|---|---|---|
+| `mux::backend` | `$TMUX` | `$REX_SESSION`, checked LAST | ✅ | a tmux/zellij started by hand inside a Rex pane inherits `REX_SESSION`, and there the inner mux must win |
+| `mux::available` | in a session + binary | same, **plus `$MUX_REX_CONSUMERS`** | 🟡 | the consumer gate stays shut on Rex until each consumer is ported; the verbs answer regardless. Temporary knob |
+| `mux::in_session` | `$TMUX`/`$ZELLIJ` | unchanged — false in Rex | ❌ | it means "in a tmux or zellij pane"; `.zshrc` has its own Rex refusal |
+| widgets (`mux::pick`/`confirm`/`choose`/`form`) | popup float | inline | ⏳ | `_mux::widgets_float` admits tmux/zellij only |
+| current/list/kill/rename session | `display`, `list-sessions`, … | `rex ls --json`, `rex kill`, `rex session rename` | ✅ | sessions are addressed by LABEL; rename defaults to our session by id |
+| `mux::resolve_session <pid>` | `list-clients` by pid | fails | ❌ | the Rex app is ONE process attached to many sessions — no single answer |
+| `mux::attached_sessions` | `session_attached` | sessions held by a client of kind `app` | ✅ | every CLI call is itself a client and must not count |
+| `mux::client_sessions` | WezTerm tty join | empty, success | ❌ | there is no outer terminal pane to map |
+| `mux::dump_screen` | `capture-pane` | `rex capture`, tail-cut to the block's rows | 🟡 | `rex capture` always includes scrollback; the viewport is approximated |
+| `mux::split` | `split-window -l` | `rex run/split --split --ratio` | 🟡 | `--size` only as a percentage; a cell count is dropped (Rex splits by ratio) |
+| `mux::popup` | `display-popup` via `run-shell -b` | `session.new_layer`, centered | 🟡 | fire-and-forget on both. NOT modal on Rex: the layer is a real floating pane and focus can leave it |
+| `mux::float_pane` / `has_float_pane` | `new-pane` (version-gated) | `session.new_layer` (always) | ✅ | cells are converted to window fractions |
+| `mux::new_tab --singleton` | `respawn-window -k` | close the labelled window, create a new one | 🟡 | the window id changes; the label does not |
+| `mux::send_text` / `send_key` | `send-keys` | `rex send` / `rex send-key` | ✅ | shift+arrows are spelled `shift+up` |
+| current tab / name / focus | `window_index`, `window_name` | position and label of the window holding `$REX_BLOCK` | ✅ | 1-based position; our OWN window, not the session's active one |
+| `mux::pane_cwd` / `focused_command` | pane format | block `process` method (`foreground.cwd` / `.name`) | ✅ | Rex tracks the foreground process natively — no shell stamp needed |
+| `mux::terminal_size` | client size | block cells ÷ the block's share of the window | 🟡 | derived, so off by a cell where a divider falls |
+| autostart exec verbs | `new-session` … | none | ❌ | nothing launches INTO Rex from a shell |
+
+### Platform gotchas — Rex (preview.21 server, preview.35 Mac app)
+
+| Fact | Consequence |
+|---|---|
+| a unix socket path is capped near 104 bytes | a scratch server's socket cannot live under macOS `$TMPDIR` + a mktemp dir; the spec uses `/tmp/mxrx-$$.sock` |
+| `rex wait` on a block that closed before the wait attached returns 1, not the child's status | never infer a popup's exit status from `rex wait`; carry it through a file, as `tmux-popup` does |
+| a Lua `rex.session.*` call is scoped to the session the script is attached to (`409 … stream is not attached to session`) | pass `-s SESSION` to `rex do`; the shim passes `-s` on every call |
+| client actions (`session.select`, `pane.zoom`) cannot be run with `rex.invoke` from Lua | use `rex.client.queue(name, args)`, and from the CLI `rex -C CLIENT do …`, which needs **Remote Control** on in the app |
+| panes inherit the SERVER's birth environment | a non-interactive command in a pane saw a stale `GPG_TTY`; `SSH_AUTH_SOCK` is whatever the server started with |
+| the CLI autostarts a server by default | every shim call passes `--autostart=false`: a stale `$REX_SERVER` must fail, not spawn an empty server and answer for it |
+| the Mac app offers no host actions (preview.35) and ignores a unix-socket host added with `rex hosts add` | the app cannot be attached to a scratch server; client-side behavior can only be tried on the live one |
+| `rex.ui.pick` from a `rex do` script returned `unsupported` with the app connected | whether an `init.lua` action can show the picker in this build is NOT yet verified |
+| `rex resize` is unimplemented | no resize verb in the backend |

@@ -9,6 +9,11 @@ unset ZELLIJ ZELLIJ_PANE_ID ZELLIJ_SESSION_NAME
 # Same hermetic guard for tmux (the mux.zsh shim dispatches on $TMUX): specs
 # that need the tmux backend export TMUX themselves in their setup().
 unset TMUX TMUX_PANE
+# And for Rex, the third backend: every pane Rex starts exports these, so a
+# suite launched from a Rex pane would otherwise resolve `mux::backend` to rex
+# in every spec that expects "none". REX_SERVER goes too — a spec that drives
+# rex must name its own scratch server, never inherit the developer's live one.
+unset REX_SESSION REX_BLOCK REX_SERVER
 
 # tm scrub-session debounce: real sessions nap before each synthesis so a
 # held key only builds the rung the user settles on — specs step rapidly

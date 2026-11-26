@@ -37,7 +37,16 @@ unset _mux_self
 
 # _mux::widgets_float — true when the current backend renders widgets as
 # floating modals (Phase 2: both backends; "none" renders inline).
-_mux::widgets_float() { mux::available; }
+# Only the backends with a float implementation below. A Rex pane is a real
+# session (mux::available is true there) but its widget float is not built
+# yet, so pickers and dialogs keep rendering inline in it — exactly what they
+# did before Rex was a backend at all.
+_mux::widgets_float() {
+  case "$(mux::backend)" in
+    zellij | tmux) mux::available ;;
+    *) return 1 ;;
+  esac
+}
 
 # Backend-dispatching float primitives (same argv contract both sides).
 _mux::float() {

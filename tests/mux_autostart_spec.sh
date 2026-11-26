@@ -103,6 +103,40 @@ EOS
   }
   seeded() { cat "$AS_TMP/seeded"; }
 
+  # The gate, not the launch: a Rex pane must never autostart tmux or zellij.
+  # Rex is itself the multiplexer, so nesting one only doubles the chrome and
+  # steals its keys. The control ("would autostart without REX_SESSION") cannot
+  # run here — the gate also demands a real tty on fds 0 and 1 — so the second
+  # example pins the ORDER instead: the Rex refusal must come before the tty
+  # test, or a future reshuffle could let a tty-backed Rex pane through.
+  Describe 'gate inside Rex'
+    gate() {
+      awk '/^_zsh_should_autoattach_mux\(\) \{/,/^}/' "$AS_TMP/zshrc" >"$AS_TMP/gate.zsh"
+      {
+        print -r -- "source $PWD/home/dot_local/lib/mux-bootstrap.zsh"
+        print -r -- "source $AS_TMP/gate.zsh"
+        print -r -- '_zsh_should_autoattach_mux'
+      } >"$AS_TMP/gate-case.zsh"
+      env -u TMUX -u ZELLIJ REX_SESSION="$1" TERM_PROGRAM=rex zsh -i "$AS_TMP/gate-case.zsh" 2>/dev/null
+    }
+    guard_order() {
+      awk '/^_zsh_should_autoattach_mux\(\) \{/,/^}/' "$AS_TMP/zshrc" |
+        awk '/REX_SESSION:-/ && !/^[[:space:]]*#/ { r = NR }
+             /-t 0 && -t 1/ { t = NR }
+             END { if (r && t && r < t) print "rex-first"; else print "wrong-order r=" r " t=" t }'
+    }
+
+    It 'refuses to autostart when REX_SESSION is set'
+      When call gate "session:abc"
+      The status should be failure
+    End
+
+    It 'checks for Rex before it checks for a tty'
+      When call guard_order
+      The output should equal "rex-first"
+    End
+  End
+
   Describe 'tmux backend'
     It 'creates Main when no session exists'
       When call launch tmux none

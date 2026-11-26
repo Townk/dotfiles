@@ -37,27 +37,57 @@ _mux_self="${(%):-%x}"
 source "$(dirname "$_mux_self")/mux/tmux.zsh"
 unset _mux_self
 
+_mux_self="${(%):-%x}"
+source "$(dirname "$_mux_self")/mux/rex.zsh"
+unset _mux_self
+
 # $MUX_BACKEND is an explicit override for callers that are NOT in a session
 # and know better: WezTerm's hooks (mux-open, nested-session-check) and
 # tab-edit resolve the backend from the client PROCESS (mux::backend_for_pid)
 # and then set this so every mux::* call they make dispatches that way.
+#
+# Rex is detected LAST: $REX_SESSION is inherited by everything started in a
+# Rex pane, including a tmux or zellij launched there by hand, and inside that
+# inner multiplexer it is the inner one whose panes we are in. Same rule that
+# lets a nested zellij win over tmux.
 mux::backend() {
   case "${MUX_BACKEND:-}" in
-    zellij | tmux) print -r -- "$MUX_BACKEND"; return ;;
+    zellij | tmux | rex) print -r -- "$MUX_BACKEND"; return ;;
   esac
   if [[ -n "${ZELLIJ:-}" ]]; then
     print -r -- zellij
   elif [[ -n "${TMUX:-}" ]]; then
     print -r -- tmux
+  elif [[ -n "${REX_SESSION:-}" ]]; then
+    print -r -- rex
   else
     print -r -- none
   fi
 }
 
+# _mux::unknown_backend <verb> — the ONE way a dispatch `case` ends for a
+# backend it has no arm for. Loud on purpose: these arms used to be `*)` →
+# the zellij (or tmux) implementation, so a third backend silently ran
+# another multiplexer's binary and reported ITS sessions. "none" stays quiet
+# — being outside any session is an ordinary state, not a mistake.
+_mux::unknown_backend() {
+  local b
+  b="$(mux::backend)"
+  [[ "$b" == none ]] || print -ru2 -- "mux::${1:-?}: no implementation for backend '$b'"
+  return 1
+}
+
+# mux::available is the gate CONSUMERS test before taking a mux-driven path
+# (a popup preview, a scrub tab) instead of their inline one. On Rex it stays
+# FALSE unless $MUX_REX_CONSUMERS is set: the verbs below all answer in a Rex
+# pane, but the consumers behind this gate have not been ported and validated
+# there yet, and a half-ported popup is worse than the inline path they take
+# today. The knob is how each one is tried; it goes away when they are done.
 mux::available() {
   case "$(mux::backend)" in
     zellij) _mux_zj_available ;;
     tmux) _mux_tx_available ;;
+    rex) [[ -n "${MUX_REX_CONSUMERS:-}" ]] && _mux_rx_available ;;
     *) return 1 ;;
   esac
 }
@@ -171,6 +201,7 @@ mux::bin() {
   case "${1:-}" in
     zellij) _mux_zj_bin ;;
     tmux)   _mux_tx_bin ;;
+    rex)    _mux_rx_bin ;;
     *) return 2 ;;
   esac
 }
@@ -204,14 +235,18 @@ mux::resolve_session() {
   if [[ -n "${1:-}" ]]; then b="$(mux::backend_for_pid "$1")"; else b="$(mux::backend)"; fi
   case "$b" in
     tmux) _mux_tx_resolve_session "$@" ;;
-    *) resolve_session "$@" ;;   # zellij impl also serves "none" (socket scan)
+    rex) _mux_rx_resolve_session "$@" ;;
+    zellij | none) resolve_session "$@" ;;   # zellij impl also serves "none" (socket scan)
+    *) _mux::unknown_backend resolve_session ;;
   esac
 }
 
 mux::attached_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_attached_sessions ;;
-    *) zellij_attached_sessions ;;
+    rex) _mux_rx_attached_sessions ;;
+    zellij | none) zellij_attached_sessions ;;
+    *) _mux::unknown_backend attached_sessions ;;
   esac
 }
 
@@ -293,7 +328,8 @@ mux::current_session() {
   case "$(mux::backend)" in
     tmux) _mux_tx_resolve_session ;;
     zellij) [[ -n "${ZELLIJ_SESSION_NAME:-}" ]] && print -r -- "$ZELLIJ_SESSION_NAME" ;;
-    *) return 1 ;;
+    rex) _mux_rx_resolve_session ;;
+    *) _mux::unknown_backend current_session ;;
   esac
 }
 
@@ -305,7 +341,8 @@ mux::list_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_list_sessions ;;
     zellij) _mux_zj_list_sessions ;;
-    *) return 1 ;;
+    rex) _mux_rx_list_sessions ;;
+    *) _mux::unknown_backend list_sessions ;;
   esac
 }
 
@@ -318,7 +355,8 @@ mux::kill_session() {
   case "$(mux::backend)" in
     tmux) _mux_tx_kill_session "$1" ;;
     zellij) _mux_zj_kill_session "$1" ;;
-    *) return 1 ;;
+    rex) _mux_rx_kill_session "$1" ;;
+    *) _mux::unknown_backend kill_session ;;
   esac
 }
 
@@ -330,14 +368,17 @@ mux::rename_session() {
   case "$(mux::backend)" in
     tmux) _mux_tx_rename_session "$1" "${2:-}" ;;
     zellij) _mux_zj_rename_session "$1" "${2:-}" ;;
-    *) return 1 ;;
+    rex) _mux_rx_rename_session "$1" "${2:-}" ;;
+    *) _mux::unknown_backend rename_session ;;
   esac
 }
 
 mux::client_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_client_sessions ;;
-    *) zellij_wezterm_sessions ;;
+    rex) _mux_rx_client_sessions ;;
+    zellij | none) zellij_wezterm_sessions ;;
+    *) _mux::unknown_backend client_sessions ;;
   esac
 }
 
@@ -351,7 +392,8 @@ mux::dump_screen() {
   case "$(mux::backend)" in
     tmux) _mux_tx_dump_screen "$full" ;;
     zellij) _mux_zj_dump_screen "$full" ;;
-    *) return 1 ;;
+    rex) _mux_rx_dump_screen "$full" ;;
+    *) _mux::unknown_backend dump_screen ;;
   esac
 }
 
@@ -384,7 +426,8 @@ mux::split() {
   case "$(mux::backend)" in
     zellij) _mux_zj_split "$dir" "$size" "$name" "$close" "$cwd" -- "$@" ;;
     tmux)   _mux_tx_split "$dir" "$size" "$name" "$close" "$cwd" -- "$@" ;;
-    *) return 1 ;;
+    rex)    _mux_rx_split "$dir" "$size" "$name" "$close" "$cwd" -- "$@" ;;
+    *) _mux::unknown_backend split ;;
   esac
 }
 
@@ -414,7 +457,8 @@ mux::popup() {
   case "$(mux::backend)" in
     zellij) _mux_zj_popup "$w" "$h" "$title" "$cwd" "$session" "$frame" -- "$@" ;;
     tmux)   _mux_tx_popup "$w" "$h" "$title" "$cwd" "$session" -- "$@" ;;
-    *) return 1 ;;
+    rex)    _mux_rx_popup "$w" "$h" "$title" "$cwd" "$session" -- "$@" ;;
+    *) _mux::unknown_backend popup ;;
   esac
 }
 
@@ -440,7 +484,8 @@ mux::new_tab() {
   case "$(mux::backend)" in
     zellij) _mux_zj_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
     tmux)   _mux_tx_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
-    *) return 1 ;;
+    rex)    _mux_rx_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
+    *) _mux::unknown_backend new_tab ;;
   esac
 }
 
@@ -455,8 +500,11 @@ mux::new_tab() {
 #   gates on mux::has_float_pane first rather than discovering the gap via a
 #   failed launch.
 mux::float_pane() {
-  [[ "$(mux::backend)" == tmux ]] || return 1
-  _mux_tx_float_pane "$@"
+  case "$(mux::backend)" in
+    tmux) _mux_tx_float_pane "$@" ;;
+    rex) _mux_rx_float_pane "$@" ;;
+    *) return 1 ;;
+  esac
 }
 
 # mux::has_float_pane — capability probe for mux::float_pane: does the
@@ -464,8 +512,11 @@ mux::float_pane() {
 # fail (no twin, no backend); tmux delegates to the real `list-commands`
 # probe (3.7b+ carries `new-pane`, older builds don't).
 mux::has_float_pane() {
-  [[ "$(mux::backend)" == tmux ]] || return 1
-  _mux_tx_has_float_pane
+  case "$(mux::backend)" in
+    tmux) _mux_tx_has_float_pane ;;
+    rex) _mux_rx_has_float_pane ;;
+    *) return 1 ;;
+  esac
 }
 
 # mux::send_text [--pane P] <text> — inject literal text into a pane. Without
@@ -479,7 +530,8 @@ mux::send_text() {
   case "$(mux::backend)" in
     zellij) _mux_zj_send_text "$1" "$pane" ;;
     tmux)   _mux_tx_send_text "$1" "$pane" ;;
-    *) return 1 ;;
+    rex)    _mux_rx_send_text "$1" "$pane" ;;
+    *) _mux::unknown_backend send_text ;;
   esac
 }
 
@@ -493,7 +545,8 @@ mux::send_key() {
   case "$(mux::backend)" in
     zellij) _mux_zj_send_key "$1" ;;
     tmux)   _mux_tx_send_key "$1" ;;
-    *) return 1 ;;
+    rex)    _mux_rx_send_key "$1" ;;
+    *) _mux::unknown_backend send_key ;;
   esac
 }
 
@@ -504,7 +557,8 @@ mux::current_tab() {
   case "$(mux::backend)" in
     zellij) _mux_zj_current_tab ;;
     tmux)   _mux_tx_current_tab ;;
-    *) return 1 ;;
+    rex)    _mux_rx_current_tab ;;
+    *) _mux::unknown_backend current_tab ;;
   esac
 }
 
@@ -514,7 +568,8 @@ mux::current_tab_name() {
   case "$(mux::backend)" in
     zellij) _mux_zj_current_tab_name ;;
     tmux)   _mux_tx_current_tab_name ;;
-    *) return 1 ;;
+    rex)    _mux_rx_current_tab_name ;;
+    *) _mux::unknown_backend current_tab_name ;;
   esac
 }
 
@@ -523,7 +578,8 @@ mux::focus_tab() {
   case "$(mux::backend)" in
     zellij) _mux_zj_focus_tab "$1" ;;
     tmux)   _mux_tx_focus_tab "$1" ;;
-    *) return 1 ;;
+    rex)    _mux_rx_focus_tab "$1" ;;
+    *) _mux::unknown_backend focus_tab ;;
   esac
 }
 
@@ -536,7 +592,8 @@ mux::pane_count() {
   case "$(mux::backend)" in
     zellij) _mux_zj_pane_count ;;
     tmux)   _mux_tx_pane_count ;;
-    *) return 1 ;;
+    rex)    _mux_rx_pane_count ;;
+    *) _mux::unknown_backend pane_count ;;
   esac
 }
 
@@ -547,7 +604,8 @@ mux::pane_cwd() {
   case "$(mux::backend)" in
     zellij) _mux_zj_pane_cwd "${1:-}" ;;
     tmux)   _mux_tx_pane_cwd ;;
-    *) return 1 ;;
+    rex)    _mux_rx_pane_cwd ;;
+    *) _mux::unknown_backend pane_cwd ;;
   esac
 }
 
@@ -555,7 +613,9 @@ mux::pane_cwd() {
 mux::terminal_size() {
   case "$(mux::backend)" in
     tmux) _mux_tx_terminal_size ;;
-    *) _mux_zj_terminal_size ;;   # zellij impl also serves "none" (tty fallback)
+    rex) _mux_rx_terminal_size ;;
+    zellij | none) _mux_zj_terminal_size ;;   # zellij impl also serves "none" (tty fallback)
+    *) _mux::unknown_backend terminal_size ;;
   esac
 }
 
@@ -580,6 +640,7 @@ mux::focused_command() {
   case "$(mux::backend_for_pid "${1:-}")" in
     zellij) _mux_zj_focused_command "${1:-}" ;;
     tmux)   _mux_tx_focused_command "${1:-}" ;;
-    *) return 1 ;;
+    rex)    _mux_rx_focused_command "${1:-}" ;;
+    *) _mux::unknown_backend focused_command ;;
   esac
 }
