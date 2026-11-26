@@ -42,6 +42,12 @@ _zsh_should_autoattach_mux() {
   # pane envs (cross-mux hygiene), so a $ZELLIJ test alone would let a tmux
   # pane's shell through and nest.
   ! mux::in_session || return 1
+  # Rex is a terminal AND a multiplexer: its own sessions/tabs/panes replace
+  # the mux, so nesting tmux or zellij inside it only doubles the chrome and
+  # steals its keys. $REX_SESSION is set in every Rex pane's environment. This
+  # is not folded into mux::in_session — that one answers "am I in a tmux or
+  # zellij pane", which the dispatch verbs rely on, and a Rex pane is neither.
+  [[ -z "${REX_SESSION:-}" ]] || return 1
   [[ -t 0 && -t 1 ]] || return 1
 
   # GUI helpers can launch interactive zsh at login without a real terminal.
