@@ -10,8 +10,10 @@
 #     switch, or false with a reason) — a new tmux binding cannot be added
 #     without deciding what it means on Rex;
 #   * the three mode-stack behaviours the YAML encodes come out as the three
-#     binding shapes (switch → enter the mode, sticky → bare action,
-#     otherwise → action wrapped in km_do, which leaves the mode);
+#     binding shapes, each through an action of the entry's own, titled for
+#     Rex's key-hint overlay (switch → km_stay entering the mode, sticky →
+#     km_stay repeating the action, otherwise → km_leave, which leaves the
+#     mode first);
 #   * the file Rex would actually load is valid, and names only actions that
 #     exist.
 Describe 'generated Rex config'
@@ -84,38 +86,73 @@ Describe 'generated Rex config'
     End
   End
 
+  # Every leader-table key is bound to an action of its OWN, titled with the
+  # entry's icon and desc: Rex has no label on a binding, and its key-hint
+  # overlay shows the bound action's title. km_stay keeps the mode stack (a
+  # switch, a sticky motion, one of our own actions); km_leave ends it first.
   Describe 'binding shapes'
+    bound() { grep -E -- "$1" "$RK_LUA"; }
+
     It 'enters the destination mode for a switch entry'
-      When call line 'rex.bind("prefix/t", "client.mode.enter", { name = "tab" })'
+      When call bound '^rex\.bind\("prefix/t", km_stay\("km_prefix_[0-9]+", "[^"]*Tab mode …", false, "client\.mode\.enter", \{ name = "tab" \}\)\)$'
       The output should be present
     End
 
-    It 'binds a sticky entry to the bare action, so the mode survives'
-      When call line 'rex.bind("pane/h", "pane.focus.left")'
+    It 'binds a sticky entry through km_stay, repeating, so the mode survives'
+      When call bound '^rex\.bind\("pane/h", km_stay\("km_pane_[0-9]+", "[^"]*focus left", true, "pane\.focus\.left"\)\)$'
       The output should be present
     End
 
-    It 'wraps a one-shot entry in km_do, so the mode ends'
-      When call line 'rex.bind("prefix/z", "km_do", { action = "pane.zoom" })'
+    It 'binds a one-shot entry through km_leave, so the mode ends'
+      When call bound '^rex\.bind\("prefix/z", km_leave\("km_prefix_[0-9]+", "[^"]*toggle pane zoom", "pane\.zoom"\)\)$'
       The output should be present
     End
 
     It 'passes arguments through the wrapper'
-      When call line 'rex.bind("tab/0", "km_do", { action = "client.tab.goto", args = { index = 10 } })'
+      When call bound '^rex\.bind\("tab/0", km_leave\("km_tab_[0-9]+", "[^"]*go to tab 10", "client\.tab\.goto", \{ index = 10 \}\)\)$'
       The output should be present
     End
 
     # The picker must not open under the mode's key hints, and an action
-    # cannot leave a mode while it runs: km_do leaves first, then queues it.
-    It 'opens a Quick Launch picker from a mode through km_do'
-      When call line 'rex.bind("session/shift+s", "km_do", { action = "ql_workspace" })'
+    # cannot leave a mode while it runs: km_leave leaves first, then queues it.
+    It 'opens a Quick Launch picker from a mode through km_leave'
+      When call bound '^rex\.bind\("session/shift\+s", km_leave\("km_session_[0-9]+", "[^"]*quick launch session", "ql_workspace"\)\)$'
       The output should be present
     End
 
     It 'leaves the mode before it runs the action'
-      order() { awk '/name  = "km_do"/,/^}/' "$RK_LUA" | grep -o -E 'queue\("client\.mode\.exit_all"\)|queue\(args\.action' | tr '\n' ' '; }
+      order() { awk '/^local function km_define/,/^end/' "$RK_LUA" | grep -o -E 'queue\("client\.mode\.exit_all"\)|queue\(action' | tr '\n' ' '; }
       When call order
-      The output should equal 'queue("client.mode.exit_all") queue(args.action '
+      The output should equal 'queue("client.mode.exit_all") queue(action '
+    End
+
+    It 'labels a key with its keymap.yaml icon and desc'
+      label() { grep -E '^rex\.bind\("session/w",' "$RK_LUA" | grep -c -F "$(yq '.keymap.tables.session.entries[] | select(.keys[0] == "w") | .icon + "  " + .desc' home/.chezmoidata/keymap.yaml)"; }
+      When call label
+      The output should equal "1"
+    End
+
+    # Rex draws its UI text with the upstream Symbols Nerd Font it bundles; the
+    # mirror codepoints exist only in our build. The offsets must match
+    # MIRROR_RANGES in custom-builds/nerd-fonts/fontbuild/ranges.py.
+    It 'rewrites label icons to the font build'"'"'s mirror codepoints'
+      offsets() {
+        grep -c -F 'title    = ui_glyphs(title),' "$RK_LUA"
+        grep -o -E 'cp \+ 0x[0-9A-F]+' "$RK_LUA" | sort -u | tr '\n' ' '
+        grep -o -E '0x[0-9A-F]+\)?,?$' custom-builds/nerd-fonts/fontbuild/ranges.py | tr -d '),' | grep -E '^0x(FA000|1A000)$' | sort -u | tr '\n' ' '
+      }
+      When call offsets
+      The output should equal "1
+cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
+    End
+
+    # The overlay lists keys in the order they are bound.
+    It 'binds the entries that open something first, and Escape last'
+      order() {
+        grep -E '^rex\.bind\("prefix/' "$RK_LUA" | sed -n '1p;$p' | sed -E 's/^rex\.bind\("([^"]+)".*/\1/' | tr '\n' ' '
+      }
+      When call order
+      The output should equal 'prefix/s prefix/escape '
     End
 
     It 'opens the app settings on cmd+comma'
@@ -124,7 +161,7 @@ Describe 'generated Rex config'
     End
 
     It 'binds every key variant of an entry'
-      variants() { grep -c -E '^rex\.bind\("pane/(up|k)", "pane\.focus\.up"\)$' "$RK_LUA"; }
+      variants() { grep -E '^rex\.bind\("pane/(up|k)", km_stay\("km_pane_[0-9]+", "[^"]*", true, "pane\.focus\.up"\)\)$' "$RK_LUA" | grep -o -E 'km_pane_[0-9]+' | sort | uniq -c | tr -s ' ' | cut -d' ' -f2; }
       When call variants
       The output should equal "2"
     End
@@ -139,10 +176,10 @@ Describe 'generated Rex config'
       exits() {
         local m
         for m in prefix tab pane resize move session; do
-          grep -qF "rex.bind(\"$m/escape\", \"client.mode.exit_all\")" "$RK_LUA" || print -r -- "no escape: $m"
+          grep -qF "rex.bind(\"$m/escape\", km_stay(\"km_exit_all\", \"Exit\", false, \"client.mode.exit_all\"))" "$RK_LUA" || print -r -- "no escape: $m"
         done
         for m in tab pane resize move session; do
-          grep -qF "rex.bind(\"$m/backspace\", \"client.mode.exit\")" "$RK_LUA" || print -r -- "no back: $m"
+          grep -qF "rex.bind(\"$m/backspace\", km_stay(\"km_exit\", \"Back\", false, \"client.mode.exit\"))" "$RK_LUA" || print -r -- "no back: $m"
         done
       }
       When call exits
@@ -457,7 +494,6 @@ Describe 'generated Rex config'
       When call rex config check "$RK_LUA"
       The status should be success
       The output should include "modes: 6"
-      The output should include "actions: 8"
     End
 
     It 'defines every one of our actions that a binding names'
