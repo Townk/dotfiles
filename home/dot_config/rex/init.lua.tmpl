@@ -346,11 +346,15 @@ end
 rex.action{
   name  = "close_guarded",
   title = "Close, Asking First for a Running Job",
-  args  = { what = "string" },
+  args  = { what = "string", leave = "boolean?" },
   run   = function(ctx, args)
     local close = (args.what == "tab") and "client.tab.close" or "pane.close"
-    -- Bound from a mode through km_stay, which does not leave it.
-    rex.client.queue("client.mode.exit_all")
+    -- leave: bound from a mode, through km_stay, which does not leave it.
+    -- Only then: outside a mode client.mode.exit_all is "not available",
+    -- and a close queued behind a failed action must not depend on it.
+    -- What is queued runs after this returns, so a question asked from a
+    -- mode shows with the mode's key hints still up.
+    if args.leave then rex.client.queue("client.mode.exit_all") end
     local jobs = jobs_session()
     if not (jobs and ctx.block_id and ctx.session_id == jobs) then
       rex.client.queue(close)

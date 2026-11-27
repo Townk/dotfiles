@@ -268,22 +268,36 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
       The output should be present
     End
 
+    # No mode to leave: the chords carry only `what`.
     It 'binds the Cmd close chords to close_guarded'
       chords() {
-        line 'rex.bind("cmd+w", "close_guarded", { what = "pane" })'
-        line 'rex.bind("cmd+shift+w", "close_guarded", { what = "tab" })'
+        grep -x -F 'rex.bind("cmd+w", "close_guarded", { what = "pane" })' "$RK_LUA"
+        grep -x -F 'rex.bind("cmd+shift+w", "close_guarded", { what = "tab" })' "$RK_LUA"
       }
       When call chords
       The lines of output should equal 2
     End
 
-    It 'binds the leader close entries to close_guarded'
+    # km_stay does not leave the mode, so the entry asks the action to.
+    It 'binds the leader close entries to close_guarded, leaving the mode'
       leader() {
-        grep -E '^rex\.bind\("pane/x", km_stay\("km_pane_[0-9]+", "[^"]*close pane", false, "close_guarded", \{ what = "pane" \}\)\)$' "$RK_LUA"
-        grep -E '^rex\.bind\("tab/x", km_stay\("km_tab_[0-9]+", "[^"]*close tab", false, "close_guarded", \{ what = "tab" \}\)\)$' "$RK_LUA"
+        grep -E '^rex\.bind\("pane/x", km_stay\("km_pane_[0-9]+", "[^"]*close pane", false, "close_guarded", \{ leave = true, what = "pane" \}\)\)$' "$RK_LUA"
+        grep -E '^rex\.bind\("tab/x", km_stay\("km_tab_[0-9]+", "[^"]*close tab", false, "close_guarded", \{ leave = true, what = "tab" \}\)\)$' "$RK_LUA"
       }
       When call leader
       The lines of output should equal 2
+    End
+
+    # Outside a mode client.mode.exit_all is "not available"; the close
+    # queued after it must not depend on it.
+    It 'leaves the mode only when asked to, before the close'
+      order() {
+        awk '/name  = "close_guarded",/,/^}/' "$RK_LUA" |
+          grep -o -E '(if args\.leave then )?rex\.client\.queue\(("client\.mode\.exit_all"|close)\)' |
+          uniq | tr '\n' '|'
+      }
+      When call order
+      The output should equal 'if args.leave then rex.client.queue("client.mode.exit_all")|rex.client.queue(close)|'
     End
 
     It 'binds nothing straight to pane.close or client.tab.close'

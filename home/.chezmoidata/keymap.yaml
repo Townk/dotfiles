@@ -511,7 +511,7 @@ keymap:
       - keys:
         - x
         desc: close tab
-        rex: {action: close_guarded, args: {what: tab}}
+        rex: {action: close_guarded, args: {what: tab, leave: true}}
         icon: 󰱞
         color: red
         cmd: kill-window ; set key-table root
@@ -740,7 +740,7 @@ keymap:
       - keys:
         - x
         desc: close pane
-        rex: {action: close_guarded, args: {what: pane}}
+        rex: {action: close_guarded, args: {what: pane, leave: true}}
         icon: 󰅘
         color: red
         cmd: kill-pane ; set key-table root
