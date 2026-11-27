@@ -309,6 +309,54 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
 
   # The watch-tasks key shows the Jobs session. km_stay does not leave the
   # mode, so the entry asks the action to, as the close entries do.
+  # A session made with the owner's key gets a readable label: Rex shows the
+  # current session's label in the tab bar, and its own generated names are
+  # hyphenated (wandering-glade).
+  Describe 'new session key'
+    body() { awk '/name  = "session_new_named",/,/^}/' "$RK_LUA"; }
+
+    It 'defines session_new_named'
+      When call line 'name  = "session_new_named",'
+      The output should be present
+    End
+
+    It 'binds the key to it, leaving the mode, and no longer to Rex'"'"'s own action'
+      bound() {
+        grep -c -E '^rex\.bind\("session/s", km_stay\("km_session_[0-9]+", "[^"]*new session", false, "session_new_named", \{ leave = true \}\)\)$' "$RK_LUA"
+        grep -c -E '^rex\.bind\("session/s",.*"session\.new"' "$RK_LUA" || true
+      }
+      When call bound
+      The output should equal "1
+0"
+    End
+
+    It 'asks for a Title Case name, creates the session with it, then shows it'
+      steps() {
+        body | grep -o -E 'mux-random-session-name", "--title"|rex\.call\("session\.create"|label = name|rex\.client\.queue\("session\.select"' | tr '\n' '|'
+      }
+      When call steps
+      The output should equal 'mux-random-session-name", "--title"|rex.call("session.create"|label = name|rex.client.queue("session.select"|'
+    End
+
+    It 'gives the new session a shell tab, as Rex'"'"'s own action does'
+      shell() { body | grep -c -F 'flavor = "com.superlogical.terminal.shell"'; }
+      When call shell
+      The output should equal "1"
+    End
+
+    It 'falls back to Rex'"'"'s own new session when no name comes back'
+      fallback() { body | grep -c -F 'rex.client.queue("session.new")'; }
+      When call fallback
+      The output should equal "1"
+    End
+
+    It 'leaves the mode only when asked'
+      leave() { body | grep -c -F 'if args.leave then rex.client.queue("client.mode.exit_all") end'; }
+      When call leave
+      The output should equal "1"
+    End
+  End
+
   Describe 'watch tasks key'
     It 'defines jobs_show'
       When call line 'name  = "jobs_show",'

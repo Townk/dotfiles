@@ -929,7 +929,8 @@ keymap:
       - keys:
         - s
         desc: new session
-        rex: session.new
+        # rex: our own action, so the session gets a readable name
+        rex: {action: session_new_named, args: {leave: true}}
         icon: 󰝜
         color: mauve
         cmd: run-shell -b "$HOME/.config/mux/scripts/mux-new-session '#{client_tty}' '#{pane_current_path}'" ; set key-table root

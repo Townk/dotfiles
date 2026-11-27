@@ -400,6 +400,44 @@ rex.action{
 }
 
 ---------------------------------------------------------------------------
+-- Sessions
+---------------------------------------------------------------------------
+-- Rex shows the current session's label in the tab bar once there is more
+-- than one session, and the names it generates itself are hyphenated
+-- (wandering-glade). The new-session key makes the session with a name of
+-- ours instead — "Wandering Glade", from the same generator the tmux side
+-- uses — and moves the app to it. Sessions made with Rex's own buttons or
+-- palette keep Rex's names. `leave` as in close_guarded.
+rex.action{
+  name  = "session_new_named",
+  title = "New Session with a Readable Name",
+  args  = { leave = "boolean?" },
+  run   = function(ctx, args)
+    if args.leave then rex.client.queue("client.mode.exit_all") end
+
+    local named = run_script(ctx, { HOME .. "/.local/bin/mux-random-session-name", "--title" })
+    local name = named and named.stdout:match("^%s*(.-)%s*$") or ""
+    if name == "" then
+      -- No name to give: Rex's own action still makes a session.
+      rex.client.queue("session.new")
+      return
+    end
+
+    local created, err = rex.call("session.create", {
+      label = name,
+      initial_windows = {
+        { layout = { block = { flavor = "com.superlogical.terminal.shell" } } },
+      },
+    })
+    if created == nil or not created.session_id then
+      rex.log("warn", "new session " .. name .. ": " .. tostring(err))
+      return
+    end
+    rex.client.queue("session.select", { session_id = created.session_id })
+  end,
+}
+
+---------------------------------------------------------------------------
 -- Context keys — vim/fzf-aware navigation and resize
 ---------------------------------------------------------------------------
 -- Ctrl+h/j/k/l and Ctrl+arrows are ONE motion across Rex panes and nvim
