@@ -330,30 +330,129 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
 0"
     End
 
-    It 'asks for a Title Case name, creates the session with it, then shows it'
-      steps() {
-        body | grep -o -E 'mux-random-session-name", "--title"|rex\.call\("session\.create"|label = name|rex\.client\.queue\("session\.select"' | tr '\n' '|'
+    # What the action DOES, not how its text reads: the config exactly as
+    # rendered is loaded by a real Lua 5.1 interpreter against a stub `rex`
+    # that records every call, and the shipped function is run. No Rex.
+    Describe 'run under Lua with a stub rex'
+      lua_bin() { command -v lua 2>/dev/null || command -v luajit 2>/dev/null || command -v lua5.1 2>/dev/null; }
+      lua_missing() { ! lua_bin >/dev/null; }
+      Skip if 'no Lua interpreter is installed' lua_missing
+
+      write_harness() {
+        cat >"$RK_TMP/harness.lua" <<'LUA'
+-- lua harness.lua <init.lua> <action> [name=blank|fails|error] [create=fails|noid] [leave]
+local init, action = arg[1], arg[2]
+local opt = {}
+for i = 3, #arg do
+  local k, v = arg[i]:match("^(%w+)=(.*)$")
+  if k then opt[k] = v else opt[arg[i]] = true end
+end
+
+-- Whatever the config touches while loading (rex.bind, rex.mode, …): a
+-- value that can be called and indexed and does nothing.
+local function inert()
+  return setmetatable({}, {
+    __index = function() return inert() end,
+    __call = function() return inert() end,
+  })
+end
+
+local actions = {}
+local function out(...) io.write(table.concat({ ... }, " "), "\n") end
+
+rex = setmetatable({
+  action = function(def) actions[def.name] = def end,
+  log = function(level) out("log", level) end,
+  exec = function(argv, o)
+    local shown = {}
+    for i, a in ipairs(argv) do shown[i] = (a:gsub("^.*/%.local/", "~/.local/")) end
+    out("exec", table.concat(shown, " "), "REX_SESSION=" .. tostring(o and o.env and o.env.REX_SESSION))
+    if opt.name == "error" then return nil, "spawn failed" end
+    if opt.name == "fails" then return { ok = false, code = 3, stdout = "", stderr = "could not list" } end
+    if opt.name == "blank" then return { ok = true, code = 0, stdout = " \n", stderr = "" } end
+    return { ok = true, code = 0, stdout = "Wandering Glade\n", stderr = "" }
+  end,
+  call = function(method, params)
+    local w = params and params.initial_windows or {}
+    local flavor = w[1] and w[1].layout and w[1].layout.block and w[1].layout.block.flavor
+    out("call", method, "label=[" .. tostring(params and params.label) .. "]",
+        "windows=" .. #w, "flavor=" .. tostring(flavor))
+    if opt.create == "fails" then return nil, "server said no" end
+    if opt.create == "noid" then return {} end
+    return { session_id = "session:new" }
+  end,
+  client = {
+    queue = function(name, a)
+      if a and a.session_id then out("queue", name, "session_id=" .. a.session_id) else out("queue", name) end
+    end,
+  },
+}, { __index = function() return inert() end })
+
+dofile(init)
+local def = assert(actions[action], "the config defines no action " .. action)
+def.run({ session_id = "session:here", block_id = "block:here" }, { leave = opt.leave })
+LUA
       }
-      When call steps
-      The output should equal 'mux-random-session-name", "--title"|rex.call("session.create"|label = name|rex.client.queue("session.select"|'
-    End
+      BeforeAll write_harness
 
-    It 'gives the new session a shell tab, as Rex'"'"'s own action does'
-      shell() { body | grep -c -F 'flavor = "com.superlogical.terminal.shell"'; }
-      When call shell
-      The output should equal "1"
-    End
+      # act [scenario words] — the calls session_new_named makes, in order.
+      act() { "$(lua_bin)" "$RK_TMP/harness.lua" "$RK_LUA" session_new_named "$@"; }
 
-    It 'falls back to Rex'"'"'s own new session when no name comes back'
-      fallback() { body | grep -c -F 'rex.client.queue("session.new")'; }
-      When call fallback
-      The output should equal "1"
-    End
+      It 'asks for a Title Case name, creates a shell session with it, then shows it'
+        When call act
+        The output should equal 'exec ~/.local/bin/mux-random-session-name --title REX_SESSION=session:here
+call session.create label=[Wandering Glade] windows=1 flavor=com.superlogical.terminal.shell
+queue session.select session_id=session:new'
+      End
 
-    It 'leaves the mode only when asked'
-      leave() { body | grep -c -F 'if args.leave then rex.client.queue("client.mode.exit_all") end'; }
-      When call leave
-      The output should equal "1"
+      It 'leaves the mode first when asked, and only then'
+        When call act leave
+        The line 1 of output should equal 'queue client.mode.exit_all'
+        The line 2 of output should start with 'exec '
+        The lines of output should equal 4
+      End
+
+      # The name script printing nothing, failing (3 is "could not check the
+      # name is unused"), or not starting at all: no label of ours, so Rex's
+      # own action makes the session — the key press always does something.
+      Describe 'with no name to give'
+        Parameters
+          name=blank 'exec|queue session.new|'
+          name=fails 'exec|log warn|queue session.new|'
+          name=error 'exec|log error|queue session.new|'
+        End
+        # One call per line, the exec line cut to its first word.
+        steps() { act "$@" | sed 's/^exec .*/exec/' | tr '\n' '|'; }
+        It "falls back to Rex's own new session ($1)"
+          When call steps "$1"
+          The output should equal "$2"
+        End
+      End
+
+      # session.create answering nil: no session was made.
+      It "falls back to Rex's own new session when the session cannot be created"
+        When call act create=fails
+        The output should equal 'exec ~/.local/bin/mux-random-session-name --title REX_SESSION=session:here
+call session.create label=[Wandering Glade] windows=1 flavor=com.superlogical.terminal.shell
+log warn
+queue session.new'
+      End
+
+      # An answer without an id means a session was probably made: a second
+      # one from the fallback would leave the first orphaned.
+      It 'makes no second session when the answer carries no id'
+        When call act create=noid
+        The output should equal 'exec ~/.local/bin/mux-random-session-name --title REX_SESSION=session:here
+call session.create label=[Wandering Glade] windows=1 flavor=com.superlogical.terminal.shell
+log warn'
+      End
+
+      It 'still leaves the mode before falling back'
+        When call act leave create=fails
+        The line 1 of output should equal 'queue client.mode.exit_all'
+        The line 5 of output should equal 'queue session.new'
+        The lines of output should equal 5
+      End
     End
   End
 
@@ -428,6 +527,170 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
     It 'logs when there is no jobs session'
       When call line 'rex.log("info", "no jobs session")'
       The output should be present
+    End
+  End
+
+  # What close_guarded and jobs_show DO: the rendered config is loaded by a
+  # real Lua interpreter against a stub `rex` that records every call, and
+  # the shipped function is run. The Jobs session id comes from a stubbed
+  # io.open, so no state root is read. No Rex.
+  Describe 'job actions under Lua with a stub rex'
+    job_lua_bin() { command -v lua 2>/dev/null || command -v luajit 2>/dev/null || command -v lua5.1 2>/dev/null; }
+    job_lua_missing() { ! job_lua_bin >/dev/null; }
+    Skip if 'no Lua interpreter is installed' job_lua_missing
+
+    write_job_harness() {
+      cat >"$RK_TMP/job_harness.lua" <<'LUA'
+-- lua job_harness.lua <init.lua> <action> [key=value | flag]…
+--   session=ID  what .rex_session holds (left out: no such file)
+--   here=ID     the focused pane's session (default session:jobs)
+--   owns=yes|no|odd|killed|error   how `job owns-block` ends
+--   pick=close|keep                the answer to the question (left out: Esc)
+--   what=tab|pane, leave           the action's arguments
+local init, action = arg[1], arg[2]
+local opt = {}
+for i = 3, #arg do
+  local k, v = arg[i]:match("^(%w+)=(.*)$")
+  if k then opt[k] = v else opt[arg[i]] = true end
+end
+
+local function inert()
+  return setmetatable({}, {
+    __index = function() return inert() end,
+    __call = function() return inert() end,
+  })
+end
+
+local actions = {}
+local function out(...) io.write(table.concat({ ... }, " "), "\n") end
+
+local real_open = io.open
+io.open = function(path, mode)
+  if not path:match("/%.rex_session$") then return real_open(path, mode) end
+  if not opt.session then return nil end
+  return { read = function() return opt.session end, close = function() end }
+end
+
+rex = setmetatable({
+  action = function(def) actions[def.name] = def end,
+  log = function(level, msg) out("log", level, (msg:gsub(":.*", ""))) end,
+  exec = function(argv, o)
+    out("exec", (argv[1]:gsub("^.*/%.local/", "~/.local/")), argv[2], argv[3],
+        "timeout=" .. tostring(o and o.timeout))
+    if opt.owns == "error" then return nil, "timed out" end
+    if opt.owns == "killed" then return { ok = false, stdout = "", stderr = "" } end
+    if opt.owns == "odd" then return { ok = false, code = 127, stdout = "", stderr = "no such file" } end
+    if opt.owns == "no" then return { ok = false, code = 1, stdout = "", stderr = "" } end
+    return { ok = true, code = 0, stdout = "Remux\n", stderr = "" }
+  end,
+  ui = {
+    pick = function(spec)
+      out("pick", spec.title, "[" .. spec.items[1].title .. "]")
+      if opt.pick then return opt.pick end
+      return nil, "cancelled"
+    end,
+  },
+  client = {
+    queue = function(name, a)
+      if a and a.session_id then out("queue", name, "session_id=" .. a.session_id) else out("queue", name) end
+    end,
+  },
+}, { __index = function() return inert() end })
+
+dofile(init)
+local def = assert(actions[action], "the config defines no action " .. action)
+def.run({ session_id = opt.here or "session:jobs", block_id = "block:here" },
+        { what = opt.what, leave = opt.leave })
+LUA
+    }
+    BeforeAll write_job_harness
+
+    job_act() { "$(job_lua_bin)" "$RK_TMP/job_harness.lua" "$RK_LUA" "$@"; }
+
+    Describe 'jobs_show'
+      It 'selects the recorded Jobs session, leaving the mode first'
+        When call job_act jobs_show session=session:jobs leave
+        The output should equal 'queue client.mode.exit_all
+queue session.select session_id=session:jobs'
+      End
+
+      It 'logs and selects nothing when no Jobs session is recorded'
+        When call job_act jobs_show
+        The output should equal 'log info no jobs session'
+      End
+    End
+
+    Describe 'close_guarded'
+      It 'closes at once outside the Jobs session, starting no process'
+        When call job_act close_guarded session=session:jobs here=session:main what=tab
+        The output should equal 'queue client.tab.close'
+      End
+
+      It 'closes at once when no Jobs session is recorded'
+        When call job_act close_guarded what=pane leave
+        The output should equal 'queue client.mode.exit_all
+queue pane.close'
+      End
+
+      It 'closes a Jobs pane that follows no running job without asking'
+        When call job_act close_guarded session=session:jobs owns=no what=pane
+        The output should equal 'exec ~/.local/libexec/job owns-block block:here timeout=5
+queue pane.close'
+      End
+
+      It 'asks before closing a running job, and closes on yes'
+        When call job_act close_guarded session=session:jobs owns=yes pick=close what=tab
+        The output should equal 'exec ~/.local/libexec/job owns-block block:here timeout=5
+pick Close the running job Remux? [Cancel the job and close]
+queue client.tab.close'
+      End
+
+      It 'keeps the tab when the answer is to keep it, or Esc'
+        answers() {
+          job_act close_guarded session=session:jobs owns=yes pick=keep what=tab | grep -c '^queue' || :
+          job_act close_guarded session=session:jobs owns=yes what=tab | grep -c '^queue\|^log' || :
+        }
+        When call answers
+        The output should equal '0
+0'
+      End
+
+      # Closing a Jobs tab can cancel a job: when the check itself fails —
+      # it timed out, could not start, or ended some other way than "no" —
+      # the owner is asked rather than the tab closed on a guess.
+      Describe 'when the check gives no answer'
+        Parameters
+          error
+          killed
+          odd
+        End
+        It "asks instead of closing ($1)"
+          When call job_act close_guarded session=session:jobs "owns=$1" what=tab
+          The output should equal 'exec ~/.local/libexec/job owns-block block:here timeout=5
+log warn close_guarded
+pick Could not check for a running job. Close anyway? [Close it, cancelling any job in it]'
+        End
+        It "closes when the owner says so ($1)"
+          When call job_act close_guarded session=session:jobs "owns=$1" pick=close what=pane
+          The line 4 of output should equal 'queue pane.close'
+        End
+      End
+    End
+
+    # job.zsh keeps its state under $XDG_STATE_HOME; the config must look in
+    # the same place, as chezmoi sees it when it writes the file.
+    Describe 'the job state root'
+      root() { "$@" chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template <home/dot_config/rex/init.lua.tmpl | grep '^local JOB_STATE_ROOT = '; }
+
+      It 'follows XDG_STATE_HOME'
+        When call root env XDG_STATE_HOME=/x/state
+        The output should equal 'local JOB_STATE_ROOT = "/x/state/jobs"'
+      End
+
+      It 'defaults to ~/.local/state'
+        When call root env -u XDG_STATE_HOME
+        The output should equal "local JOB_STATE_ROOT = \"$(chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template '{{ .chezmoi.homeDir }}')/.local/state/jobs\""
+      End
     End
   End
 

@@ -87,7 +87,7 @@ case "$result" in
 esac
 
 if [ -n "$dir" ]; then
-  print -r -- "$EPOCHSECONDS $result ${exit_code:-}" > "$dir/result"
+  job::_result_write "$dir" "$result" "${exit_code:-}"
 fi
 
 # Statusbar (phase 3 UI rev): this job just left the running count — force

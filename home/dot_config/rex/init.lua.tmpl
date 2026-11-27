@@ -330,9 +330,11 @@ rex.action{
 -- confirmation, so every close key comes here. Outside the Jobs session —
 -- read from the id the job opener records — the close is queued at once,
 -- with no process started. Inside it, `job owns-block` says whether the
--- focused pane follows a running job; only then is the owner asked, and
--- dismissing the question keeps the tab.
-local JOB_STATE_ROOT = {{ printf "%s/.local/state/jobs" .chezmoi.homeDir | quote }}
+-- focused pane follows a running job; then, or when it cannot say, the
+-- owner is asked, and dismissing the question keeps the tab.
+-- The state root is job.zsh's: under $XDG_STATE_HOME as chezmoi saw it when
+-- it wrote this file (the Rex server's own environment may not have it).
+local JOB_STATE_ROOT = {{ joinPath (env "XDG_STATE_HOME" | default (joinPath .chezmoi.homeDir ".local/state")) "jobs" | quote }}
 local JOB_CLI = HOME .. "/.local/libexec/job"
 
 local function jobs_session()
@@ -362,16 +364,26 @@ rex.action{
     end
     local r, err = rex.exec({ JOB_CLI, "owns-block", ctx.block_id },
                             { env = pane_env(ctx), timeout = 5 })
-    if r == nil then rex.log("warn", "close_guarded: job owns-block: " .. tostring(err)) end
-    if not (r and r.ok) then
+    -- `job owns-block` exits 1 for "no running job here", and only that
+    -- closes without a question. A check that timed out, could not start
+    -- or ended any other way has not said the pane is safe to close.
+    if r and not r.ok and r.code == 1 then
       rex.client.queue(close)
       return
     end
-    local job = r.stdout:match("[^\n]+") or ctx.block_id
+    local title, yes
+    if r and r.ok then
+      title = "Close the running job " .. (r.stdout:match("[^\n]+") or ctx.block_id) .. "?"
+      yes = "Cancel the job and close"
+    else
+      rex.log("warn", "close_guarded: job owns-block: " .. tostring(err or r.code))
+      title = "Could not check for a running job. Close anyway?"
+      yes = "Close it, cancelling any job in it"
+    end
     local id, why = rex.ui.pick{
-      title = "Close the running job " .. job .. "?",
+      title = title,
       items = {
-        { id = "close", title = "Cancel the job and close" },
+        { id = "close", title = yes },
         { id = "keep",  title = "Keep it running" },
       },
     }
@@ -450,8 +462,17 @@ rex.action{
         { layout = { block = { flavor = "com.superlogical.terminal.shell" } } },
       },
     })
-    if created == nil or not created.session_id then
-      rex.log("warn", "new session " .. name .. ": " .. tostring(err))
+    if created == nil then
+      -- The session was not made: the key press must still do something
+      -- visible, so Rex's own action makes one, under a name of its own.
+      rex.log("warn", "new session " .. name .. ": " .. tostring(err) .. "; using Rex's own")
+      rex.client.queue("session.new")
+      return
+    end
+    if type(created) ~= "table" or not created.session_id then
+      -- An answer with no id: the session probably exists and cannot be
+      -- shown from here. A second one would be worse than a log line.
+      rex.log("warn", "new session " .. name .. ": created, but no session id came back")
       return
     end
     rex.client.queue("session.select", { session_id = created.session_id })

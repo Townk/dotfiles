@@ -40,6 +40,22 @@ job::_rex_log() {
   return 0
 }
 
+# job::_rex_lock — take $JOB_STATE_ROOT/.rex.lock, the one lock over the
+# Jobs session, for the life of the calling (sub)shell. Waits up to 15 s:
+# an opener holds it through two rex calls of up to 5 s each, and a waiter
+# that gave up sooner would leave its job without a tab.
+job::_rex_lock() {
+  lock::hold "$JOB_STATE_ROOT/.rex.lock" 15
+}
+
+# job::_rex_delay — set REPLY to JOB_FOLLOW_DELAY, the seconds a job runs
+# before it gets a tab: 2 when unset or not a plain number, which would
+# otherwise abort the arithmetic it is used in.
+job::_rex_delay() {
+  REPLY="${JOB_FOLLOW_DELAY:-2}"
+  [[ "$REPLY" == <->(.<->|) ]] || REPLY=2
+}
+
 # job::_rex_jobs_session <rex> <timeout> — print the id of the session
 # labelled exactly Jobs, or nothing when there is none. rc 1 when the list
 # cannot be had or read: an unreadable listing is not "no Jobs session",
@@ -95,16 +111,20 @@ job::_rex_closing() {
 }
 
 # job::_rex_block_job <block_id> — print the title (the id when it has
-# none) of the RUNNING job (no `result` file) whose `follower` file names
-# that block. rc 1 when there is none. Rex's close keys ask this (as `job
-# owns-block`) before closing a pane: closing a job's tab cancels the job.
+# none) of the RUNNING job (no result) whose `follower` file names that
+# block with a live pid. rc 1 when there is none. Rex's close keys ask this
+# (as `job owns-block`) before closing a pane: closing a job's tab cancels
+# the job — through its follower, so a dead one leaves nothing to ask about.
+# They close unasked on rc 1 only, and take any other failure for "could
+# not tell".
 job::_rex_block_job() {
   local want="${1:?job::_rex_block_job: block id required}" d block pid title
   for d in "$JOB_STATE_ROOT"/*(N/); do
-    [ -e "$d/result" ] && continue
+    [ -s "$d/result" ] && continue
     block="" pid=""
     { read -r block pid < "$d/follower" } 2>/dev/null || :
     [ -n "$block" ] && [ "$block" = "$want" ] || continue
+    [[ "$pid" == <-> ]] && kill -0 "$pid" 2>/dev/null || continue
     title=$(jq -r '.title // empty' "$d/meta.json" 2>/dev/null) || title=""
     print -r -- "${title:-${d:t}}"
     return 0
@@ -167,12 +187,12 @@ job::_rex_write_session() {
 }
 
 # job::_rex_open_tab <id> — job::_rex_open_tab_unlocked under the Jobs lock
-# (waits up to 5 s for it). The subshell holds the lock and drops it on exit.
+# (job::_rex_lock). The subshell holds the lock and drops it on exit.
 job::_rex_open_tab() {
   local id="${1:?job::_rex_open_tab: id required}"
   mkdir -p -- "$JOB_STATE_ROOT" 2>/dev/null || return 1
   (
-    lock::hold "$JOB_STATE_ROOT/.rex.lock" 5 || exit 1
+    job::_rex_lock || exit 1
     job::_rex_open_tab_unlocked "$id"
   )
 }
@@ -202,10 +222,13 @@ job::_rex_open_tab() {
 # logged.
 job::_rex_reconcile_unlocked() {
   local due="${1:-}" rex sid out d id block pid epoch res code notify created
+  local REPLY
   local -i covered
-  local -F grace=$(( ${JOB_FOLLOW_DELAY:-2} + 5 ))
+  local -F grace
   local -a listed reopen closing
   local -A keep
+  job::_rex_delay
+  grace=$(( REPLY + 5 ))
   rex=$(job::_rex) || return 1
   sid=$(job::_rex_jobs_session "$rex" 2s) || return 1
   # The session id recorded by the opener is stale after a restart; with
@@ -269,6 +292,9 @@ job::_rex_reconcile_unlocked() {
       >/dev/null 2>&1; then
       job::_rex_log "reconcile: closed $block: no live follower"
     else
+      # It stays listed: a close that timed out here can still happen, and
+      # the listing costs only an owner's close of this block not
+      # cancelling for a minute.
       job::_rex_log "reconcile: could not close $block"
     fi
   done
@@ -284,7 +310,7 @@ job::_rex_reconcile_unlocked() {
 job::_rex_reconcile() {
   mkdir -p -- "$JOB_STATE_ROOT" 2>/dev/null || return 0
   (
-    lock::hold "$JOB_STATE_ROOT/.rex.lock" 5 \
+    job::_rex_lock \
       || { job::_rex_log "reconcile: the Jobs lock is busy"; exit 0; }
     job::_rex_reconcile_unlocked
   ) || :
@@ -302,14 +328,16 @@ job::_rex_reconcile() {
 # $(…) does not wait for the delay.
 job::_rex_schedule_tab() {
   local id="${1:?job::_rex_schedule_tab: id required}"
-  local dir="$JOB_STATE_ROOT/$1" delay="${JOB_FOLLOW_DELAY:-2}" notify
+  local dir="$JOB_STATE_ROOT/$id" notify REPLY
+  job::_rex_delay
+  local delay="$REPLY"
   notify=$(jq -r '.notify // "all"' "$dir/meta.json" 2>/dev/null) || notify="all"
   [ "$notify" = "none" ] && return 0
   (
     sleep "$delay"
     [ -d "$dir" ] && [ ! -s "$dir/result" ] || exit 0
     job::_rex_available || exit 0
-    lock::hold "$JOB_STATE_ROOT/.rex.lock" 5 \
+    job::_rex_lock \
       || { job::_rex_log "job $id: open tab: the Jobs lock is busy"; exit 0; }
     job::_rex_reconcile_unlocked "$id" || job::_rex_open_tab_unlocked "$id"
   ) < /dev/null > /dev/null 2>&1 &!

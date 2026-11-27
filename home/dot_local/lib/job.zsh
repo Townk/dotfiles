@@ -8,7 +8,8 @@
 #                 $JOB_STATE_ROOT/<id>/progress    (one line: epoch pct msg)
 #                 $JOB_STATE_ROOT/<id>/phase       (optional: "waiting")
 #                 $JOB_STATE_ROOT/<id>/result      (written by job-callback)
-#                 $JOB_STATE_ROOT/<id>/follower    (live follower: block pid)
+#                 $JOB_STATE_ROOT/<id>/follower    (live follower: block pid;
+#                                                   block is - outside Rex)
 #                 $JOB_STATE_ROOT/<id>/dismissed   (failed job's tab closed)
 # The progress sidecar is the whole progress wire: writers write at their own
 # cadence, the Hammerspoon reader owns display cadence and derives staleness
@@ -229,13 +230,23 @@ job::waiting() {
   print -r -- waiting > "$ptmp" && mv -f -- "$ptmp" "$dir/phase"
 }
 
+# job::_result_write <dir> <result> [exit code] — record a job's result as
+# `<epoch> <result> <code>`, by write-then-rename: a follower polling the
+# file never reads a torn line.
+job::_result_write() {
+  local tmp="$1/.result.$$"
+  print -r -- "$EPOCHSECONDS $2 ${3:-}" > "$tmp" && mv -f -- "$tmp" "$1/result"
+}
+
 # job::cancel <id> — signal the task's whole process group via pueue kill.
 # Cancel is not a failure: the task's own TERM trap keeps its contract
 # (partial markers, exit 130, …) and the callback sees result=Killed.
 #
 # A Queued/Stashed task cannot be killed (pueue kill fails and leaves it
 # queued): it is removed instead, and — since pueue fires no completion
-# callback for a removed task — the Killed result is recorded here.
+# callback for a removed task — the Killed result is recorded here. A
+# refused remove means the task started in between: it is killed like any
+# running one, and its callback records the result.
 job::cancel() {
   local id="${1:?job::cancel: id required}" pueue task_id state
   pueue=$(job::_pueue) || return 1
@@ -247,8 +258,11 @@ job::cancel() {
     | jq -r --arg t "$task_id" '.tasks[$t].status | keys[0]' 2>/dev/null) || state=""
   case "$state" in
     Queued | Stashed)
-      "$pueue" remove "$task_id" || return $?
-      print -r -- "$EPOCHSECONDS Killed " > "$JOB_STATE_ROOT/$id/result"
+      if "$pueue" remove "$task_id" 2>/dev/null; then
+        job::_result_write "$JOB_STATE_ROOT/$id" Killed || return $?
+      else
+        "$pueue" kill "$task_id" || return $?
+      fi
       ;;
     *) "$pueue" kill "$task_id" || return $? ;;
   esac

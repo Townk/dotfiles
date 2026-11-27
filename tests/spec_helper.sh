@@ -113,3 +113,15 @@ show_separators() {
   fi
   return "$_ss_rc"
 }
+
+# with_tty CMD [ARGS...] — run CMD with a pty as its terminal, returning its
+# status. `script` is the only pty tool on every machine, and its two
+# families disagree: util-linux takes the command as one string after -c,
+# BSD takes it as arguments after the typescript file.
+with_tty() {
+  if script --version >/dev/null 2>&1; then
+    script -qec "${(j: :)${(q)@}}" /dev/null
+  else
+    script -q /dev/null "$@"
+  fi
+}

@@ -12,11 +12,29 @@ zmodload zsh/system 2>/dev/null
 # job::_follow_msg <text> — sanitize and base64 a report message. Rex rejects
 # a msg that decodes to control characters (C0, DEL and the C1 range
 # U+0080-U+009F) or more than 2,048 bytes, so control characters become
-# spaces and the text is cut on a character boundary (iconv -c drops the
-# partial character a byte cut can leave).
+# spaces and the text is cut on a character boundary. Done on bytes
+# (nomultibyte), so it needs no tool and no UTF-8 locale: C1 is C2 80-9F in
+# UTF-8, and a cut that lands on a continuation byte (80-BF) takes back the
+# whole character. iconv, where there is one, then drops bytes that were
+# never UTF-8.
 job::_follow_msg() {
-  print -rn -- "$1" | perl -CS -0777 -pe 's/[\x00-\x1f\x7f-\x9f]/ /g' \
-    | head -c 2048 | iconv -c -f UTF-8 -t UTF-8 | base64 | tr -d '\n'
+  setopt localoptions nomultibyte
+  local s="$1" c1=$'\xc2' next
+  s=${s//[$'\x00'-$'\x1f'$'\x7f']/ }
+  s=${s//${c1}[$'\x80'-$'\x9f']/ }
+  if (( $#s > 2048 )); then
+    next=$s[2049]
+    s=$s[1,2048]
+    if [[ "$next" == [$'\x80'-$'\xbf'] ]]; then
+      while [[ "$s[-1]" == [$'\x80'-$'\xbf'] ]]; do s=$s[1,-2]; done
+      s=$s[1,-2]
+    fi
+  fi
+  if command -v iconv >/dev/null 2>&1; then
+    print -rn -- "$s" | iconv -c -f UTF-8 -t UTF-8
+  else
+    print -rn -- "$s"
+  fi | base64 | tr -d '\n'
 }
 
 # job::_follow_report <id> <queued|running> — print the OSC 7501 body for the
@@ -27,6 +45,7 @@ job::_follow_report() {
   local epoch res code pct msg
   title=$(jq -r '.title // empty' "$dir/meta.json" 2>/dev/null) || title=""
   notify=$(jq -r '.notify // "all"' "$dir/meta.json" 2>/dev/null) || notify="all"
+  [ -n "$title" ] || title=job
   local head="app=job"
 
   if [ -s "$dir/result" ]; then
@@ -55,7 +74,9 @@ job::_follow_report() {
   fi
 
   pct=""; msg=""
-  [ -s "$dir/progress" ] && read -r epoch pct msg < "$dir/progress" 2>/dev/null
+  if [ -s "$dir/progress" ]; then
+    read -r epoch pct msg < "$dir/progress" 2>/dev/null || :
+  fi
   [ -n "$msg" ] || msg="$title"
   if [ "$(cat "$dir/phase" 2>/dev/null)" = "waiting" ]; then
     msg="waiting: $msg"
@@ -108,7 +129,8 @@ job::_follow_phase() {
 # the tab until its owner closes it) or `exit`. An inline follower always
 # exits: it runs in the user's own terminal, not in a Jobs tab.
 job::_follow_end() {
-  local id="$1" inline="${2:-0}" dir="$JOB_STATE_ROOT/$1" epoch res code notify
+  local id="$1" inline="${2:-0}" epoch res code notify
+  local dir="$JOB_STATE_ROOT/$id"
   if [ "$inline" = 1 ]; then
     print -r -- exit
     return 0
@@ -161,8 +183,8 @@ job::_follow_instance() {
 # of its own. Outside inline mode the decision is logged (job::_rex_log).
 # Always returns 0.
 job::_follow_on_hup() {
-  local id="$1" inline="${2:-0}" instance="${3:-}" dir="$JOB_STATE_ROOT/$1"
-  local rex rc=none match=unasked action=nothing epoch res code
+  local id="$1" inline="${2:-0}" instance="${3:-}"
+  local dir="$JOB_STATE_ROOT/$id" rex rc=none match=unasked action=nothing epoch res code
   local -F hup_wait="${JOB_FOLLOW_HUP_WAIT:-1}"
   [ -d "$dir" ] || return 0
   if [ "$inline" = 1 ]; then
@@ -222,15 +244,17 @@ job::_follow_hup_decide() {
 # once. Rex sends a closed tab's processes SIGHUP and kills them about a
 # second later — before the decision's wait is over — so it runs as `job
 # hup-decide` in a session of its own (setsid), with the follower's
-# environment (REX_BLOCK, JOB_STATE_ROOT, the test seams). A child that
-# is already a group leader (job control on) cannot setsid: it forks
-# first. Without perl or a runnable CLI, the decision runs in-process as
-# before.
+# environment (REX_BLOCK, the test seams). The state root and the wait are
+# handed over by name: the follower's shell may hold them unexported. A
+# child that is already a group leader (job control on) cannot setsid
+# (POSIX::setsid answers -1): it forks first. Without perl or a runnable
+# CLI, the decision runs in-process as before.
 job::_follow_hup_detach() {
   local cli="${JOB_CLI:-$HOME/.local/libexec/job}"
   if command -v perl >/dev/null 2>&1 && [ -x "$cli" ]; then
-    perl -MPOSIX -e '
-      if (!defined POSIX::setsid()) { exit if fork; POSIX::setsid() }
+    JOB_STATE_ROOT="$JOB_STATE_ROOT" \
+      JOB_FOLLOW_HUP_WAIT="${JOB_FOLLOW_HUP_WAIT:-1}" perl -MPOSIX -e '
+      if (POSIX::setsid() == -1) { exit if fork; POSIX::setsid() }
       exec @ARGV or exit 1' "$cli" hup-decide "$@" \
       < /dev/null > /dev/null 2>&1 &!
     return 0
@@ -242,7 +266,7 @@ job::_follow_hup_detach() {
 # is still this follower's (an inline follower hands its job to a new tab,
 # whose follower may already have written its own). Runs in job::follow's
 # dynamic scope: it reads and clears that function's `child`, `dir`, `me`
-# (`<REX_BLOCK> <real pid>`).
+# (`<REX_BLOCK or -> <real pid>`).
 job::_follow_stop() {
   if [ -n "${child:-}" ]; then
     kill "$child" 2>/dev/null || :
@@ -255,8 +279,27 @@ job::_follow_stop() {
   return 0
 }
 
+# job::_follow_tick — one poll: send the job's status report if it differs
+# from the last one sent. Runs in job::follow's dynamic scope: it reads
+# `id`, `dir`, `pueue`, `task_id` and sets `finished`, `phase`, `body`,
+# `last`.
+job::_follow_tick() {
+  finished=0
+  [ -s "$dir/result" ] && finished=1
+  phase=running
+  (( finished )) || phase=$(job::_follow_phase "$pueue" "$task_id")
+  body=$(job::_follow_report "$id" "$phase" 2>/dev/null)
+  if [ -n "$body" ] && [ "$body" != "$last" ]; then
+    job::_follow_emit "$body"
+    last="$body"
+  fi
+  return 0
+}
+
 # job::follow [--inline] <id> — follow a job until its tab should close.
-# Writes the `follower` file (`<REX_BLOCK> <pid>`), streams the task's log
+# Writes the `follower` file (`<REX_BLOCK> <pid>`, the block `-` when it is
+# not in a Rex pane: an empty first field would read as a file with no pid,
+# a follower that looks dead), streams the task's log
 # through a `pueue follow` child, and every JOB_FOLLOW_POLL seconds sends a
 # status report when it differs from the last one sent. It stops polling
 # when the job has a result (or its state dir is gone: exit quietly), then
@@ -274,7 +317,7 @@ job::follow() {
   fi
   local id="${1:?job::follow: id required}"
   local self="${sysparams[pid]:-$$}" dir="$JOB_STATE_ROOT/$id" child=""
-  local me="${REX_BLOCK:-} $self"
+  local me="${REX_BLOCK:--} $self"
   local poll="${JOB_FOLLOW_POLL:-1}" ttl="${JOB_FOLLOW_DONE_TTL:-3600}"
   local pueue task_id phase body last="" end REPLY instance="" block pid
   local -i finished n
@@ -285,7 +328,9 @@ job::follow() {
   # inline follower handing its job to this tab exits promptly, so wait up
   # to 3 s for it; one still alive after that keeps the job, and this one
   # leaves before it has a follower file or a hangup trap, so it can never
-  # cancel the job.
+  # cancel the job. Closing a tab cancels its job on the strength of this
+  # rule. An inline follower is not held to it (only job::start runs one,
+  # at once, before any tab exists) and never cancels.
   if (( ! inline )); then
     deadline=$(( EPOCHREALTIME + 3 ))
     while { read -r block pid < "$dir/follower" } 2>/dev/null \
@@ -305,16 +350,22 @@ job::follow() {
   # returns.
   # SIGHUP: the local cleanup here, the decision detached (it waits, and
   # the tab is killed about a second after the hangup).
+  # Every $(…) below is a subshell that inherits these traps and, being in
+  # the follower's process group, its signals: only the follower acts on
+  # one, or a hangup would be decided once per subshell in flight.
   TRAPHUP() {
+    [ "${sysparams[pid]:-$$}" = "$self" ] || exit 129
     job::_follow_stop
     job::_follow_hup_detach "$id" "$inline" "$instance"
     exit 129
   }
   TRAPTERM() {
+    [ "${sysparams[pid]:-$$}" = "$self" ] || exit 143
     job::_follow_stop
     exit 143
   }
   TRAPINT() {
+    [ "${sysparams[pid]:-$$}" = "$self" ] || exit 130
     job::_follow_stop
     if (( inline )); then
       [ -s "$dir/result" ] || job::_rex_open_tab "$id" || :
@@ -322,14 +373,19 @@ job::follow() {
     fi
     exit 130
   }
-  print -r -- "$me" > "$dir/.follower.$self" \
-    && mv -f -- "$dir/.follower.$self" "$dir/follower" || :
-  # The server this tab lives under, for job::_follow_on_hup. Inline never
-  # cancels, so it does not ask.
-  (( inline )) || instance=$(job::_follow_instance)
-
   pueue=$(job::_pueue) || pueue=""
   task_id=$(jq -r '.pueue_id // empty' "$dir/meta.json" 2>/dev/null) || task_id=""
+  # The first report goes out before the server is asked anything: that
+  # answer can take its whole 3 s timeout, and the tab's row should not
+  # wait for it.
+  job::_follow_tick
+  # The server this tab lives under, for job::_follow_on_hup. Inline never
+  # cancels, so it does not ask. The follower file comes after it: a tab
+  # that is listed as following a job is one whose close can cancel it.
+  (( inline )) || instance=$(job::_follow_instance)
+  print -r -- "$me" > "$dir/.follower.$self" \
+    && mv -f -- "$dir/.follower.$self" "$dir/follower" || :
+
   if [ -n "$pueue" ] && [[ "$task_id" == <-> ]]; then
     "$pueue" follow "$task_id" &
     child=$!
@@ -337,15 +393,7 @@ job::follow() {
 
   while :; do
     [ -d "$dir" ] || { job::_follow_stop; return 0; }
-    finished=0
-    [ -s "$dir/result" ] && finished=1
-    phase=running
-    (( finished )) || phase=$(job::_follow_phase "$pueue" "$task_id")
-    body=$(job::_follow_report "$id" "$phase" 2>/dev/null)
-    if [ -n "$body" ] && [ "$body" != "$last" ]; then
-      job::_follow_emit "$body"
-      last="$body"
-    fi
+    job::_follow_tick
     (( finished )) && break
     job::_follow_nap "$poll"
   done

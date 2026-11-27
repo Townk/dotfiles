@@ -11,7 +11,8 @@ Describe 'job/follow.zsh'
     export JOB_FAKE_LOG="$JOB_SANDBOX/pueue.log"
     # `follow` prints one log line and exits — or, with
     # JOB_FAKE_FOLLOW_PIDFILE set, records its pid and stays alive the way
-    # a real `pueue follow` on a running task does.
+    # a real `pueue follow` on a running task does. `status` takes
+    # JOB_FAKE_STATUS_DELAY seconds when that is set.
     cat > "$JOB_SANDBOX/pueue" <<'EOS'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
@@ -23,7 +24,10 @@ case "$1" in
       exec sleep 30
     fi
     ;;
-  status) echo '{}' ;;
+  status)
+    [ -n "${JOB_FAKE_STATUS_DELAY:-}" ] && sleep "$JOB_FAKE_STATUS_DELAY"
+    echo '{}'
+    ;;
 esac
 exit 0
 EOS
@@ -36,7 +40,9 @@ EOS
     # JOB_FAKE_REX_RC (3 = block gone, 4 = server unreachable, 0 = block
     # still there) — read from JOB_FAKE_REX_RC_FILE when it exists, so a
     # test can change the answer while a hangup is being decided. Every
-    # call also writes the JOB_CLI it sees to JOB_FAKE_REX_CLI_SEEN.
+    # call also writes the JOB_CLI it sees to JOB_FAKE_REX_CLI_SEEN. With
+    # JOB_FAKE_REX_OUT naming the follower's output file, the first whoami
+    # notes in <that file>.at-whoami whether a report was in it by then.
     export JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log"
     export JOB_FAKE_REX_INSTANCE=srv-1
     export JOB_FAKE_REX_CLI_SEEN="$JOB_SANDBOX/cli.seen"
@@ -46,6 +52,13 @@ printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
 printf '%s\n' "${JOB_CLI-unset}" > "$JOB_FAKE_REX_CLI_SEEN"
 case "$*" in
   *' whoami '*)
+    if [ -n "${JOB_FAKE_REX_OUT:-}" ] && [ ! -e "$JOB_FAKE_REX_OUT.at-whoami" ]; then
+      if grep -q ']7501;' "$JOB_FAKE_REX_OUT" 2>/dev/null; then
+        echo reported
+      else
+        echo silent
+      fi > "$JOB_FAKE_REX_OUT.at-whoami"
+    fi
     [ "${JOB_FAKE_REX_WHOAMI_RC:-0}" = 0 ] || exit "$JOB_FAKE_REX_WHOAMI_RC"
     inst="$JOB_FAKE_REX_INSTANCE"
     [ -n "${JOB_FAKE_REX_INSTANCE_FILE:-}" ] && [ -f "$JOB_FAKE_REX_INSTANCE_FILE" ] \
@@ -160,6 +173,31 @@ EOS
       The output should equal "state=working:app=job:msg=$(b64 Remux)"
     End
 
+    # meta.json always has a title when job::start wrote it; one that
+    # cannot be read must not give a message starting with a space.
+    It 'names the job when it has no title'
+      meta ""
+      echo "1700000000 Success 0" > "$JOB_STATE_ROOT/j1/result"
+      When call report running
+      The output should equal "state=done:app=job:msg=$(b64 'job completed')"
+    End
+
+    It 'sanitizes with neither perl nor iconv installed'
+      meta "Remux"
+      printf '1700000000 -1 a\tb\302\205c\n' > "$JOB_STATE_ROOT/j1/progress"
+      check() {
+        local body tool
+        mkdir "$JOB_SANDBOX/bin"
+        for tool in zsh jq base64 tr cat; do
+          ln -s "$(command -v "$tool")" "$JOB_SANDBOX/bin/$tool" || return 1
+        done
+        body=$(PATH="$JOB_SANDBOX/bin" report running) || return 1
+        printf '%s' "${body##*msg=}" | base64 -D
+      }
+      When call check
+      The output should equal "a b c"
+    End
+
     It 'sanitizes a message Rex would reject'
       meta_hostile() {
         local t
@@ -171,8 +209,8 @@ EOS
         local body bad n
         meta_hostile
         body=$(report running) || return 1
-        # Drop every printable ASCII byte and every UTF-8 letter; what is
-        # left are control bytes (C0, DEL, and the C2 80-9F C1 encodings).
+        # Any line still holding a control character: C0, DEL, or C1
+        # (U+0080-U+009F, which UTF-8 writes as C2 80-9F).
         bad=$(printf '%s' "${body##*msg=}" | base64 -D | perl -CS -ne 'print if /[\x00-\x1f\x7f-\x9f]/')
         [ -z "$bad" ] || { echo "control chars"; return 0; }
         n=$(printf '%s' "${body##*msg=}" | base64 -D | wc -c | tr -d ' ')
@@ -731,6 +769,68 @@ dismissed
 1"
     End
 
+    # A $(…) in the follower's loop is a subshell with the same traps, in
+    # the same process group: the tab's hangup reaches it too. The slow
+    # status keeps one in flight.
+    It 'decides a hangup once when a subshell of the follower is hung up too'
+      meta "Remux"
+      check() {
+        export JOB_FAKE_REX_RC=3 JOB_FAKE_STATUS_DELAY=1
+        export JOB_FAKE_FOLLOW_PIDFILE="$JOB_SANDBOX/follow.pid"
+        JOB_FOLLOW_POLL=0.1 REX_BLOCK=blk-1 \
+          perl -e 'setpgrp(0, 0); exec @ARGV or die' -- zsh -f "$JOBBIN" follow j1 \
+          > "$JOB_SANDBOX/out" 2> "$JOB_SANDBOX/err" < /dev/null &
+        FPID=$!
+        wait_for "$JOB_FAKE_FOLLOW_PIDFILE" || { echo no-child; return 1; }
+        sleep 0.3
+        kill -HUP -- "-$FPID"
+        wait "$FPID" 2>/dev/null
+        decided || return 1
+        sleep 0.5
+        grep -c ': deciding$' "$XDG_CACHE_HOME/jobs/rex.log"
+      }
+      When call check
+      The output should equal 1
+    End
+
+    # The whoami can take its whole 3 s timeout.
+    It 'sends the first report before asking the server who it is'
+      meta "Remux"
+      check() {
+        export JOB_FAKE_REX_OUT="$JOB_SANDBOX/out"
+        follow_bg j1
+        wait_for "$JOB_SANDBOX/out.at-whoami" || echo no-whoami
+        cat "$JOB_SANDBOX/out.at-whoami" 2>/dev/null
+        result Success 0
+        follow_wait
+      }
+      When call check
+      The output should equal "reported
+rc=0"
+    End
+
+    # `read` drops a leading space: an empty block would make the pid read
+    # as the block, and the follower look dead.
+    It 'records - as its block when it is not in a Rex pane'
+      meta "Remux"
+      check() {
+        local block pid
+        JOB_FOLLOW_POLL=0.1 JOB_FOLLOW_DONE_TTL=0 zsh -f "$JOBBIN" follow j1 \
+          > "$JOB_SANDBOX/out" 2> "$JOB_SANDBOX/err" < /dev/null &
+        FPID=$!
+        wait_for "$JOB_STATE_ROOT/j1/follower" || echo no-follower
+        read -r block pid < "$JOB_STATE_ROOT/j1/follower"
+        echo "block=$block"
+        [ "$pid" = "$FPID" ] && echo own-pid || echo "pid=$pid"
+        result Success 0
+        follow_wait
+      }
+      When call check
+      The output should equal "block=-
+own-pid
+rc=0"
+    End
+
     It 'exits quietly when the state dir of a failed job disappears'
       meta "Remux"; result Failed 2
       check() {
@@ -906,6 +1006,52 @@ job j1: hangup of blk-1: inspect rc=3, instance same: cancelled"
       The output should equal "rc=0 kills=0
 job j1: hangup of blk-1: deciding
 job j1: hangup of blk-1: closed by reconcile: nothing"
+    End
+
+    # An override the follower's shell did not export (an inline follower
+    # in a shell that set it by hand) must still reach the decision, which
+    # is another process. XDG_STATE_HOME: where the decision would look
+    # without it — never the real state root.
+    It 'gets the follower'"'"'s state root when that is not exported'
+      check() {
+        local alt="$JOB_SANDBOX/alt"
+        mkdir -p "$alt/j1"
+        printf '{"title":"Remux","notify":"all","pueue_id":7}\n' > "$alt/j1/meta.json"
+        JOB_FAKE_REX_RC=3 REX_BLOCK=blk-1 XDG_STATE_HOME="$JOB_SANDBOX/xdg" zsh -f -c '
+          source "$1" >/dev/null 2>&1 || exit 99
+          typeset +x JOB_STATE_ROOT
+          JOB_STATE_ROOT="$2"
+          job::_follow_hup_detach j1 0 srv-1' -- "$JOBLIB" "$alt"
+        local i=0
+        until grep -q ': hangup of blk-1: inspect' "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null; do
+          i=$((i + 1)); [ "$i" -gt 30 ] && { echo undecided; return 0; }
+          sleep 0.1
+        done
+        echo "kills=$(kills)"
+      }
+      When call check
+      The output should equal "kills=1"
+    End
+
+    # A process-group leader cannot setsid; with job control on, a
+    # background child is one. The stand-in CLI records its own ps state,
+    # where a lowercase s marks a session leader.
+    It 'runs in a session of its own even when started as a group leader'
+      check() {
+        printf '#!/bin/sh\nps -o stat= -p $$ > "%s"\n' "$JOB_SANDBOX/stat" > "$JOB_SANDBOX/cli"
+        chmod +x "$JOB_SANDBOX/cli"
+        JOB_CLI="$JOB_SANDBOX/cli" with_tty zsh -f -c '
+          setopt monitor
+          source "$1" >/dev/null 2>&1 || exit 99
+          job::_follow_hup_detach j1 0 srv-1
+          sleep 0.5' -- "$JOBLIB" > /dev/null 2>&1 < /dev/null
+        case "$(cat "$JOB_SANDBOX/stat" 2>/dev/null)" in
+          *s*) echo session-leader ;;
+          *) echo "stat=$(cat "$JOB_SANDBOX/stat" 2>/dev/null)" ;;
+        esac
+      }
+      When call check
+      The output should equal session-leader
     End
 
     It 'exports JOB_CLI as its own path when unset'

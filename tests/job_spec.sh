@@ -16,6 +16,7 @@ Describe 'job.zsh'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 [ -n "${JOB_FAKE_RC:-}" ] && exit "$JOB_FAKE_RC"
+[ "$1" = remove ] && [ -n "${JOB_FAKE_REMOVE_RC:-}" ] && exit "$JOB_FAKE_REMOVE_RC"
 case "$1" in
   add) echo "7" ;;
   status) cat "${JOB_FAKE_STATUS:-/dev/null}" 2>/dev/null || :; [ -n "${JOB_FAKE_STATUS:-}" ] || echo '{}' ;;
@@ -475,6 +476,45 @@ Killed"
 1
 0
 no-result"
+    End
+
+    # The task can start between the status read and the remove: pueue then
+    # refuses the remove, and the job is running.
+    It 'kills a queued job that started before it could be removed'
+      raced_cancel() {
+        id=$(run_job job::start --title q -- sleep 9) || return 1
+        print -r -- '{"tasks":{"7":{"status":{"Queued":{}}}}}' > "$JOB_SANDBOX/status.json"
+        JOB_FAKE_REMOVE_RC=1 JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" \
+          run_job job::cancel "$id"; print -r -- "rc=$?"
+        grep -c '^remove 7$' "$JOB_FAKE_LOG"; grep -c '^kill 7$' "$JOB_FAKE_LOG"
+        [ -e "$JOB_STATE_ROOT/$id/result" ] && print -r -- result || print -r -- no-result
+      }
+      When call raced_cancel
+      The output should equal "rc=0
+1
+1
+no-result"
+    End
+  End
+
+  Describe 'job::_result_write'
+    # A reader must never see a half-written result: the file is replaced
+    # by a rename, so a hard link to the old one keeps the old text.
+    It 'replaces the result file instead of writing into it'
+      replaced() {
+        local dir="$JOB_STATE_ROOT/j1"
+        mkdir -p "$dir"
+        echo old > "$dir/result"
+        ln "$dir/result" "$JOB_SANDBOX/kept"
+        run_job job::_result_write "$dir" Failed 2 || return 1
+        cat "$JOB_SANDBOX/kept"
+        cut -d' ' -f2- "$dir/result"
+        ls -A "$dir" | grep -c -v '^result$' || :
+      }
+      When call replaced
+      The output should equal "old
+Failed 2
+0"
     End
   End
 

@@ -220,6 +220,28 @@ $(printf 'b%.0s' $(seq 1 99))"
       The output should equal "recent block:b2"
     End
 
+    # An opener holds the lock through two rex calls of up to 5 s each: a
+    # second job waiting less than that would give up and get no tab.
+    It 'waits for the Jobs lock longer than an opener can hold it'
+      waits() {
+        meta j1 "Remux"
+        export JOB_SANDBOX
+        zsh -f -c 'source "$1" >/dev/null 2>&1 || exit 99
+          lock::hold() { print -r -- "${2:-0}" >> "$JOB_SANDBOX/locks"; }
+          job::_rex_open_tab j1
+          job::_rex_reconcile
+          job::_rex_schedule_tab j1' -- "$JOBLIB"
+        local i=0
+        until [ "$(wc -l < "$JOB_SANDBOX/locks" 2>/dev/null | tr -d ' ')" = 3 ]; do
+          i=$((i + 1)); [ "$i" -gt 50 ] && break
+          sleep 0.1
+        done
+        tr '\n' ' ' < "$JOB_SANDBOX/locks"
+      }
+      When call waits
+      The output should equal "15 15 15 "
+    End
+
     It 'logs a failed open to the sandboxed rex log'
       logged() {
         meta j1 "Remux"
@@ -258,6 +280,16 @@ $(printf 'b%.0s' $(seq 1 99))"
       The output should equal "--autostart=false --timeout 2s ls --json
 --autostart=false --timeout 2s block ls -s Jobs --json
 --autostart=false --timeout 2s block close -s Jobs block:b9"
+    End
+
+    It 'still reconciles when JOB_FOLLOW_DELAY is not a number'
+      stale() {
+        jobs_session; blocks block:b9
+        JOB_FOLLOW_DELAY=2s reconcile || return 1
+        echo "closes=$(count closes)"
+      }
+      When call stale
+      The output should equal "closes=1"
     End
 
     It 'leaves a live follower alone'
@@ -528,6 +560,20 @@ block:b9"
       The output should equal ""
     End
 
+    # A follower that died without removing its file: closing its tab
+    # cancels nothing, so there is nothing to ask about.
+    It 'fails for a block whose follower is dead'
+      dead() {
+        local p
+        sh -c 'exit 0' & p=$!; wait "$p"
+        meta j1 "One"; follower j1 block:b1 "$p"
+        run_job job::_rex_block_job block:b1
+      }
+      When call dead
+      The status should equal 1
+      The output should equal ""
+    End
+
     It 'fails for a block no job follows'
       unknown() {
         meta j1 "One"; follower j1 block:b1 $$
@@ -624,16 +670,20 @@ block:b9"
       The line 2 of output should equal "new=1"
     End
 
-    # A control job started right after proves the background step ran; the
-    # finished job's step started first, with the same delay.
+    # The job has its result before its step is scheduled, so the step
+    # cannot win a race against the result being written. A control job
+    # scheduled after it, with the same delay, proves the steps ran; the
+    # pause lets a tab opened late still show.
     It 'opens no tab for a job that finished within the delay'
       finished() {
         export JOB_FOLLOW_DELAY=0.5
-        a=$(run_job job::start --title "quick" -- true) || return 1
-        echo "1700000000 Success 0" > "$JOB_STATE_ROOT/$a/result"
+        meta quick "quick"
+        echo "1700000000 Success 0" > "$JOB_STATE_ROOT/quick/result"
+        run_job job::_rex_schedule_tab quick || return 1
         b=$(run_job job::start --title "control" -- sleep 1) || return 1
         wait_log " follow $b" || return 2
-        grep -c " follow $a" "$JOB_FAKE_REX_LOG" || :
+        sleep 0.3
+        grep -c " follow quick" "$JOB_FAKE_REX_LOG" || :
       }
       When call finished
       The output should equal 0
@@ -662,31 +712,65 @@ block:b9"
       The output should equal 0
     End
 
-    # A tty stand-in: `script` gives the child a pty, so `[ -t 2 ]` is true.
-    # The child sources job.zsh, stubs job::follow/job::watch to record their
-    # arguments, runs "$@" and writes its result to $JOB_SANDBOX/result.
+    # A tty stand-in: with_tty gives the child a pty, so `[ -t 2 ]` is
+    # true. The child sources job.zsh, stubs job::follow/job::watch to record
+    # their arguments, runs "$@" and writes what it printed (job::start: the
+    # job id) to $JOB_SANDBOX/printed.
     run_tty() {
-      script -q /dev/null zsh -f -c '
+      with_tty zsh -f -c '
         source "$1" >/dev/null 2>&1 || exit 99; shift
         job::follow() { print -r -- "follow $*" >> "$JOB_SANDBOX/calls"; }
         job::watch() { print -r -- "watch $*" >> "$JOB_SANDBOX/calls"; }
-        "$@"
+        "$@" > "$JOB_SANDBOX/printed"
       ' -- "$JOBLIB" "$@" >/dev/null 2>&1
     }
     calls() { cat "$JOB_SANDBOX/calls" 2>/dev/null; }
+    # The sandbox's one job, read from the state root — not from anything
+    # job::start printed. Fails when there is not exactly one.
+    only_job() {
+      local -a dirs
+      dirs=("$JOB_STATE_ROOT"/[0-9]*(N/:t))
+      (( ${#dirs} == 1 )) || return 1
+      print -r -- "${dirs[1]}"
+    }
 
     It 'follows a --modal job inline in a Rex pane, with no watch or tab'
       inline() {
         export JOB_SANDBOX REX_BLOCK=block:x
         unset TMUX ZELLIJ
         run_tty job::start --modal --title "watched" -- sleep 1 || return 1
-        id=$(ls "$JOB_STATE_ROOT" | grep '^[0-9]' | head -n1)
+        id=$(cat "$JOB_SANDBOX/printed")
+        [ -d "$JOB_STATE_ROOT/$id" ] || return 3
         [ "$(calls)" = "follow --inline $id" ] || { calls; return 2; }
-        sleep 0.3
-        echo "tabs=$(cat "$JOB_FAKE_REX_LOG" 2>/dev/null | grep -c ' follow ' || :)"
+        # A control job's tab proves a background step had time to run.
+        b=$(run_job job::start --title "control" -- sleep 1) || return 4
+        wait_log " follow $b" || return 5
+        echo "tabs=$(grep -c " follow $id" "$JOB_FAKE_REX_LOG" || :)"
       }
       When call inline
       The output should equal "tabs=0"
+    End
+
+    # No terminal on stderr: nothing can be followed or watched here, Rex
+    # pane or not.
+    It 'neither follows nor watches a --modal job without a terminal'
+      headless() {
+        export JOB_SANDBOX REX_BLOCK=block:x
+        unset TMUX ZELLIJ
+        zsh -f -c '
+          source "$1" >/dev/null 2>&1 || exit 99; shift
+          job::follow() { print -r -- "follow $*" >> "$JOB_SANDBOX/calls"; }
+          job::watch() { print -r -- "watch $*" >> "$JOB_SANDBOX/calls"; }
+          "$@"
+        ' -- "$JOBLIB" job::start --modal --title "watched" -- sleep 1 \
+          > "$JOB_SANDBOX/printed" 2> "$JOB_SANDBOX/err" < /dev/null || return 1
+        [ -d "$JOB_STATE_ROOT/$(cat "$JOB_SANDBOX/printed")" ] || return 2
+        echo "calls=$(calls | grep -c . || :)"
+        grep -c 'headless' "$JOB_SANDBOX/err"
+      }
+      When call headless
+      The output should equal "calls=0
+1"
     End
 
     # A tmux or zellij started inside a Rex pane inherits REX_BLOCK, but its
@@ -722,7 +806,7 @@ watch"
       survive() {
         export JOB_SANDBOX REX_BLOCK=block:x
         unset TMUX ZELLIJ
-        script -q /dev/null zsh -f -c '
+        with_tty zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99
           job::follow() { exit 7; }
           job::start --modal --title "watched" -- sleep 1 >/dev/null
@@ -742,13 +826,13 @@ watch"
         local id
         export JOB_SANDBOX REX_BLOCK=block:x
         unset TMUX ZELLIJ
-        script -q /dev/null zsh -f -c '
+        with_tty zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99
           job::follow() { print -r -- follower-marker; }
           jid=$(job::start --modal --title "watched" -- sleep 1)
           print -r -- "$jid" > "$JOB_SANDBOX/jid"
         ' -- "$JOBLIB" > "$JOB_SANDBOX/tty" 2>&1
-        id=$(ls "$JOB_STATE_ROOT" | grep '^[0-9]' | head -n1)
+        id=$(only_job) || return 1
         [ "$(cat "$JOB_SANDBOX/jid")" = "$id" ] && echo id-only \
           || echo "jid=$(cat "$JOB_SANDBOX/jid")"
         grep -c follower-marker "$JOB_SANDBOX/tty" || :
