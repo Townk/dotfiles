@@ -84,6 +84,9 @@ local function pane_env(ctx)
     PATH = HOME .. "/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     REX_SESSION = ctx.session_id or "",
     REX_BLOCK = ctx.block_id or "",
+    -- These scripts are run from the picker: a focus change they make now
+    -- loses to the palette closing, so they hand it back instead.
+    QL_DEFER_FOCUS = "1",
     TMUX = "",
     ZELLIJ = "",
   }
@@ -190,6 +193,17 @@ local function quick_launch(kind, title)
     local side = opened.stdout:match("@focus:(%a+)")
     if side then
       rex.client.queue("pane.focus", { direction = side })
+    end
+    -- A floating pane, or a pane that was already open, has no side to
+    -- name. The app does follow a focus change made on the server — only
+    -- not while the palette is closing — so that one is made a moment
+    -- later, by a command that outlives this action.
+    local block = opened.stdout:match("@focus%-block:(%S+)")
+    if block then
+      local h, err = rex.exec.start(
+        { SCRIPTS .. "/quick-launch", "focus-later", block },
+        { env = pane_env(ctx), detach = true })
+      if h == nil then rex.log("warn", "quick launch focus-later: " .. tostring(err)) end
     end
   end
 end

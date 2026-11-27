@@ -316,6 +316,54 @@ Describe 'quick-launch on Rex'
       The line 2 of output should equal "focus-unmoved"
     End
 
+    # Third live finding: a floating pane and an already-open pane cannot be
+    # reached by direction. From the picker (QL_DEFER_FOCUS) they take no
+    # focus and name the block; `focus-later` focuses it once the palette is
+    # gone. From a shell they focus at once.
+    It 'hands the focus of an already-open pane back to the picker'
+      deferred() {
+        local first out b
+        ql_dispatch pane logs >/dev/null || return 1
+        b=$(rx block ls -s "$RX_SID" --json | jq -r '[.blocks[] | select(.label == "Logs") | .block_id] | first')
+        rx focus -s "$RX_SID" "$RX_BID" >/dev/null
+        out=$(QL_DEFER_FOCUS=1 ql_dispatch pane logs) || return 1
+        [[ "$out" == *"@focus-block:$b"* ]] && print -r -- named
+        [[ "$(view "$RX_SID" | jq -r '.windows[0].focused_block_id')" == "$RX_BID" ]] && print -r -- not-focused-yet
+        ql_rx_focus_later "$b" 0
+        [[ "$(view "$RX_SID" | jq -r '.windows[0].focused_block_id')" == "$b" ]] && print -r -- focused-later
+      }
+      When call deferred
+      The line 1 of output should equal "named"
+      The line 2 of output should equal "not-focused-yet"
+      The line 3 of output should equal "focused-later"
+    End
+
+    It 'focuses an already-open pane at once when no picker is involved'
+      direct() {
+        local b
+        ql_dispatch pane logs >/dev/null || return 1
+        b=$(rx block ls -s "$RX_SID" --json | jq -r '[.blocks[] | select(.label == "Logs") | .block_id] | first')
+        rx focus -s "$RX_SID" "$RX_BID" >/dev/null
+        ql_dispatch pane logs >/dev/null || return 1
+        [[ "$(view "$RX_SID" | jq -r '.windows[0].focused_block_id')" == "$b" ]] && print -r -- focused
+      }
+      When call direct
+      The output should equal "focused"
+    End
+
+    It 'hands the focus of a new floating pane back to the picker'
+      float_deferred() {
+        local out
+        out=$(QL_DEFER_FOCUS=1 ql_dispatch pane pad3) || return 1
+        [[ "$out" == "@focus-block:block:"* ]] && print -r -- named
+        [[ "$(view "$RX_SID" | jq -r '.windows[0].focused_block_id')" != "${out#@focus-block:}" ]] && print -r -- not-focused-yet
+      }
+      QL_JSON=$(jq -c '.panes += [{"id":"pad3","name":"Pad3","direction":"floating","size":"50%","action":{"type":"Run","args":["sleep 60"]}}]' <<<"$QL_JSON")
+      When call float_deferred
+      The line 1 of output should equal "named"
+      The line 2 of output should equal "not-focused-yet"
+    End
+
     It 'runs a command through an interactive shell, as a tmux pane would'
       interactive() {
         local log="$RX_STATE/rex-argv.log"

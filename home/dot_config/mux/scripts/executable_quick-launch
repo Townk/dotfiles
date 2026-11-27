@@ -225,6 +225,12 @@ main() {
       ql_load
       ql_list "${1:-}"
       ;;
+    focus-later)
+      # Rex only: focus BLOCK after a short wait. The picker action runs
+      # this detached — see lib/dispatch-rex.zsh for why the wait is the fix.
+      [[ $# -ge 1 ]] || ql_die "usage: quick-launch focus-later BLOCK [SECONDS]"
+      ql_rx_focus_later "$1" "${2:-0.3}"
+      ;;
     -h | --help | help)
       usage
       ;;

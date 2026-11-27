@@ -34,6 +34,16 @@
 #     focus and prints `@focus:<direction>`: the new pane is, by
 #     construction, the neighbour in that direction of the pane the app is
 #     still on, and the Lua action queues `pane.focus` that way.
+#   * That trick only reaches a NEW TILED pane. A floating pane, and a pane
+#     that is already open, have no direction to name. What does work
+#     (third finding, measured with a key sent to the app's focused pane):
+#     the app DOES follow a server-side focus change — just not one made
+#     while the palette is closing. So with $QL_DEFER_FOCUS set (the Lua
+#     action sets it) these two cases take no focus now and print
+#     `@focus-block:<block-id>`; the action starts a detached
+#     `quick-launch focus-later`, which focuses the block a moment after
+#     the palette is gone. Without the variable — `quick-launch open` typed
+#     in a shell, no palette — they focus at once.
 #   * A command runs through an INTERACTIVE shell (`--interactive`). Rex
 #     otherwise gives a command the login environment only, and a tmux pane
 #     has always had everything ~/.zshrc exports — EDITOR, the fzf and theme
@@ -132,11 +142,13 @@ ql_rx_open_pane() {
     local existing
     existing="$(ql_rx_block_by_label "$session" "$name")"
     if [[ -n "$existing" ]]; then
-      if _mux_rx_run focus -s "$session" "$existing" >/dev/null 2>&1; then
-        # The pane may live in another tab of this session.
-        ql_rx_show "$session" "$(ql_rx_window_of "$session" "$existing")"
+      # The pane may live in another tab of this session.
+      ql_rx_show "$session" "$(ql_rx_window_of "$session" "$existing")"
+      if [[ -n "${QL_DEFER_FOCUS:-}" ]]; then
+        print -r -- "@focus-block:$existing"
         return 0
       fi
+      _mux_rx_run focus -s "$session" "$existing" >/dev/null 2>&1 && return 0
     fi
   fi
 
@@ -158,10 +170,14 @@ ql_rx_open_pane() {
     read -r w h < <(ql_rx_float_size "$(jq -r '.size // "80%"' <<<"$pane")")
     # _mux_rx_layer builds the block itself, so the interactive shell is
     # asked for by variable and the CLI flag is dropped from the argv.
+    local defer=0
+    (( ! building )) && [[ -n "${QL_DEFER_FOCUS:-}" ]] && defer=1
     QL_RX_LAST_BLOCK="$(REX_SESSION="$session" REX_BLOCK="$anchor" _MUX_RX_LAYER_INTERACTIVE=1 \
+      _MUX_RX_LAYER_FOCUS=$(( ! defer )) \
       _mux_rx_layer "$w" "$h" "$name" "$cwd" "$session" "${(@)reply:#--interactive}")"
-    [[ -n "$QL_RX_LAST_BLOCK" ]]
-    return
+    [[ -n "$QL_RX_LAST_BLOCK" ]] || return 1
+    (( defer )) && print -r -- "@focus-block:$QL_RX_LAST_BLOCK"
+    return 0
   fi
 
   local -a flags=(-s "$session" --label "$name" --json)
@@ -347,6 +363,16 @@ ql_rx_open_workspace() {
 ql_rx_open_workspace_window() {
   echo "quick-launch: opening a workspace in a separate window is not supported on Rex yet" >&2
   return 1
+}
+
+# ql_rx_focus_later <block> [seconds] — focus a block after a short wait.
+# Run DETACHED by the Lua picker action: by the time it fires the palette has
+# finished closing, and a focus change made then is one the app follows.
+ql_rx_focus_later() {
+  local block="$1" delay="${2:-0.3}"
+  [[ -n "$block" && -n "${REX_SESSION:-}" ]] || return 1
+  sleep "$delay"
+  _mux_rx_run focus -s "$REX_SESSION" "$block" >/dev/null 2>&1
 }
 
 ql_rx_dispatch_el() {

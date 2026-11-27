@@ -229,7 +229,9 @@ _mux_rx_fraction() {
 # floating layer running <cmd> (or a shell). Prints the new block id.
 # $_MUX_RX_LAYER_INTERACTIVE=1 runs <cmd> through an INTERACTIVE shell (the
 # block option behind `rex run --interactive`), for a caller whose command
-# expects what ~/.zshrc sets up.
+# expects what ~/.zshrc sets up. $_MUX_RX_LAYER_FOCUS=0 creates the layer
+# without giving it focus (default: focused), for a caller that moves the
+# focus itself.
 _mux_rx_layer() {
   local w="$1" h="$2" title="$3" cwd="$4" session="$5"
   shift 5
@@ -246,11 +248,11 @@ _mux_rx_layer() {
 
   local req
   req="$(jq -cn --arg fw "$fw" --arg fh "$fh" --arg title "$title" --arg cwd "$cwd" \
-    --arg inter "${_MUX_RX_LAYER_INTERACTIVE:-0}" \
+    --arg inter "${_MUX_RX_LAYER_INTERACTIVE:-0}" --arg focus "${_MUX_RX_LAYER_FOCUS:-1}" \
     '$ARGS.positional as $cmd
      | ($fw | tonumber) as $w | ($fh | tonumber) as $h
      | { bounds: [((1 - $w) / 2), ((1 - $h) / 2), $w, $h],
-         focus: true,
+         focus: ($focus != "0"),
          layout: { block: (
            { flavor: "com.superlogical.terminal.shell",
              options: ( {}
