@@ -558,3 +558,41 @@ Rex floating **layer**.
 | the Mac app offers no host actions (preview.35) and ignores a unix-socket host added with `rex hosts add` | the app cannot be attached to a scratch server; client-side behavior can only be tried on the live one |
 | `rex.ui.pick` from a `rex do` script returned `unsupported` with the app connected | whether an `init.lua` action can show the picker in this build is NOT yet verified |
 | `rex resize` is unimplemented | no resize verb in the backend |
+
+## Rex — generated keymap and Quick Launch (2026-11-26)
+
+`~/.config/rex/init.lua` is generated from `keymap.yaml`
+(`home/dot_config/rex/init.lua.tmpl`). Every leader-table entry carries a
+`rex:` answer beside its tmux `cmd:`; `keymap.direct` lists the Cmd chords,
+which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
+
+| Behavior | tmux impl | Rex impl | Status | Notes |
+|---|---|---|---|---|
+| Leader | `prefix M-w` | `alt+w` → mode `prefix` | ✅ | `prefix/alt+w` sends a literal `alt+w` to the pane |
+| Mode tables | `set key-table <t>` | exclusive Rex modes `prefix tab pane resize move session` | ✅ | same names; `escape` leaves all, `backspace` goes back one |
+| Mode stack | `switch` / `sticky` / neither | `client.mode.enter` / bare action / `km_do` (action, then `client.mode.exit_all`) | ✅ | our own actions are bound directly and leave the mode themselves: a prompt cannot be shown from an action run via `rex.invoke` |
+| Scroll / Copy / Search tables | `copy-mode-vi` + mode tables | not generated — Rex copy mode and Find | ❌ | by decision: native UX. Only the keys that enter them are bound (`prefix l`, `prefix V`, `⌘↑`, `⌘K`, `⌘F`) |
+| Which-key panel | `mux-whichkey` popup | none — Rex's own key hints | ❌ | by decision |
+| Direct chords | terminal sends MEH CSI-u → `bind -n` | `rex.bind("cmd+…")` | ✅ | one list (`keymap.direct`) instead of three files |
+| `⌘↑` / `⌘K` | enter Scroll and scroll a line | enter copy mode | 🟡 | Rex has no scroll-by-line action |
+| Locked mode, detach | key tables / `detach-client` | none | ❌ | nothing to lock away; a Rex app does not detach |
+| Alarms (`u`/`i`/`k`) | `monitor-activity/silence` | none | ❌ | Rex's activity sidebar |
+| Border toggle, sync panes, last tab, join-pane, swap-with-next | tmux commands | none | ❌ | no Rex equivalent; each has its reason beside `rex: false` in `keymap.yaml` |
+| Glyph / gitmoji / clipboard / notification / job pickers, `⌘⇧V`, `⌘⇧F` | popup pickers | none yet | ⏳ | need the widget float (phase 5) |
+| `rotate-window` (move `h`/`l`) | rotate | `pane.move.left/right` | 🟡 | moves the pane instead of rotating the layout |
+| Quick Launch picker | fzf in a popup (`quick-launch-pick`) | `rex.ui.pick`, rows from `quick-launch rows <kind>` | 🟡 | same order and tags; no glyph icons (16 fixed names), no in-picker Alt+Enter / Ctrl+D |
+| Quick Launch identity | `@ql_id` pane option, window name, session name | block / window / session **label** = the target's name | 🟡 | labels are user-visible and renameable: renaming a pane makes the next open create a second one |
+| Quick Launch workspace switch | `switch-client` | script prints `@select:<session-id>`; the Lua action queues `session.select` | ✅ | a script run by `rex.exec` has no client to move |
+| Workspace in a separate window | `quick-launch-window` | refused with a message | ⏳ | needs a client-side window + session select, unverified |
+| `nested_mux`, `color` | key-table `nested`, tint | ignored | ❌ | no nested key problem when the outer layer binds Cmd |
+| Config reload on apply | `58-reload-tmux` (`source-file` per server) | `59-reload-rex` (`config check`, then `config reload`) | ✅ | never autostarts a server; a failing check leaves the running config alone |
+
+### Platform gotchas — generating for Rex
+
+| Fact | Consequence |
+|---|---|
+| `rex.exec` runs in the SERVER's environment: no login PATH, no idea which pane is focused | the actions pass `PATH`, `REX_SESSION` and `REX_BLOCK` (from `ctx`) explicitly, and blank `TMUX`/`ZELLIJ` |
+| the Mac app keeps the `rex` CLI inside its bundle and only puts it on PATH in its own panes | `_mux_rx_bin` and the reload hook fall back to the bundle path; the ignore rule also accepts `~/.config/rex` as proof Rex is in use |
+| `rex config check` does not validate action names (they depend on the client) | the spec checks our own action names; client action names were checked once against the live app's list |
+| `edit-terminal-config` reuses `$ZELLIJ` for the binary path | "am I in zellij" must be asked before that line — the Rex branch silently never fired |
+| `chezmoi execute-template` in a spec reads the DEFAULT source's data, not the worktree's | specs that depend on new `.chezmoidata` pass `-S "$SHELLSPEC_PROJECT_ROOT"` |

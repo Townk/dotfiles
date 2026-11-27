@@ -67,6 +67,15 @@ for arg in "$@"; do
   esac
 done
 
+# No pid on Rex: the binding there has no `#{pane_pid}` to interpolate, only
+# the focused block's id in $REX_BLOCK. Ask Rex for that block's foreground
+# process — which also makes this the cwd of what is RUNNING in the pane, not
+# of the shell underneath it.
+if [[ -z "$pid" && -n "${REX_BLOCK:-}" && -z "${TMUX:-}" && -z "${ZELLIJ:-}" ]]; then
+  source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh" 2>/dev/null &&
+    pid="$(_mux_rx_block_call "$REX_BLOCK" process | jq -r '.foreground.pid // empty' 2>/dev/null)" || pid=""
+fi
+
 [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || {
   echo "copy-pwd: expected a numeric PID argument, got '${pid}'" >&2
   exit 1

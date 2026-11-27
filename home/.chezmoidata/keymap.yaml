@@ -278,6 +278,8 @@ keymap:
       - keys:
         - L
         desc: Locked mode …
+        # rex: no locked mode: Rex binds only alt+w and the cmd chords, nothing to lock away
+        rex: false
         icon: 󰌾
         color: peach
         cmd: set key-table locked
@@ -287,6 +289,7 @@ keymap:
       - keys:
         - s
         desc: Session mode …
+        rex: true
         icon: 󰙀
         color: red
         cmd: set key-table session
@@ -295,6 +298,7 @@ keymap:
       - keys:
         - t
         desc: Tab mode …
+        rex: true
         icon: 󰓩
         color: green
         cmd: set key-table tab
@@ -303,6 +307,7 @@ keymap:
       - keys:
         - p
         desc: Pane mode …
+        rex: true
         icon: 
         color: blue
         cmd: set key-table pane
@@ -311,6 +316,7 @@ keymap:
       - keys:
         - l
         desc: Scroll mode …
+        rex: pane.copy_mode.enter
         icon: 󰩤
         color: lavender
         cmd: set -p @visual 0 ; copy-mode
@@ -320,6 +326,7 @@ keymap:
       - keys:
         - V
         desc: Copy mode …
+        rex: pane.copy_mode.enter
         icon: 󰆏
         color: mauve
         cmd: set -p @visual 1 ; copy-mode
@@ -329,12 +336,14 @@ keymap:
       - keys:
         - ','
         desc: terminal settings
+        rex: edit_terminal_config
         icon: 
         color: teal
         cmd: run-shell 'zsh ~/.config/mux/scripts/edit-terminal-config'
       - keys:
         - q
         desc: kill current session
+        rex: session.close
         icon: 󰈆
         color: red
         cmd: display-popup -E -B -w 52 -h 13 -e 'COLORTERM=truecolor' '$HOME/.config/mux/scripts/tmux-modal -- $HOME/.config/mux/scripts/mux-quit-confirm'
@@ -342,18 +351,22 @@ keymap:
       - keys:
         - h
         desc: split pane (horiz)
+        rex: pane.split.down
         icon: 
         color: blue
         cmd: split-window -v -c "#{pane_current_path}"
       - keys:
         - v
         desc: split pane (vert)
+        rex: pane.split.right
         icon: 
         color: blue
         cmd: split-window -h -c "#{pane_current_path}"
       - keys:
         - f
         desc: toggle pane borders
+        # rex: pane headers are an app setting on Rex, not a per-window toggle
+        rex: false
         icon: 󰃇
         color: blue
         cmd: if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'
@@ -361,30 +374,39 @@ keymap:
       - keys:
         - z
         desc: toggle pane zoom
+        rex: pane.zoom
         icon: 󱀅
         color: blue
         cmd: resize-pane -Z
       - keys:
         - u
         desc: alarm on updated
+        # rex: Rex tracks activity natively (the activity sidebar)
+        rex: false
         icon: 󰂞
         color: yellow
         cmd: 'setw monitor-activity on ; display ''alarm: activity'''
       - keys:
         - i
         desc: alarm on idle
+        # rex: Rex tracks activity natively (the activity sidebar)
+        rex: false
         icon: 󰂠
         color: yellow
         cmd: 'setw monitor-silence 30 ; display ''alarm: idle 30s'''
       - keys:
         - k
         desc: cancel all alarms
+        # rex: Rex tracks activity natively (the activity sidebar)
+        rex: false
         icon: 󰂛
         color: yellow
         cmd: setw monitor-silence 0 ; setw monitor-activity off ; display 'alarms cleared'
       - keys:
         - U
         desc: glyph picker (repeat)
+        # rex: needs the widget float (phase 5)
+        rex: false
         icon: 󰥸
         color: mauve
         cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GLYPH_PADDING=0,2,0,2 "$HOME/.config/mux/scripts/tmux-modal --title \"Glyph Picker (resumed)\"
@@ -393,6 +415,8 @@ keymap:
       - keys:
         - G
         desc: gitmoji picker (repeat)
+        # rex: needs the widget float (phase 5)
+        rex: false
         icon: 󰥸
         color: mauve
         cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GITMOJI_PADDING=0,2,0,2 "$HOME/.config/mux/scripts/tmux-modal --title \"Gitmoji Picker (resumed)\"
@@ -401,6 +425,8 @@ keymap:
       - keys:
         - c
         desc: clipboard history
+        # rex: needs the widget float (phase 5)
+        rex: false
         icon: 󱛢
         color: mauve
         cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Clipboard history\" --inject --no-chrome -- $HOME/.local/libexec/pick-clipboard"'
@@ -408,6 +434,8 @@ keymap:
       - keys:
         - N
         desc: notification history
+        # rex: needs the widget float (phase 5)
+        rex: false
         icon: 󰂚
         color: mauve
         # `|| [ $? -eq 130 ]`: ESC/cancel is the picker's CLEAN exit (the
@@ -419,6 +447,8 @@ keymap:
       - keys:
         - J
         desc: watch tasks
+        # rex: needs the widget float (phase 5)
+        rex: false
         icon: 󰈈
         color: green
         # job::watch floats its OWN popup (mux-modal) — the dashboard is
@@ -435,12 +465,14 @@ keymap:
       - keys:
         - Y
         desc: copy pwd
+        rex: {action: copy_pwd, args: {mode: relative}}
         icon: 󰅇
         color: yellow
         cmd: 'run-shell ''zsh ~/.config/mux/scripts/copy-pwd --relative #{pane_pid}'''
       - keys:
         - M-y
         desc: copy pwd (abs)
+        rex: {action: copy_pwd, args: {mode: absolute}}
         icon: 󰅇
         color: yellow
         cmd: 'run-shell ''zsh ~/.config/mux/scripts/copy-pwd --absolute #{pane_pid}'''
@@ -453,6 +485,7 @@ keymap:
       - keys:
         - r
         desc: Rename Tab …
+        rex: client.tab.rename
         icon: 
         color: yellow
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/mux-rename --launch window'
@@ -462,12 +495,14 @@ keymap:
       - keys:
         - t
         desc: new tab
+        rex: client.tab.new
         icon: 󰝜
         color: mauve
         cmd: new-window -c "#{pane_current_path}" ; set key-table root
       - keys:
         - T
         desc: quick launch new tab
+        rex: ql_tab
         icon: 󱓞
         color: mauve
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Tab\" --no-chrome --
@@ -476,6 +511,7 @@ keymap:
       - keys:
         - x
         desc: close tab
+        rex: client.tab.close
         icon: 󰱞
         color: red
         cmd: kill-window ; set key-table root
@@ -483,6 +519,7 @@ keymap:
         - Left
         - h
         desc: previous tab
+        rex: client.tab.previous
         icon: 󰅁
         color: teal
         cmd: previous-window
@@ -491,6 +528,7 @@ keymap:
         - Right
         - l
         desc: next tab
+        rex: client.tab.next
         icon: 󰅂
         color: teal
         cmd: next-window
@@ -498,6 +536,8 @@ keymap:
       - keys:
         - Tab
         desc: last focused tab
+        # rex: Rex has no last-focused-tab action
+        rex: false
         icon: 󰄹
         color: teal
         cmd: last-window
@@ -505,84 +545,101 @@ keymap:
       - keys:
         - '1'
         desc: go to tab 1
+        rex: {action: client.tab.goto, args: {index: 1}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=1 ; set key-table root
       - keys:
         - '2'
         desc: go to tab 2
+        rex: {action: client.tab.goto, args: {index: 2}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=2 ; set key-table root
       - keys:
         - '3'
         desc: go to tab 3
+        rex: {action: client.tab.goto, args: {index: 3}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=3 ; set key-table root
       - keys:
         - '4'
         desc: go to tab 4
+        rex: {action: client.tab.goto, args: {index: 4}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=4 ; set key-table root
       - keys:
         - '5'
         desc: go to tab 5
+        rex: {action: client.tab.goto, args: {index: 5}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=5 ; set key-table root
       - keys:
         - '6'
         desc: go to tab 6
+        rex: {action: client.tab.goto, args: {index: 6}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=6 ; set key-table root
       - keys:
         - '7'
         desc: go to tab 7
+        rex: {action: client.tab.goto, args: {index: 7}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=7 ; set key-table root
       - keys:
         - '8'
         desc: go to tab 8
+        rex: {action: client.tab.goto, args: {index: 8}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=8 ; set key-table root
       - keys:
         - '9'
         desc: go to tab 9
+        rex: {action: client.tab.goto, args: {index: 9}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=9 ; set key-table root
       - keys:
         - '0'
         desc: go to tab 10
+        rex: {action: client.tab.goto, args: {index: 10}}
         icon: 󰎠
         color: teal
         cmd: select-window -t :=10 ; set key-table root
       - keys:
         - '['
         desc: tab to pane at left
+        # rex: no join-pane equivalent: pane.move_to_tab asks for the tab interactively
+        rex: false
         icon: 󰮹
         color: green
         cmd: join-pane -h -t :-1 ; set key-table root
       - keys:
         - ']'
         desc: tab to pane at right
+        # rex: no join-pane equivalent: pane.move_to_tab asks for the tab interactively
+        rex: false
         icon: 󰮺
         color: green
         cmd: join-pane -h -t :+1 ; set key-table root
       - keys:
         - P
         desc: pane to tab
+        rex: pane.move_to_new_tab
         icon: 
         color: green
         cmd: break-pane ; set key-table root
       - keys:
         - s
         desc: sync input all panes
+        # rex: Rex has no synchronized input
+        rex: false
         icon: 
         color: blue
         cmd: setw synchronize-panes ; set key-table root
@@ -595,6 +652,7 @@ keymap:
       - keys:
         - m
         desc: Move Pane …
+        rex: true
         icon: 󰆾
         color: yellow
         cmd: set key-table move
@@ -603,6 +661,7 @@ keymap:
       - keys:
         - r
         desc: Rename Pane …
+        rex: pane.rename
         icon: 
         color: yellow
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/mux-rename --launch pane'
@@ -612,6 +671,7 @@ keymap:
       - keys:
         - s
         desc: Resize Pane …
+        rex: true
         icon: 󰩨
         color: mauve
         cmd: set key-table resize
@@ -621,6 +681,7 @@ keymap:
         - Up
         - k
         desc: focus up
+        rex: pane.focus.up
         icon: 
         color: teal
         cmd: select-pane -U
@@ -629,6 +690,7 @@ keymap:
         - Down
         - j
         desc: focus down
+        rex: pane.focus.down
         icon: 
         color: teal
         cmd: select-pane -D
@@ -637,6 +699,7 @@ keymap:
         - Left
         - h
         desc: focus left
+        rex: pane.focus.left
         icon: 
         color: teal
         cmd: select-pane -L
@@ -645,6 +708,7 @@ keymap:
         - Right
         - l
         desc: focus right
+        rex: pane.focus.right
         icon: 
         color: teal
         cmd: select-pane -R
@@ -652,6 +716,7 @@ keymap:
       - keys:
         - Tab
         desc: switch focus
+        rex: pane.focus_next
         icon: 
         color: teal
         cmd: select-pane -t :.+
@@ -659,6 +724,8 @@ keymap:
       - keys:
         - f
         desc: toggle pane borders
+        # rex: pane headers are an app setting on Rex, not a per-window toggle
+        rex: false
         icon: 󰃇
         color: blue
         cmd: if -F '#{==:#{pane-border-status},off}' 'setw -g pane-border-status top' 'setw -g pane-border-status off'
@@ -666,12 +733,14 @@ keymap:
       - keys:
         - z
         desc: toggle pane zoom
+        rex: pane.zoom
         icon: 󱀅
         color: blue
         cmd: resize-pane -Z ; set key-table root
       - keys:
         - x
         desc: close pane
+        rex: pane.close
         icon: 󰅘
         color: red
         cmd: kill-pane ; set key-table root
@@ -679,6 +748,7 @@ keymap:
         - S-Up
         - K
         desc: split pane up
+        rex: pane.split.up
         icon: 
         color: mauve
         cmd: split-window -vb -c "#{pane_current_path}" ; set key-table root
@@ -686,6 +756,7 @@ keymap:
         - S-Down
         - J
         desc: split pane down
+        rex: pane.split.down
         icon: 
         color: mauve
         cmd: split-window -v -c "#{pane_current_path}" ; set key-table root
@@ -693,6 +764,7 @@ keymap:
         - S-Left
         - H
         desc: split pane left
+        rex: pane.split.left
         icon: 
         color: mauve
         cmd: split-window -hb -c "#{pane_current_path}" ; set key-table root
@@ -700,18 +772,21 @@ keymap:
         - S-Right
         - L
         desc: split pane right
+        rex: pane.split.right
         icon: 
         color: mauve
         cmd: split-window -h -c "#{pane_current_path}" ; set key-table root
       - keys:
         - p
         desc: new pane
+        rex: pane.split.auto
         icon: 󰯌
         color: green
         cmd: split-window -c "#{pane_current_path}" ; set key-table root
       - keys:
         - P
         desc: quick launch new pane
+        rex: ql_pane
         icon: 󱓞
         color: green
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 70 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Pane\" --no-chrome
@@ -727,6 +802,7 @@ keymap:
         - Up
         - k
         desc: grow up
+        rex: {action: pane.resize, args: {direction: up}}
         icon: 󰅃
         color: teal
         cmd: resize-pane -U 2
@@ -735,6 +811,7 @@ keymap:
         - Down
         - j
         desc: grow down
+        rex: {action: pane.resize, args: {direction: down}}
         icon: 󰅀
         color: teal
         cmd: resize-pane -D 2
@@ -743,6 +820,7 @@ keymap:
         - Left
         - h
         desc: grow left
+        rex: {action: pane.resize, args: {direction: left}}
         icon: 󰅁
         color: teal
         cmd: resize-pane -L 2
@@ -751,6 +829,7 @@ keymap:
         - Right
         - l
         desc: grow right
+        rex: {action: pane.resize, args: {direction: right}}
         icon: 󰅂
         color: teal
         cmd: resize-pane -R 2
@@ -758,6 +837,7 @@ keymap:
       - keys:
         - +
         desc: grow
+        rex: {action: pane.resize, args: {direction: up}}
         icon: 󰐕
         color: teal
         cmd: resize-pane -U 2
@@ -765,6 +845,7 @@ keymap:
       - keys:
         - '-'
         desc: shrink
+        rex: {action: pane.resize, args: {direction: down}}
         icon: 󰍴
         color: teal
         cmd: resize-pane -D 2
@@ -779,6 +860,7 @@ keymap:
         - Down
         - j
         desc: swap pane down
+        rex: pane.move.down
         icon: 󰅀
         color: teal
         cmd: swap-pane -D
@@ -787,6 +869,7 @@ keymap:
         - Up
         - k
         desc: swap pane up
+        rex: pane.move.up
         icon: 󰅃
         color: teal
         cmd: swap-pane -U
@@ -795,6 +878,7 @@ keymap:
         - Left
         - h
         desc: rotate window up
+        rex: pane.move.left
         icon: 󰅁
         color: teal
         cmd: rotate-window -U
@@ -803,6 +887,7 @@ keymap:
         - Right
         - l
         desc: rotate window down
+        rex: pane.move.right
         icon: 󰅂
         color: teal
         cmd: rotate-window -D
@@ -810,6 +895,8 @@ keymap:
       - keys:
         - Tab
         desc: swap with next
+        # rex: Rex moves a pane by direction; there is no swap-with-next
+        rex: false
         icon: 󰄹
         color: teal
         cmd: swap-pane -D
@@ -823,12 +910,15 @@ keymap:
       - keys:
         - d
         desc: detach
+        # rex: a Rex app does not detach: closing the window leaves the session running
+        rex: false
         icon: 󱟃
         color: red
         cmd: detach-client
       - keys:
         - r
         desc: Rename Session …
+        rex: session.rename
         icon: 󰑕
         color: yellow
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/mux-rename --launch session'
@@ -838,12 +928,14 @@ keymap:
       - keys:
         - s
         desc: new session
+        rex: session.new
         icon: 󰝜
         color: mauve
         cmd: run-shell -b "$HOME/.config/mux/scripts/mux-new-session '#{client_tty}' '#{pane_current_path}'" ; set key-table root
       - keys:
         - w
         desc: session manager
+        rex: session.switch
         icon: 󰧨
         color: red
         cmd: choose-tree -Zs ; set key-table root
@@ -851,6 +943,7 @@ keymap:
       - keys:
         - S
         desc: quick launch session
+        rex: ql_workspace
         icon: 󱓟
         color: red
         cmd: set key-table root ; run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Quick Launch — Session\" --no-chrome
@@ -1143,3 +1236,47 @@ keymap:
       - *id005
       - *id006
       - *id007
+  # --- direct chords -------------------------------------------------------
+  # The keys that act WITHOUT the leader. Under tmux these live in three
+  # places at once — each terminal's config synthesises a MEH (ctrl+alt+shift)
+  # CSI-u sequence for the Cmd chord, and keymap-base.conf binds that sequence
+  # — because Cmd cannot reach a program inside a terminal. Rex is the
+  # terminal, so it binds the Cmd chord itself, and this list is the first
+  # time these chords have one home. Only the Rex generator reads it; the
+  # tmux and terminal configs are unchanged.
+  #
+  # key: a Rex key spelling. rex: as in the tables above — an action name,
+  # {action, args}, or false with the reason in a comment.
+  direct:
+  - {key: cmd+shift+s, desc: quick launch session, rex: ql_workspace}
+  - {key: cmd+shift+t, desc: quick launch tab, rex: ql_tab}
+  - {key: cmd+shift+p, desc: quick launch pane, rex: ql_pane}
+  - {key: cmd+t, desc: new tab, rex: client.tab.new}
+  - {key: cmd+w, desc: close pane, rex: pane.close}
+  - {key: cmd+shift+w, desc: close tab, rex: client.tab.close}
+  - {key: cmd+1, desc: go to tab 1, rex: {action: client.tab.goto, args: {index: 1}}}
+  - {key: cmd+2, desc: go to tab 2, rex: {action: client.tab.goto, args: {index: 2}}}
+  - {key: cmd+3, desc: go to tab 3, rex: {action: client.tab.goto, args: {index: 3}}}
+  - {key: cmd+4, desc: go to tab 4, rex: {action: client.tab.goto, args: {index: 4}}}
+  - {key: cmd+5, desc: go to tab 5, rex: {action: client.tab.goto, args: {index: 5}}}
+  - {key: cmd+6, desc: go to tab 6, rex: {action: client.tab.goto, args: {index: 6}}}
+  - {key: cmd+7, desc: go to tab 7, rex: {action: client.tab.goto, args: {index: 7}}}
+  - {key: cmd+8, desc: go to tab 8, rex: {action: client.tab.goto, args: {index: 8}}}
+  - {key: cmd+9, desc: go to tab 9, rex: {action: client.tab.goto, args: {index: 9}}}
+  - {key: cmd+0, desc: go to tab 10, rex: {action: client.tab.goto, args: {index: 10}}}
+  - {key: cmd+shift+c, desc: copy pwd, rex: {action: copy_pwd, args: {mode: relative}}}
+  - {key: cmd+shift+alt+c, desc: copy pwd (abs), rex: {action: copy_pwd, args: {mode: absolute}}}
+  # Rex has no scroll-by-line action; these enter its copy mode, where the
+  # arrows and j/k scroll — the same two-step the tmux Scroll mode is.
+  - {key: cmd+up, desc: scroll mode, rex: pane.copy_mode.enter}
+  - {key: cmd+k, desc: scroll mode, rex: pane.copy_mode.enter}
+  - {key: cmd+shift+up, desc: previous prompt, rex: client.prompt.previous}
+  - {key: cmd+shift+down, desc: next prompt, rex: client.prompt.next}
+  - {key: cmd+f, desc: search scrollback, rex: client.find.open}
+  - {key: 'cmd+,', desc: terminal settings, rex: edit_terminal_config}
+  - {key: cmd+n, desc: new window, rex: client.window.new}
+  - {key: cmd+r, desc: reload config, rex: client.config.reload}
+  # rex: needs the scrollback-to-editor script ported (phase 5)
+  - {key: cmd+shift+f, desc: edit scrollback, rex: false}
+  # rex: the clipboard picker needs the widget float (phase 5)
+  - {key: cmd+shift+v, desc: clipboard history, rex: false}

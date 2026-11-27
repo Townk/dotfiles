@@ -303,4 +303,14 @@ AGENTS.md
 {{-   end -}}
 {{- end }}
 
+{{/* Rex config (~/.config/rex/init.lua, generated from keymap.yaml) only
+     where Rex is in use: its CLI on PATH, or the config dir Rex's own
+     onboarding creates. The Mac app keeps the CLI inside its bundle and off
+     the login PATH, which is why the directory is the second witness. A box
+     without Rex gets no stray ~/.config/rex, and the reload hook has nothing
+     to do there. */}}
+{{- if not (or (lookPath "rex") (stat (joinPath .chezmoi.homeDir ".config/rex"))) }}
+.config/rex
+{{- end }}
+
 # vim:ft=gitignore

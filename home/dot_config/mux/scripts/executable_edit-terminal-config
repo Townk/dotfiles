@@ -10,6 +10,10 @@ NVIM=${commands[nvim]:-${commands[vim]:-vi}}
 # (`${commands[zellij]:-/opt/homebrew/bin/zellij}`) was degraded — it missed the
 # mise-shim and /usr/local tiers the resolver covers.
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+# Asked BEFORE the next line reuses $ZELLIJ for the binary path — after it,
+# "is $ZELLIJ set" no longer means "am I in a zellij pane".
+_on_rex=0
+[[ -z "${TMUX:-}" && -z "${ZELLIJ:-}" && -n "${REX_SESSION:-}" ]] && _on_rex=1
 ZELLIJ="$(mux::bin zellij || true)"
 
 # Inside tmux TERM_PROGRAM lies (= "tmux"); the outer terminal's identity is
@@ -30,7 +34,13 @@ fi
 # a server-vs-client SSH mismatch now edits the config the CLIENT is really on.
 # (Worth a Mode B eyeball. Outside tmux — e.g. a zellij pane — this reports
 # local; the SSH branch there was already best-effort.)
-if mux::session_is_remote; then
+# Rex first: it is the terminal itself, so there is no outer one to ask
+# about, and mux::session_is_remote (a tmux session-env question) has nothing
+# to say there. Same precedence as everywhere else — an inner tmux or zellij
+# started inside a Rex pane is handled by the branches below.
+if (( _on_rex )); then
+  ENV_TYPE="REX"
+elif mux::session_is_remote; then
   ENV_TYPE="SSH"
 # Match TERM_PROGRAM case-INSENSITIVELY: Ghostty sets it to `ghostty` (lowercase)
 # — the value the tmux session env carries and we recover above — so a literal
@@ -55,6 +65,10 @@ case "$ENV_TYPE" in
     TARGET_FILE="$HOME/.config/ghostty/config"
     ;;
 
+  "REX")
+    TAB_NAME="Rex Config"
+    TARGET_FILE="$HOME/.config/rex/init.lua"
+    ;;
   "WEZTERM")
     TAB_NAME="Wezterm Config"
     TARGET_FILE="$HOME/.config/wezterm/wezterm.lua"
@@ -69,7 +83,17 @@ esac
 # 4. Focus-or-create the config tab/window in whichever mux hosts us
 # (mux migration Phase 1: dual-path; the shared logic collapses onto
 # mux::* calls when the Panes group lands in Phase 6).
-if [[ -n "${TMUX:-}" ]]; then
+if [[ "$ENV_TYPE" == REX ]]; then
+  # Focus the config tab if it is already open, else open it. Windows are
+  # found by label, the same identity quick-launch uses on Rex.
+  _win="$(_mux_rx_view "$REX_SESSION" |
+    jq -r --arg n "$TAB_NAME" '[.windows[]? | select(.label == $n) | .window_id] | first // empty')"
+  if [[ -n "$_win" ]]; then
+    _mux_rx_run window focus -s "$REX_SESSION" "$_win" >/dev/null
+  else
+    _mux_rx_run window new -s "$REX_SESSION" "$TAB_NAME" -- "$NVIM" "$TARGET_FILE" >/dev/null
+  fi
+elif [[ -n "${TMUX:-}" ]]; then
   TMUX_BIN=${commands[tmux]:-tmux}
   if "$TMUX_BIN" list-windows -F '#{window_name}' 2>/dev/null | grep -Fxq "$TAB_NAME"; then
     "$TMUX_BIN" select-window -t "=$TAB_NAME"

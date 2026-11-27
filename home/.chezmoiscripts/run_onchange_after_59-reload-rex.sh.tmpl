@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+# Make a RUNNING Rex server re-read its config whenever the generated config
+# changes.
+#
+# Like a tmux server, a Rex server holds its config in memory: `chezmoi apply`
+# rewrites ~/.config/rex/init.lua, and the server keeps yesterday's key
+# bindings until someone says `rex config reload`. This is the Rex twin of
+# 58-reload-tmux, for the same reason — the drift is silent and reads as a bug
+# in the file you just edited.
+#
+# Two rules that differ from the tmux hook:
+#
+#   * CHECK FIRST. `rex config check` loads the file with this rex binary and
+#     exits 1 on an error. A file that fails is not handed to the server: a
+#     reload of a broken config would leave the terminal you are sitting in
+#     with whatever subset of it parsed.
+#   * NEVER START A SERVER. The CLI autostarts one by default; an apply on a
+#     machine where Rex is installed but not running must stay a no-op.
+#
+# Hashes: the inputs that can change what the server should be running.
+#
+# init.lua:    {{ include "dot_config/rex/init.lua.tmpl" | sha256sum }}
+# keymap data: {{ include ".chezmoidata/keymap.yaml" | sha256sum }}
+
+conf="$HOME/.config/rex/init.lua"
+
+# The Mac app keeps the CLI inside its server bundle and only puts it on PATH
+# in the panes it starts, so an apply from any other shell needs the path.
+rex="${MUX_REX_BIN:-}"
+if [ -z "$rex" ]; then
+  rex="$(command -v rex 2>/dev/null || true)"
+fi
+if [ -z "$rex" ]; then
+  app="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+  [ -x "$app" ] && rex="$app"
+fi
+
+[ -n "$rex" ] || exit 0
+[ -f "$conf" ] || exit 0
+
+# No server, nothing to reload.
+"$rex" --autostart=false whoami >/dev/null 2>&1 || exit 0
+
+if ! out="$("$rex" config check "$conf" 2>&1)"; then
+  echo "⚠️  Rex config did not pass 'rex config check'; the running server keeps its current one:" >&2
+  printf '%s\n' "$out" | sed 's/^/    /' >&2
+  exit 0
+fi
+
+if "$rex" --autostart=false config reload >/dev/null 2>&1; then
+  echo "🔁  Reloaded the Rex config in the running server."
+else
+  echo "⚠️  Rex rejected the config reload; run 'rex config reload' by hand." >&2
+fi
+
+# vim:ft=sh
