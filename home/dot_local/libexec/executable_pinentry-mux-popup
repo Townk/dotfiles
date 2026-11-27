@@ -24,7 +24,7 @@
 set -uo pipefail
 
 usage() {
-  print -ru2 -- "usage: ${0:t} --open <caller_tty> <w> <h> [requester] | --hold <fifo>"
+  print -ru2 -- "usage: ${0:t} --open <caller_tty> <w> <h> [requester] | --hold <fifo> | --rex-panes | --rex-attached"
   exit 2
 }
 
@@ -72,6 +72,17 @@ case "${1:-}" in
     # zsh runs the USR1 handler between commands rather than interrupting the
     # sleep.
     while :; do sleep 0.2; done
+    ;;
+
+  # The two questions pinentry-ui's requester asks of tmux, answered for Rex
+  # in the same line formats, so the binary has one parser and no Rex client.
+  --rex-panes)
+    source "${0:A:h:h}/lib/mux/pinentry.zsh" 2>/dev/null || exit 1
+    mux::pinentry_rex_panes
+    ;;
+  --rex-attached)
+    source "${0:A:h:h}/lib/mux/pinentry.zsh" 2>/dev/null || exit 1
+    mux::pinentry_rex_attached
     ;;
 
   *) usage ;;

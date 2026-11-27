@@ -67,7 +67,12 @@ pub fn run(prompt: &str) -> ExitCode {
     let theme = Theme::load();
     let chain = parents();
     let title = title(prompt, &commands(&chain));
-    let pane = std::env::var("TMUX_PANE").unwrap_or_default();
+    // A Rex pane has no TMUX_PANE; its block id is the same kind of handle.
+    let pane = std::env::var("TMUX_PANE")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .or_else(|| std::env::var("REX_BLOCK").ok())
+        .unwrap_or_default();
     let who = if pane.is_empty() {
         None
     } else {

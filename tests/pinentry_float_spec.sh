@@ -159,3 +159,173 @@ Describe 'pinentry-mux-popup — argument contract'
     The stderr should include "usage:"
   End
 End
+
+# The Rex half: the float is a floating layer, the pane list comes from the
+# Rex server, and the process names from `ps` on each pane's tty. Hermetic:
+# `rex` and `ps` are stubs.
+Describe 'mux/pinentry.zsh — on Rex'
+  Include home/dot_local/lib/mux/pinentry.zsh
+
+  setup() {
+    PR_TMP=$(mktemp -d)
+    cat >"$PR_TMP/rex" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >>"$PR_TMP/rex.log"
+case " \$* " in
+  *" client ls "*) echo '{"clients":[{"info":{"kind":"app"},"connection_state":"connected","session_ids":["session:a"]},{"info":{"kind":"cli"},"connection_state":"connected","session_ids":["session:b"]},{"info":{"kind":"app"},"connection_state":"lost","session_ids":["session:b"]}]}' ;;
+  *" ls --json "*) echo '{"sessions":[{"session_id":"session:a","label":"Main"},{"session_id":"session:b","label":"Jobs | x"}]}' ;;
+  *" session.new_layer "*)
+    cat >"$PR_TMP/req.json"
+    [ "\${STUB_LAYER:-ok}" = fail ] && exit 1
+    : >"$PR_TMP/alive"
+    if [ "\${STUB_LAYER:-ok}" = ok ]; then
+      fifo=\$(jq -r '.layout.block.options.command[-1]' "$PR_TMP/req.json")
+      ( printf '/dev/ttys099 4242\n' >"\$fifo" ) >/dev/null 2>&1 &
+    fi
+    echo '{"block_ids":["block:layer"]}' ;;
+  *" session.view "*)
+    case " \$* " in
+      *" -s session:b "*) echo '{"active_window_id":"window:j","windows":[{"window_id":"window:j","focused_block_id":"block:job","layers":[{"kind":"tiled","blocks":[{"block_id":"block:job","creator_name":"com.superlogical.terminal","rect":[0,0,1,1]}]}]}]}' ;;
+      *) echo '{"active_window_id":"window:2","windows":[{"window_id":"window:1","focused_block_id":"block:sh","layers":[{"kind":"tiled","blocks":[{"block_id":"block:sh","creator_name":"com.superlogical.terminal","rect":[0,0,1,1]}]}]},{"window_id":"window:2","focused_block_id":"block:ag","layers":[{"kind":"tiled","blocks":[{"block_id":"block:ag","creator_name":"com.superlogical.terminal","rect":[0,0,0.5,1]},{"block_id":"block:wrapped","creator_name":"com.superlogical.terminal","rect":[0.5,0,0.5,1]},{"block_id":"block:web","creator_name":"com.example.browser"}]}]}]}' ;;
+    esac ;;
+  *" block call "*" process "*)
+    case " \$* " in
+      *" -b block:sh "*) echo '{"child":{"pid":101},"foreground":{"name":"zsh"}}' ;;
+      *" -b block:ag "*) echo '{"child":{"pid":102},"foreground":{"name":"claude.exe"}}' ;;
+      *" -b block:wrapped "*) echo '{"child":{"pid":103},"foreground":{"name":"node"}}' ;;
+      *" -b block:job "*) echo '{"child":{"pid":104},"foreground":{"name":"zsh"}}' ;;
+    esac ;;
+  *" block call "*" size "*) echo "{\"columns\":\${STUB_COLS:-60},\"rows\":\${STUB_ROWS:-40}}" ;;
+  *" block inspect "*) [ -e "$PR_TMP/alive" ] && exit 0; exit 3 ;;
+  *" block close "*) rm -f "$PR_TMP/alive" ;;
+esac
+exit 0
+EOS
+    cat >"$PR_TMP/ps" <<'EOS'
+#!/bin/sh
+case "$*" in
+  "-o tty= -p 101") echo 'ttys001' ;;
+  "-o tty= -p 102") echo 'ttys002  ' ;;
+  "-o tty= -p 103") echo 'ttys003' ;;
+  "-o tty= -p 104") echo '??' ;;
+  "-o state= -o comm= -t ttys003") printf 'Ss   -zsh\nT    /opt/bin/claude\nS+   node\nS+   /usr/local/bin/cursor-agent\n' ;;
+  "-o state= -o comm= -t ttys001") printf 'Ss   -zsh\n' ;;
+esac
+EOS
+    chmod +x "$PR_TMP/rex" "$PR_TMP/ps"
+    printf '%s\n' '# agents' agent cursor-agent claude >"$PR_TMP/agents"
+    export MUX_REX_BIN="$PR_TMP/rex" MUX_PE_PS_BIN="$PR_TMP/ps" MUX_PE_AGENT_PROCS="$PR_TMP/agents" TMPDIR="$PR_TMP"
+    unset TMUX MUX_TMUX_BIN REX_BLOCK REX_SESSION STUB_LAYER STUB_COLS STUB_ROWS
+    mux::pinentry_alert() { print -r -- "$*" >"$PR_TMP/alert"; }
+  }
+  cleanup() { rm -rf "$PR_TMP"; unset PR_TMP MUX_REX_BIN MUX_PE_PS_BIN MUX_PE_AGENT_PROCS TMPDIR STUB_LAYER STUB_COLS STUB_ROWS; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  Describe 'listing the panes'
+    It 'prints every terminal pane that has a tty, in the tmux line layout'
+      When call mux::pinentry_rex_panes
+      The output should equal "/dev/ttys001|block:sh|zsh|zsh|1|1|0|Main
+/dev/ttys002|block:ag|claude|claude|2|1|1|Main
+/dev/ttys003|block:wrapped|cursor-agent|cursor-agent|2|0|1|Main"
+    End
+
+    It 'names an agent running under a wrapper, but not a stopped one'
+      # ttys003: claude is stopped (T), cursor-agent is running.
+      When call mux::pinentry_rex_panes
+      The line 3 of output should include "|cursor-agent|"
+    End
+
+    It 'never starts a server'
+      check() { mux::pinentry_rex_panes >/dev/null; grep -c -v -- '--autostart=false' "$PR_TMP/rex.log" || true; }
+      When call check
+      The output should equal "0"
+    End
+
+    It 'fails when no server answers'
+      export MUX_REX_BIN=/usr/bin/false
+      When call mux::pinentry_rex_panes
+      The status should be failure
+    End
+  End
+
+  Describe 'listing who is watching'
+    It 'prints the sessions a connected app shows, by label, separator-safe'
+      When call mux::pinentry_rex_attached
+      The output should equal "Main"
+    End
+  End
+
+  Describe 'opening the float'
+    layer_cmd() { jq -r '.layout.block.options.command | join(" ")' "$PR_TMP/req.json" | sed -e "s|$PR_TMP/[^ ]*|FIFO|"; }
+
+    It 'opens a layer over the asking pane and prints its tty and holder'
+      When call mux::pinentry_spawn /dev/ttys002 44 12 claude
+      The output should equal "/dev/ttys099 4242"
+      The status should be success
+    End
+
+    It 'runs the holder in that layer, in the asking pane'"'"'s session, sized in cells'
+      shape() {
+        mux::pinentry_spawn /dev/ttys002 60 20 claude >/dev/null
+        layer_cmd | grep -c 'libexec/pinentry-mux-popup --hold FIFO$'
+        grep -c -- '-s block:ag session.new_layer' "$PR_TMP/rex.log"
+        # block:ag is half of a window: 60 cols x 40 rows -> a 120 x 40 window.
+        jq -c '.bounds | map(. * 100 | round)' "$PR_TMP/req.json"
+        cat "$PR_TMP/alert"
+      }
+      When call shape
+      The line 1 of output should equal "1"
+      The line 2 of output should equal "1"
+      The line 3 of output should equal "[25,25,50,50]"
+      The line 4 of output should equal " claude Rex"
+    End
+
+    It 'fails for a tty no pane has, opening nothing'
+      nothing() { mux::pinentry_spawn /dev/ttys777 44 12; print -r -- "rc=$?"; [[ -e "$PR_TMP/req.json" ]] && print opened || print "not opened"; }
+      When call nothing
+      The output should equal "rc=1
+not opened"
+    End
+
+    It 'refuses a float the window cannot spare the margin for'
+      nothing() { mux::pinentry_spawn /dev/ttys002 118 12; print -r -- "rc=$?"; [[ -e "$PR_TMP/req.json" ]] && print opened || print "not opened"; }
+      When call nothing
+      The output should equal "rc=1
+not opened"
+    End
+
+    It 'fails when the layer cannot be created, leaving nothing behind'
+      export STUB_LAYER=fail
+      failed() { mux::pinentry_spawn /dev/ttys002 44 12; print -r -- "rc=$?"; ls "$PR_TMP" | grep -c 'fifo' || true; }
+      When call failed
+      The output should equal "rc=1
+0"
+    End
+
+    It 'closes a layer whose holder never reports, and fails'
+      export STUB_LAYER=silent
+      silent() {
+        # The holder never writes; the layer is closed by hand a moment later.
+        ( sleep 0.7; rm -f "$PR_TMP/alive" ) &
+        mux::pinentry_spawn /dev/ttys002 44 12; print -r -- "rc=$?"
+        ls "$PR_TMP" | grep -c 'fifo' || true
+      }
+      When call silent
+      The output should equal "rc=1
+0"
+    End
+
+    It 'refuses a size that is not a pair of numbers'
+      When call mux::pinentry_spawn /dev/ttys002 wide 12
+      The status should be failure
+    End
+  End
+
+  Describe 'what the OSD says'
+    It 'names Rex when nobody could be named'
+      When call mux::pinentry_alert_text "" Rex
+      The output should equal "Passphrase needed — a signing prompt is waiting in Rex"
+    End
+  End
+End

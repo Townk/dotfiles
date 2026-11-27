@@ -142,17 +142,17 @@ mux::pinentry_fits() {
 # everything around it is a backgrounded subshell talking to the notification
 # daemon, and this is the part with a decision in it.
 mux::pinentry_alert_text() {
-  local who="$1"
+  local who="$1" where="${2:-tmux}"
   if [[ -n "$who" ]]; then
     print -r -- "${(C)who} is requesting your passphrase"
   else
-    print -r -- 'Passphrase needed — a signing prompt is waiting in tmux'
+    print -r -- "Passphrase needed — a signing prompt is waiting in $where"
   fi
 }
 
 mux::pinentry_alert() {
   local sess="$1" who="$2" msg
-  msg="$(mux::pinentry_alert_text "$who")"
+  msg="$(mux::pinentry_alert_text "$who" "${3:-tmux}")"
   (
     [[ -n "$sess" ]] && mux::session_is_remote "$sess" && export NOTIFY_VIA_BRIDGE=1
     source "$_MUX_PE_LIB/common.zsh" 2>/dev/null || exit 0
@@ -168,6 +168,10 @@ mux::pinentry_alert() {
 # exactly as it would with no tmux at all. Degrading to a prompt in an awkward
 # place is always allowed; wedging the agent is not.
 mux::pinentry_spawn() {
+  _mux::pinentry_spawn_tmux "$@" || _mux::pinentry_spawn_rex "$@"
+}
+
+_mux::pinentry_spawn_tmux() {
   local caller_tty="$1" w="$2" h="$3" who="${4:-}"
   local tx sess client fifo out popup_pid reader_pid line
 
@@ -235,5 +239,148 @@ mux::pinentry_spawn() {
   fi
 
   mux::pinentry_alert "$sess" "$who"
+  print -r -- "$line"
+}
+
+# --- Rex ---------------------------------------------------------------------
+#
+# The same job on Rex, where the float is a floating layer. Two things differ.
+# Rex has no per-pane stamp to say who is running, so the name is read off the
+# pane's tty — the same question keymap-base.conf and init.lua ask of `ps`.
+# And a layer opens in the session's ACTIVE window, which is where a human
+# looking at that session is, so there is no client to aim at.
+
+_mux::pinentry_ps() { "${MUX_PE_PS_BIN:-/bin/ps}" "$@"; }
+
+# mux::pinentry_rex_panes — every terminal block of every session, one line
+# each, in the layout pinentry-ui's requester already parses for tmux:
+#   <tty>|<block>|<proc>|<proc>|<window index>|<pane active>|<window active>|<session>
+# <proc> is a coding agent's name when one is running on the pane's tty (the
+# names in agent-procs.data), otherwise the foreground program.
+mux::pinentry_rex_panes() {
+  local sessions
+  sessions="$(_mux_rx_run --timeout 3s ls --json 2>/dev/null |
+    jq -r '.sessions[]? | [.session_id, (.label // "" | gsub("[|\\t\\n]"; " "))] | @tsv' 2>/dev/null)" || return 1
+  [[ -n "$sessions" ]] || return 1
+
+  local -a agents=()
+  local agents_file="${MUX_PE_AGENT_PROCS:-$HOME/.config/mux/agent-procs.data}"
+  [[ -r "$agents_file" ]] && agents=(${(f)"$(grep -v -E '^[[:space:]]*(#|$)' "$agents_file")"})
+
+  local s label view rows block widx pa wa proc pid name tty comm state c
+  while IFS=$'\t' read -r s label; do
+    view="$(_mux_rx_run --timeout 3s api call -s "$s" session.view 2>/dev/null)" || continue
+    rows="$(print -r -- "$view" | jq -r '
+      .active_window_id as $aw
+      | .windows // [] | to_entries[] | .key as $i | .value as $w
+      | $w.layers[]?.blocks[]?
+      | select(.creator_name == "com.superlogical.terminal")
+      | [.block_id, $i + 1,
+         (if .block_id == $w.focused_block_id then 1 else 0 end),
+         (if $w.window_id == $aw then 1 else 0 end)] | @tsv' 2>/dev/null)"
+    while IFS=$'\t' read -r block widx pa wa; do
+      [[ -n "$block" ]] || continue
+      proc="$(_mux_rx_run --timeout 3s block call -s "$s" -b "$block" process 2>/dev/null)" || continue
+      pid="$(print -r -- "$proc" | jq -r '.child.pid // empty' 2>/dev/null)"
+      [[ "$pid" == <-> ]] || continue
+      tty="${$(_mux::pinentry_ps -o tty= -p "$pid" 2>/dev/null)// /}"
+      [[ -n "$tty" && "$tty" != '??' ]] || continue
+      name="$(print -r -- "$proc" | jq -r '.foreground.name // empty' 2>/dev/null)"
+      name="${name%.exe}"
+      if (( ! ${agents[(Ie)$name]} )); then
+        # Not an agent by its foreground name; one may still be running under
+        # a wrapper. A stopped process is not asking for anything.
+        while read -r state comm; do
+          [[ "$state" == [TXZ]* ]] && continue
+          c="${${comm:t}#-}"; c="${c%.exe}"
+          if (( ${agents[(Ie)$c]} )); then name="$c"; break; fi
+        done < <(_mux::pinentry_ps -o state= -o comm= -t "$tty" 2>/dev/null)
+      fi
+      print -r -- "/dev/${tty#/dev/}|$block|$name|$name|$widx|$pa|$wa|$label"
+    done <<<"$rows"
+  done <<<"$sessions"
+  return 0
+}
+
+# mux::pinentry_rex_attached — the sessions a connected Rex app is showing,
+# by the same label mux::pinentry_rex_panes prints, one per line.
+mux::pinentry_rex_attached() {
+  local sessions clients
+  sessions="$(_mux_rx_run --timeout 3s ls --json 2>/dev/null)" || return 1
+  clients="$(_mux_rx_run --timeout 3s client ls --json 2>/dev/null)" || return 1
+  jq -r -n --argjson s "$sessions" --argjson c "$clients" '
+    [ ($c.clients // $c)[]?
+      | select(.info.kind? == "app" and .connection_state? == "connected")
+      | .session_ids[]? ] as $ids
+    | $s.sessions[]? | select(.session_id as $id | $ids | index($id))
+    | (.label // "" | gsub("[|\\t\\n]"; " "))' 2>/dev/null
+}
+
+# _mux::pinentry_spawn_rex <caller_tty> <w> <h> [requester] — as
+# mux::pinentry_spawn: print "<layer_tty> <holder pid>", non-zero on any
+# failure.
+_mux::pinentry_spawn_rex() {
+  local caller_tty="$1" w="$2" h="$3" who="${4:-}"
+  [[ "$w" == <-> && "$h" == <-> ]] || return 1
+  _mux_rx_bin >/dev/null 2>&1 || return 1
+
+  local origin
+  origin="$(mux::pinentry_rex_panes | awk -F'|' -v t="$caller_tty" '$1 == t { print $2; exit }')"
+  [[ -n "$origin" ]] || return 1
+
+  # The helpers below act on "our" block; under gpg-agent there is none, so
+  # the asking pane stands in. A block id is accepted wherever Rex takes a
+  # session.
+  local REX_BLOCK="$origin" REX_SESSION="$origin"
+
+  # Same rule as the tmux float: leave a margin, or prompt in place.
+  local cells
+  cells="$(_mux_rx_window_cells 2>/dev/null)" || return 1
+  local -i cw="${cells%% *}" ch="${cells##* }"
+  (( w + MUX_PINENTRY_MARGIN <= cw && h + MUX_PINENTRY_MARGIN <= ch )) || return 1
+
+  local fifo out reader_pid layer line="" rc
+  source "$_MUX_PE_LIB/common.zsh" 2>/dev/null || return 1
+  out="$(common::tmpfile)" || return 1
+  fifo="${out}.fifo"
+  if ! mkfifo -m 600 "$fifo" 2>/dev/null; then
+    rm -f -- "$out"
+    return 1
+  fi
+  cat "$fifo" >"$out" 2>/dev/null &
+  reader_pid=$!
+
+  # </dev/null for the reason the tmux half gives: nothing here may read the
+  # Assuan pipe we inherited as stdin.
+  layer="$(_mux_rx_layer "$w" "$h" "Passphrase" "" "$origin" -- \
+    "$_MUX_PE_ROOT/libexec/pinentry-mux-popup" --hold "$fifo" </dev/null 2>/dev/null)" || layer=""
+
+  local -i i=0
+  if [[ -n "$layer" ]]; then
+    while (( i < 100 )); do              # 10 s ceiling, as on tmux
+      if [[ -s "$out" ]]; then
+        line="$(<"$out")"
+        [[ "$line" == *' '* ]] && break
+      fi
+      if (( i % 5 == 4 )); then          # once a second: is the layer still there?
+        rc=0
+        _mux_rx_run --timeout 3s block inspect -s "$layer" "$layer" >/dev/null 2>&1 </dev/null || rc=$?
+        (( rc == 3 || rc == 4 )) && break
+      fi
+      sleep 0.1
+      (( i++ ))
+    done
+  fi
+
+  kill "$reader_pid" 2>/dev/null
+  wait "$reader_pid" 2>/dev/null
+  rm -f -- "$fifo" "$out"
+
+  if [[ "$line" != /dev/*' '<-> ]]; then
+    [[ -n "$layer" ]] && _mux_rx_close_block "$layer" </dev/null
+    return 1
+  fi
+
+  mux::pinentry_alert "" "$who" Rex
   print -r -- "$line"
 }

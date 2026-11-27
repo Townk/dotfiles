@@ -188,18 +188,31 @@ _mux_rx_split() {
   print -r -- "$out" | jq -r '[.. | .block_id? // empty, (.block_ids? // [])[]] | first // empty'
 }
 
-# _mux_rx_window_cells [view-json] — "<cols> <rows>" of the WINDOW our block
-# is in. Rex reports cells per block and layout as fractions of the window,
-# so the window is the block's cells divided by its share. Used to turn the
-# shim's cell-based popup/float geometry into the fractions Rex wants.
+# _mux_rx_window_cells [view-json] — "<cols> <rows>" of the session's ACTIVE
+# window, which is where a layer opens. Rex reports cells per block and
+# layout as fractions of the window, so the window is a tiled pane's cells
+# divided by its share. Used to turn the shim's cell-based popup/float
+# geometry into the fractions Rex wants.
+#
+# The pane measured is ours when it is tiled in the active window, otherwise
+# any tiled pane there: a caller in a background tab may never have been laid
+# out (it still reports the 80x24 it was born with), and a float's rect is a
+# share of its own layer. Our own pane, wherever it is, is the last resort.
 _mux_rx_window_cells() {
   [[ -n "${REX_BLOCK:-}" ]] || return 1
-  local view="${1:-}" rect size
+  local view="${1:-}" ref rect size
   [[ -n "$view" ]] || view="$(_mux_rx_view)" || return 1
-  rect="$(print -r -- "$view" | jq -r --arg b "$REX_BLOCK" '
-    [.. | objects | select(.block_id? == $b and (.rect? | type) == "array") | .rect] | first
-    | if . then "\(.[2]) \(.[3])" else empty end' 2>/dev/null)"
-  size="$(_mux_rx_block_call "$REX_BLOCK" size | jq -r '"\(.columns) \(.rows)"' 2>/dev/null)"
+  ref="$(print -r -- "$view" | jq -r --arg b "$REX_BLOCK" '
+    def panes: [.. | objects | select(.block_id? and (.rect? | type) == "array")];
+    .active_window_id as $aw
+    | ([.windows[]? | select(.window_id == $aw) | .layers[]? | select(.kind == "tiled")] | panes) as $active
+    | ([$active[] | select(.block_id == $b)] | first)
+      // ($active | first)
+      // ([panes[] | select(.block_id == $b)] | first)
+    | if . then "\(.block_id) \(.rect[2]) \(.rect[3])" else empty end' 2>/dev/null)"
+  [[ -n "$ref" ]] || return 1
+  rect="${ref#* }"
+  size="$(_mux_rx_block_call "${ref%% *}" size | jq -r '"\(.columns) \(.rows)"' 2>/dev/null)"
   [[ -n "$rect" && -n "$size" ]] || return 1
   local -a r=(${=rect}) z=(${=size})
   [[ "${z[1]}" == <-> && "${z[2]}" == <-> ]] || return 1

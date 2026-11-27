@@ -41,7 +41,12 @@ impl Requester {
     /// `claude · pane %3 (Main:2)` — process first, because that is the part
     /// that decides whether to type.
     pub fn label(&self) -> String {
-        format!("{} · pane {} ({})", self.name, self.pane_id, self.window)
+        format!(
+            "{} · pane {} ({})",
+            self.name,
+            short_pane(&self.pane_id),
+            self.window
+        )
     }
 }
 
@@ -136,7 +141,46 @@ impl By<'_> {
 /// Ask tmux who this is. None when there is no tmux, no server, or no matching
 /// pane — all of which are ordinary, and mean the caller has to find somewhere
 /// else to draw.
+/// A Rex block id is `block:` and a UUID; the app shows its last six digits, and
+/// that is all a label has room for. A tmux pane id is already short.
+fn short_pane(id: &str) -> &str {
+    match id.strip_prefix("block:") {
+        Some(uuid) if uuid.len() > 6 && uuid.is_char_boundary(uuid.len() - 6) => {
+            &uuid[uuid.len() - 6..]
+        }
+        _ => id,
+    }
+}
+
+/// tmux first, then Rex: a pane tmux does not know may be a Rex one.
 pub fn resolve(by: By) -> Option<Requester> {
+    resolve_tmux(by).or_else(|| resolve_rex(by))
+}
+
+/// The same two questions, asked of Rex. The answers come from
+/// `pinentry-mux-popup`, which already has to know Rex to open the float, in
+/// the line formats tmux is asked for — so there is one parser, and this
+/// program carries no Rex client of its own.
+fn resolve_rex(by: By) -> Option<Requester> {
+    let home = std::env::var_os("HOME")?;
+    let popup = std::path::Path::new(&home).join(".local/libexec/pinentry-mux-popup");
+    let popup = popup.to_str()?;
+    let panes = run(popup, &["--rex-panes"])?;
+    let attached = run(popup, &["--rex-attached"]).unwrap_or_default();
+    let agents = agent_procs();
+    crate::debug::log(format_args!(
+        "rex panes={panes:?} attached={attached:?} agents={agents:?}"
+    ));
+    let who = parse(by, &panes, &attached, &agents);
+    crate::debug::log(format_args!(
+        "resolved {by:?} on rex -> {:?}",
+        who.as_ref()
+            .map(|r| (&r.name, &r.pane_id, r.is_agent, r.elsewhere))
+    ));
+    who
+}
+
+fn resolve_tmux(by: By) -> Option<Requester> {
     let tmux = tmux_bin()?;
     let panes = run(&tmux, &["list-panes", "-a", "-F", PANE_FORMAT])?;
     let attached = run(&tmux, &["list-clients", "-F", "#{client_session}"]).unwrap_or_default();
@@ -155,8 +199,10 @@ pub fn resolve(by: By) -> Option<Requester> {
     who
 }
 
-fn run(tmux: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(tmux).args(args).output().ok()?;
+fn run(program: &str, args: &[&str]) -> Option<String> {
+    // `output()` gives the child no stdin, which matters: ours is gpg-agent's
+    // half of the Assuan conversation.
+    let out = Command::new(program).args(args).output().ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
@@ -250,6 +296,39 @@ mod tests {
 
     fn agents() -> Vec<String> {
         vec!["agent".to_string(), "claude".to_string()]
+    }
+
+    /// What `pinentry-mux-popup --rex-panes` prints: the tmux layout, a block
+    /// id where the pane id goes, the session's label last.
+    const REX_PANES: &str = "/dev/ttys001|block:01a21e20-35a6-70ab-8ca4-0fb5a17b55fb|claude|claude|2|1|0|Main\n\
+                             /dev/ttys002|block:01a21e20-35a6-70ab-8ca4-0fb5a1aaaaaa|zsh|zsh|1|1|1|Main\n";
+
+    #[test]
+    fn a_rex_pane_resolves_through_the_same_parser() {
+        let r = parse(By::Tty("/dev/ttys001"), REX_PANES, "Main\n", &agents()).unwrap();
+        assert_eq!(r.name, "claude");
+        assert!(r.is_agent);
+        // A background window of a session somebody is watching.
+        assert!(r.elsewhere);
+        assert_eq!(r.label(), "claude · pane 7b55fb (Main:2)");
+    }
+
+    #[test]
+    fn a_rex_block_id_is_a_pane_handle_for_askpass() {
+        let id = "block:01a21e20-35a6-70ab-8ca4-0fb5a1aaaaaa";
+        let r = parse(By::Pane(id), REX_PANES, "Main\n", &agents()).unwrap();
+        assert_eq!(r.tty, "/dev/ttys002");
+        assert!(!r.elsewhere);
+    }
+
+    #[test]
+    fn only_a_rex_block_id_is_shortened() {
+        assert_eq!(short_pane("%3"), "%3");
+        assert_eq!(short_pane("block:abc"), "block:abc");
+        assert_eq!(
+            short_pane("block:01a21e20-35a6-70ab-8ca4-0fb5a17b55fb"),
+            "7b55fb"
+        );
     }
 
     /// The measured case: tmux says `node`, the stamp says `agent`, and the
