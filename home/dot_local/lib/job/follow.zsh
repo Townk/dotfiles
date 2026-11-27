@@ -150,13 +150,16 @@ job::_follow_instance() {
 # mismatch. Before asking it waits JOB_FOLLOW_HUP_WAIT seconds (default
 # 1): a stopping server can hang up its tabs while it still answers, rc 3
 # from the same instance; after the wait it is gone (rc 4). That costs the
-# owner one second on a real close. On a confirmed close a job still in flight is cancelled and a
-# failed one is marked dismissed. Anything else — rc 4 (server
-# unreachable), rc 0 (block still there), an empty, unreadable or different
-# instance id, no rex, no REX_BLOCK — leaves the job alone: a server restart
-# must never cancel. An inline follower never cancels; its terminal going
-# away moves the job to a tab of its own. Outside inline mode the decision
-# is logged (job::_rex_log). Always returns 0.
+# owner one second on a real close. A block reconcile is closing looks
+# exactly like the owner closing it, so a block listed in .rex_closing
+# (job::_rex_closing) is never asked about. On a confirmed close a job
+# still in flight is cancelled and a failed one is marked dismissed.
+# Anything else — rc 4 (server unreachable), rc 0 (block still there), an
+# empty, unreadable or different instance id, no rex, no REX_BLOCK —
+# leaves the job alone: a server restart must never cancel. An inline
+# follower never cancels; its terminal going away moves the job to a tab
+# of its own. Outside inline mode the decision is logged (job::_rex_log).
+# Always returns 0.
 job::_follow_on_hup() {
   local id="$1" inline="${2:-0}" instance="${3:-}" dir="$JOB_STATE_ROOT/$1"
   local rex rc=none match=unasked action=nothing epoch res code
@@ -164,6 +167,10 @@ job::_follow_on_hup() {
   [ -d "$dir" ] || return 0
   if [ "$inline" = 1 ]; then
     [ -s "$dir/result" ] || job::_rex_open_tab "$id" || :
+    return 0
+  fi
+  if [ -n "${REX_BLOCK:-}" ] && job::_rex_closing "$REX_BLOCK"; then
+    job::_rex_log "job $id: hangup of $REX_BLOCK: closed by reconcile: nothing"
     return 0
   fi
   if [ -n "${REX_BLOCK:-}" ] && rex=$(job::_rex); then

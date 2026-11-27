@@ -239,6 +239,7 @@ EOS
         run_job_stubbed job::_follow_on_hup j1 "${1:-0}" "${HUP_INSTANCE-srv-1}"
       print -r -- "rc=$? kills=$(kills)"
     }
+    rexlog() { sed 's/^[^ ]* //' "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null; }
 
     It 'cancels when the server says the tab is gone'
       meta "Remux"
@@ -323,6 +324,44 @@ kept"
 rc=0 kills=1"
     End
 
+    # A tab reconcile closes hangs up its follower exactly like its owner
+    # closing it: rc 3 from the same instance. Reconcile lists the block in
+    # .rex_closing first.
+    It 'does not cancel a tab reconcile is closing'
+      meta "Remux"
+      check() {
+        echo "$(date +%s) blk-1" > "$JOB_STATE_ROOT/.rex_closing"
+        JOB_FAKE_REX_RC=3 hup
+        rexlog
+      }
+      When call check
+      The output should equal "rc=0 kills=0
+job j1: hangup of blk-1: closed by reconcile: nothing"
+    End
+
+    It 'does not dismiss a failed job whose tab reconcile is closing'
+      meta "Remux"; result Failed 2
+      check() {
+        printf '%s blk-0\n%s blk-1\n' "$(date +%s)" "$(date +%s)" \
+          > "$JOB_STATE_ROOT/.rex_closing"
+        JOB_FAKE_REX_RC=3 hup
+        [ -e "$JOB_STATE_ROOT/j1/dismissed" ] && echo dismissed || echo kept
+      }
+      When call check
+      The output should equal "rc=0 kills=0
+kept"
+    End
+
+    It 'cancels when reconcile listed the tab more than 60 s ago'
+      meta "Remux"
+      check() {
+        echo "$(( $(date +%s) - 61 )) blk-1" > "$JOB_STATE_ROOT/.rex_closing"
+        JOB_FAKE_REX_RC=3 hup
+      }
+      When call check
+      The output should equal "rc=0 kills=1"
+    End
+
     It 'does not cancel without a block to ask about'
       meta "Remux"
       check() {
@@ -377,8 +416,6 @@ j1"
       The output should equal "rc=0 kills=0
 not-opened"
     End
-
-    rexlog() { sed 's/^[^ ]* //' "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null; }
 
     It 'logs a cancel with the inspect rc and the instance match'
       meta "Remux"

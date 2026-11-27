@@ -29,8 +29,10 @@ EOS
     # adds the Jobs session to the ls fixture, and answers like the real CLI.
     # `block ls` prints the JOB_FAKE_REX_BLOCKS fixture and, like the real
     # CLI, exits 1 when the ls fixture has no Jobs session; `block close`
-    # exits JOB_FAKE_REX_CLOSE_RC.
+    # notes in JOB_FAKE_REX_CLOSING_SEEN whether $JOB_STATE_ROOT/.rex_closing
+    # lists the block at that moment, then exits JOB_FAKE_REX_CLOSE_RC.
     export JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log"
+    export JOB_FAKE_REX_CLOSING_SEEN="$JOB_SANDBOX/closing.seen"
     export JOB_FAKE_REX_LS="$JOB_SANDBOX/ls.json"
     export JOB_FAKE_REX_BLOCKS="$JOB_SANDBOX/blocks.json"
     printf '%s\n' '{"blocks":[]}' > "$JOB_FAKE_REX_BLOCKS"
@@ -45,7 +47,15 @@ case "$*" in
     grep -q '"label":"Jobs"' "$JOB_FAKE_REX_LS" || exit 1
     cat "$JOB_FAKE_REX_BLOCKS"
     ;;
-  *' block close '*) exit "${JOB_FAKE_REX_CLOSE_RC:-0}" ;;
+  *' block close '*)
+    for a; do last=$a; done
+    if grep -q "^[0-9]* $last\$" "$JOB_STATE_ROOT/.rex_closing" 2>/dev/null; then
+      echo "listed $last" >> "$JOB_FAKE_REX_CLOSING_SEEN"
+    else
+      echo "unlisted $last" >> "$JOB_FAKE_REX_CLOSING_SEEN"
+    fi
+    exit "${JOB_FAKE_REX_CLOSE_RC:-0}"
+    ;;
   *' ls --json'*) cat "$JOB_FAKE_REX_LS" ;;
   *' window new '*)
     echo '{"window_id":"window:w2","block_ids":["block:b2"]}'
@@ -428,6 +438,31 @@ j1"
       When call logged
       The output should equal "1
 1"
+    End
+
+    # A follower in a block reconcile closes must not take the hangup for
+    # its owner closing the tab: the block is listed in .rex_closing before
+    # the close, and entries older than 60 s are dropped on the way.
+    It 'lists a block in .rex_closing before closing it'
+      listed() {
+        local epoch block
+        mkdir -p "$JOB_STATE_ROOT"
+        printf '%s block:old\n%s block:recent\n' "$(( $(date +%s) - 61 ))" \
+          "$(date +%s)" > "$JOB_STATE_ROOT/.rex_closing"
+        jobs_session; blocks block:b8 block:b9
+        reconcile || return 1
+        cat "$JOB_FAKE_REX_CLOSING_SEEN"
+        sed 's/^[0-9]* //' "$JOB_STATE_ROOT/.rex_closing"
+        while read -r epoch block; do
+          [ $(( $(date +%s) - epoch )) -lt 5 ] || echo "stale $block"
+        done < "$JOB_STATE_ROOT/.rex_closing"
+      }
+      When call listed
+      The output should equal "listed block:b8
+listed block:b9
+block:recent
+block:b8
+block:b9"
     End
 
     It 'succeeds when a close fails'

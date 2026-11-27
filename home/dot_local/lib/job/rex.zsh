@@ -51,6 +51,49 @@ job::_rex_jobs_session() {
     | first(.[] | select(.label == "Jobs") | .session_id) // ""' 2>/dev/null
 }
 
+# job::_rex_closing_add <block_id>… — append `<epoch> <block_id>` for each
+# block to $JOB_STATE_ROOT/.rex_closing, dropping entries older than 60 s
+# so the file cannot grow. Reconcile calls it BEFORE it closes those
+# blocks: a follower in one sees exactly what it sees when its owner closes
+# the tab (SIGHUP, rc 3 from the same server), and only this list tells the
+# two apart (job::_rex_closing). The caller holds $JOB_STATE_ROOT/.rex.lock.
+# Never fails.
+job::_rex_closing_add() {
+  local file="$JOB_STATE_ROOT/.rex_closing" epoch block
+  local -a lines
+  (( $# )) || return 0
+  zmodload zsh/datetime 2>/dev/null
+  {
+    while read -r epoch block; do
+      [[ "$epoch" == <-> ]] && (( EPOCHSECONDS - epoch <= 60 )) \
+        && lines+=("$epoch $block")
+    done < "$file"
+  } 2>/dev/null
+  for block in "$@"; do
+    lines+=("$EPOCHSECONDS $block")
+  done
+  {
+    print -rl -- "${lines[@]}" > "$file.$$" && mv -f -- "$file.$$" "$file"
+  } 2>/dev/null || :
+  return 0
+}
+
+# job::_rex_closing <block_id> — rc 0 when $JOB_STATE_ROOT/.rex_closing
+# lists that block with an epoch at most 60 s old: reconcile is closing it,
+# its owner is not.
+job::_rex_closing() {
+  local want="$1" epoch block
+  [ -n "$want" ] || return 1
+  zmodload zsh/datetime 2>/dev/null
+  {
+    while read -r epoch block; do
+      [ "$block" = "$want" ] && [[ "$epoch" == <-> ]] \
+        && (( EPOCHSECONDS - epoch <= 60 )) && return 0
+    done < "$JOB_STATE_ROOT/.rex_closing"
+  } 2>/dev/null
+  return 1
+}
+
 # job::_rex_block_job <block_id> — print the title (the id when it has
 # none) of the RUNNING job (no `result` file) whose `follower` file names
 # that block. rc 1 when there is none. Rex's close keys ask this (as `job
@@ -131,7 +174,8 @@ job::_rex_open_tab() {
 # label, a new block id and no follower. A no-op, rc 1, unless a session
 # labelled exactly Jobs exists and its blocks can be listed; every call
 # names that session and no other. Otherwise rc 0, after:
-#   1. closing every block in Jobs that no live follower names;
+#   1. closing every block in Jobs that no live follower names, after
+#      listing them in .rex_closing (job::_rex_closing_add);
 #   2. opening a tab for every job with no result, and every failed job
 #      that had a Jobs tab (its `tab` file exists) and is not dismissed,
 #      that has no live follower — never for a success, a cancel or a
@@ -149,7 +193,7 @@ job::_rex_reconcile_unlocked() {
   local due="${1:-}" rex sid out d id block pid epoch res code notify created
   local -i covered
   local -F grace=$(( ${JOB_FOLLOW_DELAY:-2} + 5 ))
-  local -a listed reopen
+  local -a listed reopen closing
   local -A keep
   rex=$(job::_rex) || return 1
   sid=$(job::_rex_jobs_session "$rex" 2s) || return 1
@@ -198,7 +242,12 @@ job::_rex_reconcile_unlocked() {
   done
 
   for block in "${listed[@]}"; do
-    (( ${+keep[$block]} )) && continue
+    (( ${+keep[$block]} )) || closing+=("$block")
+  done
+  # Listed before any close: a follower the file wrongly calls dead must
+  # not cancel its job when its tab goes.
+  job::_rex_closing_add "${closing[@]}"
+  for block in "${closing[@]}"; do
     if "$rex" --autostart=false --timeout 2s block close -s Jobs "$block" \
       >/dev/null 2>&1; then
       job::_rex_log "reconcile: closed $block: no live follower"
