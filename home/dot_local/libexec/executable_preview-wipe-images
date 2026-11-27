@@ -1,0 +1,23 @@
+#!/bin/sh
+# preview-wipe-images [--keep] — take down the Kitty images `preview` drew in
+# this terminal's fzf.
+#
+# Outside tmux a Kitty image sits on the terminal itself, not in fzf's preview
+# pane, so nothing fzf does to the pane removes it — hiding the preview
+# (Ctrl+Space) left the picture floating over the list. `preview` flags a
+# picture it draws (see "Kitty images in an fzf preview pane" there); this is
+# the other half, small enough to run from a key binding: when the flag for
+# this terminal exists, tell the terminal to delete its images.
+#
+# --keep leaves the flag in place. The preview toggle uses it: showing the
+# pane again may put the picture back without a new `preview` run to flag it,
+# and the flag is what lets fzf's exit clean up.
+#
+# POSIX sh and no sourcing on purpose: it runs on a keypress.
+[ -n "${TMUX:-}" ] && exit 0
+tty="${PREVIEW_TTY_NAME:-$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')}"
+flag="${TMPDIR:-/tmp}/preview-kitty.${tty##*/}"
+[ -e "$flag" ] || exit 0
+printf '\033_Ga=d,d=A\033\\' >"${PREVIEW_TTY:-/dev/tty}" 2>/dev/null
+[ "${1:-}" = --keep ] || rm -f -- "$flag"
+exit 0
