@@ -41,6 +41,25 @@ EOF
     The result of function last_entry should include '"kind":"generic"'
   End
 
+  # --record-only: the entry and nothing else. For a notification something
+  # else is showing (Rex, for a job that has a tab there).
+  It 'records without showing anything with --record-only, and succeeds'
+    recorded() {
+      notify --record-only --kind job --sound Glass "Build X completed"
+      print -r -- "rc=$?"
+      jq -r '[.kind, .text] | join("|")' "$NOTIFY_HISTORY_FILE"
+    }
+    When call recorded
+    The output should equal "rc=0
+job|Build X completed"
+  End
+
+  It 'still feeds the unacked ledger with --record-only --ack'
+    acked() { notify --record-only --ack "Build X failed" >/dev/null; [[ -s "$NOTIFY_UNACKED_FILE" ]] && print ledger; }
+    When call acked
+    The output should equal "ledger"
+  End
+
   It 'records --kind/--source/--meta and keeps meta as structured JSON'
     do_notify() {
       notify --kind job --source job-callback \

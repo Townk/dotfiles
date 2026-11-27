@@ -819,11 +819,17 @@ notify::statusbar_refresh() {
 # picker renders ack-able entries distinctly.
 notify() {
   local icon="" sound="" style="plain"
-  local kind="generic" source_tag="${ZSH_ARGZERO:t}" meta="" ack=0
+  local kind="generic" source_tag="${ZSH_ARGZERO:t}" meta="" ack=0 record_only=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --ack)
         ack=1
+        shift
+        ;;
+      # The history entry (and the --ack ledger) and nothing shown or
+      # played: for a notification something else is already raising.
+      --record-only)
+        record_only=1
         shift
         ;;
       --kind)
@@ -886,6 +892,7 @@ notify() {
   if [ "$ack" = 1 ]; then
     notify::_ack_ledger_add 2>/dev/null || :
   fi
+  [ "$record_only" = 1 ] && return 0
 
   if _notify_bridge_target; then
     _notify_bridge_send "$style" "$icon" "$sound" "$text" && return 0

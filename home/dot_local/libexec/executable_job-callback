@@ -1,7 +1,8 @@
 #!/usr/bin/env zsh
 # job-callback — pueue's daemon.callback target: one invocation per finished
 # task, args <pueue_id> <result> <exit_code> (exit_code may be empty).
-# Notifies (Success → sound; Killed → quiet, cancel is not a failure;
+# Notifies — unless the job has a live tab in Rex, which announces it itself
+# (see `quiet` below) — (Success → sound; Killed → quiet, cancel is not a failure;
 # anything else → failure toast PAIRED with a persistent hs.notify, since
 # Focus can swallow either alone), records the result file the HUD keys off,
 # and prunes old finished jobs. Never lets its own failure affect anything:
@@ -54,10 +55,23 @@ fi
 job_id="${dir:+${dir:t}}"
 meta=$(jq -nc --arg job_id "$job_id" --arg pueue_id "$pueue_id"   --arg result "$result"   '{job_id:$job_id, pueue_id:($pueue_id|tonumber? // $pueue_id), result:$result}')   || meta=""
 
+# A job followed from a Rex tab is announced by Rex: the follower's status
+# report raises Rex's notification (a banner unless Rex is the app in front,
+# where it is a sound and a badge on the tab), and clicking it opens the tab.
+# A toast of ours on top would say everything twice, so the callback only
+# records the result in the history — and, for a failure, in the ledger the
+# status bar's bell reads. The persistent hs.notify half goes too: the tab
+# of a failed job stays open until its owner closes it, which is the
+# persistence that half existed for.
+typeset -a quiet=()
+if [ -n "$dir" ] && job::_rex_tab_live "$dir" 2>/dev/null; then
+  quiet=(--record-only)
+fi
+
 case "$result" in
   Success)
     if [ "$notify_mode" = "all" ]; then
-      notify --kind job --source job --meta "$meta" \
+      notify "${quiet[@]}" --kind job --source job --meta "$meta" \
         --icon "${icon:-glyph:nf-md-check_circle}" --sound Glass \
         "$title completed"
     fi
@@ -65,7 +79,7 @@ case "$result" in
   Killed)
     # A cancel the user asked for: acknowledge without alarm.
     if [ "$notify_mode" = "all" ]; then
-      notify --kind job --source job --meta "$meta" \
+      notify "${quiet[@]}" --kind job --source job --meta "$meta" \
         --icon "glyph:nf-md-close_circle" "$title cancelled"
     fi
     ;;
@@ -73,12 +87,12 @@ case "$result" in
     if [ "$notify_mode" != "none" ]; then
       # --ack: a failure is acknowledgable (phase 3 UI rev) — it feeds the
       # status bar's 󰂚 element until pick-notifications is opened.
-      notify --ack --kind job --source job --meta "$meta" \
+      notify "${quiet[@]}" --ack --kind job --source job --meta "$meta" \
         --icon "glyph:nf-md-alert_circle" --sound Basso \
         "$title failed${exit_code:+ (exit $exit_code)}"
       # The persistent half of the pair (local screen only — over SSH the
       # toast already routed to the human via the bridge).
-      if hs_bin=$(notify::available --path); then
+      if (( ! ${#quiet} )) && hs_bin=$(notify::available --path); then
         "$hs_bin" -q -c "hs.notify.new(nil, {title=$(_notify_lua_arg "Job failed: $title"), informativeText=$(_notify_lua_arg "$result${exit_code:+ — exit $exit_code}"), withdrawAfter=0}):send()" \
           </dev/null >/dev/null 2>&1 || true
       fi

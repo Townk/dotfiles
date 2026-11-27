@@ -132,6 +132,18 @@ job::_rex_block_job() {
   return 1
 }
 
+# job::_rex_tab_live <job dir> — true when the job is being followed, right
+# now, from a Rex tab: its `follower` file names a block and a live pid. An
+# inline follower records `-` for its block and does not count. This is what
+# says "Rex is announcing this job" to the callback: the tab's status reports
+# are what raise Rex's own notification.
+job::_rex_tab_live() {
+  local block="" pid=""
+  { read -r block pid < "$1/follower" } 2>/dev/null || return 1
+  [[ "$block" == block:* && "$pid" == <-> ]] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
 # job::_rex_open_tab_unlocked <id> — open the job's follower tab in the Jobs
 # session, creating the session when no session is labelled Jobs, and record
 # the session id in $JOB_STATE_ROOT/.rex_session and `<epoch> <block id>` of

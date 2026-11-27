@@ -91,6 +91,70 @@ EOF
     The output should include 'withdrawAfter=0'
   End
 
+  # A job with a live follower in a Rex tab is announced by Rex itself (the
+  # follower's status report raises the notification, and clicking it opens
+  # the tab), so the callback only records it. Measured 2026-11-27: Rex shows
+  # a banner unless Rex is the app in front, where it plays its sound and
+  # badges the tab instead.
+  followed() {  # followed <id> <block> — a live follower for the job
+    sleep 30 &
+    FOLLOWER_PID=$!
+    print -r -- "$2 $FOLLOWER_PID" > "$JOB_STATE_ROOT/$1/follower"
+  }
+
+  It 'leaves a success to Rex when the job has a tab there, but records it'
+    rex_success() {
+      id=$(seed) || return 1
+      followed "$id" block:tab
+      zsh -f "$CALLBACK" 7 "Success" 0 || return 2
+      kill $FOLLOWER_PID 2>/dev/null
+      printf '%s|%s|%s' \
+        "$(cat "$CB_SANDBOX/hs.log" 2>/dev/null | grep -c 'completed' || true)" \
+        "$(jq -r '.text' "$NOTIFY_HISTORY_FILE")" \
+        "$(sed 's/^[0-9]* //' "$JOB_STATE_ROOT/$id/result")"
+    }
+    When call rex_success
+    The output should equal '0|Build X completed|Success 0'
+  End
+
+  It 'leaves a failure to Rex too: no toast, no persistent notification, still acknowledgable'
+    rex_failure() {
+      id=$(seed) || return 1
+      followed "$id" block:tab
+      zsh -f "$CALLBACK" 7 "Failed(2)" 2 || return 2
+      kill $FOLLOWER_PID 2>/dev/null
+      printf '%s|%s|%s' \
+        "$(cat "$CB_SANDBOX/hs.log" 2>/dev/null | grep -c . || true)" \
+        "$(jq -r '[.text, (.ack|tostring)] | join(" ack=")' "$NOTIFY_HISTORY_FILE")" \
+        "$([[ -s "$NOTIFY_UNACKED_FILE" ]] && print ledger)"
+    }
+    When call rex_failure
+    The output should equal '0|Build X failed (exit 2) ack=true|ledger'
+  End
+
+  It 'still notifies itself when the follower is dead'
+    dead_follower() {
+      id=$(seed) || return 1
+      print -r -- "block:tab 999999" > "$JOB_STATE_ROOT/$id/follower"
+      zsh -f "$CALLBACK" 7 "Success" 0 || return 2
+      grep -c 'completed' "$CB_SANDBOX/hs.log"
+    }
+    When call dead_follower
+    The output should equal '1'
+  End
+
+  It 'still notifies itself for a follower that is not in a Rex tab'
+    inline_follower() {
+      id=$(seed) || return 1
+      followed "$id" -
+      zsh -f "$CALLBACK" 7 "Failed(2)" 2 || return 2
+      kill $FOLLOWER_PID 2>/dev/null
+      grep -c 'hs.notify.new' "$CB_SANDBOX/hs.log"
+    }
+    When call inline_follower
+    The output should equal '1'
+  End
+
   It 'falls back to a generic title for tasks pueue ran outside job::start'
     unlabeled() { zsh -f "$CALLBACK" 99 "Success" 0; cat "$CB_SANDBOX/hs.log"; }
     When call unlabeled
