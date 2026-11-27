@@ -27,8 +27,13 @@ EOS
     # JOB_FAKE_REX_LS fixture. `new` exits JOB_FAKE_REX_NEW_RC when set;
     # otherwise it takes a moment (widening any race between two openers),
     # adds the Jobs session to the ls fixture, and answers like the real CLI.
+    # `block ls` prints the JOB_FAKE_REX_BLOCKS fixture and, like the real
+    # CLI, exits 1 when the ls fixture has no Jobs session; `block close`
+    # exits JOB_FAKE_REX_CLOSE_RC.
     export JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log"
     export JOB_FAKE_REX_LS="$JOB_SANDBOX/ls.json"
+    export JOB_FAKE_REX_BLOCKS="$JOB_SANDBOX/blocks.json"
+    printf '%s\n' '{"blocks":[]}' > "$JOB_FAKE_REX_BLOCKS"
     printf '%s\n' '{"sessions":[{"session_id":"session:main","label":"Main"}]}' \
       > "$JOB_FAKE_REX_LS"
     cat > "$JOB_SANDBOX/rex" <<'EOS'
@@ -36,6 +41,11 @@ EOS
 printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
 case "$*" in
   *' whoami'*) exit "${JOB_FAKE_REX_WHOAMI_RC:-0}" ;;
+  *' block ls '*)
+    grep -q '"label":"Jobs"' "$JOB_FAKE_REX_LS" || exit 1
+    cat "$JOB_FAKE_REX_BLOCKS"
+    ;;
+  *' block close '*) exit "${JOB_FAKE_REX_CLOSE_RC:-0}" ;;
   *' ls --json'*) cat "$JOB_FAKE_REX_LS" ;;
   *' window new '*)
     echo '{"window_id":"window:w2","block_ids":["block:b2"]}'
@@ -53,6 +63,8 @@ EOS
     chmod +x "$JOB_SANDBOX/rex"
     export JOB_REX_BIN="$JOB_SANDBOX/rex"
     export JOB_FOLLOW_DELAY=0
+    # job::_rex_log writes under $XDG_CACHE_HOME/jobs, never the real cache.
+    export XDG_CACHE_HOME="$JOB_SANDBOX/cache"
   }
   cleanup() { rm -rf "$JOB_SANDBOX"; }
   BeforeEach 'setup'
@@ -113,7 +125,7 @@ EOS
         cat "$JOB_STATE_ROOT/.rex_session"
       }
       When call opened
-      The line 2 of output should equal "--autostart=false --timeout 5s new Jobs --window Remux --json -- $JOB_CLI follow j1"
+      The line 2 of output should equal "--autostart=false --timeout 5s new Jobs --window=Remux --json -- $JOB_CLI follow j1"
       The output should include "session:jobs"
       The status should be success
     End
@@ -156,11 +168,248 @@ $(printf 'b%.0s' $(seq 1 99))"
         run_job job::_rex_open_tab j1 || return 1
         # The label is the argument after --window: one line, ≤128 chars.
         wc -l < "$JOB_FAKE_REX_LOG" | tr -d ' '
-        sed -n 's/.* --window \(.*\) --json .*/\1/p' "$JOB_FAKE_REX_LOG"
+        sed -n 's/.* --window=\(.*\) --json .*/\1/p' "$JOB_FAKE_REX_LOG"
       }
       When call long
       The line 1 of output should equal 2
       The line 2 of output should equal "$(printf 'a%.0s' $(seq 1 100)) $(printf 'b%.0s' $(seq 1 27))"
+    End
+
+    It 'creates nothing when the session list cannot be read'
+      unreadable() {
+        meta j1 "Remux"
+        printf 'not json\n' > "$JOB_FAKE_REX_LS"
+        run_job job::_rex_open_tab j1
+        echo "rc=$? opens=$(opens)"
+      }
+      When call unreadable
+      The output should equal "rc=1 opens=0"
+    End
+
+    It 'passes a title starting with a dash as a label, not a flag'
+      dashed() {
+        meta j1 "--help me"
+        run_job job::_rex_open_tab j1 || return 1
+        jobs_session
+        run_job job::_rex_open_tab j1 || return 2
+        grep ' new ' "$JOB_FAKE_REX_LOG"
+      }
+      When call dashed
+      The line 1 of output should equal "--autostart=false --timeout 5s new Jobs --window=--help me --json -- $JOB_CLI follow j1"
+      The line 2 of output should equal "--autostart=false --timeout 5s window new -s Jobs  --help me --focus=false --json -- $JOB_CLI follow j1"
+    End
+
+    It 'records when it opened the tab and its block'
+      recorded() {
+        meta j1 "Remux"; jobs_session
+        run_job job::_rex_open_tab j1 || return 1
+        read -r epoch block < "$JOB_STATE_ROOT/j1/tab"
+        [ $(( $(date +%s) - epoch )) -lt 5 ] && echo "recent $block"
+      }
+      When call recorded
+      The output should equal "recent block:b2"
+    End
+
+    It 'logs a failed open to the sandboxed rex log'
+      logged() {
+        meta j1 "Remux"
+        JOB_FAKE_REX_NEW_RC=4 run_job job::_rex_open_tab j1
+        grep -c 'j1' "$XDG_CACHE_HOME/jobs/rex.log"
+      }
+      When call logged
+      The output should equal 1
+    End
+  End
+
+  Describe 'job::_rex_reconcile'
+    # blocks <block_id>… — the Jobs session's block listing, as the real
+    # `block ls -s Jobs --json` prints it.
+    blocks() {
+      jq -nc '{blocks: [$ARGS.positional[]
+        | {block_id: ., label: "shell", placement: "placed", window_id: "window:w"}]}' \
+        --args "$@" > "$JOB_FAKE_REX_BLOCKS"
+    }
+    # A pid that is certainly dead: a child that exited and was reaped.
+    dead_pid() { sh -c 'exit 0' & p=$!; wait "$p"; echo "$p"; }
+    result() { echo "1700000000 $2 $3" > "$JOB_STATE_ROOT/$1/result"; }
+    follower() { echo "$2 $3" > "$JOB_STATE_ROOT/$1/follower"; }
+    reconcile() { run_job job::_rex_reconcile; }
+    closes() { grep ' block close ' "$JOB_FAKE_REX_LOG" | sed 's/.* block close //'; }
+    tabs() { grep ' window new \| new Jobs ' "$JOB_FAKE_REX_LOG" | sed 's/.* follow //'; }
+    count() { "$@" | grep -c . || :; }
+
+    It 'closes a tab that is not a live follower'
+      stale() {
+        jobs_session; blocks block:b9
+        reconcile || return 1
+        cat "$JOB_FAKE_REX_LOG"
+      }
+      When call stale
+      The output should equal "--autostart=false --timeout 2s ls --json
+--autostart=false --timeout 2s block ls -s Jobs --json
+--autostart=false --timeout 2s block close -s Jobs block:b9"
+    End
+
+    It 'leaves a live follower alone'
+      live() {
+        meta j1 "One"; follower j1 block:b1 $$
+        jobs_session; blocks block:b1
+        reconcile || return 1
+        echo "closes=$(count closes) tabs=$(count tabs)"
+      }
+      When call live
+      The output should equal "closes=0 tabs=0"
+    End
+
+    It 'reopens a running job that lost its tab'
+      lost() {
+        meta j2 "Two"; follower j2 block:b2 "$(dead_pid)"
+        jobs_session; blocks block:b2
+        reconcile || return 1
+        echo "closed: $(closes)"
+        grep ' window new ' "$JOB_FAKE_REX_LOG"
+      }
+      When call lost
+      The line 1 of output should equal "closed: -s Jobs block:b2"
+      The line 2 of output should equal "--autostart=false --timeout 5s window new -s Jobs Two --focus=false --json -- $JOB_CLI follow j2"
+    End
+
+    It 'reopens a failed job that was not dismissed'
+      failed() {
+        meta j3 "Three"; result j3 Failed 2
+        jobs_session
+        reconcile || return 1
+        tabs
+      }
+      When call failed
+      The output should equal "j3"
+    End
+
+    It 'does not reopen a dismissed failure, a success, a cancel or a notify=none job'
+      settled() {
+        meta j4 "Four"; result j4 Failed 2; touch "$JOB_STATE_ROOT/j4/dismissed"
+        meta j5 "Five"; result j5 Success 0
+        meta j6 "Six"; result j6 Killed ""
+        mkdir -p "$JOB_STATE_ROOT/j7"
+        printf '{"title":"Seven","notify":"none","pueue_id":7}\n' \
+          > "$JOB_STATE_ROOT/j7/meta.json"
+        result j7 Failed 1
+        jobs_session
+        reconcile || return 1
+        echo "tabs=$(count tabs)"
+      }
+      When call settled
+      The output should equal "tabs=0"
+    End
+
+    It 'does nothing when there is no Jobs session'
+      nosession() {
+        meta j2 "Two"; follower j2 block:b2 "$(dead_pid)"
+        blocks block:b2 block:b9
+        reconcile || return 1
+        cat "$JOB_FAKE_REX_LOG"
+      }
+      When call nosession
+      The output should equal "--autostart=false --timeout 2s ls --json"
+    End
+
+    It 'does nothing when the session list cannot be read'
+      unreadable() {
+        meta j2 "Two"
+        printf 'garbage\n' > "$JOB_FAKE_REX_LS"
+        blocks block:b9
+        reconcile || return 1
+        echo "closes=$(count closes) opens=$(opens)"
+      }
+      When call unreadable
+      The output should equal "closes=0 opens=0"
+    End
+
+    It 'only ever names the Jobs session'
+      named() {
+        meta j2 "Two"
+        jobs_session; blocks block:b8 block:b9
+        reconcile || return 1
+        echo "calls=$(grep -c ' block \| window new ' "$JOB_FAKE_REX_LOG")"
+        echo "other=$(grep ' block \| window new ' "$JOB_FAKE_REX_LOG" | grep -vc -- ' -s Jobs ' || :)"
+      }
+      When call named
+      The output should equal "calls=4
+other=0"
+    End
+
+    # The rule for a tab still starting: its follower may not have written
+    # the follower file yet, so a tab opened less than JOB_FOLLOW_DELAY + 5
+    # seconds ago is neither closed nor reopened.
+    It 'leaves a tab opened moments ago alone'
+      starting() {
+        meta j1 "One"; echo "$(date +%s) block:b3" > "$JOB_STATE_ROOT/j1/tab"
+        jobs_session; blocks block:b3
+        reconcile || return 1
+        echo "closes=$(count closes) tabs=$(count tabs)"
+      }
+      When call starting
+      The output should equal "closes=0 tabs=0"
+    End
+
+    It 'reopens a tab opened long ago whose follower never started'
+      never() {
+        meta j1 "One"; echo "1700000000 block:b3" > "$JOB_STATE_ROOT/j1/tab"
+        jobs_session; blocks block:b3
+        reconcile || return 1
+        echo "closed: $(closes)"
+        tabs
+      }
+      When call never
+      The output should equal "closed: -s Jobs block:b3
+j1"
+    End
+
+    It 'leaves a job started moments ago to its own scheduled step'
+      young() {
+        mkdir -p "$JOB_STATE_ROOT/j1"
+        printf '{"title":"One","notify":"all","pueue_id":7,"created":%s}\n' \
+          "$(date +%s)" > "$JOB_STATE_ROOT/j1/meta.json"
+        jobs_session
+        reconcile || return 1
+        echo "tabs=$(count tabs)"
+      }
+      When call young
+      The output should equal "tabs=0"
+    End
+
+    It 'does not reopen a job followed inline in another session'
+      inline() {
+        meta j1 "One"; follower j1 block:elsewhere $$
+        jobs_session
+        reconcile || return 1
+        echo "tabs=$(count tabs)"
+      }
+      When call inline
+      The output should equal "tabs=0"
+    End
+
+    It 'logs every close and reopen to the sandboxed rex log'
+      logged() {
+        meta j2 "Two"
+        jobs_session; blocks block:b9
+        reconcile || return 1
+        grep -c 'block:b9' "$XDG_CACHE_HOME/jobs/rex.log"
+        grep -c 'j2' "$XDG_CACHE_HOME/jobs/rex.log"
+      }
+      When call logged
+      The output should equal "1
+1"
+    End
+
+    It 'succeeds when a close fails'
+      closefail() {
+        jobs_session; blocks block:b9
+        JOB_FAKE_REX_CLOSE_RC=4 reconcile
+        echo "rc=$?"
+      }
+      When call closefail
+      The output should equal "rc=0"
     End
   End
 
@@ -169,7 +418,7 @@ $(printf 'b%.0s' $(seq 1 99))"
       started() {
         id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
         wait_log " follow $id" || return 2
-        grep -c " new Jobs --window plan check --json -- $JOB_CLI follow $id" \
+        grep -c " new Jobs --window=plan check --json -- $JOB_CLI follow $id" \
           "$JOB_FAKE_REX_LOG"
       }
       When call started
@@ -200,8 +449,42 @@ $(printf 'b%.0s' $(seq 1 99))"
         echo "without=$(grep -vc '^--autostart=false ' "$JOB_FAKE_REX_LOG")"
       }
       When call calls
-      The line 1 of output should equal "calls=6"
+      # First job: whoami, reconcile's ls (no Jobs session), the opener's
+      # ls and new. Second: whoami, reconcile's ls and block ls, then the
+      # opener's ls and window new.
+      The line 1 of output should equal "calls=9"
       The line 2 of output should equal "without=0"
+    End
+
+    # The background step reconciles first, and reconcile itself opens the
+    # scheduled job's tab: the step must not open a second one.
+    It 'opens one tab for the scheduled job when it reconciles first'
+      once() {
+        jobs_session
+        id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
+        wait_log " follow $id" || return 2
+        sleep 0.5
+        echo "block_ls=$(grep -c ' block ls ' "$JOB_FAKE_REX_LOG")"
+        echo "tabs=$(grep -c " follow $id" "$JOB_FAKE_REX_LOG")"
+      }
+      When call once
+      The line 1 of output should equal "block_ls=1"
+      The line 2 of output should equal "tabs=1"
+    End
+
+    It 'reopens another job that lost its tab when a job starts'
+      repaired() {
+        meta j2 "Two"
+        jobs_session
+        id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
+        wait_log " follow $id" || return 2
+        sleep 0.5
+        echo "j2=$(grep -c ' follow j2$' "$JOB_FAKE_REX_LOG")"
+        echo "new=$(grep -c " follow $id" "$JOB_FAKE_REX_LOG")"
+      }
+      When call repaired
+      The line 1 of output should equal "j2=1"
+      The line 2 of output should equal "new=1"
     End
 
     # A control job started right after proves the background step ran; the

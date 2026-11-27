@@ -94,6 +94,10 @@ fi
 # a repaint (the failure bell, when any, was already poked by notify --ack).
 job::_statusbar_sync 2>/dev/null || :
 
+# Rex: after a server restart the Jobs session holds bare shells where the
+# job tabs were. Close those and reopen the tabs still wanted (job/rex.zsh).
+job::_rex_reconcile 2>/dev/null || :
+
 # Prune: finished jobs (result file present) beyond the newest JOB_KEEP.
 # Active dirs have no result file and are never candidates.
 keep="${JOB_KEEP:-50}"

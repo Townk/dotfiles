@@ -136,6 +136,52 @@ EOF
     The output should equal 'swept|kept'
   End
 
+  # The callback repairs the Jobs session after a Rex restart: a restored
+  # bare shell no follower names is closed. A fake rex (JOB_REX_BIN) with a
+  # Jobs session holding one such block; JOB_FAKE_REX_RC makes every call
+  # fail instead.
+  Describe 'the Rex reconcile'
+    fake_rex() {
+      export JOB_FAKE_REX_LOG="$CB_SANDBOX/rex.log"
+      cat > "$CB_SANDBOX/rex" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
+[ -n "${JOB_FAKE_REX_RC:-}" ] && exit "$JOB_FAKE_REX_RC"
+case "$*" in
+  *' block ls '*) echo '{"blocks":[{"block_id":"block:b9","label":"shell"}]}' ;;
+  *' ls --json'*) echo '{"sessions":[{"session_id":"session:jobs","label":"Jobs"}]}' ;;
+esac
+exit 0
+EOF
+      chmod +x "$CB_SANDBOX/rex"
+      export JOB_REX_BIN="$CB_SANDBOX/rex"
+    }
+
+    It 'closes a Jobs tab no follower names'
+      reconciled() {
+        id=$(seed) || return 1
+        fake_rex
+        zsh -f "$CALLBACK" 7 "Success" 0 || return 2
+        grep -c ' block close -s Jobs block:b9$' "$JOB_FAKE_REX_LOG"
+      }
+      When call reconciled
+      The output should equal 1
+    End
+
+    It 'still exits 0 and records the result when rex fails'
+      failing() {
+        id=$(seed) || return 1
+        fake_rex
+        JOB_FAKE_REX_RC=4 zsh -f "$CALLBACK" 7 "Success" 0
+        echo "rc=$? asked=$(grep -c ' ls --json' "$JOB_FAKE_REX_LOG")"
+        sed 's/^[0-9]* //' "$JOB_STATE_ROOT/$id/result"
+      }
+      When call failing
+      The output should equal "rc=0 asked=1
+Success 0"
+    End
+  End
+
   # phase 4: the --notify meta gates the callback's toasts.
   Describe 'the --notify gate'
     seed_notify() {  # <mode>

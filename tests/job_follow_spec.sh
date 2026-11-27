@@ -55,6 +55,8 @@ EOS
     chmod +x "$JOB_SANDBOX/rex"
     export JOB_REX_BIN="$JOB_SANDBOX/rex"
     export JOB_FAKE_OPEN_LOG="$JOB_SANDBOX/opened"
+    # job::_rex_log writes under $XDG_CACHE_HOME/jobs, never the real cache.
+    export XDG_CACHE_HOME="$JOB_SANDBOX/cache"
     : > "$JOB_FAKE_LOG"
     mkdir -p "$JOB_STATE_ROOT/j1"
   }
@@ -347,6 +349,43 @@ j1"
       When call check
       The output should equal "rc=0 kills=0
 not-opened"
+    End
+
+    rexlog() { sed 's/^[^ ]* //' "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null; }
+
+    It 'logs a cancel with the inspect rc and the instance match'
+      meta "Remux"
+      check() { JOB_FAKE_REX_RC=3 hup >/dev/null; rexlog; }
+      When call check
+      The output should equal "job j1: hangup of blk-1: inspect rc=3, instance same: cancelled"
+    End
+
+    It 'logs a restart as doing nothing'
+      meta "Remux"; result Failed 2
+      check() { JOB_FAKE_REX_RC=3 JOB_FAKE_REX_INSTANCE=srv-2 hup >/dev/null; rexlog; }
+      When call check
+      The output should equal "job j1: hangup of blk-1: inspect rc=3, instance different: nothing"
+    End
+
+    It 'logs a dismissal'
+      meta "Remux"; result Failed 2
+      check() { JOB_FAKE_REX_RC=3 hup >/dev/null; rexlog; }
+      When call check
+      The output should equal "job j1: hangup of blk-1: inspect rc=3, instance same: dismissed"
+    End
+
+    It 'logs a block that still exists without asking the instance'
+      meta "Remux"
+      check() { JOB_FAKE_REX_RC=0 hup >/dev/null; rexlog; }
+      When call check
+      The output should equal "job j1: hangup of blk-1: inspect rc=0, instance unasked: nothing"
+    End
+
+    It 'logs nothing for an inline follower'
+      meta "Remux"
+      check() { JOB_FAKE_REX_RC=3 hup 1 >/dev/null; rexlog; echo end; }
+      When call check
+      The output should equal "end"
     End
   End
 

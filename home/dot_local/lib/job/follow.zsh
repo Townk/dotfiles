@@ -149,31 +149,47 @@ job::_follow_instance() {
 # unreachable), rc 0 (block still there), an empty, unreadable or different
 # instance id, no rex, no REX_BLOCK — leaves the job alone: a server restart
 # must never cancel. An inline follower never cancels; its terminal going
-# away moves the job to a tab of its own. Always returns 0.
+# away moves the job to a tab of its own. Outside inline mode the decision
+# is logged (job::_rex_log). Always returns 0.
 job::_follow_on_hup() {
   local id="$1" inline="${2:-0}" instance="${3:-}" dir="$JOB_STATE_ROOT/$1"
-  local rex rc=0 epoch res code
+  local rex rc=none match=unasked action=nothing epoch res code
   [ -d "$dir" ] || return 0
   if [ "$inline" = 1 ]; then
     [ -s "$dir/result" ] || job::_rex_open_tab "$id" || :
     return 0
   fi
-  [ -n "${REX_BLOCK:-}" ] || return 0
-  rex=$(job::_rex) || return 0
-  "$rex" --autostart=false --timeout 3s block inspect "$REX_BLOCK" \
-    >/dev/null 2>&1 || rc=$?
-  [ "$rc" -eq 3 ] || return 0
-  [ -n "$instance" ] || return 0
-  [ "$(job::_follow_instance)" = "$instance" ] || return 0
-  if [ ! -s "$dir/result" ]; then
-    job::cancel "$id" >/dev/null 2>&1 || :
-    return 0
+  if [ -n "${REX_BLOCK:-}" ] && rex=$(job::_rex); then
+    rc=0
+    "$rex" --autostart=false --timeout 3s block inspect "$REX_BLOCK" \
+      >/dev/null 2>&1 || rc=$?
   fi
-  { read -r epoch res code < "$dir/result" } 2>/dev/null || :
-  case "$res" in
-    Success | Killed) ;;
-    *) touch -- "$dir/dismissed" 2>/dev/null || : ;;
-  esac
+  if [ "$rc" = 3 ]; then
+    if [ -z "$instance" ]; then
+      match=unrecorded
+    elif [ "$(job::_follow_instance)" = "$instance" ]; then
+      match=same
+    else
+      match=different
+    fi
+  fi
+  if [ "$match" = same ]; then
+    if [ ! -s "$dir/result" ]; then
+      action=cancelled
+      job::cancel "$id" >/dev/null 2>&1 || action="cancel failed"
+    else
+      { read -r epoch res code < "$dir/result" } 2>/dev/null || :
+      case "$res" in
+        Success | Killed) ;;
+        *)
+          action=dismissed
+          touch -- "$dir/dismissed" 2>/dev/null || action="dismiss failed"
+          ;;
+      esac
+    fi
+  fi
+  job::_rex_log "job $id: hangup of ${REX_BLOCK:-no block}:" \
+    "inspect rc=$rc, instance $match: $action"
   return 0
 }
 
