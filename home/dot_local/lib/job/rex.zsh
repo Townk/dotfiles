@@ -115,8 +115,9 @@ job::_rex_open_tab() {
 # names that session and no other. Otherwise rc 0, after:
 #   1. closing every block in Jobs that no live follower names;
 #   2. opening a tab for every job with no result, and every failed job
-#      not dismissed, that has no live follower — never for a success, a
-#      cancel or a --notify none job.
+#      that had a Jobs tab (its `tab` file exists) and is not dismissed,
+#      that has no live follower — never for a success, a cancel or a
+#      --notify none job.
 # A follower is live when the pid in the job's `follower` file is alive (a
 # follower outside Jobs — inline, in the pane that started the job — covers
 # its job too). A tab still starting is left alone: one opened (per the
@@ -169,6 +170,9 @@ job::_rex_reconcile_unlocked() {
       { read -r epoch res code < "$d/result" } 2>/dev/null || :
       case "$res" in Success | Killed) continue ;; esac
       [ -e "$d/dismissed" ] && continue
+      # Only a failure that had a Jobs tab gets one back: one followed
+      # inline, or over within the delay, never had one.
+      [ -e "$d/tab" ] || continue
     elif [ "$id" != "$due" ]; then
       [[ "$created" == <-> ]] && (( EPOCHSECONDS - created < grace )) && continue
     fi

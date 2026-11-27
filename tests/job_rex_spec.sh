@@ -277,12 +277,40 @@ $(printf 'b%.0s' $(seq 1 99))"
     It 'reopens a failed job that was not dismissed'
       failed() {
         meta j3 "Three"; result j3 Failed 2
+        echo "1700000000 block:b3" > "$JOB_STATE_ROOT/j3/tab"
+        follower j3 block:b3 "$(dead_pid)"
         jobs_session
         reconcile || return 1
         tabs
       }
       When call failed
       The output should equal "j3"
+    End
+
+    # A failure followed inline, or over within the delay, never had a Jobs
+    # tab (no `tab` file): reconcile must not open one for it.
+    It 'opens nothing for a failed job that never had a tab'
+      tabless() {
+        meta j3 "Three"; result j3 Failed 2
+        jobs_session
+        reconcile || return 1
+        echo "tabs=$(count tabs)"
+      }
+      When call tabless
+      The output should equal "tabs=0"
+    End
+
+    It 'closes only the stale block beside a live follower'
+      mixed() {
+        meta j1 "One"; follower j1 block:b1 $$
+        jobs_session; blocks block:b1 block:b9
+        reconcile || return 1
+        closes
+        echo "live=$(grep ' block close ' "$JOB_FAKE_REX_LOG" | grep -c 'block:b1' || :)"
+      }
+      When call mixed
+      The output should equal "-s Jobs block:b9
+live=0"
     End
 
     It 'does not reopen a dismissed failure, a success, a cancel or a notify=none job'
