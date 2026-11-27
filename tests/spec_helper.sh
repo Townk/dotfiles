@@ -14,6 +14,11 @@ unset TMUX TMUX_PANE
 # in every spec that expects "none". REX_SERVER goes too — a spec that drives
 # rex must name its own scratch server, never inherit the developer's live one.
 unset REX_SESSION REX_BLOCK REX_SERVER
+# Every job::start schedules a tab in Rex's Jobs session from the background,
+# and job::_rex finds the live CLI on its own (PATH, then the app bundle). A
+# rex that always fails keeps every spec that starts a job off the live
+# server; the Rex specs export their own fake in setup().
+export JOB_REX_BIN=/usr/bin/false
 
 # tm scrub-session debounce: real sessions nap before each synthesis so a
 # held key only builds the rung the user settles on — specs step rapidly

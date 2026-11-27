@@ -47,6 +47,9 @@ exit 0
 SH
     chmod +x "$SB/bin/tmux"
     JOB_TMUX_BIN="$SB/bin/tmux"
+    # job::start also schedules a Rex tab; a rex that always fails keeps
+    # that background step off the live Rex server.
+    JOB_REX_BIN=/usr/bin/false
 
     # A fake pbcopy, and PATH ahead of the real one — same house rule as the
     # tmux stub above and for the same reason: share::clip now runs pbcopy on

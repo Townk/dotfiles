@@ -24,6 +24,9 @@ exit 0
 EOF
     chmod +x "$JOB_SANDBOX/pueue"
     export JOB_PUEUE_BIN="$JOB_SANDBOX/pueue"
+    # job::start schedules a Rex tab: a rex that always fails keeps the
+    # background step off the live server (tests/job_rex_spec.sh covers it).
+    export JOB_REX_BIN=/usr/bin/false
 
     # FAKE tmux for the @jobs statusbar writers (JOB_TMUX_BIN): records
     # argv only — the sync helper's contract is the option value it sets.

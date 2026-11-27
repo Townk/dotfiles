@@ -168,6 +168,8 @@ job::start() {
   jq --argjson tid "$task_id" '.pueue_id = $tid' "$dir/meta.json" > "$tmp" \
     && mv -f -- "$tmp" "$dir/meta.json"
   job::_statusbar_sync 2>/dev/null || :
+  # The job's Rex tab, opened in the background (job/rex.zsh).
+  ((modal)) || job::_rex_schedule_tab "$id" 2>/dev/null || :
   print -r -- "$id"
   if ((modal)); then
     # Headless (no controlling terminal on stderr — cron, a run-shell
