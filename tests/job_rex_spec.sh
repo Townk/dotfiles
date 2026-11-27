@@ -351,6 +351,31 @@ live=0"
       The output should equal "--autostart=false --timeout 2s ls --json"
     End
 
+    # Session ids change across a Rex restart, and Rex's Lua reads
+    # .rex_session for the close confirmation and the show-Jobs key.
+    It 'rewrites a stale .rex_session with the Jobs session id'
+      stale() {
+        mkdir -p "$JOB_STATE_ROOT"
+        echo session:old > "$JOB_STATE_ROOT/.rex_session"
+        jobs_session
+        reconcile || return 1
+        cat "$JOB_STATE_ROOT/.rex_session"
+      }
+      When call stale
+      The output should equal "session:jobs"
+    End
+
+    It 'removes .rex_session when there is no Jobs session'
+      gone() {
+        mkdir -p "$JOB_STATE_ROOT"
+        echo session:old > "$JOB_STATE_ROOT/.rex_session"
+        reconcile || return 1
+        [ -e "$JOB_STATE_ROOT/.rex_session" ] && echo kept || echo removed
+      }
+      When call gone
+      The output should equal "removed"
+    End
+
     It 'does nothing when the session list cannot be read'
       unreadable() {
         meta j2 "Two"

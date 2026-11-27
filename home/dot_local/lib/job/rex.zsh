@@ -154,7 +154,15 @@ job::_rex_open_tab_unlocked() {
       && mv -f -- "$JOB_STATE_ROOT/$id/.tab.$$" "$JOB_STATE_ROOT/$id/tab"
   } 2>/dev/null || :
   [ -n "$sid" ] || return 0
-  print -r -- "$sid" > "$JOB_STATE_ROOT/.rex_session.$$" \
+  job::_rex_write_session "$sid"
+}
+
+# job::_rex_write_session <sid> — record the Jobs session id in
+# $JOB_STATE_ROOT/.rex_session, atomically (Rex's Lua reads it for the
+# close confirmation and the show-Jobs key). Session ids change across a
+# Rex restart, so reconcile rewrites it too, not only the opener.
+job::_rex_write_session() {
+  print -r -- "$1" > "$JOB_STATE_ROOT/.rex_session.$$" \
     && mv -f -- "$JOB_STATE_ROOT/.rex_session.$$" "$JOB_STATE_ROOT/.rex_session"
 }
 
@@ -171,9 +179,12 @@ job::_rex_open_tab() {
 
 # job::_rex_reconcile_unlocked [<id>] — repair the Jobs session after a Rex
 # server restart, which restores each job tab as a bare shell with the same
-# label, a new block id and no follower. A no-op, rc 1, unless a session
-# labelled exactly Jobs exists and its blocks can be listed; every call
-# names that session and no other. Otherwise rc 0, after:
+# label, a new block id and no follower. It records the Jobs session id
+# in .rex_session (job::_rex_write_session) whenever it finds the session,
+# and removes that file when there is none. Beyond that, a no-op, rc 1,
+# unless a session labelled exactly Jobs exists and its blocks can be
+# listed; every call names that session and no other. Otherwise rc 0,
+# after:
 #   1. closing every block in Jobs that no live follower names, after
 #      listing them in .rex_closing (job::_rex_closing_add);
 #   2. opening a tab for every job with no result, and every failed job
@@ -197,7 +208,13 @@ job::_rex_reconcile_unlocked() {
   local -A keep
   rex=$(job::_rex) || return 1
   sid=$(job::_rex_jobs_session "$rex" 2s) || return 1
-  [ -n "$sid" ] || return 1
+  # The session id recorded by the opener is stale after a restart; with
+  # no Jobs session there is none to record.
+  if [ -z "$sid" ]; then
+    rm -f -- "$JOB_STATE_ROOT/.rex_session" 2>/dev/null
+    return 1
+  fi
+  job::_rex_write_session "$sid" 2>/dev/null || :
   out=$("$rex" --autostart=false --timeout 2s block ls -s Jobs --json \
     2>/dev/null) || return 1
   [ -n "$out" ] || return 1
