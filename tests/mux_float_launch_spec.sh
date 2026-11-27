@@ -468,21 +468,20 @@ Describe 'mux/rex.zsh — float launch guard'
     The status should be success
   End
 
-  It '_mux_rx_float runs input-widget under rex-modal and lets the modal paint the title'
+  # The input widgets draw their own box and title. A tmux popup is exactly as
+  # tall as the widget, so a header painted by the modal scrolls away; a Rex
+  # layer is sized as a fraction of the window and is rarely that exact, and
+  # the header stayed on screen above the widget's own (seen live with
+  # mux::choose). So the modal never paints one here.
+  It '_mux_rx_float runs input-widget under rex-modal, which draws no header of its own'
     shape() {
-      _mux_rx_float --type confirm --title Quit -- "Really?" >/dev/null
-      layer_cmd | grep -c -E 'rex-modal --origin block:origin --title Quit --capture [^ ]+ -- [^ ]*/input-widget --type confirm -- Really\?$'
-      layer_cmd | grep -c -- '--no-chrome' || true
+      _mux_rx_float --type choose --title Quit -- --title Quit "Really?" a b >/dev/null
+      layer_cmd | grep -c -E 'rex-modal --origin block:origin --no-chrome --capture [^ ]+ -- [^ ]*/input-widget --type choose -- --title Quit Really\? a b$'
+      jq -r '.layout.block.label' "$STUB_REQ"
     }
     When call shape
     The output should equal "1
-0"
-  End
-
-  It '_mux_rx_float passes no stray --title when none is given'
-    shape() { _mux_rx_float --type confirm -- "Really?" >/dev/null; layer_cmd | grep -c -- '--title' || true; }
-    When call shape
-    The output should equal "0"
+Quit"
   End
 
   It '_mux_rx_float returns non-zero promptly and leaks nothing when the layer cannot be created'

@@ -420,8 +420,12 @@ _mux_rx_float() {
   fi
   [[ -n "$pane_w" ]] || pane_w="60%"
 
-  local -a modal_args=(--capture "$fifo")
-  [[ -n "$title" ]] && modal_args=(--title "$title" "${modal_args[@]}")
+  # --no-chrome, and no --title for the modal: the input widgets draw their
+  # own box and title. On tmux the modal's header scrolls out of a popup that
+  # is exactly as tall as the widget; a layer is sized as a fraction of the
+  # window and is rarely that exact, so the header would stay above the
+  # widget's own. The title still labels the layer.
+  local -a modal_args=(--no-chrome --capture "$fifo")
 
   cat "$fifo" >"$out" 2>/dev/null &
   local reader_pid=$!
