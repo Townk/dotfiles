@@ -447,8 +447,9 @@ keymap:
       - keys:
         - J
         desc: watch tasks
-        # rex: needs the widget float (phase 5)
-        rex: false
+        # Rex: show the Jobs session (its Activity panel replaces the
+        # dashboard); `leave` because the entry is bound through km_stay.
+        rex: {action: jobs_show, args: {leave: true}}
         icon: 󰈈
         color: green
         # job::watch floats its OWN popup (mux-modal) — the dashboard is

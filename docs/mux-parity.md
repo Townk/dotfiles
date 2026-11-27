@@ -579,7 +579,8 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 | Locked mode, detach | key tables / `detach-client` | none | ❌ | nothing to lock away; a Rex app does not detach |
 | Alarms (`u`/`i`/`k`) | `monitor-activity/silence` | none | ❌ | Rex's activity sidebar |
 | Border toggle, sync panes, last tab, join-pane, swap-with-next | tmux commands | none | ❌ | no Rex equivalent; each has its reason beside `rex: false` in `keymap.yaml` |
-| Glyph / gitmoji / clipboard / notification / job pickers, `⌘⇧V`, `⌘⇧F` | popup pickers | none yet | ⏳ | need the widget float (phase 5) |
+| Glyph / gitmoji / clipboard / notification pickers, `⌘⇧V`, `⌘⇧F` | popup pickers | none yet | ⏳ | need the widget float (phase 5) |
+| Watch tasks (`J`) | `job watch` dashboard in a popup | `jobs_show` → `session.select` on the Jobs session | ✅ | each job has its own tab there; the job picker is not ported because Rex's Activity panel replaces it; with no Jobs session it logs and does nothing |
 | `rotate-window` (move `h`/`l`) | rotate | `pane.move.left/right` | 🟡 | moves the pane instead of rotating the layout |
 | Quick Launch picker | fzf in a popup (`quick-launch-pick`) | `rex.ui.pick`, rows from `quick-launch rows <kind>` | 🟡 | same order and tags; no glyph icons (16 fixed names), no in-picker Alt+Enter / Ctrl+D |
 | Quick Launch identity | `@ql_id` pane option, window name, session name | block / window / session **label** = the target's name | 🟡 | labels are user-visible and renameable: renaming a pane makes the next open create a second one |

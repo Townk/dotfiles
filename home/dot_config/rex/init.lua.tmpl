@@ -383,6 +383,22 @@ rex.action{
   end,
 }
 
+-- The watch-tasks key: show the Jobs session. `leave` as in close_guarded.
+rex.action{
+  name  = "jobs_show",
+  title = "Show the Jobs Session",
+  args  = { leave = "boolean?" },
+  run   = function(_, args)
+    if args.leave then rex.client.queue("client.mode.exit_all") end
+    local jobs = jobs_session()
+    if not jobs then
+      rex.log("info", "no jobs session")
+      return
+    end
+    rex.client.queue("session.select", { session_id = jobs })
+  end,
+}
+
 ---------------------------------------------------------------------------
 -- Context keys — vim/fzf-aware navigation and resize
 ---------------------------------------------------------------------------

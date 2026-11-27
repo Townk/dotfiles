@@ -307,6 +307,36 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
     End
   End
 
+  # The watch-tasks key shows the Jobs session. km_stay does not leave the
+  # mode, so the entry asks the action to, as the close entries do.
+  Describe 'watch tasks key'
+    It 'defines jobs_show'
+      When call line 'name  = "jobs_show",'
+      The output should be present
+    End
+
+    It 'binds the key to jobs_show, leaving the mode'
+      bound() { grep -E '^rex\.bind\("prefix/shift\+j", km_stay\("km_prefix_[0-9]+", "[^"]*watch tasks", false, "jobs_show", \{ leave = true \}\)\)$' "$RK_LUA"; }
+      When call bound
+      The lines of output should equal 1
+    End
+
+    It 'leaves the mode before selecting the session'
+      order() {
+        awk '/name  = "jobs_show",/,/^}/' "$RK_LUA" |
+          grep -o -E '(if args\.leave then )?rex\.client\.queue\("(client\.mode\.exit_all|session\.select)"' |
+          tr '\n' '|'
+      }
+      When call order
+      The output should equal 'if args.leave then rex.client.queue("client.mode.exit_all"|rex.client.queue("session.select"|'
+    End
+
+    It 'logs when there is no jobs session'
+      When call line 'rex.log("info", "no jobs session")'
+      The output should be present
+    End
+  End
+
   # Ctrl+h/j/k/l and Ctrl+arrows: one motion across Rex panes and nvim
   # splits. Hand-written in the template header, like their tmux twins.
   Describe 'context keys'
