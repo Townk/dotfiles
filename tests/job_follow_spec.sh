@@ -29,12 +29,27 @@ exit 0
 EOS
     chmod +x "$JOB_SANDBOX/pueue"
     export JOB_PUEUE_BIN="$JOB_SANDBOX/pueue"
-    # rex: records argv, exits JOB_FAKE_REX_RC (3 = block gone, 4 = server
-    # unreachable, 0 = block still there).
+    # rex: records argv. `whoami --json` answers the server instance id —
+    # from JOB_FAKE_REX_INSTANCE_FILE when it exists (so a test can restart
+    # the "server" under a running follower), else JOB_FAKE_REX_INSTANCE —
+    # and exits JOB_FAKE_REX_WHOAMI_RC. Everything else exits
+    # JOB_FAKE_REX_RC (3 = block gone, 4 = server unreachable, 0 = block
+    # still there).
     export JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log"
+    export JOB_FAKE_REX_INSTANCE=srv-1
     cat > "$JOB_SANDBOX/rex" <<'EOS'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
+case "$*" in
+  *' whoami '*)
+    [ "${JOB_FAKE_REX_WHOAMI_RC:-0}" = 0 ] || exit "$JOB_FAKE_REX_WHOAMI_RC"
+    inst="$JOB_FAKE_REX_INSTANCE"
+    [ -n "${JOB_FAKE_REX_INSTANCE_FILE:-}" ] && [ -f "$JOB_FAKE_REX_INSTANCE_FILE" ] \
+      && inst=$(cat "$JOB_FAKE_REX_INSTANCE_FILE")
+    printf '{"instance_id":"%s","session":"Jobs"}\n' "$inst"
+    exit 0
+    ;;
+esac
 exit "${JOB_FAKE_REX_RC:-0}"
 EOS
     chmod +x "$JOB_SANDBOX/rex"
@@ -212,7 +227,8 @@ EOS
 
   Describe 'job::_follow_on_hup'
     hup() {
-      REX_BLOCK="${HUP_BLOCK-blk-1}" run_job_stubbed job::_follow_on_hup j1 "${1:-0}"
+      REX_BLOCK="${HUP_BLOCK-blk-1}" \
+        run_job_stubbed job::_follow_on_hup j1 "${1:-0}" "${HUP_INSTANCE-srv-1}"
       print -r -- "rc=$? kills=$(kills)"
     }
 
@@ -226,19 +242,54 @@ EOS
       When call check
       The output should equal "rc=0 kills=1
 1
---autostart=false --timeout 3s block inspect blk-1"
+--autostart=false --timeout 3s block inspect blk-1
+--autostart=false --timeout 3s whoami --json"
+    End
+
+    It 'does not cancel when a restarted server says the tab is gone'
+      meta "Remux"; result Failed 2
+      check() {
+        JOB_FAKE_REX_RC=3 JOB_FAKE_REX_INSTANCE=srv-2 hup
+        [ -e "$JOB_STATE_ROOT/j1/dismissed" ] && echo dismissed || echo kept
+      }
+      When call check
+      The output should equal "rc=0 kills=0
+kept"
+    End
+
+    It 'does not cancel when a restarted server says an unfinished job tab is gone'
+      meta "Remux"
+      export JOB_FAKE_REX_RC=3 JOB_FAKE_REX_INSTANCE=srv-2
+      When call hup
+      The output should equal "rc=0 kills=0"
+    End
+
+    It 'does not cancel without a recorded server instance'
+      meta "Remux"
+      # A server that reports no instance id would compare equal to the
+      # empty one recorded at start.
+      export JOB_FAKE_REX_RC=3 HUP_INSTANCE="" JOB_FAKE_REX_INSTANCE=""
+      When call hup
+      The output should equal "rc=0 kills=0"
+    End
+
+    It 'does not cancel when the server instance cannot be read'
+      meta "Remux"
+      export JOB_FAKE_REX_RC=3 JOB_FAKE_REX_WHOAMI_RC=4
+      When call hup
+      The output should equal "rc=0 kills=0"
     End
 
     It 'does not cancel when the server is unreachable'
       meta "Remux"
-      JOB_FAKE_REX_RC=4
+      export JOB_FAKE_REX_RC=4
       When call hup
       The output should equal "rc=0 kills=0"
     End
 
     It 'does not cancel when the block still exists'
       meta "Remux"
-      JOB_FAKE_REX_RC=0
+      export JOB_FAKE_REX_RC=0
       When call hup
       The output should equal "rc=0 kills=0"
     End
@@ -451,7 +502,26 @@ follower-gone"
       When call check
       The output should equal "rc=129
 0
+--autostart=false --timeout 3s whoami --json
 --autostart=false --timeout 3s block inspect blk-1"
+    End
+
+    It 'keeps the job when the tab is gone from a server that restarted'
+      meta "Remux"
+      check() {
+        export JOB_FAKE_REX_RC=3 JOB_FAKE_REX_INSTANCE_FILE="$JOB_SANDBOX/instance"
+        echo srv-1 > "$JOB_FAKE_REX_INSTANCE_FILE"
+        follow_bg j1
+        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
+        sleep 0.3
+        echo srv-2 > "$JOB_FAKE_REX_INSTANCE_FILE"
+        kill -HUP "$FPID"
+        follow_wait
+        kills
+      }
+      When call check
+      The output should equal "rc=129
+0"
     End
 
     It 'stays on failure until the tab is closed, then marks it dismissed'
@@ -474,6 +544,22 @@ rc=129
 0
 dismissed
 1"
+    End
+
+    It 'exits quietly when the state dir of a failed job disappears'
+      meta "Remux"; result Failed 2
+      check() {
+        follow_bg j1
+        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
+        sleep 0.3
+        rm -rf "$JOB_STATE_ROOT/j1"
+        follow_wait || return 1
+        cat "$JOB_SANDBOX/err"
+        kills
+      }
+      When call check
+      The output should equal "rc=0
+0"
     End
 
     It 'detaches an inline follower on Ctrl+C into a tab of its own'

@@ -125,18 +125,34 @@ job::_follow_end() {
   esac
 }
 
-# job::_follow_on_hup <id> <inline:0|1> — the SIGHUP decision. A Jobs tab's
-# follower gets SIGHUP both when the owner closes the tab and when the Rex
-# server stops or restarts, so it asks the server about its own block: only
-# rc 3 ("block target … not found") means the tab was closed. Then a job
-# still in flight is cancelled, and a failed one is marked dismissed. Any
-# other answer — rc 4 (server unreachable), rc 0 (block still there), no
-# rex, no REX_BLOCK — leaves the job alone: a server restart must never
-# cancel. An inline follower never cancels; its terminal going away moves
-# the job to a tab of its own. Always returns 0.
+# job::_follow_instance — print the running Rex server's instance id (it
+# changes on every server start), or nothing when there is no answer.
+job::_follow_instance() {
+  local rex
+  rex=$(job::_rex) || return 0
+  "$rex" --autostart=false --timeout 3s whoami --json 2>/dev/null \
+    | jq -r '.instance_id // empty' 2>/dev/null || :
+  return 0
+}
+
+# job::_follow_on_hup <id> <inline:0|1> <instance id> — the SIGHUP decision.
+# A Jobs tab's follower gets SIGHUP both when the owner closes the tab and
+# when the Rex server stops or restarts, so it asks the server about its own
+# block: rc 3 ("block target … not found") means the tab was closed — but
+# only if the server answering is the one the follower started under (the
+# recorded instance id). A restarted server gives restored blocks new ids,
+# so it answers rc 3 for the old one too; the Rex app restarts its server
+# on its own, so that answer can come back fast. The instance is asked
+# AFTER the block, so a restart between the two questions shows as a
+# mismatch. On a confirmed close a job still in flight is cancelled and a
+# failed one is marked dismissed. Anything else — rc 4 (server
+# unreachable), rc 0 (block still there), an empty, unreadable or different
+# instance id, no rex, no REX_BLOCK — leaves the job alone: a server restart
+# must never cancel. An inline follower never cancels; its terminal going
+# away moves the job to a tab of its own. Always returns 0.
 job::_follow_on_hup() {
-  local id="$1" inline="${2:-0}" dir="$JOB_STATE_ROOT/$1" rex rc=0
-  local epoch res code
+  local id="$1" inline="${2:-0}" instance="${3:-}" dir="$JOB_STATE_ROOT/$1"
+  local rex rc=0 epoch res code
   [ -d "$dir" ] || return 0
   if [ "$inline" = 1 ]; then
     [ -s "$dir/result" ] || job::_rex_open_tab "$id" || :
@@ -147,6 +163,8 @@ job::_follow_on_hup() {
   "$rex" --autostart=false --timeout 3s block inspect "$REX_BLOCK" \
     >/dev/null 2>&1 || rc=$?
   [ "$rc" -eq 3 ] || return 0
+  [ -n "$instance" ] || return 0
+  [ "$(job::_follow_instance)" = "$instance" ] || return 0
   if [ ! -s "$dir/result" ]; then
     job::cancel "$id" >/dev/null 2>&1 || :
     return 0
@@ -181,8 +199,9 @@ job::_follow_stop() {
 # status report when it differs from the last one sent. It stops polling
 # when the job has a result (or its state dir is gone: exit quietly), then
 # ends as job::_follow_end says. Every exit path kills the child and removes
-# the follower file. SIGHUP goes to job::_follow_on_hup; in --inline mode,
-# Ctrl+C detaches instead: the job keeps running in a tab of its own.
+# the follower file. SIGHUP goes to job::_follow_on_hup, with the Rex server
+# instance recorded at start; in --inline mode, Ctrl+C detaches instead: the
+# job keeps running in a tab of its own.
 job::follow() {
   setopt localoptions localtraps
   local inline=0
@@ -193,17 +212,17 @@ job::follow() {
   local id="${1:?job::follow: id required}"
   local dir="$JOB_STATE_ROOT/$id" me="${REX_BLOCK:-} $$" child=""
   local poll="${JOB_FOLLOW_POLL:-1}" ttl="${JOB_FOLLOW_DONE_TTL:-3600}"
-  local pueue task_id phase body last="" end REPLY
+  local pueue task_id phase body last="" end REPLY instance=""
   local -i finished n
   [ -f "$dir/meta.json" ] || { log_error "job::follow: unknown job $id"; return 1; }
 
   # TRAPxxx functions, not `trap '…' SIG`: an `exit` in a trap string waits
-  # for the running builtin (a one-hour zselect while staying) to finish,
-  # while one in a trap function exits at once. localtraps drops them when
-  # this function returns.
+  # for the running builtin (a zselect nap) to finish, while one in a trap
+  # function exits at once. localtraps drops them when this function
+  # returns.
   TRAPHUP() {
     job::_follow_stop
-    job::_follow_on_hup "$id" "$inline"
+    job::_follow_on_hup "$id" "$inline" "$instance"
     exit 129
   }
   TRAPTERM() {
@@ -220,6 +239,9 @@ job::follow() {
   }
   print -r -- "$me" > "$dir/.follower.$$" \
     && mv -f -- "$dir/.follower.$$" "$dir/follower" || :
+  # The server this tab lives under, for job::_follow_on_hup. Inline never
+  # cancels, so it does not ask.
+  (( inline )) || instance=$(job::_follow_instance)
 
   pueue=$(job::_pueue) || pueue=""
   task_id=$(jq -r '.pueue_id // empty' "$dir/meta.json" 2>/dev/null) || task_id=""
@@ -255,7 +277,8 @@ job::follow() {
       fi
       ;;
     stay)
-      while :; do job::_follow_nap 3600; done
+      # Until signalled — or until the job's state dir is pruned.
+      while [ -d "$dir" ]; do job::_follow_nap "$poll"; done
       ;;
     *)
       # Let the child print the task's last lines: `pueue follow` ends on
