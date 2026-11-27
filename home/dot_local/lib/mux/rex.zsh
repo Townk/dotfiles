@@ -16,10 +16,8 @@
 # answer returns 1 rather than guessing — the callers that can degrade test
 # mux::available and take their own inline path.
 #
-# NOT here on purpose (later phases): the widget floats (_mux::float /
-# _mux::pick_float stay tmux/zellij-only, so pickers and dialogs render inline
-# in a Rex pane), the mode stack, and the autostart exec verbs — nothing
-# launches INTO Rex from a shell.
+# NOT here on purpose: the mode stack (Rex modes nest natively), and the
+# autostart exec verbs — nothing launches INTO Rex from a shell.
 #
 # Lessons that cost a spike (docs/mux-parity.md has the full table):
 #   * a unix socket path is capped near 104 bytes — a scratch server's socket
@@ -297,18 +295,29 @@ _mux_rx_modal_layer() {
 }
 
 # _mux_rx_await_modal <layer block> <reader pid> — wait for the reader to
-# finish (the modal answered). Returns 1 after abandoning it because the
-# layer is gone and nothing was written. `block inspect` exits 3 for a block
-# the server no longer knows; any other failure (a server hiccup) is not
-# proof the layer died, so only 3 counts.
+# finish (the modal answered). Returns 1 after abandoning it because nobody
+# will ever write the answer. The wait is BOUNDED whatever the server says:
+#   * `block inspect` exits 3 for a block the server no longer knows — the
+#     layer is gone — and 4 when no server is running, which takes every
+#     layer with it. Either ends the wait at once.
+#   * any other failure (a timeout, a hiccup) is not proof, so it is counted,
+#     and a run of them — $_MUX_RX_AWAIT_MISSES, default 25 polls, about 5 s —
+#     ends the wait too. A check that succeeds resets the count: a float that
+#     is simply taking its time is never abandoned.
 _mux_rx_await_modal() {
-  local block="$1" reader="$2" rc=0
+  local block="$1" reader="$2" rc=0 misses=0
+  local limit="${_MUX_RX_AWAIT_MISSES:-25}"
   while kill -0 "$reader" 2>/dev/null; do
     rc=0
     _mux_rx_run --timeout 3s block inspect -s "$block" "$block" >/dev/null 2>&1 || rc=$?
-    if (( rc == 3 )); then
-      # Gone. The modal writes its answer as it exits, so give a reader that
-      # is mid-read a moment before calling it abandoned.
+    case "$rc" in
+      0) misses=0 ;;
+      3 | 4) misses=$limit ;;
+      *) (( misses += 1 )) ;;
+    esac
+    if (( misses >= limit )); then
+      # The modal writes its answer as it exits, so give a reader that is
+      # mid-read a moment before calling it abandoned.
       sleep 0.3
       kill -0 "$reader" 2>/dev/null || break
       kill "$reader" 2>/dev/null

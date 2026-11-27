@@ -381,12 +381,15 @@ Describe 'mux/rex.zsh — float launch guard'
       echo '    if [[ "${STUB_MODE:-ok}" == closed ]]; then'
       echo '      # The layer is closed by hand: it goes away and nobody writes.'
       echo '      { sleep 0.4; rm -f "$STUB_ALIVE" } &!'
+      echo '    elif [[ "${STUB_MODE:-ok}" == slow ]]; then'
+      echo '      # Alive and silent: the example writes the answer itself, later.'
+      echo '      :'
       echo '    else'
       echo '      { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER-picked}" >&3; exec 3>&-; rm -f "$STUB_ALIVE" } &!'
       echo '    fi'
       echo '    print -r -- "{\"block_ids\":[\"block:layer\"]}"'
       echo '    exit 0 ;;'
-      echo '  *" block inspect "*) [[ -e "$STUB_ALIVE" ]] && exit 0; exit 3 ;;'
+      echo '  *" block inspect "*) [[ -n "${STUB_INSPECT_RC:-}" ]] && exit "$STUB_INSPECT_RC"; [[ -e "$STUB_ALIVE" ]] && exit 0; exit 3 ;;'
       echo 'esac'
       echo 'exit 1'
     } > "$stub"
@@ -396,7 +399,7 @@ Describe 'mux/rex.zsh — float launch guard'
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset MUX_REX_BIN STUB_ARGV_LOG STUB_REQ STUB_ALIVE STUB_MODE STUB_ANSWER TMPDIR REX_SESSION REX_BLOCK
+    unset MUX_REX_BIN STUB_ARGV_LOG STUB_REQ STUB_ALIVE STUB_MODE STUB_ANSWER TMPDIR REX_SESSION REX_BLOCK STUB_INSPECT_RC _MUX_RX_AWAIT_MISSES
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'
@@ -498,6 +501,41 @@ Quit"
     The output should equal ""
     The error should equal ""
     The status should equal 130
+  End
+
+  # The wait must be bounded whatever the server says. Only "block not found"
+  # (3) PROVES the layer is gone, but a server that has stopped (4), or one
+  # that keeps failing for any other reason, will never say it — and nobody
+  # will ever write the answer either.
+  It 'returns 130 at once when the server is gone mid-wait'
+    export STUB_MODE=closed STUB_INSPECT_RC=4
+    When call run_and_report 4 _mux_rx_float --type confirm --title Quit -- "Really?"
+    The output should equal ""
+    The error should equal ""
+    The status should equal 130
+  End
+
+  It 'gives up after a run of failed checks instead of waiting forever'
+    export STUB_MODE=closed STUB_INSPECT_RC=1 _MUX_RX_AWAIT_MISSES=3
+    When call run_and_report 6 _mux_rx_float --type confirm --title Quit -- "Really?"
+    The output should equal ""
+    The error should equal ""
+    The status should equal 130
+  End
+
+  It 'does not give up on a float that is simply taking its time'
+    slow() {
+      # The layer stays alive (inspect exits 0) and answers after many more
+      # polls than the miss limit: successful checks must not count as misses.
+      export _MUX_RX_AWAIT_MISSES=2 STUB_MODE=slow
+      ( sleep 1.5
+        fifo=$(jq -r '.layout.block.options.command as $c | $c[($c | index("--capture")) + 1]' "$STUB_REQ")
+        print -rn -- late >"$fifo" ) &
+      _mux_rx_float --type confirm --title Quit -- "Really?"
+    }
+    When call run_and_report 8 slow
+    The output should equal "late"
+    The status should be success
   End
 
   Describe 'dispatch'
