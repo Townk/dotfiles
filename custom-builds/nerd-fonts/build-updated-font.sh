@@ -31,7 +31,9 @@
 #   6b-7c. One fontTools pass per built font (fontbuild pipeline): import a
 #      tiny allowlist of real Unicode keyboard/symbol glyphs from OFL-licensed
 #      donor fonts; strip the colour-emoji domain from the cmap so terminal
-#      lookups for ♻ ✏ 🚀 fall through to the system colour-emoji font; stash a
+#      lookups for ♻ ✏ 🚀 fall through to the system colour-emoji font; alias
+#      every Private Use icon at a mirror Plane-16 codepoint (for apps that
+#      prefer their own bundled Nerd Font, see README "Mirror codepoints"); stash a
 #      pristine pre-scale copy (for recalibrate-fa.sh); normalize every FA +
 #      custom icon to the curated md/oct box (renderer-agnostic sizing); and
 #      bleed block/legacy glyphs past the cell edges (embedded JBM only).

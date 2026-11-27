@@ -1,6 +1,7 @@
-"""In-memory per-font pipeline (steps 6b -> 7 -> 7b -> 7c).
+"""In-memory per-font pipeline (steps 6b -> 7 -> 7a -> 7b -> 7c).
 
-For each built font: donor import -> emoji strip -> stash a pristine pre-scale
+For each built font: donor import -> emoji strip -> mirror aliases -> stash a
+pristine pre-scale
 copy -> icon scale -> cell bleed (JetBrains Mono only). The font is parsed once
 and serialized twice (the pre-scale stash + the final output) instead of the
 per-step load/save round-trips the original separate steps performed. Donors are
@@ -12,7 +13,7 @@ import os
 
 from fontTools.ttLib import TTFont
 
-from . import donor, scale, strip_emoji
+from . import donor, mirror, scale, strip_emoji
 from .bleed import bleed_font
 
 
@@ -145,6 +146,10 @@ def run(argv):
         removed, _removed_cps = strip_emoji.strip_font(font, explicit_keep)
         total_stripped += removed
         print("  %s: stripped %d emoji codepoints" % (base, removed))
+
+        # 7a: alias every Private Use icon at its mirror codepoint (cmap only).
+        # Before the stash, so recalibrate-fa.sh's restored copies keep them.
+        print("  %s: mirrored %d icon codepoint(s)" % (base, mirror.mirror_font(font)))
 
         # 7b: stash pristine (pre-scale) copy, then normalize icon sizing.
         font.save(os.path.join(args.prescale_dir, base))

@@ -73,5 +73,36 @@ HTERM_WIDE = [
 ]
 
 
+# Mirror aliases (step 7a, mirror.py): (first, last, offset). Every codepoint in
+# first..last is also mapped at codepoint + offset, in a Plane-16 block nothing
+# else allocates:
+#   BMP Private Use Area   U+E000..U+F8FF    -> U+108000..U+1098FF
+#   Material Design icons  U+F0000..U+F1FFF  -> U+10A000..U+10BFFF
+# What the block has to stay clear of:
+#   * this build's own Plane-16 use — U+100021..U+10005A and U+10E000..U+10F8FF
+#     (Font Awesome relocations, _fontforge_merge.py) and U+10FB00 on (custom
+#     SVG icons). Those exist only in this build already and need no mirror.
+#   * SF Symbols. Apple's SF Pro fonts carry them at U+100000..U+103835 (8,505
+#     of them in 2026, more every year), and an app whose UI font is SF would
+#     draw a mirror codepoint in that range as an SF Symbol instead of falling
+#     back to this font. Hence U+108000, well past where they have got to.
+MIRROR_RANGES = [
+    (0xE000,  0xF8FF,  0xFA000),
+    (0xF0000, 0xF1FFF, 0x1A000),
+]
+
+
+def mirror_cp(cp):
+    """The mirror codepoint of cp, or None when cp has no mirror."""
+    for lo, hi, off in MIRROR_RANGES:
+        if lo <= cp <= hi:
+            return cp + off
+    return None
+
+
+def is_mirror(cp):
+    return any(lo + off <= cp <= hi + off for lo, hi, off in MIRROR_RANGES)
+
+
 def in_ranges(cp, ranges):
     return any(lo <= cp <= hi for lo, hi in ranges)

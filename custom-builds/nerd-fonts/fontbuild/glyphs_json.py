@@ -22,6 +22,8 @@ from pathlib import Path
 
 from fontTools.ttLib import TTFont
 
+from .ranges import is_mirror
+
 
 NF_COLLECTION_NAMES = {
     "fa":      "font-awesome",
@@ -120,7 +122,10 @@ def main(argv):
     ttf_path = _pick_canonical_ttf(built_dir)
     font = TTFont(ttf_path)
     cmap = font.getBestCmap() or {}
-    font_codepoints = set(cmap.keys())
+    # Mirror aliases (mirror.py) are second codepoints for icons already
+    # indexed at their real one; listing them would double every icon in the
+    # pickers.
+    font_codepoints = {cp for cp in cmap if not is_mirror(cp)}
 
     # native-hex -> relocated-hex for free FA icons the merge step had to move
     # off a colliding curated codepoint (see _fontforge_merge.py).

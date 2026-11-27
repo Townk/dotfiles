@@ -1,6 +1,8 @@
 """Subcommand dispatch for `python -m fontbuild`.
 
-  pipeline      donor import + emoji strip + icon scale + cell bleed (in-memory)
+  pipeline      donor import + emoji strip + mirror aliases + icon scale + cell
+                bleed (in-memory)
+  mirror        add the mirror aliases to already-built fonts in place
   scale         re-normalize icon sizing only (used by recalibrate-fa.sh)
   glyphs        emit glyphs.json index
   verify        print built-vs-shipped glyph-count diff
@@ -9,7 +11,7 @@
 import sys
 
 USAGE = ("usage: python -m fontbuild "
-         "<pipeline|scale|glyphs|verify|emoji-split> ...\n")
+         "<pipeline|mirror|scale|glyphs|verify|emoji-split> ...\n")
 
 
 def _run_scale(rest):
@@ -52,6 +54,9 @@ def main(argv=None):
     if cmd == "pipeline":
         from . import pipeline
         return pipeline.run(rest)
+    if cmd == "mirror":
+        from . import mirror
+        return mirror.main(rest)
     if cmd == "scale":
         return _run_scale(rest)
     if cmd == "glyphs":

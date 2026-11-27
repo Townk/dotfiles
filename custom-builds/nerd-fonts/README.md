@@ -92,6 +92,35 @@ With `--install`, the two `.ttf` files are copied into `~/Library/Fonts/`
 regardless of `--install`. Override with `JSON_OUT_DIR=/some/where`,
 or disable with `JSON_OUT_DIR=""`.
 
+### Mirror codepoints
+
+Every Private Use icon is also mapped at a second, **mirror** codepoint in
+Plane 16 (`fontbuild/mirror.py`, rule in `fontbuild/ranges.py`):
+
+```
+U+E000..U+F8FF    -> U+108000..U+1098FF   (codepoint + 0xFA000)
+U+F0000..U+F1FFF  -> U+10A000..U+10BFFF   (codepoint + 0x1A000)
+```
+
+They exist for apps that bundle their own, upstream Symbols Nerd Font and
+prefer it for UI text. Rex does, for tab titles and the key-hint overlay: an
+icon its bundled copy has is drawn from that copy, and only a codepoint it
+lacks falls back to the installed fonts. No upstream font has the mirror
+codepoints, so a label written with them is drawn from this build. The Rex
+config rewrites its key-hint labels that way (`ui_glyphs` in
+`home/dot_config/rex/init.lua.tmpl`), with the same two offsets.
+
+The aliases are cmap entries only — no glyph is duplicated — and they are left
+out of `glyphs.json`, so the pickers do not list every icon twice. The block
+starts at U+108000 to stay clear of this build's other Plane-16 allocations
+and of SF Symbols, which Apple's SF Pro fonts carry at U+100000..U+103835.
+
+To add them to already-built fonts without a rebuild:
+
+```bash
+PYTHONPATH=. build/.venv/bin/python -m fontbuild mirror build/output/*.ttf build/work/prescale/*.ttf
+```
+
 ### Unicode donor glyphs
 
 After the Nerd Fonts patcher runs, the build imports an explicit allowlist of
