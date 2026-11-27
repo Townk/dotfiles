@@ -1,3 +1,4 @@
+{{- $hasRex := or (lookPath "rex") (stat (joinPath .chezmoi.homeDir ".config/rex")) -}}
 {{- $hasQmk := and (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk")) (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk-config")) -}}
 {{- $hasWeztermPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/quicklaunch.wezterm")) (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/statusbar.wezterm")) -}}
 {{- $hasZellijPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-context-keys/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-prompt-jumper/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-hud")) -}}
@@ -194,7 +195,16 @@ tabs:
       label: Edit Wezterm configuration
       cwd: ~/.config/wezterm
       args: ["wezterm.lua"]
-
+{{ if $hasRex }}
+  - id: rex-config
+    name: Rex Config
+    icon: "󰆍 "
+    action:
+      type: Edit
+      label: Edit Rex configuration
+      cwd: ~/.config/rex
+      args: ["init.lua"]
+{{ end }}
   - id: zsh-config
     name: Zsh Config
     icon: "􏬅 "

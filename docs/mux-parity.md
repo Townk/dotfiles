@@ -620,3 +620,6 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 | a pane no client has shown reports 80x24 | on a headless scratch server every pane is 80 columns wide whatever its share; the resize spec's expected ratios follow from that, not from real geometry |
 | `rex do <action> -s S -b B key=value` runs an `init.lua` action on the server with `ctx.session_id` / `ctx.block_id` set, in one round trip (~19 ms) | the route by which a program inside a pane (nvim) reaches a config action; it works only for actions that stay on the server — no `rex.client.queue` |
 | Rex's Lua has no `table.unpack` | copy arrays with a loop |
+| what an action queues with `rex.client.queue` runs only after the action returns | an action that waits on the user (a picker) cannot leave its mode first; the mode's key-hint overlay stays up over the picker. `km_do` leaves the mode, THEN queues the picker action |
+| the `quick-launch` script runs under `set -e`; specs that source its libraries do not | `cond && ((n++))` from zero is fatal only in the real script — it ended a workspace build before `@select:` was printed. The spec for it runs the script itself |
+| `⌘,` opens Rex's own Settings (`client.settings`) | editing the config file was a WezTerm habit (no settings UI there); on Rex the file is a Quick Launch tab, `rex-config` |

@@ -322,7 +322,10 @@ ql_rx_workspace_build() {
   ((${#queue[@]})) || return 0
   local built=0
   for tab in "${queue[@]}"; do
-    ql_rx_open_tab "$tab" "$sid" && ((built++))
+    # NOT `((built++))`: its status is that of the OLD value, so the first
+    # success returned 1 and quick-launch's `set -e` ended the script there —
+    # session built, `@select:` never printed, the app never switched.
+    ql_rx_open_tab "$tab" "$sid" && built=$((built + 1))
   done
   # Only drop the placeholder once something replaced it — closing a
   # session's last window would close the session.

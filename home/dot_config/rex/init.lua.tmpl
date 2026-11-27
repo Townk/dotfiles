@@ -42,9 +42,11 @@
 {{- /* rexbind: dict "mode" <mode or ""> "key" <tmux key name, or a Rex spelling
        when mode is ""> "rex" <the entry's rex value> "leave" <bool>
        leave = this binding sits in a mode and must end it. A client action is
-       then wrapped in km_do; one of OUR actions (no dot in the name) is bound
-       directly, because it leaves the mode itself — it may open the picker,
-       and a prompt cannot be shown from an action run through rex.invoke. */ -}}
+       then wrapped in km_do. So is a Quick Launch picker (ql_*): the mode,
+       and with it Rex's key-hint overlay, has to be gone BEFORE the picker
+       opens, and an action cannot leave a mode while it is still running —
+       what it queues runs after it returns. Our other actions are bound
+       directly and leave the mode themselves; they are over in an instant. */ -}}
 {{- define "rexbind" -}}
 {{- $act := "" -}}
 {{- $args := dict -}}
@@ -54,7 +56,7 @@
 {{-   $act = .rex.action -}}
 {{-   $args = (.rex.args | default dict) -}}
 {{- end -}}
-{{- if and .leave (contains "." $act) -}}
+{{- if and .leave (or (contains "." $act) (hasPrefix "ql_" $act)) -}}
 rex.bind("{{ if .mode }}{{ .mode }}/{{ template "rexkey" .key }}{{ else }}{{ .key }}{{ end }}", "km_do", { action = {{ $act | quote }}{{ if $args }}, args = {{ template "rexargs" $args }}{{ end }} })
 {{- else if $args -}}
 rex.bind("{{ if .mode }}{{ .mode }}/{{ template "rexkey" .key }}{{ else }}{{ .key }}{{ end }}", {{ $act | quote }}, {{ template "rexargs" $args }})
@@ -111,15 +113,18 @@ end
 -- Modes
 ---------------------------------------------------------------------------
 
--- A leader-table entry that is not sticky: do the thing, then leave every
--- mode — tmux's `<cmd> ; set key-table root`.
+-- A leader-table entry that is not sticky: leave every mode, then do the
+-- thing — tmux's `set key-table root ; <cmd>`. In that order, so that an
+-- action which waits on the user (a Quick Launch picker) does not sit under
+-- the mode's key-hint overlay: queued actions run one after the other, and
+-- only once this one has returned.
 rex.action{
   name  = "km_do",
   title = "Run an action and leave the key mode",
   args  = { action = "string", args = "object?" },
   run   = function(ctx, args)
-    rex.client.queue(args.action, args.args or {})
     rex.client.queue("client.mode.exit_all")
+    rex.client.queue(args.action, args.args or {})
   end,
 }
 

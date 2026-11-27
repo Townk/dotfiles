@@ -105,8 +105,21 @@ Describe 'generated Rex config'
       The output should be present
     End
 
-    It 'binds our own actions directly — they open prompts, which rex.invoke cannot'
-      When call line 'rex.bind("session/shift+s", "ql_workspace")'
+    # The picker must not open under the mode's key hints, and an action
+    # cannot leave a mode while it runs: km_do leaves first, then queues it.
+    It 'opens a Quick Launch picker from a mode through km_do'
+      When call line 'rex.bind("session/shift+s", "km_do", { action = "ql_workspace" })'
+      The output should be present
+    End
+
+    It 'leaves the mode before it runs the action'
+      order() { awk '/name  = "km_do"/,/^}/' "$RK_LUA" | grep -o -E 'queue\("client\.mode\.exit_all"\)|queue\(args\.action' | tr '\n' ' '; }
+      When call order
+      The output should equal 'queue("client.mode.exit_all") queue(args.action '
+    End
+
+    It 'opens the app settings on cmd+comma'
+      When call line 'rex.bind("cmd+,", "client.settings")'
       The output should be present
     End
 

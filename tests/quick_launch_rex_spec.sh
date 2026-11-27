@@ -251,6 +251,28 @@ Describe 'quick-launch on Rex'
       The output should equal "1"
     End
 
+    # The quick-launch SCRIPT runs under `set -e`; the libraries sourced by
+    # this spec do not. A statement that is only fatal under errexit (an
+    # arithmetic `((n++))` from zero) once ended the script after the session
+    # was built and before `@select:` was printed — so the app never switched
+    # to a workspace it had just created. This one runs the script itself.
+    It 'reports a freshly built workspace when run as the real script'
+      real_script() {
+        local sid tmp
+        sid=$(ql_rx_session_id proj)
+        [[ -n "$sid" ]] && rx kill "$sid" >/dev/null 2>&1
+        tmp=$(mktemp -d)
+        print -r -- "$QL_JSON" >"$tmp/targets.json"
+        QUICK_LAUNCH_TARGETS="$tmp/targets.json" XDG_CACHE_HOME="$tmp/cache" \
+          zsh home/dot_config/mux/scripts/executable_quick-launch pick workspace proj | sed 's/:.*//'
+        print -r -- "status=${pipestatus[1]}"
+        rm -rf "$tmp"
+      }
+      When call real_script
+      The line 1 of output should equal "@select"
+      The line 2 of output should equal "status=0"
+    End
+
     It 'treats a live session with no definition as a workspace'
       adhoc() {
         local sid

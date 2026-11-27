@@ -802,7 +802,7 @@ keymap:
         - Up
         - k
         desc: grow up
-        rex: {action: pane.resize, args: {direction: up}}
+        rex: {action: pane_resize_by, args: {direction: up, cells: 2}}
         icon: 󰅃
         color: teal
         cmd: resize-pane -U 2
@@ -811,7 +811,7 @@ keymap:
         - Down
         - j
         desc: grow down
-        rex: {action: pane.resize, args: {direction: down}}
+        rex: {action: pane_resize_by, args: {direction: down, cells: 2}}
         icon: 󰅀
         color: teal
         cmd: resize-pane -D 2
@@ -820,7 +820,7 @@ keymap:
         - Left
         - h
         desc: grow left
-        rex: {action: pane.resize, args: {direction: left}}
+        rex: {action: pane_resize_by, args: {direction: left, cells: 2}}
         icon: 󰅁
         color: teal
         cmd: resize-pane -L 2
@@ -829,7 +829,7 @@ keymap:
         - Right
         - l
         desc: grow right
-        rex: {action: pane.resize, args: {direction: right}}
+        rex: {action: pane_resize_by, args: {direction: right, cells: 2}}
         icon: 󰅂
         color: teal
         cmd: resize-pane -R 2
@@ -837,7 +837,7 @@ keymap:
       - keys:
         - +
         desc: grow
-        rex: {action: pane.resize, args: {direction: up}}
+        rex: {action: pane_resize_by, args: {direction: up, cells: 2}}
         icon: 󰐕
         color: teal
         cmd: resize-pane -U 2
@@ -845,7 +845,7 @@ keymap:
       - keys:
         - '-'
         desc: shrink
-        rex: {action: pane.resize, args: {direction: down}}
+        rex: {action: pane_resize_by, args: {direction: down, cells: 2}}
         icon: 󰍴
         color: teal
         cmd: resize-pane -D 2
@@ -1273,7 +1273,7 @@ keymap:
   - {key: cmd+shift+up, desc: previous prompt, rex: client.prompt.previous}
   - {key: cmd+shift+down, desc: next prompt, rex: client.prompt.next}
   - {key: cmd+f, desc: search scrollback, rex: client.find.open}
-  - {key: 'cmd+,', desc: terminal settings, rex: edit_terminal_config}
+  - {key: 'cmd+,', desc: terminal settings, rex: client.settings}
   - {key: cmd+n, desc: new window, rex: client.window.new}
   - {key: cmd+r, desc: reload config, rex: client.config.reload}
   # rex: needs the scrollback-to-editor script ported (phase 5)
