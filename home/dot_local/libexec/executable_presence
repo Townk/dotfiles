@@ -42,6 +42,19 @@ if /usr/sbin/netstat -an -p tcp 2>/dev/null | /usr/bin/awk '
   exit 0
 fi
 
+# The same viewer in High Performance mode has no TCP stream to find: the
+# session runs over UDP (5900/5901, held by avconferenced) and `netstat` lists
+# neither socket. Measured 2026-11-27 with Screens on iOS over Tailscale: no
+# ESTABLISHED :5900, and Touch ID was offered to someone who could not reach
+# the sensor — its "type the password" button does nothing over VNC. What IS
+# there is SSMenuAgent, the menu-bar item that says the screen is being
+# viewed; macOS starts it when a viewer attaches (same second as
+# screensharingd) in either mode.
+if /usr/bin/pgrep -x SSMenuAgent >/dev/null 2>&1; then
+  echo vnc
+  exit 0
+fi
+
 # Locked (or the key missing — a headless boot with no console session) means
 # nobody can be sitting there, whatever else the probes below might say.
 locked=$(/usr/sbin/ioreg -n Root -d1 -a 2>/dev/null |
