@@ -258,18 +258,52 @@ Describe 'quick-launch on Rex'
 
     It 'opens a tab in the current session, then focuses it on the second ask'
       tab_twice() {
-        ql_dispatch tab dev || return 1
-        ql_dispatch tab dev || return 1
+        ql_dispatch tab dev >/dev/null || return 1
+        ql_dispatch tab dev >/dev/null || return 1
         view "$RX_SID" | jq -r '[.windows[] | select(.label == "Dev")] | length'
       }
       When call tab_twice
       The output should equal "1"
     End
 
+    # Found live: the server made the new window active and the app stayed on
+    # the old tab. Only a client action moves the app, so the script has to
+    # say which window to show — on create AND on focus.
+    It 'names the window to show when it opens a tab, and again when it focuses it'
+      shown() {
+        local want first second
+        first=$(ql_dispatch tab dev) || return 1
+        second=$(ql_dispatch tab dev) || return 1
+        want="@select:$RX_SID $(view "$RX_SID" | jq -r '[.windows[] | select(.label == "Dev") | .window_id] | first')"
+        [[ "$first" == "$want" ]] && print -r -- created-ok
+        [[ "$second" == "$want" ]] && print -r -- focused-ok
+      }
+      When call shown
+      The line 1 of output should equal "created-ok"
+      The line 2 of output should equal "focused-ok"
+    End
+
+    It 'names the window of an existing pane it focuses, wherever that pane is'
+      pane_window() {
+        local out
+        ql_dispatch pane logs >/dev/null || return 1
+        out=$(ql_dispatch pane logs) || return 1
+        [[ "$out" == "@select:$RX_SID window:"* ]] && print -r -- ok
+      }
+      When call pane_window
+      The output should equal "ok"
+    End
+
+    It 'says nothing about windows while building a workspace'
+      build_quiet() { ql_dispatch workspace proj | grep -c ' window:' || true; }
+      When call build_quiet
+      The output should equal "0"
+    End
+
     It 'opens a pane as a labelled split, then focuses it on the second ask'
       pane_twice() {
-        ql_dispatch pane logs || return 1
-        ql_dispatch pane logs || return 1
+        ql_dispatch pane logs >/dev/null || return 1
+        ql_dispatch pane logs >/dev/null || return 1
         rx block ls -s "$RX_SID" --json | jq -r '[.blocks[] | select(.label == "Logs")] | length'
       }
       When call pane_twice

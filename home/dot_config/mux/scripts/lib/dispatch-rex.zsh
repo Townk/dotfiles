@@ -21,6 +21,11 @@
 #     from `rex.exec`, which has no client. So opening a workspace PRINTS
 #     `@select:<session-id>` on stdout and the Lua action that called us
 #     queues the switch.
+#   * The same goes for TABS, which was not obvious: `rex window new` and
+#     `rex window focus` make a window the session's active one on the
+#     server, and the app's tab selection does not follow (found in the
+#     first live session — a new tab opened behind the one in view). So tab
+#     and pane opens print `@select:<session-id> <window-id>` as well.
 #   * There is no nested_mux, no tint and no separate-window launcher: Rex is
 #     the terminal, so a `Remote` workspace is simply a session whose pane
 #     runs ssh, and its keys are not in competition with ours.
@@ -49,6 +54,19 @@ ql_rx_block_by_label() {
 # new`, `rex window new` and `rex run` each nest it differently.
 ql_rx_first_block() {
   jq -r '[.. | .block_id? // empty, (.block_ids? // [])[]] | first // empty' <<<"$1"
+}
+
+# ql_rx_show <session> <window> — tell the caller which window the app
+# should be looking at. See the header: only a client action can move it.
+ql_rx_show() {
+  [[ -n "${1:-}" && -n "${2:-}" ]] && print -r -- "@select:$1 $2"
+  return 0
+}
+
+# ql_rx_window_of <session> <block> — the window a block sits in.
+ql_rx_window_of() {
+  _mux_rx_view "$1" | jq -r --arg b "$2" '
+    [.windows[]? | select([.layers[]?.blocks[]?.block_id] | index($b)) | .window_id] | first // empty'
 }
 
 # ql_rx_argv <cmd> — sets `reply` to the argv that runs a quick-launch
@@ -99,7 +117,11 @@ ql_rx_open_pane() {
     local existing
     existing="$(ql_rx_block_by_label "$session" "$name")"
     if [[ -n "$existing" ]]; then
-      _mux_rx_run focus -s "$session" "$existing" >/dev/null 2>&1 && return 0
+      if _mux_rx_run focus -s "$session" "$existing" >/dev/null 2>&1; then
+        # The pane may live in another tab of this session.
+        ql_rx_show "$session" "$(ql_rx_window_of "$session" "$existing")"
+        return 0
+      fi
     fi
   fi
 
@@ -162,8 +184,12 @@ ql_rx_open_tab() {
     existing="$(_mux_rx_view "$session" |
       jq -r --arg n "$name" '[.windows[]? | select(.label == $n) | .window_id] | first // empty')"
     if [[ -n "$existing" ]]; then
-      _mux_rx_run window focus -s "$session" "$existing" >/dev/null 2>&1 && return 0
+      if _mux_rx_run window focus -s "$session" "$existing" >/dev/null 2>&1; then
+        ql_rx_show "$session" "$existing"
+        return 0
+      fi
     fi
+    local interactive=1
   fi
 
   # Same split as the tmux twin: tiled panes form the chain, floats are laid
@@ -197,6 +223,8 @@ ql_rx_open_tab() {
   }
   first="$(ql_rx_first_block "$out")"
   [[ -n "$first" ]] || return 1
+  local new_window
+  new_window="$(jq -r '[.. | .window_id? // empty] | first // empty' <<<"$out")"
   # Label the first block as its pane, so a later pane-open focuses it
   # instead of opening a duplicate (tmux twin: the @ql_id stamp).
   if ((count > 0)); then
@@ -214,6 +242,8 @@ ql_rx_open_tab() {
     p="$(jq -c ".[$i]" <<<"$floating_panes")"
     ql_rx_open_pane "$p" "$session" "$first" || true
   done
+  # Opened on request (not as part of building a workspace): show it.
+  (( ${interactive:-0} )) && ql_rx_show "$session" "$new_window"
   return 0
 }
 

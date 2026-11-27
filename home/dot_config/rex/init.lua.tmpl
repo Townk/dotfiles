@@ -127,9 +127,12 @@ rex.action{
 -- ~/.config/mux/scripts/quick-launch. This is only the picker: rows come
 -- from `quick-launch rows <kind>` (tab-separated: id, title, subtitle, icon,
 -- detail — already in display order), the choice goes back through
--- `quick-launch pick <kind> <id>`. Opening a workspace prints
--- `@select:<session-id>`, because moving the app to another session is a
--- client action the script has no way to perform.
+-- `quick-launch pick <kind> <id>`. The script answers with
+-- `@select:<session-id> [<window-id>]` when the app has to be moved —
+-- to another session, or to another tab of this one. Both are client
+-- actions the script has no way to perform: it can make a window the
+-- session's active one on the server, and the app's tab selection stays
+-- where it was.
 
 local function split_tabs(line)
   local fields = {}
@@ -175,8 +178,9 @@ local function quick_launch(kind, title)
     local opened = run_script(ctx, { SCRIPTS .. "/quick-launch", "pick", kind, id })
     if opened == nil then return end
     local session = opened.stdout:match("@select:(%S+)")
+    local window = opened.stdout:match("@select:%S+ (window:%S+)")
     if session then
-      rex.client.queue("session.select", { session_id = session })
+      rex.client.queue("session.select", { session_id = session, window_id = window })
     end
   end
 end
