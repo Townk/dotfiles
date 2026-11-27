@@ -28,9 +28,7 @@ set -u
 typeset -g __TERMINAL_LOCATION_ZSH=1
 
 # The mux shim answers "which backend is this client, and what is running in
-# its focused pane" for BOTH backends (mux::backend_for_pid /
-# mux::focused_command); it also re-exports the zellij session resolvers this
-# file used before Phase 6.
+# its focused pane" (mux::backend_for_pid / mux::focused_command).
 (( ${+functions[mux::backend]} )) || source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 
 # Profile → default palette color name. Used when a machine has no explicit
@@ -157,19 +155,6 @@ tl_hex_for_colorname() {
   print -r -- "$hex"
 }
 
-# RUNNING_COMMAND of the sole client (zellij fallback when no focused
-# terminal pane; tmux has no equivalent and needs none — its focused-pane
-# query never comes up empty for a live client).
-tl_client_running_command() {
-  local session="$1" zj count
-  zj="${ZELLIJ_BIN:-${commands[zellij]:-}}"
-  [[ -n "$zj" && -x "$zj" ]] || return 1
-  count=$("$zj" -s "$session" action list-clients 2>/dev/null | awk 'NR > 1 { c++ } END { print c + 0 }')
-  ((count == 1)) || return 1
-  "$zj" -s "$session" action list-clients 2>/dev/null |
-    awk -F'  +' 'NR == 2 { for (i = 3; i <= NF; i++) printf "%s%s", (i > 3 ? " " : ""), $i }'
-}
-
 # Classify a command line → palette color name. An onboarded ssh target yields
 # its color; any other ssh yields the remote default; non-ssh is non-zero (the
 # caller treats that as local).
@@ -186,7 +171,7 @@ tl_classify_command() {
 #   Prints: local | <palette color name>
 resolve_terminal_location() {
   local client_pid="${1:?usage: resolve_terminal_location <client_pid>}"
-  local session cmd exe args backend
+  local cmd exe args backend
 
   exe=$(ps -p "$client_pid" -o comm= 2>/dev/null) || {
     print -r -- local
@@ -197,7 +182,7 @@ resolve_terminal_location() {
   # since this runs in WezTerm's environment, not in a pane.
   backend="$(mux::backend_for_pid "$client_pid")"
   case "$exe" in
-    *zellij*|*tmux*) ;;
+    *tmux*) ;;
     # Bare ssh (or anything that is not a mux client): classify its own argv.
     *)
       args=$(ps -p "$client_pid" -o args= 2>/dev/null) || args=""
@@ -209,12 +194,6 @@ resolve_terminal_location() {
 
   # A mux client: ask the shim what its focused (tiled) pane is running.
   cmd="$(MUX_BACKEND="$backend" mux::focused_command "$client_pid")"
-  if [[ -z "$cmd" && "$backend" == zellij ]]; then
-    # Zellij-only fallback: a single client's RUNNING_COMMAND, for the case
-    # where no terminal pane is focused (a plugin pane holds focus).
-    session="$(resolve_session "$client_pid" 2>/dev/null)" &&
-      cmd="$(tl_client_running_command "$session")" || cmd=""
-  fi
 
   tl_classify_command "$cmd" && return 0
   print -r -- local

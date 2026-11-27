@@ -23,7 +23,7 @@
 --   - a resize, when the nvim window fills the whole axis (nothing of nvim's
 --     own to resize), moves the Rex pane's border instead.
 --
--- A Rex pane is one with $REX_BLOCK and neither $TMUX nor $ZELLIJ — the same
+-- A Rex pane is one with $REX_BLOCK and no $TMUX — the same
 -- precedence the shell side uses, so a tmux started inside a Rex pane is not
 -- mistaken for Rex. The CLI lives in $REX_BIN_DIR (Rex exports it into every
 -- pane; the Mac app keeps the binary inside its bundle, off the login PATH).
@@ -41,7 +41,6 @@ M.RESIZE_STEP = 2
 function M.in_rex()
   return (vim.env.REX_BLOCK or "") ~= ""
     and (vim.env.TMUX or "") == ""
-    and (vim.env.ZELLIJ or "") == ""
 end
 
 function M.rex_bin()

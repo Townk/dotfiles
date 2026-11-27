@@ -1,4 +1,4 @@
-# Tests for rex-modal — the Rex twin of tmux-modal / zellij-modal: the script
+# Tests for rex-modal — the Rex twin of tmux-modal: the script
 # that runs INSIDE a Rex floating layer and hands a picker's or a widget's
 # result back, either through a capture file or by typing it into the block
 # the layer was opened over. Hermetic: `rex` is a stub that logs its argv.

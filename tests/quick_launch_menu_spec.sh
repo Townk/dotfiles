@@ -3,9 +3,9 @@
 #
 # quick-launch-pick already accepts --no-border and forwards it into its
 # pick::start args; the missing half was the dispatcher, which used to rely on
-# the QUICK_LAUNCH_NO_BORDER env var leaking through. With all four zellij
-# picker adapters moving to the --no-border flag form, `quick-launch` must
-# accept the flag (the adapter execs `quick-launch --no-border menu <kind>`)
+# the QUICK_LAUNCH_NO_BORDER env var leaking through. With the picker
+# embedders using the --no-border flag form, `quick-launch` must
+# accept the flag (an embedder runs `quick-launch --no-border menu <kind>`)
 # and pass it through to quick-launch-pick.
 #
 # Harness: copy the real dispatcher into a temp dir beside a FAKE
@@ -50,7 +50,7 @@ ZSH
   AfterEach 'cleanup'
 
   It 'forwards --no-border to the picker when passed before the subcommand'
-    # This is the adapter's own form: `quick-launch --no-border menu <kind>`.
+    # This is the embedder's own form: `quick-launch --no-border menu <kind>`.
     When run zsh "$QLM_TMP/quick-launch" --no-border menu pane
     The status should be success
     The contents of file "$REC" should include "PICKARGV: pane --no-border"

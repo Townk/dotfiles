@@ -164,7 +164,7 @@ Describe 'quick-launch on Rex'
 
   Describe 'backend selection'
     BeforeEach 'load_libs'
-    AfterEach 'unset REX_SESSION TMUX ZELLIJ'
+    AfterEach 'unset REX_SESSION TMUX'
     It 'drives Rex in a Rex pane'
       REX_SESSION=session:x
       When call ql_on_rex

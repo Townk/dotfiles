@@ -1,24 +1,16 @@
 #!/usr/bin/env zsh
-# copy-pwd — copy the focused zellij pane's working directory to the macOS
+# copy-pwd — copy the focused mux pane's working directory to the macOS
 #            clipboard, then show a Hammerspoon OSD (and play a short sound).
 #
 # Lives under ~/.config/mux/scripts/ — a mux-internal helper, not a shell
-# command; both backends call it (zellij through the context-keys plugin,
-# tmux through a run-shell bind). It is invoked *headlessly* by the zj-context-keys
-# ("context-keys") plugin via its `run` action, wired to the `Alt+w Y`
-# (and `Alt+w Ctrl+y`) leader chords in ~/.config/zellij/config.kdl.
-# Because the plugin runs the command through Zellij's host `run_command`
-# API, NO pane is spawned — so there's none of the visual flash a
-# `Run {}` keybind block produces.
+# command; both backends call it *headlessly* (tmux through a run-shell bind,
+# Rex through a Lua action), so NO pane is spawned.
 #
-# Why a PID argument instead of querying zellij:
-#   Commands launched by `run_command` do NOT reliably inherit the
-#   ZELLIJ / ZELLIJ_SESSION_NAME environment, so `zellij action
-#   list-panes` from here could fail or target the wrong session. The
-#   plugin instead passes the focused pane's ROOT PROCESS PID (its
-#   `{pid}` placeholder). We resolve that PID's current working directory
+# Why a PID argument instead of querying the mux:
+#   The caller passes the focused pane's ROOT PROCESS PID (tmux's
+#   `#{pane_pid}`). We resolve that PID's current working directory
 #   straight from the kernel (/proc on Linux, `lsof` on macOS), which needs no
-#   zellij context.
+#   mux context.
 #   For a normal shell pane the root process IS the shell, so its cwd is
 #   exactly the pane's $PWD (and tracks every `cd`).
 #
@@ -47,8 +39,8 @@ LSOF="/usr/sbin/lsof"
 # Route the copy through the pbcopy SHIM, which owns the tier logic (local
 # pasteboard, and under SSH the bridge/OSC-52 mirror to the attached client) —
 # so this no longer hand-rolls a `tmux load-buffer` OSC-52 copy. The shim is
-# addressed by ABSOLUTE path because copy-pwd runs headlessly (zellij/tmux
-# run_command) with no PATH; /usr/bin/pbcopy is the fallback when it's missing.
+# addressed by ABSOLUTE path because copy-pwd runs headlessly (tmux
+# run-shell) with no PATH; /usr/bin/pbcopy is the fallback when it's missing.
 PBCOPY="$HOME/.local/bin/pbcopy"
 [[ -x "$PBCOPY" ]] || PBCOPY="/usr/bin/pbcopy"
 
@@ -71,7 +63,7 @@ done
 # the focused block's id in $REX_BLOCK. Ask Rex for that block's foreground
 # process — which also makes this the cwd of what is RUNNING in the pane, not
 # of the shell underneath it.
-if [[ -z "$pid" && -n "${REX_BLOCK:-}" && -z "${TMUX:-}" && -z "${ZELLIJ:-}" ]]; then
+if [[ -z "$pid" && -n "${REX_BLOCK:-}" && -z "${TMUX:-}" ]]; then
   source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh" 2>/dev/null &&
     pid="$(_mux_rx_block_call "$REX_BLOCK" process | jq -r '.foreground.pid // empty' 2>/dev/null)" || pid=""
 fi

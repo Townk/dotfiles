@@ -1185,35 +1185,6 @@ bkp::tm::launch() {
       fi
       mux::split "${_split[@]}" -- "$BKP_TM_BIN" lens "$s" >/dev/null ||
         { [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"; rm -rf "$s"; return 1 }
-      # ZELLIJ ONLY: `zellij run` cannot size the pane it creates, so the
-      # new pane takes focus and is grown leftward until THIS pane (the
-      # timeline-to-be) converges on its 21-col design width. Geometry
-      # must settle HERE, while the origin tab is guaranteed active —
-      # the timeline verb can't do it later, since resize acts on the
-      # focused pane and the user may be on another tab by then. Focus
-      # STAYS on the lens: scrubbing works from inside it, and a focused
-      # timeline reads as two active panes with no visual tiebreaker.
-      if [[ "$(mux::backend)" == zellij ]]; then
-        zellij action resize increase left 2>/dev/null || :
-        if [[ -t 0 ]]; then   # /dev/tty redirection aborts headless runs
-          local i _cols
-          for i in {1..30}; do
-            _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
-            [[ -n "$_cols" ]] && (( _cols > 22 )) || break
-            zellij action resize increase left 2>/dev/null || break
-            sleep 0.05
-          done
-          # Overshoot correction: zellij's resize step is coarser than one
-          # column, so the last shrink can land below the 21-col floor —
-          # nudge the lens's left edge back until we're in the 21..22 band.
-          for i in 1 2 3 4; do
-            _cols=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
-            [[ -n "$_cols" ]] && (( _cols < 21 )) || break
-            zellij action resize decrease left 2>/dev/null || break
-            sleep 0.05
-          done
-        fi
-      fi
       (( _hop )) && mux::focus_tab "$_now_tab" 2>/dev/null || :
       "$BKP_TM_BIN" timeline "$s" || return $?
     fi
@@ -1223,7 +1194,7 @@ bkp::tm::launch() {
 }
 
 # bkp::tm::fallback <session>
-# No-Zellij sequential mode (spec §5.4): lens full-screen, then a keybar —
+# No-mux sequential mode (spec §5.4): lens full-screen, then a keybar —
 # j older / k newer / a apply / q quit — stepping relaunches the lens.
 # The dispatcher runs under set -e; this function manages its own return
 # codes, so err_exit is disabled for its body — otherwise a lens app dying

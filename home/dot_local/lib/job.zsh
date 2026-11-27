@@ -179,10 +179,10 @@ job::start() {
     # is untrusted (could error, could hang) — never attempt to drive the
     # dashboard here, just say so and let the GUI HUD be the surface.
     if [ -t 2 ]; then
-      # REX_BLOCK is inherited by a tmux or zellij started inside a Rex
-      # pane, whose own panes are where we are then: Rex is detected last
-      # (as in mux::backend).
-      if [ -n "${REX_BLOCK:-}" ] && [ -z "${TMUX:-}" ] && [ -z "${ZELLIJ:-}" ]; then
+      # REX_BLOCK is inherited by a tmux started inside a Rex pane, whose
+      # own panes are where we are then: Rex is detected last (as in
+      # mux::backend).
+      if [ -n "${REX_BLOCK:-}" ] && [ -z "${TMUX:-}" ]; then
         # A Rex pane: follow right here instead of opening a dashboard. In a
         # SUBSHELL — the follower traps signals and `exit`s on Ctrl+C, and
         # that must never take down the shell that called job::start. Its
@@ -410,8 +410,8 @@ job::_task_log() {
 # open/wait/bound machinery below is real code under the spec suite, not a
 # bypassed no-op. The real path shells to mux::new_tab (the house tab-open
 # primitive, mirroring how mux-open/edit-terminal-config open a tab running
-# a command); mux::new_tab is itself fire-and-forget (a tmux window/zellij
-# tab's spawn call returns immediately — the window's own command keeps
+# a command); mux::new_tab is itself fire-and-forget (a tmux
+# window's spawn call returns immediately — the window's own command keeps
 # running as the mux server's child, independent of this process), so this
 # function's OWN blocking read is what turns "tab requested" into "tab
 # closed", not the spawn call.
@@ -518,8 +518,7 @@ job::_theme_args() {
 }
 
 # job::_dashboard_float <troupe> [<select-id>] [<known-height>] — float `troupe jobs` in a
-# mux-modal popup (TMUX-only, per the established float gate: zellij-modal
-# is a float CONSUMER, not a SPAWNER — see mux-modal's own header) and print
+# mux-modal popup (TMUX-only, per the established float gate) and print
 # the one action line troupe hands back through the popup's --capture
 # channel. <select-id>, when given, rides the real launch as `--select` —
 # the resize wire's cursor-preservation half: a relaunch after a resize

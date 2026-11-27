@@ -21,8 +21,8 @@
 # action silently did nothing, so Ctrl+Alt+A opened a blank pane. `backend` is
 # only a tier-1 on/off selector, and any name other than "zellij" simply requires
 # all five templates to be overridden — which is what we do here: every action
-# goes through our shim wrapper, which resolves zellij-vs-tmux PER CALL from the
-# pane it is invoked in. One config, both backends, no knob to flip.
+# goes through our shim wrapper, which resolves the backend (tmux or Rex) PER
+# CALL from the pane it is invoked in. One config, both backends, no knob to flip.
 #
 # These are argv templates, not shell — no ~ expansion, hence the absolute path.
 backend = "mux"

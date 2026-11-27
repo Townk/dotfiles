@@ -12,7 +12,6 @@ get_terminal_image_protocol() {
   local term_prog="${TERM_PROGRAM:-}"
   local iterm_sess="${ITERM_SESSION_ID:-}"
   local lc_term="${LC_TERMINAL:-}"
-  local zellij_env="${ZELLIJ:-}"
   local tmux_env="${TMUX:-}"
 
   # 1. STEP ONE: Accumulate ALL protocols natively supported by the Host
@@ -29,7 +28,6 @@ get_terminal_image_protocol() {
   fi
 
   # 2. STEP TWO: Resolve capability through the multiplexer constraint.
-  # Zellij: only Sixel survives its VTE (host_support gates it).
   # tmux: the pane env LIES — tmux sets TERM_PROGRAM=tmux — so the outer
   # terminal comes from the tmux SESSION environment, which our tmux.conf
   # keeps fresh via `update-environment TERM_PROGRAM` (same trick yazi's
@@ -42,19 +40,7 @@ get_terminal_image_protocol() {
   #             text to tmux, so they persist; Ghostty has no sixel).
   # Unknown outer (e.g. detached, or over SSH without the env) → no image
   # protocol; consumers fall back to character art.
-  if [ -n "$zellij_env" ]; then
-    local has_sixel=false
-    for proto in "${host_support[@]}"; do
-      if [ "$proto" = "Sixel" ]; then
-        has_sixel=true
-        break
-      fi
-    done
-
-    if [ "$has_sixel" = true ]; then
-      final_capability+=("Sixel")
-    fi
-  elif [ -n "$tmux_env" ]; then
+  if [ -n "$tmux_env" ]; then
     local tmux_outer
     tmux_outer=$(tmux show-environment TERM_PROGRAM 2>/dev/null)
     case "${tmux_outer#TERM_PROGRAM=}" in

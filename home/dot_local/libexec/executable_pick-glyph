@@ -23,9 +23,9 @@
 #                    name                         e.g. :heart:
 #   Ctrl-P           \u{HEX} escape sequence      e.g. \u{2764}
 # The Alt- twins (Alt-Enter/G = glyph, Alt-N = shortcode, Alt-P = code-point)
-# insert WITHOUT closing the picker: the value goes to the originating zellij
-# pane when embedded (PICK_INJECT_PANE / PICK_INJECT_ZELLIJ, set by
-# zellij-modal), otherwise to the system clipboard.
+# insert WITHOUT closing the picker: the value goes to the originating mux
+# pane when embedded (PICK_INJECT_PANE, set by tmux-modal / rex-modal),
+# otherwise to the system clipboard.
 #
 # Recently-picked glyphs float to the top: each pick stamps `last_used` in the
 # DB and the query orders by it. --resume reopens with the previous query and
@@ -56,7 +56,7 @@ Inside the picker:
   Ctrl-P             output \u{HEX} escape syntax
   Alt-Enter / Alt-G  insert the glyph WITHOUT closing the picker
   Alt-N / Alt-P      same, but insert the :shortcode: / code-point
-                     (sink: the originating zellij pane when embedded,
+                     (sink: the originating mux pane when embedded,
                       else the system clipboard)
   Tab / Ctrl-A       (with --multi) mark / select-all
 
@@ -83,8 +83,8 @@ EOF
 pick_symbols::parse_args "$@"
 pick_symbols::require_db
 
-# Geometry/UI is overridable by embedders (pick-glyph-zellij sets a tall
-# height + side padding for its floating pane). The hint line shows the submit
+# Geometry/UI is overridable by embedders (the mux key bind sets side
+# padding for its floating pane). The hint line shows the submit
 # keys, the insert-and-stay (Alt) keys, and — only with --multi — the marking
 # keys (so fzf never adds a second header row).
 hb=( "󰘴 G" glyph "󰘴 N" name "󰘴 P" code-point "󰘵 G/N/P" insert )

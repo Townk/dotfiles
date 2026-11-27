@@ -1,5 +1,7 @@
 # Universal Clipboard — Project Spec
 
+> **Note (2026-11-27):** zellij support was removed from this repo; tmux and Rex are the supported multiplexers. Zellij mentions below are historical.
+
 > **Recovery note**: this file was accidentally deleted (an `rm -rf
 > ~/.local/share` during Phase 2 self-testing — a cleanup script resolved its
 > "sandbox" path from the Hammerspoon daemon's environment instead of the

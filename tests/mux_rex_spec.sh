@@ -21,7 +21,7 @@ Describe 'mux shim — Rex backend'
   Include home/dot_local/lib/mux-bootstrap.zsh
 
   Describe 'backend detection'
-    cleanup_env() { unset MUX_BACKEND ZELLIJ TMUX REX_SESSION; }
+    cleanup_env() { unset MUX_BACKEND TMUX REX_SESSION; }
     AfterEach 'cleanup_env'
 
     It 'resolves to rex in a Rex pane'
@@ -36,12 +36,6 @@ Describe 'mux shim — Rex backend'
       The output should equal "tmux"
     End
 
-    It 'lets zellij win when zellij runs inside a Rex pane'
-      REX_SESSION="session:x" ZELLIJ=0
-      When call mux::backend
-      The output should equal "zellij"
-    End
-
     It 'accepts MUX_BACKEND=rex as an explicit override'
       MUX_BACKEND=rex TMUX="/tmp/sock,1,0"
       When call mux::backend
@@ -53,7 +47,7 @@ Describe 'mux shim — Rex backend'
       The output should equal "none"
     End
 
-    It 'does not count a Rex pane as "in a tmux or zellij session"'
+    It 'does not count a Rex pane as "in a tmux session"'
       # .zshrc relies on this distinction; see the comment on its autostart gate.
       REX_SESSION="session:x"
       When call mux::in_session
@@ -73,13 +67,13 @@ Describe 'mux shim — Rex backend'
       The stderr should include "no implementation for backend 'wezmux'"
     End
 
-    It 'fails loudly on a verb that used to fall through to zellij (attached_sessions)'
+    It 'fails loudly on attached_sessions, which used to fall through to another backend'
       When call mux::attached_sessions
       The status should be failure
       The stderr should include "wezmux"
     End
 
-    It 'fails loudly on terminal_size, the other old zellij fallthrough'
+    It 'fails loudly on terminal_size, the other old fallthrough'
       When call mux::terminal_size
       The status should be failure
       The stderr should include "wezmux"

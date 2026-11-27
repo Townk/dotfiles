@@ -61,8 +61,7 @@ no child panes).
 The command prefix is assembled as
 `cd <cwd>; <python_venv>; <mise_env>; <command>`.
 
-When opened as a **tab**, the target inherits the default `new_tab_template` (so
-the `zj-hud` bar and floating which-key/search panes are present). A command
+When opened as a **tab**, the target inherits the session's chrome. A command
 target (`Edit`/`Run`/`Remote`) runs as the tab's initial command and the tab
 closes when that command exits; a `Shell` tab is a plain interactive shell.
 
@@ -85,7 +84,7 @@ a separate OS window with the picker's Alt+Enter.
 
 | key             | type | description                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `nested_mux` | bool | When true, the session is built for hosting another full multiplexer (e.g. a remote over SSH). The workspace's `Run`/`Remote` action runs directly as the sole pane's command (no login-shell tab, so no MOTD flash) and every key is forwarded verbatim to the inner mux. **Zellij**: a generated bar-less layout in plain `normal` mode with `clear-defaults=true` keybinds (Locked mode is unreachable for a custom-layout session in Zellij 0.44, so passthrough is achieved by clearing bindings instead). **tmux** (D14): `prefix None`, `status off` and the `nested` key table. Either way the local bindings are `Ctrl+Alt+Space` and — on tmux — the MEH-s spellings themselves, so `Cmd+Shift+S` summons the LOCAL workspace picker from both terminals rather than passing through to the remote's. (WezTerm reaches the same bind by substituting `Ctrl+Alt+Space` when `nested-session-check` says the pane is nested; Ghostty cannot branch, which is why the split lives in the key table.) `Cmd+Shift+Alt+S` reaches the REMOTE's picker instead, by forwarding the leader chord — MEH-s cannot serve there, since the nested table now eats those bytes. The old key `nested_zellij` is still read as an alias, so existing definitions keep working. |
+| `nested_mux` | bool | When true, the session is built for hosting another full multiplexer (e.g. a remote over SSH). The workspace's `Run`/`Remote` action runs directly as the sole pane's command (no login-shell tab, so no MOTD flash) and every key is forwarded verbatim to the inner mux. **tmux** (D14): `prefix None`, `status off` and the `nested` key table. Either way the local bindings are `Ctrl+Alt+Space` and — on tmux — the MEH-s spellings themselves, so `Cmd+Shift+S` summons the LOCAL workspace picker from both terminals rather than passing through to the remote's. (WezTerm reaches the same bind by substituting `Ctrl+Alt+Space` when `nested-session-check` says the pane is nested; Ghostty cannot branch, which is why the split lives in the key table.) `Cmd+Shift+Alt+S` reaches the REMOTE's picker instead, by forwarding the leader chord — MEH-s cannot serve there, since the nested table now eats those bytes. The old key `nested_zellij` is still read as an alias, so existing definitions keep working. |
 | `color` | string | Optional named tint from `~/.config/wezterm/tint-palette.toml` for a nested workspace opened in a separate Ghostty window. Use this when a wrapper hides the SSH destination from automatic command classification — the classification itself still reads the workspace's own command, not the `tmux attach` the window runs. |
 
 ## Nesting
@@ -121,7 +120,6 @@ that lacks the project. Adding the project later requires re-running
 ```
 quick-launch menu   pane|tab|workspace        # fuzzy-pick, then open
 quick-launch open   pane|tab|workspace ID     # open directly (focus-or-create)
-quick-launch layout pane|tab|workspace ID     # print generated KDL / command
 quick-launch list  [pane|tab|workspace]       # list defined targets
 quick-launch rows   pane|tab|workspace        # picker rows as TSV (Rex palette)
 quick-launch pick   pane|tab|workspace ID     # open + record recency (Rex palette)
@@ -129,7 +127,7 @@ quick-launch pick   pane|tab|workspace ID     # open + record recency (Rex palet
 
 ## On Rex
 
-Rex is a backend like tmux and zellij; the targets above are unchanged. What
+Rex is a backend like tmux; the targets above are unchanged. What
 differs:
 
 - The picker is Rex's native palette, fed by `quick-launch rows` (id, title,

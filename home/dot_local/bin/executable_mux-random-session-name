@@ -38,7 +38,7 @@ TITLE CASE
 
 MUTATING MODES
   --apply-current
-      Generate a name and rename the current tmux or Zellij session.
+      Generate a name and rename the current tmux or Rex session.
       This option must be run from inside a multiplexer session.
 
   --apply SESSION
@@ -46,12 +46,11 @@ MUTATING MODES
       and is used by the automatic tmux anonymous-session hook.
 
 BACKEND SELECTION
-  Inside a session, the active tmux or Zellij backend is used.
+  Inside a session, the active tmux or Rex backend is used.
   Outside a session, MUX_BACKEND overrides the configured default backend;
   otherwise the configured default is used.
 
-  Name availability follows mux::list_sessions: tmux checks live sessions,
-  while Zellij also checks exited sessions that can be resurrected.
+  Name availability follows mux::list_sessions (the live sessions).
 
 OUTPUT
   On success, prints exactly one generated name to standard output. On any
@@ -67,8 +66,8 @@ EXIT STATUS
   2  Command-line usage was invalid.
   3  The sessions could not be listed, so no name could be checked and none
      was printed. Only with --title or on Rex, which accept two sessions
-     with the same name; tmux and Zellij refuse a duplicate themselves, and
-     a failed listing there means no server, hence no sessions.
+     with the same name; tmux refuses a duplicate itself, and a failed
+     listing there means no server, hence no sessions.
 
 EXAMPLES
   mux-random-session-name
@@ -76,7 +75,7 @@ EXAMPLES
   name=$(mux-random-session-name --title)
   mux-random-session-name --apply-current
   mux-random-session-name --apply Main
-  MUX_BACKEND=zellij mux-random-session-name --apply scratch
+  MUX_BACKEND=tmux mux-random-session-name --apply scratch
 EOF
 }
 
@@ -162,8 +161,8 @@ nouns=(
   tomato triceratops ukulele viola weasel xylophone yak zebra
 )
 
-# A listing that FAILED is not an empty one. tmux and Zellij refuse a second
-# session with a taken name themselves, and a failed listing there is the
+# A listing that FAILED is not an empty one. tmux refuses a second
+# session with a taken name itself, and a failed listing there is the
 # ordinary "no server, so no sessions" — the name is still good. Rex accepts
 # duplicate labels, so on Rex (and for --title, which only Rex uses) this
 # check is the only guard: without a listing, say so and print no name. The

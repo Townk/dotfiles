@@ -1,15 +1,11 @@
 # spec_helper.sh — suite-wide hermetic guard for ShellSpec tests.
 #
-# Unset ambient Zellij environment variables so specs that do NOT explicitly
-# stub/set ZELLIJ always take the non-Zellij (test) path.  Specs that need
-# Zellij (workers, action-broker, zellij_spec, assist-agent-common) export
-# ZELLIJ=1 themselves in their BeforeEach/setup(), which runs per-example and
-# takes precedence over this module-level unset.
-unset ZELLIJ ZELLIJ_PANE_ID ZELLIJ_SESSION_NAME
-# Same hermetic guard for tmux (the mux.zsh shim dispatches on $TMUX): specs
-# that need the tmux backend export TMUX themselves in their setup().
+# Unset the ambient tmux environment (the mux.zsh shim dispatches on $TMUX) so
+# specs that do NOT explicitly set it always take the no-mux path: specs that
+# need the tmux backend export TMUX themselves in their setup(), which runs
+# per-example and takes precedence over this module-level unset.
 unset TMUX TMUX_PANE
-# And for Rex, the third backend: every pane Rex starts exports these, so a
+# And for Rex, the other backend: every pane Rex starts exports these, so a
 # suite launched from a Rex pane would otherwise resolve `mux::backend` to rex
 # in every spec that expects "none". REX_SERVER goes too — a spec that drives
 # rex must name its own scratch server, never inherit the developer's live one.

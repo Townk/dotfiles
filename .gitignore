@@ -59,7 +59,6 @@ home/dot_config/wezterm/colors/chezmoi-system.toml
 home/dot_config/wezterm/tint-palette.toml
 home/dot_config/bat/themes/chezmoi-system.tmTheme
 home/dot_config/glow/chezmoi-system.json
-home/dot_config/zellij/themes/chezmoi-system*.kdl
 home/dot_config/yazi/flavors/chezmoi-system.yazi/
 home/dot_config/yazi/theme.toml
 home/dot_config/zsh/themes.sh

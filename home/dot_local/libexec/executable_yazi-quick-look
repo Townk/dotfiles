@@ -28,7 +28,7 @@
 #
 # SSH or non-macOS: Quick Look can't reach this screen — float the unified
 # `preview` render in the mux instead (same UX as the fzf-tab floating
-# preview): a zellij float or a tmux popup, whichever backend this pane is
+# preview): a tmux popup or a Rex layer, whichever backend this pane is
 # in. Outside any mux there is nowhere to draw either → quiet no-op.
 
 emulate -L zsh
@@ -86,7 +86,7 @@ main() {
   # terminal viewer, the same one Ctrl+O and CMD+click use. Only INSIDE a mux
   # though — with no tab or float to put it in, term-quick-view would render
   # inline over yazi's own UI. Outside one this stays a quiet no-op.
-  if [[ -n "${TMUX:-}${ZELLIJ:-}" ]] && command -v term-quick-view >/dev/null 2>&1; then
+  if [[ -n "${TMUX:-}" ]] && command -v term-quick-view >/dev/null 2>&1; then
     term-quick-view "$1"
     return $?
   fi

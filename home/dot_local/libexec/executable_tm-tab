@@ -3,15 +3,8 @@
 # (yazi's `g t` lands here; works from any shell inside a mux too).
 # Args are tm's: a path (dir = explore, file = scoped diff), --diff, etc.
 #
-# ZELLIJ: the tab is spawned WITH the session command baked into a generated
-# layout — nothing is typed into panes (the old write-chars route raced
-# tab-construction focus, spraying keys into plugin panes or the origin
-# yazi). The layout derives from the deployed default.kdl, so the tab
-# keeps the full zj-hud chrome its default_tab_template provides.
-#
-# TMUX: none of that is needed — `new-window` takes the command directly and
-# the window inherits the session's chrome, so the whole layout dance is
-# skipped (migration Phase 6.6).
+# `mux::new_tab` takes the command directly and the tab inherits the
+# session's chrome, so there is no layout to generate.
 emulate -L zsh
 set -u
 
@@ -42,47 +35,7 @@ for a in "$@"; do
 done
 local name="${${anchor:a}:t}"
 
-# tmux: a window takes the command directly — no layout, no escaping dance.
-if [[ "$(mux::backend)" == tmux ]]; then
-  mux::new_tab --name "tm: $name" \
-    -- "$HOME/.local/bin/system-backup" browse "${@:-$PWD}"
-  return $?
-fi
-
-# The pane runs zsh -c so the session sees the full user environment
-# (.zshenv always runs); (q) shell-quotes each arg into that command
-# line, then the whole line is KDL-escaped (backslash first, quotes
-# second) to survive the layout file.
-local -a cmd=(exec "$HOME/.local/bin/system-backup" browse "${@:-$PWD}")
-local sh_line="${(j: :)${(@q)cmd}}"
-local kdl="${sh_line//\\/\\\\}"
-kdl="${kdl//\"/\\\"}"
-local kname="tm: ${name//\\/\\\\}"
-kname="${kname//\"/\\\"}"
-
-local base="${TM_TAB_LAYOUTS:-${XDG_CONFIG_HOME:-$HOME/.config}/zellij/layouts}/default.kdl"
-local layout
-layout=$(mktemp "${TMPDIR:-/tmp}/tm-tab.XXXXXX") || exit 1
-{
-  if [[ -r "$base" ]]; then
-    # Everything but the closing brace: pane templates and the
-    # default_tab_template (chrome + floating which-key panes) — the
-    # tab node below gets wrapped by it.
-    sed '$d' "$base"
-  else
-    print 'layout {'   # chrome-less fallback: still a working session
-  fi
-  print -r -- "    tab name=\"$kname\" focus=true {"
-  print -r -- "        pane command=\"/bin/zsh\" {"
-  print -r -- "            args \"-c\" \"$kdl\""
-  print -r -- "            close_on_exit true"
-  print -r -- "        }"
-  print -r -- "    }"
-  print '}'
-} > "$layout"
-
-zellij action new-tab --name "$kname" --layout "$layout"
-local rc=$?
-# The server reads the file on its own clock — reap it off the fast path.
-( sleep 5; rm -f "$layout" ) &!
-return $rc
+# A tab takes the command directly — no layout, no escaping dance.
+mux::new_tab --name "tm: $name" \
+  -- "$HOME/.local/bin/system-backup" browse "${@:-$PWD}"
+return $?

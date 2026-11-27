@@ -88,7 +88,6 @@ alias zcp="noglob zmv -C"
 alias zln="noglob zmv -L"
 alias vim="nvim"
 alias vi="nvim"
-alias zj="zellij"
 alias t="tmux"
 
 ## git aliases

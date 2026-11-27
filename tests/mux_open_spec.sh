@@ -3,7 +3,7 @@
 # Two callers with different knowledge reach it, which is the whole reason its
 # argument handling is shaped the way it is:
 #
-#   * WezTerm's `open-uri` Lua hook, from the GUI, where $TMUX/$ZELLIJ say
+#   * WezTerm's `open-uri` Lua hook, from the GUI, where $TMUX says
 #     nothing. It knows the mux CLIENT pid and nothing else, so the script
 #     derives backend + session from that process.
 #   * tmux's ⌥+click binding, which runs inside the server and already knows

@@ -1,8 +1,8 @@
 # keymap.yaml — THE authoritative mux keymap (migration Phase 5/5.2).
 # Single source for: the generated tmux mode tables (keymap.conf.tmpl), the
-# which-key PANEL's own dispatcher + labels (whichkey.data → mux-whichkey),
-# and later the zellij KDL (Phase 8). Everything the panel shows and every
-# key it dispatches comes from here, so the two can never drift.
+# which-key PANEL's own dispatcher + labels (whichkey.data → mux-whichkey).
+# Everything the panel shows and every key it dispatches comes from here, so
+# the two can never drift.
 #
 # entry fields: keys[] (tmux key names; several = variants shown merged,
 # e.g. Up + k → "↑,K"), desc, icon, color (palette slot), cmd (tmux command

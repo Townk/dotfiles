@@ -1,13 +1,10 @@
 # Tests for lib/dispatch-tmux.zsh — the quick-launch tmux backend (mux
-# migration Phase 3). A stub tmux records every invocation; the zellij path
-# is proven untouched by zellij_spec + the byte-identical dispatch functions
-# (only the entry branches changed).
+# migration Phase 3). A stub tmux records every invocation.
 Describe 'quick-launch tmux dispatch'
   setup() {
     TEST_TMP=$(mktemp -d)
     TX_LOG="$TEST_TMP/tmux-calls.log"
     WINDOW_LOG="$TEST_TMP/window-calls.log"
-    unset ZELLIJ
     export TMUX=/tmp/sock,1,0
     stub="$TEST_TMP/tmux"
     {
@@ -91,8 +88,8 @@ EOF
 
   # The window used to run the ssh directly, with no outer tmux at all — which
   # left it without a local mux, so the workspace picker was unreachable from a
-  # remote window on either terminal. Zellij's window path always attached to
-  # the bar-less nested layout; this is the tmux twin of that.
+  # remote window on either terminal. The window now attaches to a bar-less
+  # nested session instead.
   It 'wraps a nested workspace window in a bar-less outer tmux session'
     When call ql_dispatch_window remote
     The contents of file "$TX_LOG" should include "new-session -d -s Remote"

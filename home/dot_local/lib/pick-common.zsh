@@ -32,9 +32,9 @@
 #                      search and ctrl-u clears/hides search by default.
 #
 # Insert-without-dismiss is wired through `--key-background` (see the
-# option list below): the sink is the originating zellij pane when
-# PICK_INJECT_PANE / PICK_INJECT_ZELLIJ are exported (the zellij-modal
-# embed), else the system clipboard.
+# option list below): the sink is the originating mux pane when
+# PICK_INJECT_PANE and PICK_INJECT_TMUX / PICK_INJECT_REX are exported (the
+# tmux-modal / rex-modal embed), else the system clipboard.
 #
 # Simple picker API:
 #   PICK_NAME=pick-host source "$HOME/.local/lib/pick-common.zsh"
@@ -95,7 +95,7 @@
 #   #   --key-background KEY:SPEC (repeatable; on KEY, emit SPEC of the current
 #   #     row to the sink WITHOUT dismissing the picker — insert-and-stay)
 #   #   --on-key-background FUNC (in-process zsh function run with each background
-#   #     emission; default sink injects into the zellij pane / clipboard)
+#   #     emission; default sink injects into the mux pane / clipboard)
 #   #   --header TEXT, --hints TEXT, --query TEXT, --height N, --margin SPEC,
 #   #   --padding SPEC, --input-border LABEL, --no-border, --no-hints
 #   #   --preview CMD, --preview-window SPEC (ctrl-space toggles the preview
@@ -410,15 +410,14 @@ pick::build_fzf_args() {
   local NBSP=$'\u00a0'
   # Every picker is a mantle dialog — the same neutral dark modal on host and
   # remote alike (mantle is shared across machines under one theme). The remote
-  # identity is carried by the window tint and the zj-hud bar, never the dialog.
+  # identity is carried by the window tint and the status bar, never the dialog.
   local pick_bg="$C_ROLE_UI_DIALOG_BG"  # modal canvas = dialog_bg (mantle)
   typeset -gA pick_ui
-  # "fzf owns the box": a borderless zellij modal (zellij-modal --no-chrome)
-  # exports ZJ_MODAL_TITLE. fzf then renders the WHOLE modal — full-screen, its
-  # own rounded --border as the (mantle) outer box, with "▓▓▓ <title>" on the
-  # border label — instead of leaning on a zellij frame + a script title block
-  # (zellij can't tint a floating frame's border background per-pane).
-  # A borderless zellij modal (zellij-modal --no-chrome) exports ZJ_MODAL_TITLE.
+  # "fzf owns the box": a borderless modal (tmux-modal / rex-modal
+  # --no-chrome) exports ZJ_MODAL_TITLE — the name is the removed zellij
+  # modal's, kept. fzf then renders the WHOLE modal — full-screen, its own
+  # rounded --border as the (mantle) outer box, with "▓▓▓ <title>" on the
+  # border label — instead of leaning on a mux frame + a script title block.
   # Two ways to render it:
   #   * frame compositor (preferred): `troupe frame` (the pty-frame port —
   #     troupe consolidation) draws the outer box + "▓▓▓ title" + rule and runs
@@ -806,16 +805,12 @@ pick::start_add_key_output() {
 # fzf stays open. Globals pick_background_fifo / pick_background_broker drive teardown.
 
 # Default sink when --on-key-background is omitted: inject the formatted text
-# into the originating zellij pane (embed mode) or, failing that, the clipboard.
+# into the originating mux pane (embed mode) or, failing that, the clipboard.
 pick::background_sink() {
   local text=$1
-  if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_ZELLIJ:-}" ]]; then
-    ${(z)PICK_INJECT_ZELLIJ} action write-chars --pane-id "$PICK_INJECT_PANE" -- "$text"
-    return 0
-  fi
-  # tmux twin (mux migration Phase 2): tmux-modal exports PICK_INJECT_TMUX
-  # beside PICK_INJECT_PANE (a tmux %pane id); send-keys -l is the literal
-  # write-chars equivalent.
+  # tmux (mux migration Phase 2): tmux-modal exports PICK_INJECT_TMUX
+  # beside PICK_INJECT_PANE (a tmux %pane id); send-keys -l writes the text
+  # literally.
   if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_TMUX:-}" ]]; then
     # Strip VS16: zsh counts a VS16 emoji as 1 cell, tmux renders 2, and the
     # width drift corrupts the ZLE line (see tmux-modal, same strip there).

@@ -1,5 +1,7 @@
 # Silo & Integration Map — chezmoi dotfiles repo
 
+> **Note (2026-11-27):** zellij support was removed from this repo; tmux and Rex are the supported multiplexers. Zellij mentions below are historical.
+
 A dispatch guide for parallel agents. Each silo is a **bounded ownership area**
 an agent can work in without stepping on other agents, plus the **contracts**
 it must preserve (the seams other silos depend on) and the **dependencies** it

@@ -39,19 +39,6 @@ esac
 ZSH
     chmod +x "$MSN_TMP/tmux"
 
-    cat >"$MSN_TMP/zellij" <<'ZSH'
-#!/usr/bin/env zsh
-case "$*" in
-  "list-sessions -s")
-    print -l -- "${(@f)STUB_SESSIONS}"
-    ;;
-  *"action rename-session "*)
-    print -r -- "$*" >>"$MSN_LOG"
-    ;;
-esac
-ZSH
-    chmod +x "$MSN_TMP/zellij"
-
     # Rex: `ls --json` answers from STUB_SESSIONS (labels), or fails the way
     # the CLI does with no server to talk to.
     cat >"$MSN_TMP/rex" <<'ZSH'
@@ -84,14 +71,6 @@ ZSH
   apply_tmux_target() {
     env MUX_LIB="$MSN_LIB" MUX_BACKEND=tmux MUX_TMUX_BIN="$MSN_TMP/tmux" \
       MUX_TMUX_SOCKET="$MSN_TMP/socket" zsh "$MSN_SCRIPT" --apply "$1"
-  }
-  apply_zellij_current() {
-    env MUX_LIB="$MSN_LIB" MUX_BACKEND=zellij ZELLIJ_BIN="$MSN_TMP/zellij" \
-      ZELLIJ=1 ZELLIJ_SESSION_NAME=old-name zsh "$MSN_SCRIPT" --apply-current
-  }
-  apply_zellij_target() {
-    env MUX_LIB="$MSN_LIB" MUX_BACKEND=zellij ZELLIJ_BIN="$MSN_TMP/zellij" \
-      zsh "$MSN_SCRIPT" --apply "$1"
   }
   rename_calls() { grep -c 'rename-session' "$MSN_LOG" || true; }
   short_help_matches() {
@@ -167,7 +146,7 @@ ZSH
   # FAILED is not an empty one: the script must say it could not check
   # (status 3, no name) rather than print a name it never compared.
   generate_rex() {
-    env MUX_LIB="$MSN_LIB" MUX_BACKEND= TMUX= ZELLIJ= REX_SESSION=session:here \
+    env MUX_LIB="$MSN_LIB" MUX_BACKEND= TMUX= REX_SESSION=session:here \
       MUX_REX_BIN="$MSN_TMP/rex" zsh "$MSN_SCRIPT" "$@"
   }
   unguarded_rex_calls() { grep -v -c -- '--autostart=false' "$MSN_LOG" || true; }
@@ -213,7 +192,7 @@ ZSH
 1"
   End
 
-  # tmux and Zellij refuse a duplicate name themselves, and a listing that
+  # tmux refuses a duplicate name itself, and a listing that
   # fails there is the ordinary "no server, so no sessions" — still a name.
   It 'still prints a hyphenated name when a tmux listing fails'
     export STUB_LIST_FAILS=1
@@ -330,21 +309,6 @@ ZSH
     When call env MUX_LIB="$MSN_LIB" zsh "$MSN_SCRIPT" --apply-current
     The status should be failure
     The error should include "requires a mux session"
-  End
-
-  It 'renames the current Zellij session through the mux API'
-    When call apply_zellij_current
-    The status should be success
-    The output should match pattern "*-*"
-    The contents of file "$MSN_LOG" should match pattern "action rename-session *-*"
-    The contents of file "$MSN_LOG" should not include "--session"
-  End
-
-  It 'targets a named Zellij session through the global selector'
-    When call apply_zellij_target old-name
-    The status should be success
-    The output should match pattern "*-*"
-    The contents of file "$MSN_LOG" should match pattern "--session old-name action rename-session *-*"
   End
 
   It 'installs a numeric-only automatic tmux naming hook'

@@ -34,7 +34,7 @@ EOS
   AfterEach 'cleanup'
 
   edit() {
-    env -u TMUX -u ZELLIJ REX_SESSION=session:s REX_BLOCK="${ES_BLOCK-block:origin}" TMPDIR="$ES_TMP" \
+    env -u TMUX REX_SESSION=session:s REX_BLOCK="${ES_BLOCK-block:origin}" TMPDIR="$ES_TMP" \
       MUX_REX_BIN="$ES_TMP/rex" MUX_LIB="$LIB" zsh "$SCRIPT" 2>"$ES_TMP/err"
     print -r -- "rc=$?"
   }

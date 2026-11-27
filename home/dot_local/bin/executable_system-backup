@@ -67,7 +67,7 @@ Usage:
   system-backup browse [--diff] [--deleted] [path]
 
 Open a scrub session anchored at [path] (default \$PWD): a timeline pane
-(under Zellij) or keybar (without it) steps through snapshots while a lens
+(inside a mux) or keybar (without one) steps through snapshots while a lens
 pane follows along. Lens picks itself — explore (yazi, jailed) for a
 directory, diff (hunk) for a file; --diff/--deleted force the diff lens.
 Explore needs macFUSE for the restic mount; without it, explore errors with

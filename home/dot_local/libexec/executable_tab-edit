@@ -1,18 +1,18 @@
 #!/usr/bin/env zsh
 #
-# tab-edit — Open file(s) in Neovim inside WezTerm/Zellij
+# tab-edit — Open file(s) in Neovim inside WezTerm/tmux
 #
 # WHAT
 #   Smart launcher that opens its file arguments in nvim inside the focused
-#   Zellij session when WezTerm is currently hosting one, falling back to the
-#   existing bare-WezTerm nvim tab when no Zellij client can be resolved. Tab
+#   mux session when WezTerm is currently hosting one, falling back to the
+#   existing bare-WezTerm nvim tab when no mux client can be resolved. Tab
 #   title is derived from the arguments: bare → "NeoVim", one file → its
 #   basename, many → "<first> +N".
 #
 # HOW
-#   Zellij path: ask WezTerm for the active pane TTY, find the Zellij client
+#   Mux path: ask WezTerm for the active pane TTY, find the tmux client
 #   running there, resolve its session through the mux shim, and
-#   run `zellij --session <name> action new-tab -- nvim "$@"`.
+#   open a tab there with `mux::new_tab --session <name> -- nvim "$@"`.
 #   Fallback path: raise the app (platform::raise_app), `wezterm cli spawn --
 #   nvim "$@"` (which auto-connects to the running GUI), capture the spawned
 #   PANE_ID, and `wezterm cli set-tab-title --pane-id <id>`.
@@ -105,13 +105,13 @@ EOF
   [ -n "$ACTIVE_TTY" ] || return 1
 
   CLIENT_PID=$(ps -t "${ACTIVE_TTY#/dev/}" -o pid=,comm= 2>/dev/null |
-    awk '$2 ~ /zellij|tmux/ {print $1; exit}')
+    awk '$2 ~ /tmux/ {print $1; exit}')
   [ -n "$CLIENT_PID" ] || return 1
 
   # shellcheck source=/dev/null
   . "$MUX_SHIM"
   # The backend comes from the CLIENT PROCESS: this runs from a desktop
-  # handler, outside any session, where $ZELLIJ/$TMUX say nothing.
+  # handler, outside any session, where $TMUX says nothing.
   MUX_BACKEND=$(mux::backend_for_pid "$CLIENT_PID")
   export MUX_BACKEND
   MUX_SESSION=$(mux::resolve_session "$CLIENT_PID" 2>/dev/null) || return 1

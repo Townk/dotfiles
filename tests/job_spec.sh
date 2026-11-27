@@ -1189,7 +1189,7 @@ EOF
 
   # mux::confirm is the house dialog layer (ask/ai-playbook floated in a mux
   # popup inside a session, inline input::confirm otherwise). The sandbox
-  # here has no TMUX/ZELLIJ (spec_helper.sh unsets both suite-wide), so
+  # here has no TMUX (spec_helper.sh unsets it suite-wide), so
   # mux::confirm takes the inline input::confirm path, which shells out to
   # ai-playbook — AI_PLAYBOOK_INPUT_BIN is its documented test seam
   # (input-common.zsh's _input::bin).

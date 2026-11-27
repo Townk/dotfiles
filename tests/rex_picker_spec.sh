@@ -28,7 +28,7 @@ EOS
   AfterEach 'cleanup'
 
   picker() {
-    env -u TMUX -u ZELLIJ HOME=/home/u REX_SESSION=session:s REX_BLOCK="${RP_BLOCK-block:origin}" \
+    env -u TMUX HOME=/home/u REX_SESSION=session:s REX_BLOCK="${RP_BLOCK-block:origin}" \
       MUX_REX_BIN="$RP_TMP/rex" MUX_LIB="$LIB" zsh "$PICKER" "$@" 2>"$RP_TMP/err"
     print -r -- "rc=$?"
   }

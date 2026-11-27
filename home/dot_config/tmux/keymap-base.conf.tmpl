@@ -668,10 +668,8 @@ bind -T copy-mode-vi M-p run-shell -b "{{ .chezmoi.homeDir }}/.config/mux/script
 
 # ---------------------------------------------------------------------------
 # Pickers (Phase 2) — glyph / gitmoji / clipboard popups via tmux-modal.
-# The zellij twins are the zellijModalRun keybinds (config.kdl); geometry and
-# chrome contract match (fzf owns the box, -B borderless popup). The libexec
-# pickers are called directly — the pick-*-zellij thins carry zellij-only
-# glue; resume variants (prefix U/G) reopen with --resume like the leader
+# Chrome contract: fzf owns the box, -B borderless popup. The libexec
+# pickers are called directly; resume variants (prefix U/G) reopen with --resume like the leader
 # chords.
 bind -n C-S-u run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GLYPH_PADDING=0,2,0,2 "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Glyph Picker\" --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-glyph"'
 bind -n C-S-g run-shell -b '{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GITMOJI_PADDING=0,2,0,2 "{{ .chezmoi.homeDir }}/.config/mux/scripts/tmux-modal --title \"Gitmoji Picker\" --inject --no-chrome -- {{ .chezmoi.homeDir }}/.local/libexec/pick-gitmoji"'

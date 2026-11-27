@@ -17,7 +17,7 @@ Describe 'theme-common.zsh'
     The output should equal "━━━━━━"
   End
 
-  # Regression: theme::rule is called by zellij-modal, which runs under
+  # Regression: theme::rule is called by the modal scripts, which run under
   # `set -euo pipefail`. A bare ${(l:cols::━:)} fill aborts under nounset
   # ("parameter not set"), silently killing every modal dialog before it
   # spawns its target. Run in a real nounset shell to guard that path.

@@ -737,7 +737,7 @@ block:b9"
     It 'follows a --modal job inline in a Rex pane, with no watch or tab'
       inline() {
         export JOB_SANDBOX REX_BLOCK=block:x
-        unset TMUX ZELLIJ
+        unset TMUX
         run_tty job::start --modal --title "watched" -- sleep 1 || return 1
         id=$(cat "$JOB_SANDBOX/printed")
         [ -d "$JOB_STATE_ROOT/$id" ] || return 3
@@ -756,7 +756,7 @@ block:b9"
     It 'neither follows nor watches a --modal job without a terminal'
       headless() {
         export JOB_SANDBOX REX_BLOCK=block:x
-        unset TMUX ZELLIJ
+        unset TMUX
         zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99; shift
           job::follow() { print -r -- "follow $*" >> "$JOB_SANDBOX/calls"; }
@@ -773,22 +773,18 @@ block:b9"
 1"
     End
 
-    # A tmux or zellij started inside a Rex pane inherits REX_BLOCK, but its
-    # own panes are where we are: Rex is detected last.
-    It 'opens the watch dashboard inside tmux or zellij in a Rex pane'
+    # A tmux started inside a Rex pane inherits REX_BLOCK, but its own
+    # panes are where we are: Rex is detected last.
+    It 'opens the watch dashboard inside tmux in a Rex pane'
       nested() {
         export JOB_SANDBOX REX_BLOCK=block:x
-        unset ZELLIJ
         TMUX="fake/sock,1,0" run_tty job::start --modal --title "watched" \
           -- sleep 1 || return 1
         unset TMUX
-        ZELLIJ=0 run_tty job::start --modal --title "watched" \
-          -- sleep 1 || return 2
         calls | sed 's/ *$//'
       }
       When call nested
-      The output should equal "watch
-watch"
+      The output should equal "watch"
     End
 
     It 'still opens the watch dashboard for a --modal job outside Rex'
@@ -805,7 +801,7 @@ watch"
     It 'keeps the caller alive when the inline follower exits'
       survive() {
         export JOB_SANDBOX REX_BLOCK=block:x
-        unset TMUX ZELLIJ
+        unset TMUX
         with_tty zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99
           job::follow() { exit 7; }
@@ -825,7 +821,7 @@ watch"
       captured() {
         local id
         export JOB_SANDBOX REX_BLOCK=block:x
-        unset TMUX ZELLIJ
+        unset TMUX
         with_tty zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99
           job::follow() { print -r -- follower-marker; }

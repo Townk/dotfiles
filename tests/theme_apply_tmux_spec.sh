@@ -2,8 +2,8 @@
 # Sandbox $HOME (not just XDG vars: theme-apply is exec'd as a fresh zsh, which
 # would source the real ~/.zshenv → environment.sh and re-export the XDG vars
 # back to the real config dirs — a sandbox $HOME has no zshenv to clobber with)
-# + a PATH-shimmed `tmux` that records its argv; the zellij canonical kdl is
-# absent so only the tmux (and json/zsh) branches run.
+# + a PATH-shimmed `tmux` that records its argv, so the tmux (and json/zsh)
+# branches run against the sandbox.
 Describe 'theme-apply (tmux branch)'
   setup() {
     SANDBOX=$(mktemp -d)

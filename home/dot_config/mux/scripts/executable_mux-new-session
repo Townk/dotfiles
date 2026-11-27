@@ -15,7 +15,7 @@
 # moment they appear, so a name captured from `new-session -P` could already be
 # gone by the time switch-client asked for it.
 #
-# tmux only — Zellij's session mode answers `s` with the session-manager plugin.
+# tmux only.
 
 set -euo pipefail
 

@@ -7,10 +7,10 @@
 # declared snaps without trying to remove snapd-managed base/platform snaps.
 #
 # No current dev-shell snaps. Reserve this for classic-confined apps that are
-# better as snaps than as mise binaries. Do NOT list mise, atuin, zellij, or
+# better as snaps than as mise binaries. Do NOT list mise, atuin, or
 # neovim here:
 #   - snap mise symlinks its tool shims to /snap/bin/mise, which breaks
 #     shim execution (tools resolve to the snap dispatcher).
 #   - snap atuin is strict-confined and cannot write ~/.local/share/atuin.
-#   - zellij and neovim must survive dev-shell reboots, so they are installed
+#   - neovim must survive dev-shell reboots, so it is installed
 #     in $HOME via mise instead of snap's system state.

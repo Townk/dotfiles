@@ -215,3 +215,28 @@ README.md
 # `system-service sync` as an orphan; this drops its wrapper, which every
 # profile received. .local/libexec is ignored on no profile.
 .local/libexec/croc-relay
+
+# ── zellij support removed (2026-11-27) ────────────────────────────────────
+# The zellij backend of the mux shim, its config, layout, plugin tooling and
+# floating-modal scripts left the source tree; tmux and Rex are the supported
+# multiplexers. Explicit files only, never the directories: ~/.config/zellij
+# may hold the owner's own files, and ~/.local/share/zellij/plugins the
+# downloaded wasms — neither was ever chezmoi-managed. The two themes/*.kdl
+# files were never managed either: generate-theme.sh rendered the base and
+# theme-apply derived the effective one from it (same case as the theme
+# outputs above). .config/zellij and .local/lib are ignored on no profile.
+.config/zellij/config.kdl
+.config/zellij/ensure-plugins
+.config/zellij/grant-plugin-permissions
+.config/zellij/layouts/default.kdl
+.config/zellij/scripts/pick-clipboard-zellij
+.config/zellij/scripts/pick-gitmoji-zellij
+.config/zellij/scripts/pick-glyph-zellij
+.config/zellij/scripts/quick-launch-zellij
+.config/zellij/scripts/zellij-modal
+.config/zellij/scripts/lib/pick-adapter.zsh
+.config/zellij/scripts/lib/zellij-session.zsh
+.config/zellij/themes/chezmoi-system-base.kdl
+.config/zellij/themes/chezmoi-system.kdl
+.local/lib/mux/zellij.zsh
+.local/lib/zellij.zsh

@@ -2592,8 +2592,8 @@ EOF
     It 'browse launches a one-pane explore scrub session under FUSE'
       run_it() {
         STUB="$FIX/stub"; mkdir -p "$STUB"
-        printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
-        chmod +x "$STUB/zellij"
+        printf '#!/bin/sh\necho "tmux $*" >> "%s/tx.calls"\ncase "$1" in split-window) echo "%%9" ;; display) echo 2 ;; esac\n' "$FIX" > "$STUB/tmux"
+        chmod +x "$STUB/tmux"
         cat > "$FIX/snaps.json" <<'JSON'
 [{"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
 JSON
@@ -2604,25 +2604,26 @@ JSON
         printf '#!/bin/sh\necho "tm $*" >> "%s/tm.calls"\n' "$FIX" > "$STUB/system-backup-tm"
         chmod +x "$STUB/system-backup-tm"
         PATH="$STUB:$PATH" BKP_HAS_FUSE=1 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
-          BKP_TM_BIN="$STUB/system-backup-tm" ZELLIJ=1 \
+          BKP_TM_BIN="$STUB/system-backup-tm" TMUX=/tmp/sock,1,0 MUX_TMUX_BIN="$STUB/tmux" \
+          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
           zsh "$DISPATCH" browse "$FIX/anchor"
         cat "$FIX/tm.calls"
-        [ -f "$FIX/zj.calls" ] && cat "$FIX/zj.calls" || echo no-zellij-calls
+        grep -q 'split-window' "$FIX/tx.calls" 2>/dev/null && echo split || echo no-split
       }
       When run run_it
       The status should be success
       # explore is ONE pane: yazi (in-column timeline) takes over the
       # invoking pane — no split, no timeline pane
       The output should include "tm lens"
-      The output should include "no-zellij-calls"
+      The output should include "no-split"
       The output should not include "tm timeline"
     End
 
-    It 'browse launches a zellij scrub session tab for a diff dir anchor without FUSE'
+    It 'browse launches a split scrub session for a diff dir anchor without FUSE'
       run_it() {
         STUB="$FIX/stub"; mkdir -p "$STUB"
-        printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
-        chmod +x "$STUB/zellij"
+        printf '#!/bin/sh\necho "tmux $*" >> "%s/tx.calls"\ncase "$1" in split-window) echo "%%9" ;; display) echo 2 ;; esac\n' "$FIX" > "$STUB/tmux"
+        chmod +x "$STUB/tmux"
         cat > "$FIX/snaps.json" <<'JSON'
 [{"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
 JSON
@@ -2633,13 +2634,14 @@ JSON
         printf '#!/bin/sh\necho "tm $*" >> "%s/tm.calls"\n' "$FIX" > "$STUB/system-backup-tm"
         chmod +x "$STUB/system-backup-tm"
         PATH="$STUB:$PATH" BKP_HAS_FUSE=0 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
-          BKP_TM_BIN="$STUB/system-backup-tm" ZELLIJ=1 \
+          BKP_TM_BIN="$STUB/system-backup-tm" TMUX=/tmp/sock,1,0 MUX_TMUX_BIN="$STUB/tmux" \
+          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
           zsh "$DISPATCH" browse --diff "$FIX/anchor"
-        cat "$FIX/zj.calls" "$FIX/tm.calls"
+        cat "$FIX/tx.calls" "$FIX/tm.calls"
       }
       When run run_it
       The status should be success
-      The output should include "run --close-on-exit --direction right"
+      The output should include "split-window -h"
       The output should include "tm timeline"
     End
   End

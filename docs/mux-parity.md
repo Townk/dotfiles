@@ -1,5 +1,7 @@
 # Mux parity ledger — Zellij ↔ tmux config plane
 
+> **Note (2026-11-27):** zellij support was removed from this repo; tmux and Rex are the supported multiplexers. The Zellij columns are kept as they were and are historical.
+
 The drift **detector** for the dual-backend migration (spec §4,
 `docs/superpowers/specs/2026-07-21-tmux-migration-design.md`): one row per
 behavior, with each backend's implementation and its parity status. Any

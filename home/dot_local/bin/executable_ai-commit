@@ -85,7 +85,7 @@ probe_available() {
 # pick_harness — pick among AVAILABLE, printing the chosen harness name.
 # mux.zsh is sourced lazily (it pulls in pick-common.zsh for pick::line) so
 # an explicit-harness run never needs fzf. mux::pick is a drop-in for
-# pick::start that floats the picker in a Zellij pane when one is available,
+# pick::start that floats the picker in a mux float when one is available,
 # and runs it inline otherwise. --selector opens in browse (selection) mode.
 #
 # Each row is "<icon>  <name>  <label>". Names are right-padded to the widest so

@@ -85,8 +85,8 @@ Include ~/.ssh/config.d/*
 #     <devbox> (the onboarded color / profile default / grey, from the shared
 #     tint-palette.toml) and writes it as a loose
 #     ~/.config/theme/override.toml on the remote; the remote's theme-apply
-#     folds it into the effective palette and the Zellij `system` theme at
-#     shell startup, so the zj-hud bar, fzf, dialogs, and file viewers there
+#     folds it into the effective palette and the tmux theme at
+#     shell startup, so the status bar, fzf, dialogs, and file viewers there
 #     match the window tint (see docs/theme-unification.md §4.8).
 # The rsync steps send deltas only — a near-instant no-op when nothing changed.
 #

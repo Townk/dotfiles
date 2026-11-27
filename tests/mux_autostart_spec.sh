@@ -11,8 +11,8 @@
 # the argv it was launched with instead of starting anything. So each case
 # asserts on the real command the real block builds.
 #
-# The stub is injected through $MUX_TMUX_BIN / $ZELLIJ_BIN, the backends' own
-# documented binary-override seams, so nothing in the block's source is
+# The stub is injected through $MUX_TMUX_BIN, the backend's own documented
+# binary-override seam, so nothing in the block's source is
 # rewritten except the baked default. Before the launch moved behind mux::*,
 # this had to line-edit the two hard-coded binary-search loops out of the
 # block — a rewrite that was easy to get subtly wrong (a
@@ -21,9 +21,8 @@
 # nothing).
 #
 # The three-way "Main" reuse dance (absent / idle / has-a-client) is asserted
-# on BOTH backends. Mirroring it was the point of the phase — the knob is meant
-# to change which mux starts, never how the system behaves — so the Zellij
-# expectations here are a regression fence around the pre-flip behaviour.
+# on tmux, the only launch backend since zellij support was removed
+# (2026-11-27); a zellij pin or baked value must now be IGNORED.
 Describe 'zshrc mux autostart'
   setup_all() {
     AS_TMP=$(mktemp -d)
@@ -31,9 +30,7 @@ Describe 'zshrc mux autostart'
 
     # Stub multiplexer. Answers the liveness/client probes from $CASE; for
     # anything else prints the argv, which is what the block execs into.
-    # Matches on the WHOLE argv: `--session Main action list-clients` (a probe)
-    # and `--session Main --new-session-with-layout default` (a launch) are
-    # indistinguishable from $1/$2 alone.
+    # Matches on the WHOLE argv.
     cat >"$AS_TMP/mux" <<'EOS'
 #!/usr/bin/env zsh
 # Log every invocation next to the stub, so a case can assert on the PROBES
@@ -42,12 +39,6 @@ print -r -- "$*" >>"${0:h}/argv.log"
 case "$*" in
   "has-session -t=Main")  [[ "$CASE" == none ]] && exit 1 || exit 0 ;;
   "list-clients -t=Main") [[ "$CASE" == attached ]] && print -r -- "/dev/ttys00 ..." ; exit 0 ;;
-  "list-sessions -n")     [[ "$CASE" == none ]] && print -r -- Other || print -r -- "Main [Created 1s ago]" ; exit 0 ;;
-  "--session Main action list-clients")
-    print -r -- HEADER
-    [[ "$CASE" == attached ]] && print -r -- client1
-    exit 0 ;;
-  "delete-session Main"*) exit 0 ;;
 esac
 print -r -- "EXEC: $*"
 EOS
@@ -83,16 +74,13 @@ EOS
       # so it does not glue itself onto the captured line.
       print -r -- 'SSH_CONNECTION='
       print -r -- "XDG_CACHE_HOME=$AS_TMP/cache"
-      # Also points _mux_zj_ensure_plugins at an empty tree, so a zellij case
-      # cannot reach into the real ~/.config and fetch plugin wasms.
       print -r -- "XDG_CONFIG_HOME=$AS_TMP/cfg"
-      # Both backends resolve their binary through these seams, so the block
+      # The backend resolves its binary through this seam, so the block
       # execs into the stub with none of its own source rewritten.
       print -r -- "MUX_TMUX_BIN=$AS_TMP/mux"
-      print -r -- "ZELLIJ_BIN=$AS_TMP/mux"
       print -r -- "source $PWD/home/dot_local/lib/mux-bootstrap.zsh"
       awk '/^if _zsh_should_autoattach_mux; then$/,/^unset -f _zsh_should_autoattach_mux/' "$AS_TMP/zshrc" \
-        | sed -E "s/mux::default_backend (zellij|tmux)/mux::default_backend $_bk/"
+        | sed -E "s/mux::default_backend [a-z]+/mux::default_backend $_bk/"
     } >"$AS_TMP/case.zsh"
     CASE=$_case zsh "$AS_TMP/case.zsh" 2>&1 | grep '^EXEC:'
     if [ -s "$AS_TMP/cache/quick-launch/usage-workspace" ]; then
@@ -103,7 +91,7 @@ EOS
   }
   seeded() { cat "$AS_TMP/seeded"; }
 
-  # The gate, not the launch: a Rex pane must never autostart tmux or zellij.
+  # The gate, not the launch: a Rex pane must never autostart tmux.
   # Rex is itself the multiplexer, so nesting one only doubles the chrome and
   # steals its keys. The control ("would autostart without REX_SESSION") cannot
   # run here — the gate also demands a real tty on fds 0 and 1 — so the second
@@ -117,7 +105,7 @@ EOS
         print -r -- "source $AS_TMP/gate.zsh"
         print -r -- '_zsh_should_autoattach_mux'
       } >"$AS_TMP/gate-case.zsh"
-      env -u TMUX -u ZELLIJ REX_SESSION="$1" TERM_PROGRAM=rex zsh -i "$AS_TMP/gate-case.zsh" 2>/dev/null
+      env -u TMUX REX_SESSION="$1" TERM_PROGRAM=rex zsh -i "$AS_TMP/gate-case.zsh" 2>/dev/null
     }
     guard_order() {
       awk '/^_zsh_should_autoattach_mux\(\) \{/,/^}/' "$AS_TMP/zshrc" |
@@ -165,23 +153,6 @@ EOS
     End
   End
 
-  Describe 'zellij backend (regression fence — must not have moved)'
-    It 'creates Main with the default layout when none exists'
-      When call launch zellij none
-      The output should eq 'EXEC: --session Main --new-session-with-layout default'
-    End
-
-    It 'reattaches an idle Main'
-      When call launch zellij idle
-      The output should eq 'EXEC: attach Main'
-    End
-
-    It 'spawns an anonymous session when Main already has a client'
-      When call launch zellij attached
-      The output should eq 'EXEC: --new-session-with-layout default'
-    End
-  End
-
   # "Main" sorts to the top of the quick-launch picker because this boot path
   # records it by hand. Only the paths that actually land IN Main should do so:
   # the anonymous-session branch is a different workspace.
@@ -190,9 +161,6 @@ EOS
       tmux   none     yes
       tmux   idle     yes
       tmux   attached no
-      zellij none     yes
-      zellij idle     yes
-      zellij attached no
     End
 
     It "seeds Main only when attaching to it ($1/$2)"
@@ -202,20 +170,24 @@ EOS
     End
   End
 
-  # Loose file beats chezmoi data, so one machine can dissent without an edit.
+  # The loose file is still read ahead of chezmoi data; tmux is the only value
+  # either accepts.
   Describe 'the loose ~/.config/mux/backend pin'
-    It 'overrides a baked zellij default'
-      When call launch zellij none tmux
+
+    It 'tolerates surrounding whitespace'
+      When call launch tmux none '  tmux  '
       The output should eq 'EXEC: new-session -s Main'
     End
 
-    It 'overrides a baked tmux default'
+    # zellij was a backend until 2026-11-27. A pin left behind on some machine,
+    # or a stale baked value, must fall back to tmux — never to a missing mux.
+    It 'ignores a leftover zellij pin'
       When call launch tmux none zellij
-      The output should eq 'EXEC: --session Main --new-session-with-layout default'
+      The output should eq 'EXEC: new-session -s Main'
     End
 
-    It 'tolerates surrounding whitespace'
-      When call launch zellij none '  tmux  '
+    It 'ignores a baked zellij default'
+      When call launch zellij none
       The output should eq 'EXEC: new-session -s Main'
     End
 
@@ -228,8 +200,8 @@ EOS
 
   # mux::default_backend answers the same question for callers that are not the
   # login shell. Nothing forces the two to agree, so pin them here: a flip that
-  # changes only one of them is a split brain that shows up as "the picker
-  # thinks I am on Zellij while I am sitting in tmux".
+  # changes only one of them is a split brain: the picker and the
+  # login shell disagreeing about which mux is the default.
   Describe 'the shim default agrees with the chezmoi default'
     baked_zshrc() { grep -oE 'muxBackend: [a-z]+' home/.chezmoidata/mux.yaml | awk '{print $2}'; }
     # `zsh -f`: without it .zshenv runs and resets XDG_CONFIG_HOME back to the
@@ -237,7 +209,7 @@ EOS
     # fallback this asserts on. Passed as `-c` text rather than the environment
     # for the same reason — the rc files win over anything exported in.
     baked_shim()  {
-      unset ZELLIJ ZELLIJ_SESSION_NAME TMUX MUX_BACKEND
+      unset TMUX MUX_BACKEND
       zsh -f -c "XDG_CONFIG_HOME=$(mktemp -d)
                  source home/dot_local/lib/mux.zsh
                  mux::default_backend"

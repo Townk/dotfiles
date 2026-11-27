@@ -97,16 +97,8 @@ EOF
       The output should equal "teal"
     End
 
-    It 'classifies a nested zellij session by its ssh target'
-      ps() { case "$*" in *"-p 5555"*comm=*) print -r -- "zellij"; return 0 ;; esac; command ps "$@"; }
-      resolve_session() { print -r -- "Some Dev Session"; }
-      mux::focused_command() { print -r -- "ssh devbox"; }
-      When call resolve_terminal_location 5555
-      The output should equal "blue"
-    End
-
-    # Same question, tmux client: the focused command comes from the shim
-    # (which asks the tmux server), not from a zellij list-panes scrape.
+    # A tmux client: the focused command comes from the shim (which asks the
+    # tmux server).
     It 'classifies a tmux client by the focused pane ssh target'
       ps() { case "$*" in *"-p 7777"*comm=*) print -r -- "tmux"; return 0 ;; esac; command ps "$@"; }
       mux::focused_command() { print -r -- "ssh devbox"; }
@@ -115,16 +107,14 @@ EOF
     End
 
     It 'classifies a nested session that sshes to a real hostname'
-      ps() { case "$*" in *"-p 5556"*comm=*) print -r -- "zellij"; return 0 ;; esac; command ps "$@"; }
-      resolve_session() { print -r -- "Home Session"; }
+      ps() { case "$*" in *"-p 5556"*comm=*) print -r -- "tmux"; return 0 ;; esac; command ps "$@"; }
       mux::focused_command() { print -r -- "ssh macmini-aa-bbbb.local"; }
       When call resolve_terminal_location 5556
       The output should equal "teal"
     End
 
     It 'returns the remote default for a session to a non-onboarded host'
-      ps() { case "$*" in *"-p 5557"*comm=*) print -r -- "zellij"; return 0 ;; esac; command ps "$@"; }
-      resolve_session() { print -r -- "Some Session"; }
+      ps() { case "$*" in *"-p 5557"*comm=*) print -r -- "tmux"; return 0 ;; esac; command ps "$@"; }
       mux::focused_command() { print -r -- "ssh elsewhere"; }
       When call resolve_terminal_location 5557
       The output should equal "grey"

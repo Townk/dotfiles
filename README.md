@@ -22,7 +22,7 @@ hosts (headless profiles) are first-class from the same source.
 | `dot_config/zsh/environment.sh` | Shared shell/GUI environment source, including XDG paths and `GNUPGHOME`. |
 | `private_dot_ssh/`, `dot_config/private_gnupg/` | SSH and GnuPG configs (chezmoi-private permissions). |
 | `dot_local/bin/system-update` | Canonical "bring all tools to latest" script. Used both as a daily command and inside the bootstrap. |
-| `dot_local/libexec/tab-edit` | Opens file(s) in a new WezTerm/Zellij tab. Engine behind the macOS "Open in NeoVim" Finder droplet and the Linux `tab-edit.desktop` handler (both call it by absolute path). |
+| `dot_local/libexec/tab-edit` | Opens file(s) in a new WezTerm/tmux tab. Engine behind the macOS "Open in NeoVim" Finder droplet and the Linux `tab-edit.desktop` handler (both call it by absolute path). |
 | `../assets/open-in-neovim/` | Icons used by the generated "Open in NeoVim" Finder app. |
 | `Library/private_Application Support/` | macOS symlinks to XDG paths (e.g. tealdeer's config). |
 | `home/.chezmoiscripts/` | Chezmoi run scripts, kept out of `$HOME` while still participating in script ordering. |
@@ -35,7 +35,6 @@ hosts (headless profiles) are first-class from the same source.
 | `home/.chezmoiscripts/run_onchange_after_35-generate-open-in-neovim-app.sh.tmpl` | Generates and registers the `Open in NeoVim.app` Finder droplet. |
 | `home/.chezmoiscripts/run_after_35-install-dev-shell-sudo-tool-links.sh.tmpl` | Linux dev-shell: exposes selected mise binaries through `/usr/local/bin` for `sudo`. |
 | `home/.chezmoiscripts/run_onchange_after_40-install-snaps.sh.tmpl` | Linux dev-shell: syncs snaps declared in `Snapfile`. |
-| `home/.chezmoiscripts/run_after_45-grant-zellij-plugin-permissions.sh.tmpl` | Pre-grants Zellij plugin permissions for managed plugin paths. |
 | `home/.chezmoiscripts/run_onchange_after_50-custom-build-zsh.sh.tmpl` | Builds the non-unicode9 zsh from source (macOS work/personal) and sets it as the login shell. |
 | `home/.chezmoiscripts/run_onchange_after_60-symbols-db.sh.tmpl` | Marks symbols database rebuilds when static DB inputs change. |
 | `home/.chezmoiscripts/run_onchange_after_70-symbols-nerd-font.sh.tmpl` | Marks Symbols Nerd Font rebuilds when static font inputs change. |

@@ -2,12 +2,11 @@
 # docs/superpowers/specs/2026-08-01-shared-lib-consolidation-design.md):
 # the two shared resolvers added to home/dot_local/lib/mux-bootstrap.zsh —
 #
-#   mux::bin <zellij|tmux>  — the ONE public wrapper around _mux_zj_bin /
-#                             _mux_tx_bin. Standalone scripts that used to
-#                             re-implement the install-dir search (zellij-modal,
-#                             command.zsh, edit-terminal-config) call it now.
-#   mux::wezterm_panes       — the backend-neutral WezTerm pane probe, formerly
-#                             triplicated in mux/zellij.zsh + mux/tmux.zsh.
+#   mux::bin <tmux|rex>     — the ONE public wrapper around the backend
+#                             resolvers (_mux_tx_bin, _mux_rx_bin), so
+#                             standalone scripts do not re-implement the
+#                             install-dir search.
+#   mux::wezterm_panes       — the backend-neutral WezTerm pane probe.
 #
 # The install-dir fallbacks reach absolute paths (/opt/homebrew, /usr/local)
 # this box can't clear, so — mirroring the existing `_mux_*_bin` tests in
@@ -17,44 +16,20 @@
 Describe 'mux-bootstrap.zsh — mux::bin (public binary resolver)'
   Include home/dot_local/lib/mux-bootstrap.zsh
 
-  setup() { unset MUX_TMUX_BIN ZELLIJ_BIN; }
+  setup() { unset MUX_TMUX_BIN; }
   BeforeEach 'setup'
 
   no_tmux() { [[ ! -x /opt/homebrew/bin/tmux && ! -x /usr/local/bin/tmux && ! -x /usr/bin/tmux ]]; }
-  no_zellij() { [[ ! -x /opt/homebrew/bin/zellij && ! -x /usr/local/bin/zellij ]]; }
-  real_zellij() { [[ -x /opt/homebrew/bin/zellij || -x /usr/local/bin/zellij ]]; }
+  real_tmux() { [[ -x /opt/homebrew/bin/tmux || -x /usr/local/bin/tmux ]]; }
 
   # PATH-scrubbed subshells: command -v fails, so the install-dir list is walked
   # (the .zshrc-autostart / early-login case). The change must not leak out.
-  zj_no_path() ( PATH=/nonexistent; mux::bin zellij )
   tx_no_path() ( PATH=/nonexistent; mux::bin tmux )
-
-  It 'honours $ZELLIJ_BIN verbatim for zellij'
-    export ZELLIJ_BIN=/some/stub/zellij
-    When call mux::bin zellij
-    The output should equal "/some/stub/zellij"
-  End
 
   It 'honours $MUX_TMUX_BIN verbatim for tmux'
     export MUX_TMUX_BIN=/some/stub/tmux
     When call mux::bin tmux
     The output should equal "/some/stub/tmux"
-  End
-
-  It 'resolves zellij via command -v when it is on $PATH'
-    dir=$(mktemp -d)
-    printf '#!/bin/sh\n' >"$dir/zellij"; chmod +x "$dir/zellij"
-    export PATH="$dir:$PATH"
-    When call mux::bin zellij
-    The output should equal "$dir/zellij"
-    rm -rf "$dir"
-  End
-
-  It 'finds zellij at a known install location when $PATH lacks it'
-    Skip if 'zellij is not installed where the shim looks' no_zellij
-    When call zj_no_path
-    The output should start with "/"
-    The status should be success
   End
 
   It 'finds tmux at a known install location when $PATH lacks it'
@@ -64,25 +39,29 @@ Describe 'mux-bootstrap.zsh — mux::bin (public binary resolver)'
     The status should be success
   End
 
-  # The exact case edit-terminal-config's degraded
-  # `${commands[zellij]:-/opt/homebrew/bin/zellij}` used to miss: command -v
-  # fails and zellij lives ONLY in the mise-shim dir. The shared resolver walks
-  # past command -v through the full install list and finds it.
-  It 'walks past command -v to the mise-shim dir (the edit-terminal-config gap)'
-    Skip if 'a real zellij shadows the shim on this box' real_zellij
+  # command -v fails and tmux lives ONLY in the mise-shim dir (the dev-shell
+  # at login). The shared resolver walks past command -v through the full
+  # install list and finds it.
+  It 'walks past command -v to the mise-shim dir'
+    Skip if 'a real tmux shadows the shim on this box' real_tmux
     fakehome=$(mktemp -d)
     mkdir -p "$fakehome/.local/share/mise/shims"
-    printf '#!/bin/sh\n' >"$fakehome/.local/share/mise/shims/zellij"
-    chmod +x "$fakehome/.local/share/mise/shims/zellij"
-    resolve() ( HOME="$fakehome"; PATH=/nonexistent; mux::bin zellij )
+    printf '#!/bin/sh\n' >"$fakehome/.local/share/mise/shims/tmux"
+    chmod +x "$fakehome/.local/share/mise/shims/tmux"
+    resolve() ( HOME="$fakehome"; PATH=/nonexistent; mux::bin tmux )
     When call resolve
-    The output should equal "$fakehome/.local/share/mise/shims/zellij"
+    The output should equal "$fakehome/.local/share/mise/shims/tmux"
     The status should be success
     rm -rf "$fakehome"
   End
 
   It 'returns non-zero for an unknown backend name'
     When call mux::bin frobnicate
+    The status should be failure
+  End
+
+  It 'no longer knows zellij'
+    When call mux::bin zellij
     The status should be failure
   End
 End
@@ -137,12 +116,11 @@ Describe 'mux-bootstrap.zsh — mux::wezterm_panes'
   End
 End
 
-Describe 'command.zsh — ql_zellij_bin routes through the shared resolver'
+Describe 'command.zsh — loads the shared resolver'
   setup() {
     export MUX_LIB="$PWD/home/dot_local/lib"
-    unset ZELLIJ_BIN
   }
-  cleanup() { unset MUX_LIB ZELLIJ_BIN; }
+  cleanup() { unset MUX_LIB; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -155,54 +133,5 @@ Describe 'command.zsh — ql_zellij_bin routes through the shared resolver'
     load
     When call whence -w mux::bin
     The output should include "function"
-  End
-
-  It 'ql_zellij_bin honours $ZELLIJ_BIN through mux::bin'
-    load
-    export ZELLIJ_BIN=/some/stub/zellij
-    When call ql_zellij_bin
-    The output should equal "/some/stub/zellij"
-  End
-End
-
-Describe 'zellij-modal — bin resolution via the shared resolver'
-  SCRIPT="home/dot_config/zellij/scripts/executable_zellij-modal"
-  setup() {
-    TEST_TMP=$(mktemp -d)
-    ZJ_LOG="$TEST_TMP/zj.log"
-    export ZJ_LOG
-    # Stub zellij: log every invocation's argv, succeed for everything.
-    stub="$TEST_TMP/zellij"
-    {
-      echo '#!/usr/bin/env zsh'
-      echo 'print -r -- "$*" >> "$ZJ_LOG"'
-      echo 'exit 0'
-    } > "$stub"
-    chmod +x "$stub"
-    export MUX_LIB="$PWD/home/dot_local/lib"
-    export ZELLIJ=1
-    # No ZELLIJ_PANE_ID → the deferred focus loop is skipped (no lingering bg
-    # job holding the captured pipe); discover_target_pane still exercises the
-    # resolved binary synchronously.
-    unset ZELLIJ_PANE_ID ZELLIJ_BIN
-  }
-  cleanup() { rm -rf "$TEST_TMP"; unset MUX_LIB ZELLIJ ZELLIJ_PANE_ID ZELLIJ_BIN ZJ_LOG; }
-  BeforeEach 'setup'
-  AfterEach 'cleanup'
-
-  It 'honours $ZELLIJ_BIN'
-    export ZELLIJ_BIN="$stub"
-    When run zsh "$SCRIPT" --title T -- true
-    The status should be success
-    The contents of file "$ZJ_LOG" should include "list-panes"
-    The output should include "▓▓▓ T"
-  End
-
-  It 'resolves the binary via command -v when $ZELLIJ_BIN is unset'
-    export PATH="$TEST_TMP:$PATH"
-    When run zsh "$SCRIPT" --title T -- true
-    The status should be success
-    The contents of file "$ZJ_LOG" should include "list-panes"
-    The output should include "▓▓▓ T"
   End
 End

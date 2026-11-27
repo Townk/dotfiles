@@ -5,9 +5,9 @@
 # as:  mux-open <client_pid> <uri> [cols] [rows]
 #
 # <client_pid> is the foreground process of the clicked WezTerm pane (the
-# mux client — zellij or tmux). The backend is read from that PROCESS and
+# mux client — tmux). The backend is read from that PROCESS and
 # pinned via $MUX_BACKEND, because this script runs in WezTerm's GUI
-# environment where $ZELLIJ/$TMUX say nothing. Then:
+# environment where $TMUX says nothing. Then:
 #   - directory  -> new tab running Yazi at that dir
 #   - image      -> floating popup running our preview wrapper
 #   - text/code  -> new tab running nvim (CWD = git root, else the file's dir)
@@ -15,7 +15,7 @@
 # Tabs/popups close on exit, so they vanish when the program quits.
 #
 # Runs from WezTerm's GUI environment, so it sets a sane PATH up front (lsof,
-# ps, file, git, zellij, tmux, nvim, yazi may otherwise be missing).
+# ps, file, git, tmux, nvim, yazi may otherwise be missing).
 set -uo pipefail
 # User-managed tools must precede the fixed GUI-safe fallback paths. On the dev
 # shell fzf and tmux come from mise; hiding fzf aborted while sourcing mux.zsh,
@@ -109,8 +109,7 @@ target="${target#localhost}"
 # --- Resolve the client's backend and session ------------------------------
 # The shim reads the backend from the client PROCESS (mux::backend_for_pid)
 # and every mux::* call below dispatches on the pinned value; the session
-# lookup is each backend's own (zellij: the client's unix socket; tmux: ask
-# the server). Tracks live session switches and needs no --session in argv.
+# lookup is each backend's own (tmux: ask the server). Tracks live session switches and needs no --session in argv.
 source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 
 if [ -n "${MUX_BACKEND:-}" ] && [ -n "${MUX_SESSION:-}" ]; then
@@ -146,16 +145,13 @@ _rlib="$HOME/.local/lib/raster-common.zsh"
 if command -v raster::rasterisable >/dev/null 2>&1 || (( ${+functions[raster::rasterisable]} )); then
   if raster::rasterisable "$target"; then
     # term-quick-view owns the quick look: the "Quick View" singleton tab on
-    # tmux, a float on zellij, the chrome, and the render. It is a command in
+    # tmux, the chrome, and the render. It is a command in
     # its own right (fzf's Ctrl+O and yazi's Ctrl+Space use it too).
     # MUX_SESSION, alongside MUX_BACKEND above: we run in WezTerm's GUI
-    # environment, so term-quick-view has no $ZELLIJ/$TMUX of its own to
-    # target. Zellij REFUSES an untargeted `action new-tab` ("Please specify
-    # the session name"), which is why CMD+click never opened the quick view
-    # there while the nvim branch below — which passes --session explicitly —
-    # always worked. tmux hid the same gap: an untargeted command picks the
-    # most-recently-used session, so it worked by luck and would have opened
-    # the view in the WRONG session with two of them about.
+    # environment, so term-quick-view has no $TMUX of its own to target. An
+    # untargeted tmux command picks the most-recently-used session, so
+    # without this it worked by luck and would have opened the view in the
+    # WRONG session with two of them about.
     MUX_SESSION="$session" term-quick-view "$target"
     exit $?
   fi

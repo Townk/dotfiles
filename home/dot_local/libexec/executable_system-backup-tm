@@ -2,17 +2,15 @@
 # system-backup-tm — tm scrub session worker (spec 2026-07-04).
 # Verbs: timeline <session> | lens <session> | ctl <session> <older|newer|end>
 #        route <key> <pane-pid> | apply <session> [path…] | confirm-apply <session>
-# The dispatcher/tm front-end creates sessions; zj-context-keys fires route;
+# The dispatcher/tm front-end creates sessions; the mux key binds fire route;
 # yazi bindings fire ctl/apply. BKP_TM_SESSIONS overrides the state root.
 
 set -u -o pipefail
 source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
 
-# Both-mux context stamp (D4/D20). Zellij context-keys matchers key on this
-# wrapper's comm in the process tree ("system-backup-tm"); tmux has no
-# process-tree matching, so its context binds match the @ctx PANE OPTION
-# this stamps. The vocabulary is what makes zellij's per-app clauses
-# expressible on tmux:
+# Context stamp (D4/D20). tmux has no process-tree matching, so its context
+# binds match the @ctx PANE OPTION this stamps (Rex: the tm_ctx action). The
+# vocabulary:
 #
 #   tm          the timeline pane          → J/K, Shift+arrows, A route here
 #   tm-explore  the yazi lens              → keys pass THROUGH (yazi binds them)
@@ -50,12 +48,6 @@ tm_stamp() {  # tm_stamp <ctx> [session-dir]
 # mux, always 1.) Cheap enough to poll once per loop tick: one query per
 # backend, no shim sourcing on this hot path.
 tl_focused() {
-  if [[ -n "${ZELLIJ:-}" && -n "${ZELLIJ_PANE_ID:-}" ]]; then
-    local f
-    f=$(zellij action list-clients 2>/dev/null | awk 'NR == 2 { print $2; exit }')
-    if [[ "$f" == "terminal_${ZELLIJ_PANE_ID}" ]]; then print 1; else print 0; fi
-    return
-  fi
   if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
     # Both halves matter: a pane can be its window's active pane while the
     # window itself is in the background.
@@ -337,12 +329,13 @@ tm_ctl() {
 }
 
 # tm_route <key> <pane-pid>
-# zj-context-keys fires this for Shift+Up/Down/Enter over yazi/hunk panes.
+# The mux key binds fire this for Shift+Up/Down/Enter over yazi/hunk panes.
 # If the pane belongs to a scrub session, drive it; otherwise write the
 # original key through so non-session panes lose nothing.
 # tm_route <key> <pane-pid> | tm_route --session <dir> <key>
-# Zellij passes the focused pane's root pid ({pid}); tmux passes the pane's
-# @tm_session, because its pane pid is the shell, not the worker (D20). An
+# The pid form matches a pane's root pid against lens.pid/timeline.pid (the
+# removed zellij binds passed it); tmux and Rex pass the pane's @tm_session,
+# because a tmux pane pid is the shell, not the worker (D20). An
 # unknown session is a no-op — a stale stamp must not write the key back
 # into a pane that is no longer a lens.
 tm_route() {

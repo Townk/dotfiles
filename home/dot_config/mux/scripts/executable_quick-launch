@@ -1,12 +1,12 @@
 #!/usr/bin/env zsh
 # quick-launch — define quick-launch actions as "panes", "tabs", or
-# "workspaces" for Zellij. A CLI port of the quicklaunch.wezterm plugin.
+# "workspaces" for the multiplexer (tmux or Rex). A CLI port of the
+# quicklaunch.wezterm plugin.
 #
 #   quick-launch menu  pane|tab|workspace      # fuzzy-pick, then open
 #   quick-launch open   pane|tab|workspace ID  # open a target directly
 #   quick-launch rows   pane|tab|workspace     # picker rows as TSV (Rex palette)
 #   quick-launch pick   pane|tab|workspace ID  # open + record recency (Rex palette)
-#   quick-launch layout pane|tab|workspace ID  # print the generated KDL (debug)
 #   quick-launch list  [pane|tab|workspace]    # list defined targets
 #
 # Targets are read from a directory ($QUICK_LAUNCH_DIR, default
@@ -14,10 +14,9 @@
 # host-local fragments under launch.d/. A single file can be forced via
 # $QUICK_LAUNCH_TARGETS. YAML/JSON/TOML are accepted.
 #
-# The fuzzy picker is plain `fzf`; inside Zellij it is meant to run in a
-# floating modal pane (see the quick-launch-zellij adapter), but it works
-# standalone too. Geometry is taken from QUICK_LAUNCH_HEIGHT / _MARGIN /
-# _PADDING; `menu` also accepts a --no-border flag (borderless render for an
+# The fuzzy picker is plain `fzf`; inside a mux it is meant to run in a
+# floating modal (mux-modal), but it works standalone too. Geometry is taken
+# from QUICK_LAUNCH_HEIGHT / _MARGIN / _PADDING; `menu` also accepts a --no-border flag (borderless render for an
 # embedder that draws its own frame) and forwards it to the picker on the
 # command line, matching the pick-glyph / pick-gitmoji convention. The legacy
 # QUICK_LAUNCH_NO_BORDER env var is still read by quick-launch-pick itself.
@@ -75,7 +74,7 @@ ql_write_merged_cache() {
 # picker itself is quick-launch-pick (zsh), built on the shared
 # pick-common.zsh facility so it matches pick-glyph / pick-gitmoji; it
 # prints the selected id (or exits 130 on cancel). Geometry is inherited from
-# the environment (set by the quick-launch-zellij adapter); no-border arrives
+# the environment (set by the embedder); no-border arrives
 # as the --no-border CLI flag (2nd arg) and is forwarded to the picker on its
 # command line, matching pick-glyph / pick-gitmoji (Wave 2, group C5,
 # Decision 1).
@@ -132,21 +131,6 @@ ql_menu() {
   ql_dispatch "$kind" "$chosen"
 }
 
-ql_print_layout() {
-  local kind="$1" id="$2" el
-  el="$(ql_get_element "$kind" "$id")" || true
-  [[ -n "$el" ]] || ql_die "no $kind target with id '$id'"
-  case "$kind" in
-    tab) ql_build_tab_layout "$el" ;;
-    workspace) ql_build_workspace_layout "$el" ;;
-    pane)
-      ql_action_command "$(jq -c '.action // {}' <<<"$el")"
-      echo
-      ;;
-    *) ql_die "unknown kind '$kind'" ;;
-  esac
-}
-
 ql_list() {
   local kind="${1:-}"
   local kinds=("$kind")
@@ -166,13 +150,13 @@ ql_list() {
 }
 
 usage() {
-  sed -n '2,20p' "$_src" | sed 's/^# \{0,1\}//'
+  sed -n '2,18p' "$_src" | sed 's/^# \{0,1\}//'
 }
 
 main() {
-  # --no-border is a borderless-render hint for the picker (menu only). The
-  # quick-launch-zellij adapter execs `quick-launch --no-border menu <kind>`,
-  # so it arrives ahead of the subcommand; accept it anywhere on the line and
+  # --no-border is a borderless-render hint for the picker (menu only). An
+  # embedder runs `quick-launch --no-border menu <kind>`, so it arrives
+  # ahead of the subcommand; accept it anywhere on the line and
   # strip it out before dispatch (harmless for the other, picker-less
   # subcommands, which never draw a border).
   local no_border=0
@@ -216,11 +200,6 @@ main() {
       ql_record_usage "$1" "$2"
       ql_dispatch "$1" "$2"
       ;;
-    layout)
-      [[ $# -ge 2 ]] || ql_die "usage: quick-launch layout pane|tab|workspace ID"
-      ql_load
-      ql_print_layout "$1" "$2"
-      ;;
     list)
       ql_load
       ql_list "${1:-}"
@@ -235,7 +214,7 @@ main() {
       usage
       ;;
     *)
-      ql_die "unknown command '$cmd' (want menu|open|rows|pick|layout|list)"
+      ql_die "unknown command '$cmd' (want menu|open|rows|pick|list)"
       ;;
   esac
 }

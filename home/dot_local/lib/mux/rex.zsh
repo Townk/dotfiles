@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
 # mux/rex.zsh — the Rex backend of the mux::* shim.
 #
-# Off-PATH internal library, SOURCED by mux-bootstrap.zsh beside mux/tmux.zsh
-# and mux/zellij.zsh. Like them it only ever shells out — here to the `rex`
+# Off-PATH internal library, SOURCED by mux-bootstrap.zsh beside mux/tmux.zsh.
+# Like it this only ever shells out — here to the `rex`
 # CLI — so it stays cheap enough to load from a shell startup path.
 #
 # Rex is a terminal AND a multiplexer, so the vocabulary shifts: a tmux
@@ -158,7 +158,7 @@ _mux_rx_dump_screen() {
 # _mux_rx_split <dir> <size> <name> <close> <cwd> -- <cmd...>
 # Prints the new block id. --size is honoured only as a PERCENTAGE (`30%`):
 # Rex splits by ratio, and a cell count has no ratio without knowing the
-# anchor's size — dropped rather than guessed, as zellij drops every size.
+# anchor's size — dropped rather than guessed, as zellij dropped every size.
 # <close> is accepted and ignored, as on tmux: a block closes with its command.
 _mux_rx_split() {
   local dir="$1" size="$2" name="$3" close="$4" cwd="$5"

@@ -5,14 +5,14 @@
 # executable_preview) that lets a test source the functions, prepend stub
 # binaries to PATH, and call main directly. Stubs echo their argv, so the
 # assertions read the dispatch decision straight from the output — nothing
-# GUI-facing (open/pkill/zellij) ever really runs.
+# GUI-facing (open/pkill/tmux) ever really runs.
 Describe 'yazi-quick-look: dispatch'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_yazi-quick-look"
 
   setup() {
     STUBS="$SHELLSPEC_TMPBASE/ql-stubs"
     mkdir -p "$STUBS"
-    for tool in open pkill zellij tmux term-quick-view; do
+    for tool in open pkill tmux term-quick-view; do
       printf '#!/bin/sh\necho "%s $@"\n' "$tool" >"$STUBS/$tool"
       chmod +x "$STUBS/$tool"
     done
@@ -32,7 +32,7 @@ Describe 'yazi-quick-look: dispatch'
     The status should be success
     The line 1 should equal "pkill -f qlmanage -p "
     The line 2 should equal "open -n /System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app --args -p $SHELLSPEC_TMPBASE/stage-root/yazi-quick-look/ql-target.txt"
-    The output should not include "zellij"
+    The output should not include "term-quick-view"
   End
 
   It 'local macOS session: stages every selected file, deduping basename collisions'
@@ -75,38 +75,11 @@ Describe 'yazi-quick-look: dispatch'
     The line 2 should equal "open -n /System/Library/Frameworks/QuickLook.framework/Versions/A/Resources/qlmanage.app --args -p $SHELLSPEC_TMPBASE"
   End
 
-  It 'local macOS session inside zellij: never opens the floating pane'
-    [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
-    When run zsh -c "
-      unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-      export ZELLIJ=0 TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
-      YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
-      PATH='$STUBS':\$PATH
-      main '$TARGET'"
-    The status should be success
-    The line 2 should include "open -n"
-    The output should not include "zellij"
-  End
-
-  It 'SSH session inside zellij: floats the unified preview instead of Quick Look'
-    When run zsh -c "
-      export SSH_TTY=/dev/ttys000 ZELLIJ=0
-      export MUX_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'
-      export ZELLIJ_BIN='$STUBS/zellij'
-      YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
-      PATH='$STUBS':\$PATH
-      main '$TARGET'"
-    The status should be success
-    The output should include "term-quick-view $TARGET"
-    The output should not include "qlmanage.app"
-  End
-
   # One viewer for every entry point now: yazi hands off to term-quick-view,
   # which owns the tab-or-float choice per backend.
   It 'SSH session inside tmux: hands off to the shared terminal viewer'
     When run zsh -c "
       export SSH_TTY=/dev/ttys000 TMUX=/tmp/sock,1,0
-      unset ZELLIJ
       export MUX_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'
       export MUX_TMUX_BIN='$STUBS/tmux'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
@@ -120,7 +93,7 @@ Describe 'yazi-quick-look: dispatch'
   It 'SSH session outside any mux: quiet no-op'
     When run zsh -c "
       export SSH_TTY=/dev/ttys000
-      unset ZELLIJ TMUX
+      unset TMUX
       export MUX_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH

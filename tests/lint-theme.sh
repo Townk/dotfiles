@@ -35,7 +35,6 @@ matches=$(rg -n '#[0-9a-fA-F]{6}' home/ \
   -g '!**/wezterm/wezterm.lua' \
   -g '!**/yazi/init.lua' \
   -g '!**/ghostty/config' \
-  -g '!**/lib/zellij.zsh' \
   -g '!**/bin/executable_ai-commit' \
   -g '!**/bin/executable_notify' \
   -g '!**/libexec/executable_theme-apply' \

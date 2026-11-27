@@ -51,7 +51,6 @@ libc = "gnu"
 [tools]
 # Registry-resolved (prebuilt binaries). Per-tool musl keeps the old global-musl
 # asset picks on this glibc-2.35 host (see [settings].libc above).
-"zellij" = { version = "latest", libc = "musl" }
 # Build tmux locally because upstream publishes source only and the Aqua
 # binaries omit native Sixel support. The asdf backend compiles the pinned
 # release and owns the resulting mise shim.

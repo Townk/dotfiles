@@ -89,7 +89,7 @@ zle -N cd-down
 #
 # The float is a mux action, and ai-playbook's [mux] preset is STATIC (one
 # backend, chosen in its config, no runtime detection). Ours points every
-# action at ~/.config/mux/scripts/mux-playbook, which resolves zellij-vs-tmux
+# action at ~/.config/mux/scripts/mux-playbook, which resolves the backend
 # per call — so this widget behaves the same in either, and neither needs a
 # knob. Before that the config named zellij outright, and under tmux every
 # action silently did nothing: Ctrl+Alt+A opened a blank pane.

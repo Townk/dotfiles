@@ -1,6 +1,6 @@
 # quick-launch command builder (lib/command.zsh): the Edit action's file list
 # and the cd prefix are flattened into a shell string that is later executed
-# by a shell ($SHELL -c on tmux, zellij `args "-c" …` — both eval it). The
+# by a shell ($SHELL -c, which evals it). The
 # flatten must therefore quote each path: an unquoted "${files[*]}" turns a
 # spaced path into two argv entries and a bracketed path into a glob that
 # aborts the whole command line under zsh's NOMATCH.

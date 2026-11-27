@@ -212,7 +212,7 @@ theme:
     action: { primary: mauve, run: green, confirm: green, stop: red,
               caution: peach, attention: yellow, info: sapphire, neutral: overlay1 }
 
-    # Input-state indicators (NOT actions). Reused by zellij modes, p10k vi-mode,
+    # Input-state indicators (NOT actions). Reused by the tmux modes, p10k vi-mode,
     # nvim mode-line. tmux = "command"; rename covers rename_tab + rename_pane.
     mode: { normal: green, locked: peach, pane: blue, tab: green, resize: mauve,
             move: yellow, search: blue, scroll: lavender, rename: yellow,

@@ -3,30 +3,25 @@
 # (mux migration Phase 2, spec §2/§3: `mux::modal`'s script-plane face).
 #
 # Dispatches on the runtime mux:
-#   zellij → exec zellij-modal (args passthrough — identical interface)
 #   tmux   → wrap the modal in `display-popup -E` running tmux-modal inside.
 #   rex    → a floating layer running rex-modal; returns when it closes.
 #
-# Usage (superset of zellij-modal):
+# Usage:
 #   mux-modal [--width W] [--height H] [--title TEXT] [--borderless]
 #             [--inject | --capture FILE] [--no-chrome] [--no-discover]
 #             -- CMD [ARGS...]
 #
-#   --width/--height  Popup geometry (percent or cells). On zellij these are
-#                     IGNORED — the zellij pane geometry belongs to the
-#                     spawner (`zellij action new-pane`/keybind Run block),
-#                     matching how zellij-modal is always launched today.
+#   --width/--height  Popup geometry (percent or cells).
 #   --borderless      tmux only: `display-popup -B` — the target draws its
 #                     OWN frame (its own titled box, e.g. troupe's dashboard
 #                     or an ask/--no-chrome widget), so the popup itself
 #                     must draw none, mirroring mux.zsh's own
 #                     _mux_tx_float --borderless precedent (stacking both
 #                     is a double-border, caught live in Mode B for that
-#                     widget float). Silently dropped on zellij — its
-#                     floating panes have no equivalent border toggle
-#                     through this scaffolding.
-#   --no-discover     zellij-only flag, passed through; a no-op on tmux
-#                     (origin is $TMUX_PANE, no discovery to skip — D7).
+#                     widget float).
+#   --no-discover     accepted and ignored — a leftover of the removed
+#                     zellij modal that callers still pass (the origin is
+#                     $TMUX_PANE / $REX_BLOCK, no discovery to skip — D7).
 #
 # Env overrides: MUX_TMUX_BIN (tests).
 
@@ -48,19 +43,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "${ZELLIJ:-}" ]]; then
-  # --borderless has no zellij-modal equivalent (consumed above, never
-  # forwarded) and --no-discover is already zellij-modal vocabulary —
-  # strip nothing else.
-  exec "$HOME/.config/zellij/scripts/zellij-modal" "${fwd[@]}"
-fi
-
 if [[ -z "${TMUX:-}" && -n "${REX_BLOCK:-}" ]]; then
   # Rex: a floating layer running rex-modal, over the calling block and in
   # its directory. `display-popup -E` blocks until the popup closes and so
   # must this: a layer is created and returns at once, so wait for its block
   # to go away. --borderless is the layer's only form and --no-discover is
-  # zellij vocabulary; rex-modal takes the rest as it is.
+  # dropped; rex-modal takes the rest as it is.
   source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
   typeset -a rargs=()
   title="" capture=""

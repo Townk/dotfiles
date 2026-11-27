@@ -1,5 +1,7 @@
 # Unique Features Classification — chezmoi dotfiles repo
 
+> **Note (2026-11-27):** zellij support was removed from this repo; tmux and Rex are the supported multiplexers. Zellij mentions below are historical.
+
 Worktree: `../chezmoi-scan` (branch `master`, isolated from `feat/ai-assist-phase-c1`).
 Scope: features beyond standard tool config (bat/atuin/bottom/git/gnupg/gh/glow/tealdeer/mise/npm/homebrew/espanso, LazyVim defaults, basic terminal themes & keymaps are excluded).
 

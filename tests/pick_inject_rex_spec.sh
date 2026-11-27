@@ -15,7 +15,7 @@ Describe 'pick::background_sink — Rex'
 printf '%s\n' "\$*" >>"$PI_TMP/rex.log"
 EOS
     chmod +x "$PI_REX"
-    unset PICK_INJECT_ZELLIJ PICK_INJECT_TMUX
+    unset PICK_INJECT_TMUX
   }
   cleanup() { rm -rf "$PI_TMP"; unset PICK_INJECT_PANE PICK_INJECT_REX; }
   BeforeEach 'setup'

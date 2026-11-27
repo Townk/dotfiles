@@ -54,14 +54,13 @@ if [[ "$_mode" == view ]]; then
   source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
   _self="${0:A}"
   if mux::available; then
-    # A TAB on BOTH backends. The zellij float predates this viewer; a full
-    # tab reads better for a picture and — more to the point — keeps one
-    # implementation instead of two. The NAME is the singleton's identity: it
+    # A TAB on every backend: a full tab reads better for a picture and
+    # keeps one implementation. The NAME is the singleton's identity: it
     # must match what the renderer names the tab, or a second call opens a
     # second one.
-    # --session only when a caller handed us one. Inside a pane $ZELLIJ/$TMUX
-    # answer for themselves; from WezTerm's GUI (mux-open) there is no session
-    # in the environment at all, and zellij refuses an untargeted new-tab.
+    # --session only when a caller handed us one. Inside a pane $TMUX
+    # answers for itself; from WezTerm's GUI (mux-open) there is no session
+    # in the environment at all.
     local -a _sess=()
     [[ -n "${MUX_SESSION:-}" ]] && _sess=(--session "$MUX_SESSION")
     mux::new_tab "${_sess[@]}" --name "$TERM_QUICK_VIEW_NAME" --singleton \
@@ -134,9 +133,6 @@ fi
 if [[ -n "${TMUX:-}" ]]; then
   tmux rename-window "$TERM_QUICK_VIEW_NAME" 2>/dev/null || :
   tmux set -w @win_icon "󰛐" 2>/dev/null || :
-elif [[ -n "${ZELLIJ:-}" ]]; then
-  # zellij has no per-tab icon option, so the glyph rides in the tab name.
-  zellij action rename-tab "󰛐 $TERM_QUICK_VIEW_NAME" 2>/dev/null || :
 fi
 
 _out=$(mktemp "${TMPDIR:-/tmp}/quickview.XXXXXX") || exit 1
@@ -162,26 +158,10 @@ _pady="${TERM_QUICK_VIEW_PAD_Y:-2}"
 # image to a 68x20 box in a 130x33 window: ~40% small, on every render
 # (Mode B 2026-07-26, caught by the debug log). tmux knows the real size
 # immediately; tput is the fallback outside a mux.
-#
-# Zellij has the SAME problem and needed its own answer: it has no client-size
-# query at all, so the shim derives the tab's usable extent from its
-# non-floating panes (_mux_zj_terminal_size). Without this branch $TMUX is
-# unset under zellij, tput answers with the unsettled default, and the chrome
-# lays itself out for 80x24 inside a much larger tab — the image still
-# rendered, the frame around it did not fit (zellij pass, 2026-07-27).
-#
-# The shim is sourced HERE rather than at the top so the tmux and no-mux paths
-# pay nothing for it.
 _cols="" _rows=""
 if [[ -n "${TMUX:-}" ]]; then
   _geo="$(tmux display -p -t "${TMUX_PANE:-}" '#{pane_width} #{pane_height}' 2>/dev/null)"
   [[ "$_geo" == <->" "<-> ]] && { _cols="${_geo%% *}"; _rows="${_geo##* }" }
-elif [[ -n "${ZELLIJ:-}" ]]; then
-  source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh" 2>/dev/null || true
-  if (( ${+functions[mux::terminal_size]} )); then
-    _geo="$(mux::terminal_size 2>/dev/null)"
-    [[ "$_geo" == <->" "<-> ]] && { _cols="${_geo%% *}"; _rows="${_geo##* }" }
-  fi
 fi
 [[ -n "$_cols" ]] || _cols="$(tput cols 2>/dev/null || echo 80)"
 [[ -n "$_rows" ]] || _rows="$(tput lines 2>/dev/null || echo 24)"

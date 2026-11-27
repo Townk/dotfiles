@@ -4,7 +4,7 @@
 # Phase 1 scope: Detect + Session + Screen groups. The widget/modal
 # implementations arrive in Phase 2 (until then mux.zsh renders widgets
 # inline under tmux — same UX as the no-mux path). MUX_TMUX_BIN overrides
-# the binary (test seam, mirroring ZELLIJ_BIN on the zellij side).
+# the binary (test seam).
 
 # _mux_tx_bin — the tmux binary, or non-zero when there is none. $PATH first,
 # then the known install locations: .zshrc's autostart calls this BEFORE it
@@ -79,8 +79,8 @@ _mux_tx_exec_anonymous() {
 }
 
 # _mux_tx_resolve_session [client_pid] — session of the given CLIENT pid
-# (list-clients), or of the current pane when no pid is given. The zellij
-# twin needs a ps+lsof unix-socket dance; tmux just asks the server
+# (list-clients), or of the current pane when no pid is given. The removed
+# zellij twin needed a ps+lsof unix-socket dance; tmux just asks the server
 # (spec §3: "simpler").
 _mux_tx_resolve_session() {
   local pid="${1:-}"
@@ -120,15 +120,15 @@ _mux_tx_rename_session() {
 }
 
 # _mux_tx_attached_sessions — sessions with a connected client, one per line
-# (contract of zellij_attached_sessions).
+# (the contract the removed zellij_attached_sessions set).
 _mux_tx_attached_sessions() {
   "$(_mux_tx_bin)" list-sessions -F '#{session_attached} #{session_name}' 2>/dev/null |
     awk '$1>0 { $1=""; sub(/^ /,""); print }'
 }
 
 # _mux_tx_client_sessions — "<session>\t<window_id>\t<pane_id>" for every
-# WezTerm pane hosting a tmux client (output contract mirrors
-# zellij_wezterm_sessions). Mapping: tmux client tty (list-clients) ↔ WezTerm
+# WezTerm pane hosting a tmux client (the output contract the removed
+# zellij_wezterm_sessions set). Mapping: tmux client tty (list-clients) ↔ WezTerm
 # pane tty (wezterm cli list). Prints nothing when WezTerm isn't reachable,
 # so callers degrade gracefully; the pane probe is mux::wezterm_panes.
 _mux_tx_client_sessions() {
@@ -166,8 +166,8 @@ _mux_tx_dump_screen() {
 
 # _mux_tx_split <dir> <size> <name> <close> <cwd> -- <cmd...>
 # tmux sizes a split AT CREATION (-l), so there is no resize-convergence loop
-# here — the zellij twin needs one because its resize step is coarser than a
-# column. <close> is accepted and ignored: remain-on-exit is off by default,
+# here — the removed zellij twin needed one because its resize step was
+# coarser than a column. <close> is accepted and ignored: remain-on-exit is off by default,
 # which IS close-on-exit.
 _mux_tx_split() {
   local dir="$1" size="$2" name="$3" close="$4" cwd="$5"
@@ -300,8 +300,7 @@ _mux_tx_current_tab() { "$(_mux_tx_bin)" display -p '#{window_index}' 2>/dev/nul
 _mux_tx_current_tab_name() { "$(_mux_tx_bin)" display -p '#{window_name}' 2>/dev/null; }
 _mux_tx_focus_tab() { "$(_mux_tx_bin)" select-window -t ":$1" 2>/dev/null; }
 
-# _mux_tx_pane_count — panes across every window of the session (-s), the
-# twin of _mux_zj_pane_count. awk rather than `wc -l` because wc pads its
+# _mux_tx_pane_count — panes across every window of the session (-s). awk rather than `wc -l` because wc pads its
 # output with leading blanks on BSD, and the caller compares the result
 # numerically. No output at all (no server, not in a session) reads as 0.
 _mux_tx_pane_count() {
@@ -337,7 +336,7 @@ _mux_tx_focused_command() {
 # is the synchronization point — the same shape as the zellij float.
 
 # _mux_tx_pick_float <pane_w> <pane_h> <header> [pick args...]
-# tmux twin of _mux_zj_pick_float: fzf-owns-the-box picker in a borderless
+# tmux twin of the removed zellij pick float: fzf-owns-the-box picker in a borderless
 # popup (-B: troupe frame/fzf draw the chrome, matching the zellij pickers),
 # result captured through a FIFO.
 _mux_tx_pick_float() {
@@ -401,7 +400,7 @@ _mux_tx_pick_float() {
 }
 
 # _mux_tx_float --type T [--title TITLE] [--pane-width W] [--pane-height H] -- <widget args...>
-# tmux twin of _mux_zj_float: sized popup running input-widget, answer via
+# tmux twin of the removed zellij float: sized popup running input-widget, answer via
 # FIFO. Geometry parity: the zellij floats are borderless panes whose
 # width/height ARE the interior; a tmux popup's DEFAULT frame eats 2 cells
 # each way, so +2 keeps the widgets rendering at identical interior sizes —
@@ -478,7 +477,7 @@ _mux_tx_float() {
   [[ -n "$pane_x" ]] && geom+=(-x "$pane_x")
   [[ -n "$pane_y" ]] && geom+=(-y "$pane_y")
 
-  # Mirror the zellij twin (_mux_zj_float): forward --title to tmux-modal so it
+  # As the removed zellij twin did: forward --title to tmux-modal so it
   # renders the ▓▓▓ header block; omit it entirely when no title was given so no
   # empty --title reaches the modal.
   local -a modal_args=(--capture "$fifo")

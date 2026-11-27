@@ -1,7 +1,7 @@
 # Regression test for the float-capture helpers in home/dot_local/lib/mux/*.zsh.
 #
-# HI-7: each float (_mux_tx_pick_float / _mux_tx_float / _mux_zj_pick_float /
-# _mux_zj_float) spawns the popup/pane, discards its stderr, never checks whether
+# HI-7: each float (_mux_tx_pick_float / _mux_tx_float and the Rex twins)
+# spawns the popup/pane, discards its stderr, never checks whether
 # it actually launched, and then does `result=$(cat "$fifo")`. If the spawn
 # FAILS (no client, a client that already owns a popup, a missing pane, …) no
 # writer ever opens the FIFO, so the `cat` blocks on open(2) forever: the caller
@@ -51,8 +51,8 @@ run_and_report() {
   rm -f -- "$tmpin" "$outf"
 
   local f
-  for f in "$TEST_TMP"/*fifo*(N) "$TEST_TMP"/txpick.*(N) "$TEST_TMP"/zjpick.*(N) \
-           "$TEST_TMP"/*-out.*(N) "$TEST_TMP"/txinput*(N) "$TEST_TMP"/zjinput*(N) \
+  for f in "$TEST_TMP"/*fifo*(N) "$TEST_TMP"/txpick.*(N) \
+           "$TEST_TMP"/*-out.*(N) "$TEST_TMP"/txinput*(N) \
            "$TEST_TMP"/rxpick.*(N) "$TEST_TMP"/rxinput*(N); do
     [[ "${f:t}" == guard* ]] && continue
     print -r -- "LEAK:${f:t}" >&2
@@ -67,7 +67,6 @@ Describe 'mux/tmux.zsh — float launch guard (HI-7)'
     TEST_TMP=$(mktemp -d)
     export TMPDIR="$TEST_TMP"          # steer every float temp into the sandbox
     export TMUX=/tmp/sock,1,0
-    unset ZELLIJ
     stub="$TEST_TMP/tmux"
     {
       echo '#!/usr/bin/env zsh'
@@ -181,7 +180,6 @@ Describe 'mux/tmux.zsh — floating pane (job-runner design §6 rev 4)'
   setup() {
     TEST_TMP=$(mktemp -d)
     export TMUX=/tmp/sock,1,0
-    unset ZELLIJ
     stub="$TEST_TMP/tmux"
     ARGVLOG="$TEST_TMP/argv.log"
     export ARGVLOG
@@ -283,78 +281,6 @@ Describe 'mux/tmux.zsh — floating pane (job-runner design §6 rev 4)'
   End
 End
 
-Describe 'mux/zellij.zsh — float launch guard (HI-7)'
-  Include home/dot_local/lib/mux.zsh
-
-  setup() {
-    TEST_TMP=$(mktemp -d)
-    export TMPDIR="$TEST_TMP"
-    export ZELLIJ=1
-    unset TMUX
-    stub="$TEST_TMP/zellij"
-    {
-      echo '#!/usr/bin/env zsh'
-      echo 'if [[ "$1" == action && "$2" == new-pane ]]; then'
-      echo '  if [[ "${STUB_MODE:-ok}" == fail ]]; then exit 1; fi'
-      echo '  fifo=""; prev=""'
-      echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  # Write-only open BLOCKS until the float opens the fifo for read — a'
-      echo '  # race-free rendezvous. (The old `3<>` + `sleep 0.5` hoped the reader'
-      echo '  # opened within 0.5s; on a slow box it did not, the buffer was freed on'
-      echo '  # close, and the reader hung — stalling the whole suite. HI-7 harness.)'
-      echo '  [[ -n "$fifo" ]] && { { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER:-picked}" >&3; exec 3>&- } &! }'
-      echo '  print -- "terminal_99"'
-      echo '  exit 0'
-      echo 'fi'
-      echo 'exit 0'
-    } > "$stub"
-    chmod +x "$stub"
-    export ZELLIJ_BIN="$stub"
-    export STUB_MODE=ok STUB_ANSWER=picked
-  }
-  cleanup() { rm -rf "$TEST_TMP"; unset ZELLIJ_BIN STUB_MODE STUB_ANSWER TMPDIR ZELLIJ; }
-  BeforeEach 'setup'
-  AfterEach 'cleanup'
-
-  It '_mux_zj_pick_float returns the selection and leaves no temp files (happy path)'
-    export STUB_ANSWER=claude
-    Data
-      #|claude  Claude Code
-    End
-    When call run_and_report 8 _mux_zj_pick_float 70% 60% Pick --output field:1
-    The output should equal "claude"
-    The error should equal ""
-    The status should be success
-  End
-
-  It '_mux_zj_pick_float returns non-zero promptly and leaks nothing when new-pane fails'
-    export STUB_MODE=fail
-    Data
-      #|claude  Claude Code
-    End
-    When call run_and_report 8 _mux_zj_pick_float 70% 60% Pick --output field:1
-    The output should equal ""
-    The error should equal ""
-    The status should equal 1
-  End
-
-  It '_mux_zj_float returns the answer and leaves no temp files (happy path)'
-    export STUB_ANSWER=yes
-    When call run_and_report 8 _mux_zj_float --type confirm --title Quit -- "Really?"
-    The output should equal "yes"
-    The error should equal ""
-    The status should be success
-  End
-
-  It '_mux_zj_float returns non-zero promptly and leaks nothing when new-pane fails'
-    export STUB_MODE=fail
-    When call run_and_report 8 _mux_zj_float --type confirm --title Quit -- "Really?"
-    The output should equal ""
-    The error should equal ""
-    The status should equal 1
-  End
-End
-
 # The Rex twins. A Rex float is a floating LAYER (session.new_layer) whose
 # command is rex-modal; the answer comes back through the same capture FIFO.
 # Two failure shapes are Rex's own: the layer cannot be created, and — a layer
@@ -366,7 +292,7 @@ Describe 'mux/rex.zsh — float launch guard'
   setup() {
     TEST_TMP=$(mktemp -d)
     export TMPDIR="$TEST_TMP"
-    unset TMUX ZELLIJ MUX_BACKEND MUX_REX_CONSUMERS
+    unset TMUX MUX_BACKEND MUX_REX_CONSUMERS
     export REX_SESSION=session:s1 REX_BLOCK=block:origin
     stub="$TEST_TMP/rex"
     {

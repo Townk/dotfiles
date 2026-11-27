@@ -6,7 +6,7 @@ set -eu
 {{ if $guiLinux -}}
 # Generate the "Open in Neovim" desktop entry — the Linux counterpart to the
 # macOS Finder droplet. It registers tab-edit as a handler for text/source MIME
-# types so files can be opened in a new WezTerm/Zellij tab from the file
+# types so files can be opened in a new WezTerm/tmux tab from the file
 # manager's "Open With" menu, and (per this host's choice) as their default.
 #
 # Generated at runtime rather than shipped as a managed file so $HOME resolves
@@ -45,14 +45,14 @@ Type=Application
 Version=1.0
 Name=Open in Neovim
 GenericName=Text Editor
-Comment=Open file(s) in Neovim in a new WezTerm/Zellij tab
+Comment=Open file(s) in Neovim in a new WezTerm/tmux tab
 Exec=${exec_path} %F
 Icon=nvim
 Terminal=false
 NoDisplay=false
 StartupNotify=false
 Categories=Utility;TextEditor;Development;
-Keywords=neovim;vim;editor;wezterm;zellij;
+Keywords=neovim;vim;editor;wezterm;tmux;
 MimeType=${mimes}
 EOF
 chmod 644 "$desktop"

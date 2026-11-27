@@ -6,10 +6,8 @@
 #
 # Public mux::* API + runtime backend dispatch; zj::* kept as permanent
 # aliases (spec §2 — cheap, honors "no loss"). This file replaced
-# lib/zellij.zsh as the widget/picker entry point in migration Phase 1;
-# zellij.zsh remains as a compat shim sourcing this file, so every existing
-# `source ~/.local/lib/zellij.zsh` consumer keeps working unchanged until
-# the Phase 6 rewire.
+# lib/zellij.zsh as the widget/picker entry point in migration Phase 1; the
+# zellij backend and that compat shim were removed on 2026-11-27.
 #
 # TWO FLAVORS. This one is the full shim: the widget/picker API on top of
 # everything in mux-bootstrap.zsh, which holds backend detection and the
@@ -42,16 +40,15 @@ unset _mux_self
 # for consumers that are NOT ported yet — and the widget float is ported.
 _mux::widgets_float() {
   case "$(mux::backend)" in
-    zellij | tmux) mux::available ;;
+    tmux) mux::available ;;
     rex) _mux_rx_available ;;
     *) return 1 ;;
   esac
 }
 
-# Backend-dispatching float primitives (same argv contract both sides).
+# Backend-dispatching float primitives (same argv contract on every backend).
 _mux::float() {
   case "$(mux::backend)" in
-    zellij) _mux_zj_float "$@" ;;
     tmux) _mux_tx_float "$@" ;;
     rex) _mux_rx_float "$@" ;;
     *) return 1 ;;
@@ -59,7 +56,6 @@ _mux::float() {
 }
 _mux::pick_float() {
   case "$(mux::backend)" in
-    zellij) _mux_zj_pick_float "$@" ;;
     tmux) _mux_tx_pick_float "$@" ;;
     rex) _mux_rx_pick_float "$@" ;;
     *) return 1 ;;
@@ -76,9 +72,9 @@ _mux::pick_float() {
 #
 #   * Inline (no float backend) -> exactly `pick::start "$@"`; pane opts are
 #     ignored.
-#   * Zellij -> the fzf UI runs in a floating, pinned, BORDERLESS pane via
-#     the shared zellij-modal scaffolding and the chosen value is captured
-#     back through a FIFO (see _mux_zj_pick_float).
+#   * tmux / Rex -> the fzf UI runs in a BORDERLESS float via the backend's
+#     modal scaffolding and the chosen value is captured back through a FIFO
+#     (see _mux_tx_pick_float / _mux_rx_pick_float).
 #
 # Caveat: the capture channel returns the *selection*, so --copy-only and the
 # insert-without-dismiss background sink are not meaningful through the float
@@ -220,7 +216,8 @@ mux::form() {
 }
 
 # --- zj::* permanent aliases (spec §2) -------------------------------------
-zj::available() { [[ "$(mux::backend)" == zellij ]] && _mux_zj_available; }
+# zj::available meant "inside zellij"; with that backend gone it is always false.
+zj::available() { return 1; }
 zj::pick() { mux::pick "$@"; }
 zj::confirm() { mux::confirm "$@"; }
 zj::choose() { mux::choose "$@"; }

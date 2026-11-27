@@ -11,7 +11,7 @@
 #   quick-launch-pick <pane|tab|workspace> [--no-border]
 #
 # It prints the chosen target's `id` to stdout (one line); `quick-launch`
-# captures that and performs the actual zellij action. On cancel it exits
+# captures that and performs the actual mux action. On cancel it exits
 # 130 with no output (pick-common's clean-cancel convention).
 #
 # Two INTERNAL modes serve the workspace picker's Ctrl+D (kill a session):
@@ -126,8 +126,8 @@ fi
 # Active scope (panes only). Wezterm's make_panes_choices offers the active
 # tab's panes + the active workspace's panes + the global top-level panes — so
 # a pane nested under a workspace is reachable only while that workspace is
-# live. A workspace == a session on either backend (a zellij session, a tmux
-# session), and a tab == a zellij tab or a tmux window. Outside any mux (e.g.
+# live. A workspace == a session on either backend, and a tab == a tmux
+# window or a Rex tab. Outside any mux (e.g.
 # standalone testing) both stay empty and only the global panes are offered.
 active_ws="$(mux::current_session 2>/dev/null || true)"
 active_tab="$(mux::current_tab_name 2>/dev/null || true)"
@@ -220,7 +220,7 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
       else "󰙀" end;
     # Pane choices mirror the wezterm plugin: the active tab is panes +
     # the active workspace is panes + the global top-level panes, deduped
-    # first-id-wins. A workspace==a zellij session, so a pane nested under a
+    # first-id-wins. A workspace==a mux session, so a pane nested under a
     # workspace surfaces only while that workspace is the live one ($ws); a
     # pane nested under a tab surfaces only while that tab is active ($tab).
     # Tabs/workspaces themselves are listed at the top level only.
@@ -261,7 +261,7 @@ if ((force_build)) || pick::cache_stale "$LINES_CACHE" "$TARGETS" "$SCRIPT_PATH"
           ($ic | paint(c_glyph)) + "  " + ($label | paint(c_key)) + $suffix;
           $fields
         );
-    # The Zellij session name is the workspace `name` (default `id`) — the same
+    # The mux session name is the workspace `name` (default `id`) — the same
     # join key dispatch and the .zshrc boot session use; `id` is only the
     # dedup/CLI key. A workspace is "live" when a session of that name exists
     # ($live is the running session names). Capture the workspace before piping

@@ -17,8 +17,8 @@
 #   Enter    raw emoji        (e.g. 🎨)
 #   Ctrl-N   :name:           (e.g. :art:)
 # The Alt- twins (Alt-Enter = emoji, Alt-N = :name:) insert WITHOUT closing
-# the picker: the value goes to the originating zellij pane when embedded
-# (PICK_INJECT_PANE / PICK_INJECT_ZELLIJ, set by zellij-modal), otherwise to
+# the picker: the value goes to the originating mux pane when embedded
+# (PICK_INJECT_PANE, set by tmux-modal / rex-modal), otherwise to
 # the system clipboard.
 #
 # Recently-picked gitmojis float to the top: each pick stamps `last_used` in
@@ -49,7 +49,7 @@ Inside the picker:
   Ctrl-N           output the :name: code (e.g. :tada:)
   Alt-Enter        insert the emoji WITHOUT closing the picker
   Alt-N            same, but insert the :name: code
-                   (sink: the originating zellij pane when embedded,
+                   (sink: the originating mux pane when embedded,
                     else the system clipboard)
   Tab / Ctrl-A     (with --multi) mark / select-all
 

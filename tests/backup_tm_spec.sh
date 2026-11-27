@@ -725,19 +725,17 @@ EOF
       mkdir -p "$FIX/anchor" "$S/mnt/ids/cccc0000$FIX/anchor" "$S/mnt/ids/aaaa0000$FIX/anchor"
       printf '4242\n' > "$S/lens.pid"
       STUB="$FIX/stub"; mkdir -p "$STUB"
-      printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
-      chmod +x "$STUB/zellij"
       printf '#!/bin/sh\necho "tmux $*" >> "%s/tx.calls"\n' "$FIX" > "$STUB/tmux"
       chmod +x "$STUB/tmux"
       PATH="$STUB:$PATH"
       # The write-through path goes through the shim now (mux::send_text).
       export MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
-      export ZELLIJ_BIN="$STUB/zellij" MUX_TMUX_BIN="$STUB/tmux"
+      export MUX_TMUX_BIN="$STUB/tmux"
     }
     cleanup_fix() {
       rm -rf "$FIX"
       unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG BKP_MANIFEST MUX_LIB \
-            ZELLIJ_BIN MUX_TMUX_BIN ZELLIJ TMUX
+            MUX_TMUX_BIN TMUX
     }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
@@ -746,14 +744,6 @@ EOF
       When run zsh "$BIN" route shift+down 4242
       The status should be success
       The contents of file "$FIX/sessions/s.test/rung" should equal 2
-    End
-
-    It 'writes the key through when no session owns the pid (zellij)'
-      route_through() { ZELLIJ=1 zsh "$BIN" route shift+down 9999; }
-      When run route_through
-      The status should be success
-      The contents of file "$FIX/zj.calls" should include "action write-chars"
-      The contents of file "$FIX/sessions/s.test/rung" should equal 1
     End
 
     It 'writes the key through when no session owns the pid (tmux)'
@@ -863,7 +853,6 @@ EOF
       } > "$STUB/restic"
       chmod +x "$STUB/restic"
       PATH="$STUB:$PATH"
-      unset ZELLIJ
     }
     cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG BKP_TM_ASSUME_YES; }
     BeforeEach 'setup_fix'
@@ -900,7 +889,7 @@ EOF
     It 'fzf multi-pick preserves spaces in paths and skips /dev/null'
       run_it() {
         printf 'diff\n' > "$S/lens"
-        # No ZELLIJ in this fixture -> tm_apply takes the inline fzf
+        # No mux in this fixture -> tm_apply takes the inline fzf
         # multi-pick over current.patch's +++ b/--- a header lines. Real
         # git diff appends a trailing tab on --- /+++ lines whose path
         # has a space — this fixture reproduces that so the tab-strip is
@@ -946,16 +935,23 @@ EOF
 [{"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
 EOF
       STUB="$FIX/stub"; mkdir -p "$STUB"
-      printf '#!/bin/sh\necho "zellij $*" >> "%s/zj.calls"\n' "$FIX" > "$STUB/zellij"
-      chmod +x "$STUB/zellij"
+      cat > "$STUB/tmux" <<EOF
+#!/bin/sh
+echo "tmux \$*" >> "$FIX/tx.calls"
+case "\$1" in
+  split-window) echo "%9" ;;
+  display) echo "2" ;;
+esac
+EOF
+      chmod +x "$STUB/tmux"
       printf '#!/bin/sh\necho "tm $*" >> "%s/tm.calls"\n' "$FIX" > "$STUB/system-backup-tm"
       chmod +x "$STUB/system-backup-tm"
       export BKP_TM_BIN="$STUB/system-backup-tm"
       PATH="$STUB:$PATH"
       mkdir -p "$FIX/anchor"
-      export ZELLIJ=1 ZELLIJ_PANE_ID=1
+      export TMUX=/tmp/sock,1,0 MUX_TMUX_BIN="$STUB/tmux" MUX_LIB="$LIB"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_TM_SESSIONS BKP_MANIFEST BKP_HAS_FUSE ZELLIJ ZELLIJ_PANE_ID BKP_TM_BIN; }
+    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_TM_SESSIONS BKP_MANIFEST BKP_HAS_FUSE TMUX MUX_TMUX_BIN MUX_LIB BKP_TM_BIN; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -975,50 +971,20 @@ EOF
         bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
         bkp::tm::launch explore "$FIX/anchor"
         cat "$FIX/tm.calls"
-        [ -f "$FIX/zj.calls" ] && cat "$FIX/zj.calls" || echo no-zellij-calls
+        grep -q 'split-window' "$FIX/tx.calls" 2>/dev/null && echo split || echo no-split
       }
       When run run_it
       The status should be success
       The output should include "tm lens"
-      The output should include "no-zellij-calls"
+      The output should include "no-split"
       The output should not include "tm timeline"
     End
 
-    It 'splits the diff tab: hunk lens right, timeline in the invoking pane'
-      run_it() {
-        source "$LIB/backup-tm.zsh"; stub_restic
-        bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
-        bkp::tm::launch diff "$FIX/anchor"
-        cat "$FIX/zj.calls"
-        cat "$FIX/tm.calls"
-      }
-      When run run_it
-      The status should be success
-      The output should include "run --close-on-exit --direction right"
-      The output should include "action resize increase left"
-      The output should include "tm timeline"
-      The output should not include "new-tab"
-      # focus deliberately STAYS on the lens pane — no move-focus back
-      The output should not include "move-focus"
-    End
-
-    # tmux twin of the two launches above (mux migration Phase 6.2): the same
-    # session shapes, but the split is SIZED AT CREATION — tmux takes -l, so
-    # the zellij resize-convergence loop must not run at all.
+    # The diff session (mux migration Phase 6.2): hunk lens right, timeline in
+    # the invoking pane. The split is SIZED AT CREATION — tmux takes -l, so no
+    # resize follows it.
     It 'splits the diff window on tmux with the lens sized at split time'
       run_it() {
-        unset ZELLIJ ZELLIJ_PANE_ID
-        export TMUX=/tmp/sock,1,0
-        export MUX_TMUX_BIN="$STUB/tmux"
-        cat > "$STUB/tmux" <<EOF
-#!/bin/sh
-echo "tmux \$*" >> "$FIX/tx.calls"
-case "\$1" in
-  split-window) echo "%9" ;;
-  display) echo "2" ;;
-esac
-EOF
-        chmod +x "$STUB/tmux"
         source "$LIB/backup-tm.zsh"; stub_restic
         bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
         bkp::tm::launch diff "$FIX/anchor"
@@ -1029,7 +995,7 @@ EOF
       The status should be success
       The output should include "split-window -h"
       The output should include "tm timeline"
-      The output should not include "resize increase left"
+      The output should not include "resize-pane"
       The output should not include "new-window"
     End
 
@@ -1049,7 +1015,7 @@ bkp::restic() {
 }
 bkp::mount() { mkdir -p "\$2/snapshots"; REPLY=\$\$; }
 bkp::umount() { print umount >> "$FIX/calls"; }
-unset ZELLIJ
+unset TMUX
 s=\$(bkp::tm::session_new explore "$FIX/anchor")
 bkp::tm::fallback "\$s"
 [[ -d "\$s" ]] && print leaked || print cleaned
@@ -1089,7 +1055,7 @@ EOS
       export MUX_LIB="$FIX/muxlib"; mkdir -p "$MUX_LIB"
       cat > "$MUX_LIB/mux.zsh" <<'EOF'
 mux::available()   { return 0; }
-mux::backend()     { print -r -- zellij; }
+mux::backend()     { print -r -- tmux; }
 mux::current_tab() { print -r -- tab1; }
 mux::focus_tab()   { return 0; }
 mux::split()       { return 1; }   # the failure under test
@@ -1184,134 +1150,65 @@ line two."
     End
   End
 
-  Describe 'tm-tab: sessions in a fresh zellij tab'
+  Describe 'tm-tab: sessions in a fresh mux tab'
     BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_tm-tab"
     setup_fix() {
       FIX=$(mktemp -d)
-      mkdir -p "$FIX/stub" "$FIX/layouts"
-      # a stand-in default.kdl: recognizable chrome content + closing brace
-      cat > "$FIX/layouts/default.kdl" <<'EOF'
-layout {
-    pane_template name="chrome-pane" borderless=true {
-        plugin location="status-bar"
-    }
-    default_tab_template {
-        children
-        chrome-pane size=1
-    }
-}
-EOF
-      # zellij stub: records argv, snapshots the layout before the reaper
-      cat > "$FIX/stub/zellij" <<EOF
+      mkdir -p "$FIX/stub"
+      cat > "$FIX/stub/tmux" <<EOF
 #!/bin/sh
-printf '%s\n' "\$*" >> "$FIX/zellij.calls"
-while [ \$# -gt 0 ]; do
-  [ "\$1" = "--layout" ] && cp "\$2" "$FIX/layout.kdl"
-  shift
-done
+echo "tmux \$*" >> "$FIX/tmux.calls"
 EOF
       cat > "$FIX/stub/system-backup" <<EOF
 #!/bin/sh
 printf 'browse-direct %s\n' "\$*" >> "$FIX/sb.calls"
 EOF
-      chmod +x "$FIX/stub/zellij" "$FIX/stub/system-backup"
+      chmod +x "$FIX/stub/tmux" "$FIX/stub/system-backup"
     }
     cleanup_fix() { rm -rf "$FIX"; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
-    It 'bakes the session command into a chrome-preserving layout'
+    # A window takes its command directly: no layout file, no escaping dance.
+    It 'opens a plain tmux window with the command'
       run_it() {
-        PATH="$FIX/stub:$PATH" TM_TAB_LAYOUTS="$FIX/layouts" ZELLIJ=1 \
-          zsh "$BIN" "$FIX/some dir"
-        grep -v list-clients "$FIX/zellij.calls"
-        cat "$FIX/layout.kdl"
+        PATH="$FIX/stub:$PATH" TMUX=/tmp/sock,1,0 \
+          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
+          MUX_TMUX_BIN="$FIX/stub/tmux" zsh "$BIN" "$FIX/some dir"
+        cat "$FIX/tmux.calls"
       }
       When run run_it
       The status should be success
-      The line 1 should start with "action new-tab --name tm: some dir --layout "
-      # the default layout's chrome must ride along...
-      The output should include 'default_tab_template'
-      The output should include 'chrome-pane size=1'
-      # ...wrapped around our command tab
-      The output should include 'tab name="tm: some dir" focus=true'
-      The output should include 'pane command="/bin/zsh"'
-      The output should include 'some\\ dir'
-      The output should include "close_on_exit true"
-    End
-
-    It 'escapes KDL-hostile characters in the baked command'
-      run_it() {
-        PATH="$FIX/stub:$PATH" TM_TAB_LAYOUTS="$FIX/layouts" ZELLIJ=1 \
-          zsh "$BIN" "$FIX/we\"ird"
-        grep 'args "-c"' "$FIX/layout.kdl"
-      }
-      When run run_it
-      The status should be success
-      # zsh (q) shell-escapes the quote, then KDL escaping doubles the
-      # backslash and escapes the quote for the layout string
-      The output should include 'we\\\"ird'
-    End
-
-    It 'still opens a session when no default layout exists (no chrome)'
-      run_it() {
-        PATH="$FIX/stub:$PATH" TM_TAB_LAYOUTS="$FIX/nowhere" ZELLIJ=1 \
-          zsh "$BIN" "$FIX/some dir"
-        cat "$FIX/layout.kdl"
-      }
-      When run run_it
-      The status should be success
-      The line 1 should equal "layout {"
-      The output should include 'tab name="tm: some dir" focus=true'
-      The output should not include 'default_tab_template'
+      The output should include "new-window -n tm: some dir"
+      The output should include "system-backup"
     End
 
     It 'drops empty positionals and anchors at PWD'
       run_it() {
         cd "$FIX"
-        PATH="$FIX/stub:$PATH" TM_TAB_LAYOUTS="$FIX/layouts" ZELLIJ=1 \
-          zsh "$BIN" ""
-        grep 'args "-c"' "$FIX/layout.kdl"
+        PATH="$FIX/stub:$PATH" TMUX=/tmp/sock,1,0 \
+          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
+          MUX_TMUX_BIN="$FIX/stub/tmux" zsh "$BIN" ""
+        grep new-window "$FIX/tmux.calls"
       }
       When run run_it
       The status should be success
       The output should include "browse $FIX"
     End
 
-    # tmux needs no layout at all: a window takes its command directly, so
-    # the chrome-preservation dance (a layout derived from default.kdl) is
-    # zellij-only.
-    It 'opens a plain tmux window with the command, no layout file'
-      run_it() {
-        cat > "$FIX/stub/tmux" <<EOF
-#!/bin/sh
-echo "tmux \$*" >> "$FIX/tmux.calls"
-EOF
-        chmod +x "$FIX/stub/tmux"
-        PATH="$FIX/stub:$PATH" TMUX=/tmp/sock,1,0 ZELLIJ= \
-          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-          MUX_TMUX_BIN="$FIX/stub/tmux" zsh "$BIN" "$FIX/some dir"
-        cat "$FIX/tmux.calls"
-        [[ -f "$FIX/layout.kdl" ]] && print layout-was-written || print no-layout
-      }
-      When run run_it
-      The status should be success
-      The output should include "new-window -n tm: some dir"
-      The output should include "system-backup"
-      The output should include "no-layout"
-    End
-
     It 'degrades to an inline session outside any mux'
       run_it() {
         cd "$FIX"
-        PATH="$FIX/stub:$PATH" ZELLIJ= TMUX= zsh "$BIN" --diff "$FIX"
+        PATH="$FIX/stub:$PATH" TMUX= \
+          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
+          zsh "$BIN" --diff "$FIX"
         cat "$FIX/sb.calls"
-        [[ -f "$FIX/zellij.calls" ]] && print zellij-was-called || print no-zellij
+        [[ -f "$FIX/tmux.calls" ]] && print mux-was-called || print no-mux
       }
       When run run_it
       The status should be success
       The output should include "browse-direct browse --diff $FIX"
-      The output should include "no-zellij"
+      The output should include "no-mux"
     End
   End
 End

@@ -1,5 +1,7 @@
 # Theme Unification — chezmoi dotfiles repo
 
+> **Note (2026-11-27):** zellij support was removed from this repo; tmux and Rex are the supported multiplexers. Zellij mentions below are historical.
+
 A **single source of truth** for color across every app, CLI, and shell in this
 repo: one switchable, role-based schema in `home/.chezmoidata/theme.yaml`, with
 thin per-format projections (and per-app generated themes) that each consumer

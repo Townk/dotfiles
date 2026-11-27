@@ -2,7 +2,7 @@
 # theme-common.zsh — semantic theme tokens (THEME_*), decoration glyphs,
 # and theme::rule, all built from the C_*/C_HEX_* palette in common.zsh.
 # SOURCED, never executed. The single styling source of truth for the dialog
-# family (zellij-modal, input::*, zj::*).
+# family (tmux-modal / rex-modal, input::*, mux::*).
 
 _theme_self="${(%):-%x}"
 source "$(dirname "$_theme_self")/common.zsh"
@@ -33,7 +33,7 @@ THEME_ICON_TAB_SEP="▏"
 # theme::sgr_fg "#rrggbb" — a 24-bit set-foreground SGR built from a hex value.
 # Use for color that must render regardless of the source-time `[ -t 1 ]` gate:
 # the C_*/THEME_* SGR vars are empty when a script's stdout is a captured file
-# (e.g. input-widget under zellij-modal), but C_HEX_* are always set. The
+# (e.g. input-widget under a mux modal), but C_HEX_* are always set. The
 # input::confirm hint always prints to /dev/tty, so it builds its colors here.
 #
 # THE single hex→SGR pair (C1 consolidation): the former pick / backup-tm /
@@ -200,7 +200,7 @@ theme::rule() {
   ((cols < 1)) && cols=1
   # Pad an explicitly-set empty parameter ($fill) to width $cols with ━. The
   # parameter name is REQUIRED: a bare ${(l:cols::━:)} aborts under `set -u`
-  # ("parameter not set"), which silently kills zellij-modal (run with
+  # ("parameter not set"), which silently kills a modal script (run with
   # `set -euo pipefail`) before it spawns its dialog target.
   local fill=""
   printf '%s' "${(l:cols::━:)fill}"

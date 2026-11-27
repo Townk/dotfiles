@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # input-common.zsh — input::* themed INLINE widgets (confirm/line/text/choose/
 # form). SOURCED, never executed. The portable widget layer any script can use;
-# zj::* (zellij.zsh) floats these in a pane. Theme + boilerplate live here once.
+# mux::* (mux.zsh; zj::* are its aliases) floats these in a pane. Theme + boilerplate live here once.
 
 _input_self="${(%):-%x}"
 source "$(dirname "$_input_self")/theme-common.zsh"

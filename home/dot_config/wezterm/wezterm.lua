@@ -386,22 +386,21 @@ wezterm.on("window-config-reloaded", function(window, _)
 	notify_config_reloaded()
 end)
 
--- Is this pane's foreground process a mux client? Both backends are first
--- class here (migration Phase 6): the helpers below take the client's pid and
--- resolve the backend from the process itself, so WezTerm only has to decide
--- "mux or not". Matched on the executable path, like every other gate here.
+-- Is this pane's foreground process a mux client? The helpers below take the
+-- client's pid and resolve the backend from the process itself, so WezTerm
+-- only has to decide "mux or not". Matched on the executable path, like every other gate here.
 local function is_mux_client(exe)
-	return exe:find("zellij") ~= nil or exe:find("tmux") ~= nil
+	return exe:find("tmux") ~= nil
 end
 
 -- CMD+click on a file:// link inside a mux opens it locally: directories in a
 -- Yazi tab, images in a floating preview, text/code in an nvim tab (see
 -- ~/.config/mux/scripts/mux-open). The clicked pane's foreground process is the
--- mux client — zellij or tmux; mux-open reads the backend from that process,
+-- mux client (tmux); mux-open reads the backend from that process,
 -- resolves which session it is attached to, and dispatches there. Non-file
 -- links (and panes running neither mux) fall through to WezTerm's default
--- open. Requires OSC 8 forwarding on the mux side (zellij `osc8_hyperlinks
--- true`, tmux `terminal-features hyperlinks`) so file:// links reach WezTerm.
+-- open. Requires OSC 8 forwarding on the mux side (tmux `terminal-features
+-- hyperlinks`) so file:// links reach WezTerm.
 wezterm.on("open-uri", function(_, pane, uri)
 	if not uri:find("^file://") then
 		return true
@@ -572,7 +571,7 @@ local function send_meh(ch)
 end
 
 -- True when the focused pane is a mux client attached to a nested workspace
--- session. The pane's foreground process is the mux client (zellij or tmux);
+-- session. The pane's foreground process is the mux client (tmux);
 -- nested-session-check resolves which session it is on through the shim (live,
 -- so it tracks in-place swaps) and tests it against the registry quick-launch
 -- maintains. Drives the Cmd+Shift+P / Cmd+Shift+Alt+P split: inside a nested

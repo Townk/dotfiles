@@ -2,23 +2,16 @@
 # mux-quit-confirm — backend-neutral session-kill confirm dialog (mux
 # migration Phase 2; spec 2.3's "quit-confirm dialog per-backend kill path").
 #
-# Runs INSIDE the modal (zellij-modal action mode / tmux-modal action mode
-# via display-popup). Themed input::confirm widget; defaults to Cancel so
-# Enter/ESC are safe. Only the affirmative answer kills:
-#   zellij → `zellij kill-session $ZELLIJ_SESSION_NAME` (NOT `action quit`,
-#            which only quits the current client in some setups — same
-#            rationale zellij-quit-confirm had before Phase 6 retired it (the
-#            Zellij keybind until the Phase 6 sweep re-points it here)
+# Runs INSIDE the modal (tmux-modal action mode via display-popup). Themed
+# input::confirm widget; defaults to Cancel so Enter/ESC are safe. Only the
+# affirmative answer kills:
 #   tmux   → `tmux kill-session` (current session)
 
 set -euo pipefail
 
 source "$HOME/.local/lib/input-common.zsh"
 
-if [[ -n "${ZELLIJ:-}" ]]; then
-  session="${ZELLIJ_SESSION_NAME:-}"
-  kill_cmd() { "${ZELLIJ_BIN:-zellij}" kill-session "$session"; }
-elif [[ -n "${TMUX:-}" ]]; then
+if [[ -n "${TMUX:-}" ]]; then
   TMUX_BIN="${MUX_TMUX_BIN:-tmux}"
   session="$("$TMUX_BIN" display -p '#{session_name}' 2>/dev/null)"
   kill_cmd() { "$TMUX_BIN" kill-session; }

@@ -192,13 +192,12 @@ quit-after-last-window-closed = true
 # ---------------------------------------------------------------
 # Keybindings
 # ---------------------------------------------------------------
-# Pane/tab/split bindings live in the multiplexer (zellij's config.kdl /
-# tmux's keymap). Only Ghostty-specific shortcuts stay here so they don't
+# Pane/tab/split bindings live in the multiplexer (tmux's keymap). Only Ghostty-specific shortcuts stay here so they don't
 # get swallowed before reaching it.
 
-# Cmd+F triggers the mux's search. We send ESC + / (`Alt+/`), which BOTH
-# backends bind to their search entry (zellij: SwitchToMode "entersearch";
-# tmux: copy-mode + the search dialog), so this needs no per-backend branch
+# Cmd+F triggers the mux's search. We send ESC + / (`Alt+/`), which tmux
+# binds to its search entry (copy-mode + the search dialog), so this needs
+# no per-backend branch
 # (migration D22). Done this way because the mux's scrollback is the
 # relevant buffer whenever one is running.
 keybind = cmd+f=text:\x1b/
@@ -342,9 +341,9 @@ keybind = cmd+j=text:\x1b[106;8u
 keybind = cmd+shift+arrow_up=text:\x1b[98;8u
 keybind = cmd+shift+arrow_down=text:\x1b[102;8u
 
-# Cmd+N opens a fresh Ghostty window. Because zellij's config sets
-# `attach_to_session true` without a `session_name`, each new shell that
-# launches zellij gets its own random-named session — exactly what we want.
+# Cmd+N opens a fresh Ghostty window. The .zshrc autostart gives each new
+# shell its own anonymous mux session when Main already has a client —
+# exactly what we want.
 keybind = cmd+n=new_window
 
 # Reload Ghostty config from disk without restarting.
@@ -356,17 +355,13 @@ keybind = cmd+r=reload_config
 # consume the key before tmux can make that distinction.
 keybind = alt+enter=text:\x1b\r
 
-# Open Ghostty's config in nvim in a new zellij tab of the current session.
-# Forwarded as the leader chord `Alt+w ,`; zellij's `,` chord uses the
-# edit-ghostty-config.kdl layout (a single nvim pane). Must use `,` (the
+# Open Ghostty's config in nvim in a new mux tab of the current session.
+# Forwarded as the leader chord `Alt+w ,` (edit-terminal-config). Must use `,` (the
 # codepoint form) to override the default `super+,=open_config` — the
 # named form `cmd+comma` is a different trigger that doesn't shadow it.
 keybind = cmd+,=text:\x1bw,
 
 # NOTE on jump_to_prompt: Ghostty's native `jump_to_prompt` action is
-# unusable while zellij is multiplexing — zellij's VTE parser has no
-# OSC 133 dispatcher (only OSC 7), so the markers are silently dropped
-# at parse time and never reach Ghostty's scrollback. The Cmd+Shift+
-# Up/Down chords above route to zellij's zj-promptjump plugin instead,
-# which scans the pane's scrollback for the printable prompt prefix
-# (default `❯ ` / `❮ ` from p10k) and re-aligns the viewport.
+# unusable while a mux is multiplexing — the OSC 133 markers stay in the
+# mux and never reach Ghostty's scrollback. The Cmd+Shift+Up/Down chords
+# above route to the mux's own prompt jump instead.

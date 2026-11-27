@@ -13,8 +13,8 @@ never on `PATH`) live in `~/.local/libexec/` instead. Each is reached by an
 absolute path from its caller, so it never needs to be on `PATH`:
 
 - `pinentry-auto` — gpg-agent's `pinentry-program` (set in `gpg-agent.conf`);
-- `pick-glyph`, `pick-gitmoji` — the fzf symbol pickers, driven by the zellij
-  `pick-{glyph,gitmoji}-zellij` adapters (`Ctrl+Shift+u` / `Ctrl+Shift+g`);
+- `pick-glyph`, `pick-gitmoji` — the fzf symbol pickers, driven by the mux
+  key binds through `tmux-modal` / `rex-modal` (`Ctrl+Shift+u` / `Ctrl+Shift+g`);
   backed by `pick-symbols.zsh` → `pick-common.zsh`.
 - `pick-list` — a generic standalone front-end to `pick::start`, used by
   `mux::pick` (in `mux.zsh`) to run a picker inside a floating pane on
@@ -37,14 +37,13 @@ absolute path from its caller, so it never needs to be on `PATH`:
   driven by an ssh `Match originalhost ... exec` hook (see `~/.ssh/config.example`).
 - `theme-apply` — resolves the EFFECTIVE theme (canonical ⊕ the loose per-machine
   `~/.config/theme/override.toml`) into the runtime files the shell, dialogs, and
-  Zellij read; run from shell init (`dot_zshrc`) before the Zellij attach, and by
+  tmux read; run from shell init (`dot_zshrc`) before the mux attach, and by
   the user-facing `theme-reset` (in `bin`), which clears the override and re-runs it.
 - The AI terminal assistant is now the single `ai-playbook` Go binary
   (`~/Projects/langs/go/ai-playbook`, manually `go install`ed), which subsumes the
   former `ai-assist-*` shell stack (popup/input/shell/run/ask/remember/triage/
   render/pager/harness wrappers). It is launched by the `ai-assist-trigger` ZLE
-  widget (bound to `Ctrl+Shift+/`, delivered as kitty `CSI 47;6u` by
-  `zj-context-keys`), which just runs `ai-playbook troubleshoot`.
+  widget (bound to `Ctrl+Shift+/`, delivered as kitty `CSI 47;6u`), which just runs `ai-playbook troubleshoot`.
 
 ## Library layering
 
@@ -58,8 +57,8 @@ common.zsh ............. base "stdlib": C_* palette, log_info/log_ok/log_warn/
    ├── pick-common.zsh ........... pick::*  (the fzf picker engine)
    │     ├── pick-symbols.zsh          pick_symbols::*  (glyph/gitmoji shared bits)
    │     └── mux.zsh ............. mux::*  (the mux shim: pick/confirm/line/
-   │           ├── mux/zellij.zsh   choose/text/form + panes, tabs, sessions;
-   │           └── mux/tmux.zsh     floats the picker inside either mux, runs
+   │           ├── mux/tmux.zsh     choose/text/form + panes, tabs, sessions;
+   │           └── mux/rex.zsh      floats the picker inside either mux, runs
    │                                inline outside one. zj::* stay as aliases)
    ├── system-package-common.zsh .. pkg::*  (manifest parsing, version diff,
    │                              restart hook, outdated rows, table print)
@@ -98,7 +97,7 @@ The rule reads as: *bare = stdlib, `::` = a library module.*
 
 | Category | Scripts | Backing library |
 |---|---|---|
-| AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh`, `zellij.zsh` |
+| AI-driven git commits | `ai-commit` + `ai-commit-{pi,cursor}` | `commit-agent-common.zsh`, `mux.zsh` |
 | AI terminal assistant | `ai-playbook` (Go binary; not a script here) | — |
 | File preview (fzf/yazi) | `preview` | — |
 | Editor/terminal glue | `tab-edit`² | `platform.zsh` (tab-edit) |
@@ -133,7 +132,7 @@ that already sources the library can call `notify …` directly — no extra
 process between it and Hammerspoon's `hs` CLI. The bin is the standalone
 front-end (help text, argument handling, and a hard error when Hammerspoon
 isn't running). The library function is best-effort instead: it returns
-non-zero quietly so hot paths (e.g. the zellij `copy-pwd` helper) can ignore a
+non-zero quietly so hot paths (e.g. the mux `copy-pwd` helper) can ignore a
 missing OSD.
 
 ## `pbcopy` / `pbpaste`
@@ -147,7 +146,7 @@ sitting at the Mac or SSH'd into a remote host, and they shadow the real
   to the platform's real tool (macOS `/usr/bin/pbcopy`/`pbpaste`, or
   `wl-copy`/`wl-paste`/`xclip` on Linux).
 - **Over SSH**: `pbcopy` base64-encodes stdin and writes an OSC 52 sequence
-  straight to `/dev/tty` (write-only, rides up through Zellij/WezTerm to the
+  straight to `/dev/tty` (write-only, rides up through tmux/WezTerm to the
   Mac's clipboard — see terminal-mux's OSC 52 notes in
   `docs/chezmoi-silo-map.md`). `pbpaste` reads the Mac's clipboard back over
   the clipboard-bridge reverse tunnel — a framed `G` (get) request to loopback

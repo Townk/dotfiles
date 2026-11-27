@@ -10,7 +10,7 @@
 # Rather than pick a backend statically, the config points every template at
 # THIS script and we resolve the backend per invocation through the shim —
 # the same rule as every other consumer: whichever mux the calling pane is in
-# wins, so a zellij session and a tmux session work side by side.
+# wins, so a tmux session and a Rex session work side by side.
 #
 # Subcommands map 1:1 onto ai-playbook's five templates:
 #
@@ -112,9 +112,9 @@ case "$cmd" in
   # ("terminal_{ZELLIJ_PANE_ID}"), and it resolves to empty whenever
   # $ZELLIJ_PANE_ID is unset, i.e. always under tmux. So we ignore it and let
   # the shim target our own pane: we are a direct child of the ai-playbook
-  # process running in the origin pane, so $TMUX_PANE / $ZELLIJ_PANE_ID are
-  # inherited and correct on either backend. Accepting the flag keeps the
-  # zellij template valid rather than making it an error.
+  # process running in the origin pane, so $TMUX_PANE / $REX_BLOCK are
+  # inherited and correct on either backend. Accepting the flag keeps
+  # ai-playbook's template valid rather than making it an error.
   dump)
     parse_common "$@"
     mux::dump_screen

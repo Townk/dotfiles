@@ -18,7 +18,7 @@
 #
 # Keys:
 #   Enter        paste the selected clip's text into the originating pane
-#                (zellij-modal captures pick-clipboard's stdout, so we print the
+#                (the mux modal captures pick-clipboard's stdout, so we print the
 #                re-fetched text after pick::start returns the id).
 #   Ctrl-O       "sticky" (--key-background): re-fetch + insert WITHOUT
 #                dismissing. The GUI picker uses Ctrl-Enter for this, but fzf
@@ -1529,9 +1529,9 @@ if [[ "${1:-}" == --pull-live ]]; then
 fi
 
 # --no-border (front-end CLI flag, shared-lib Wave 2, group C5, Decision 1) -----
-# The zellij floating pane draws its own frame, so the modal wants fzf rendered
+# The mux float draws its own frame, so the modal wants fzf rendered
 # borderless. This is now accepted as a --no-border CLI flag -- matching
-# pick-glyph / pick-gitmoji, so all four zellij picker adapters drive the
+# pick-glyph / pick-gitmoji, so every picker embedder drives the
 # borderless look through the flag form -- and forwarded into the pick::start
 # args below. PICK_CLIPBOARD_NO_BORDER is still honored as harmless back-compat
 # (the adapter no longer sets it). --restore-id is dispatched above and never
@@ -1651,7 +1651,7 @@ clip::render_restore_failure() {
 
 # --- live entry accept handlers (spec §22.4) --------------------------------
 # The three below act on the already-fetched peer text in LIVE_TEXT_FILE — no
-# second fetch. deliver = print it (zellij-modal injects our stdout into the
+# second fetch. deliver = print it (the mux modal injects our stdout into the
 # pane); copy = set the clipboard I'm sitting at (clip.set with the peer's
 # regtype); materialize = persist a self-contained local row via
 # store.persist.text on THIS machine's own bridge (the trusted socket), so the
@@ -1702,14 +1702,12 @@ clip::materialize_live_files() {
   return 0
 }
 
-# Inject a clip's text into the originating zellij pane (embed mode), else
+# Inject a clip's text into the originating Rex pane (embed mode), else
 # fall back to copy. Mirrors pick::background_sink's inject path.
 clip::inject_by_id() {
   local id=$1 text
   text="$(clip::text_by_id "$id")"
-  if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_ZELLIJ:-}" ]]; then
-    ${(z)PICK_INJECT_ZELLIJ} action write-chars --pane-id "$PICK_INJECT_PANE" -- "$text"
-  elif [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_REX:-}" ]]; then
+  if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_REX:-}" ]]; then
     # Rex twin (rex-modal): one binary path, never word-split.
     "$PICK_INJECT_REX" --autostart=false send -s "$PICK_INJECT_PANE" -b "$PICK_INJECT_PANE" -- "$text"
   elif command -v pbcopy >/dev/null 2>&1; then
@@ -2715,7 +2713,7 @@ pick_args=(
 
 # pick::start prints one accept marker on stdout: the plain id (Enter), "MD:id"
 # (Alt-Enter, markdown), or "CP:id" (Ctrl-Y, copy). We re-fetch by id and print
-# the appropriate rendering, which zellij-modal's stdout capture injects into
+# the appropriate rendering, which the mux modal's stdout capture injects into
 # the originating pane -- EXCEPT Ctrl-Y, which copies to the clipboard (with the
 # register type, so a block clip stays block-pasteable) and prints nothing, so
 # nothing is injected. pick::start's --copy-only path is not used here.
@@ -2753,8 +2751,8 @@ esac
 
 # W2: a Ctrl-Y files-restore failure (rsync pull of a since-vanished remote
 # path, a stale localized row, …) used to be unreadable -- its one-line
-# reason printed to stderr right as this script exited, and zellij-modal's
-# floating pane (close_on_exit) was gone a heartbeat later (validated live
+# reason printed to stderr right as this script exited, and the modal's
+# float (close on exit) was gone a heartbeat later (validated live
 # twice). Hold it on screen instead of letting it vanish with the picker:
 # only fires when clip::copy_by_id actually hit a files-restore failure
 # above (CLIP_RESTORE_FAILURE non-empty), we're on the interactive path

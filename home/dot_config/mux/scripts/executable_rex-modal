@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # rex-modal — Rex backend of the shared floating-modal scaffolding. The
-# interface mirrors tmux-modal and zellij-modal exactly; it runs INSIDE a Rex
+# interface mirrors tmux-modal exactly; it runs INSIDE a Rex
 # floating layer (session.new_layer, opened by _mux_rx_layer) whose command
 # it is, so the layer closes when this script exits.
 #

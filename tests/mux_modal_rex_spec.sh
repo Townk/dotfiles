@@ -31,7 +31,7 @@ EOS
   AfterEach 'cleanup'
 
   modal() {
-    env -u TMUX -u ZELLIJ HOME=/home/u REX_SESSION=session:s REX_BLOCK=block:origin \
+    env -u TMUX HOME=/home/u REX_SESSION=session:s REX_BLOCK=block:origin \
       MUX_REX_BIN="$MM_TMP/rex" MUX_LIB="$LIB" MUX_MODAL_REX_MISSES="${MISSES:-25}" zsh "$MODAL" "$@" 2>"$MM_TMP/err"
   }
   cmdline() { jq -r '.layout.block.options.command | join(" ")' "$MM_TMP/req.json"; }
@@ -122,7 +122,7 @@ size=0"
     export STUB_LIFE=6
     run() {
       # exec: the signal must reach the script itself, not a wrapper shell.
-      ( exec env -u TMUX -u ZELLIJ HOME=/home/u REX_SESSION=session:s REX_BLOCK=block:origin \
+      ( exec env -u TMUX HOME=/home/u REX_SESSION=session:s REX_BLOCK=block:origin \
           MUX_REX_BIN="$MM_TMP/rex" MUX_LIB="$LIB" zsh "$MODAL" -- true 2>/dev/null ) &
       local pid=$!
       local i; for i in {1..40}; do [[ -e "$MM_TMP/alive" ]] && break; sleep 0.1; done
@@ -136,7 +136,7 @@ size=0"
   It 'still prefers tmux when both are present'
     run() {
       printf '%s\n' '#!/bin/sh' "echo \"tmux \$1\" >\"$MM_TMP/tmux.log\"" >"$MM_TMP/tmux"; chmod +x "$MM_TMP/tmux"
-      env -u ZELLIJ TMUX=/tmp/s,1,0 TMUX_PANE=%1 REX_BLOCK=block:origin MUX_TMUX_BIN="$MM_TMP/tmux" MUX_REX_BIN="$MM_TMP/rex" MUX_LIB="$LIB" zsh "$MODAL" -- true
+      env TMUX=/tmp/s,1,0 TMUX_PANE=%1 REX_BLOCK=block:origin MUX_TMUX_BIN="$MM_TMP/tmux" MUX_REX_BIN="$MM_TMP/rex" MUX_LIB="$LIB" zsh "$MODAL" -- true
       cat "$MM_TMP/tmux.log"; [[ -e "$MM_TMP/req.json" ]] && print "rex layer" || print "no rex layer"
     }
     When call run

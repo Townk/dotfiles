@@ -6,13 +6,13 @@
 #
 # This is mux.zsh minus the widgets: backend detection plus every
 # session / screen / pane / tab / info verb — the ones that only ever shell
-# out to `tmux` or `zellij`. It exists because the full shim cannot be loaded
+# out to `tmux` or `rex`. It exists because the full shim cannot be loaded
 # from a shell startup path:
 #
 #   * pick-common.zsh runs `require_cmd fzf` at SOURCE time, and require_cmd
 #     calls die → `exit 1`. Sourcing mux.zsh from .zshrc on a box without fzf
 #     would kill the login shell outright.
-#   * pick/input/theme-common cost ~50ms to source; the two backend files
+#   * pick/input/theme-common cost ~50ms to source; the backend files
 #     below cost ~1.5ms together.
 #
 # mux.zsh sources THIS file and then layers the widget API (mux::pick,
@@ -22,16 +22,11 @@
 # .zshrc welcome screen, status-line helpers — source this.
 #
 # Backend resolution (§2): INSIDE a session, runtime detection wins — never
-# the knob — so a Zellij session and a tmux session work correctly side by
-# side on the same machine. $ZELLIJ is checked first: a real Zellij nested
-# in a tmux pane re-exports it, while plain tmux panes never carry a stale
-# copy (tmux.conf scrubs ZELLIJ* — the cross-mux hygiene block). The knob
-# (mux::default_backend) only decides what the Phase 7 autostart LAUNCHES
-# outside any session.
-
-_mux_self="${(%):-%x}"
-source "$(dirname "$_mux_self")/mux/zellij.zsh"
-unset _mux_self
+# the knob — so a tmux session and a Rex session work correctly side by side
+# on the same machine. The knob (mux::default_backend) only decides what the
+# Phase 7 autostart LAUNCHES outside any session.
+#
+# Zellij was a third backend until 2026-11-27, when its support was removed.
 
 _mux_self="${(%):-%x}"
 source "$(dirname "$_mux_self")/mux/tmux.zsh"
@@ -56,16 +51,13 @@ fi
 # and then set this so every mux::* call they make dispatches that way.
 #
 # Rex is detected LAST: $REX_SESSION is inherited by everything started in a
-# Rex pane, including a tmux or zellij launched there by hand, and inside that
-# inner multiplexer it is the inner one whose panes we are in. Same rule that
-# lets a nested zellij win over tmux.
+# Rex pane, including a tmux launched there by hand, and inside that inner
+# multiplexer it is the inner one whose panes we are in.
 mux::backend() {
   case "${MUX_BACKEND:-}" in
-    zellij | tmux | rex) print -r -- "$MUX_BACKEND"; return ;;
+    tmux | rex) print -r -- "$MUX_BACKEND"; return ;;
   esac
-  if [[ -n "${ZELLIJ:-}" ]]; then
-    print -r -- zellij
-  elif [[ -n "${TMUX:-}" ]]; then
+  if [[ -n "${TMUX:-}" ]]; then
     print -r -- tmux
   elif [[ -n "${REX_SESSION:-}" ]]; then
     print -r -- rex
@@ -76,8 +68,8 @@ mux::backend() {
 
 # _mux::unknown_backend <verb> — the ONE way a dispatch `case` ends for a
 # backend it has no arm for. Loud on purpose: these arms used to be `*)` →
-# the zellij (or tmux) implementation, so a third backend silently ran
-# another multiplexer's binary and reported ITS sessions. "none" stays quiet
+# one backend's implementation, so another backend silently ran the wrong
+# multiplexer's binary and reported ITS sessions. "none" stays quiet
 # — being outside any session is an ordinary state, not a mistake.
 _mux::unknown_backend() {
   local b
@@ -94,7 +86,6 @@ _mux::unknown_backend() {
 # today. The knob is how each one is tried; it goes away when they are done.
 mux::available() {
   case "$(mux::backend)" in
-    zellij) _mux_zj_available ;;
     tmux) _mux_tx_available ;;
     rex) [[ -n "${MUX_REX_CONSUMERS:-}" ]] && _mux_rx_available ;;
     *) return 1 ;;
@@ -108,7 +99,7 @@ mux::available() {
 # want driven (mux-open, from the terminal's GUI). Such a shell is not nested,
 # and reading it as nested would make .zshrc's autostart gate refuse to launch
 # a multiplexer at all. This asks only the question the env vars can answer.
-mux::in_session() { [[ -n "${ZELLIJ:-}" || -n "${TMUX:-}" ]]; }
+mux::in_session() { [[ -n "${TMUX:-}" ]]; }
 
 # Knob (§2): the default backend for OUTSIDE-a-session launches, in priority
 # order — the loose, untracked per-machine file (theme-override pattern), then
@@ -126,12 +117,12 @@ mux::default_backend() {
   [[ -r "$f" ]] && b="$(<"$f")"
   b="${b//[[:space:]]/}"
   case "$b" in
-    zellij | tmux) print -r -- "$b"; return ;;
+    tmux) print -r -- "$b"; return ;;
   esac
   # An unrecognised value in either place is IGNORED rather than obeyed: a typo
   # must not leave the login shell with no multiplexer at all.
   case "${1:-}" in
-    zellij | tmux) print -r -- "$1" ;;
+    tmux) print -r -- "$1" ;;
     *) print -r -- tmux ;;
   esac
 }
@@ -195,20 +186,18 @@ mux::session_is_remote() {
 
 # --- binary resolution & wezterm probe (spec §3, C4) -----------------------
 #
-# The ONE public entry to the two backend resolvers, replacing the hand-rolled
-# install-dir searches that had drifted across standalone scripts (zellij-modal,
-# quick-launch's command.zsh, edit-terminal-config — the last of which was
+# The ONE public entry to the backend resolvers, replacing the hand-rolled
+# install-dir searches that had drifted across standalone scripts
+# (quick-launch's command.zsh, edit-terminal-config — the last of which was
 # DEGRADED, missing the mise-shim and /usr/local tiers).
 
-# mux::bin <zellij|tmux> — absolute path to that multiplexer binary, or non-zero
-# when none is found. Delegates to the backend resolvers, which honour
-# $ZELLIJ_BIN / $MUX_TMUX_BIN, then $PATH (command -v), then the known install
-# dirs (homebrew, /usr/local, the mise shim, ~/.local/bin — plus /usr/bin for
-# tmux). That last-resort list is why the .zshrc autostart can find its binary
+# mux::bin <tmux|rex> — absolute path to that multiplexer binary, or non-zero
+# when none is found. Delegates to the backend resolvers; tmux's honours
+# $MUX_TMUX_BIN, then $PATH (command -v), then the known install dirs
+# (homebrew, /usr/local, the mise shim, ~/.local/bin, /usr/bin). That last-resort list is why the .zshrc autostart can find its binary
 # BEFORE it extends $PATH or activates mise.
 mux::bin() {
   case "${1:-}" in
-    zellij) _mux_zj_bin ;;
     tmux)   _mux_tx_bin ;;
     rex)    _mux_rx_bin ;;
     *) return 2 ;;
@@ -216,18 +205,17 @@ mux::bin() {
 }
 
 # mux::wezterm_panes — one TSV row per WezTerm pane: "<tty>\t<window_id>\t<pane_id>".
-# Backend-neutral: both client-session mappers (zellij_wezterm_sessions and
-# _mux_tx_client_sessions) enumerate WezTerm panes this way, then join the tty
-# against their own client list. The `env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE`
+# Backend-neutral: a client-session mapper (_mux_tx_client_sessions)
+# enumerates WezTerm panes this way, then joins the tty against its own client
+# list. The `env -u WEZTERM_UNIX_SOCKET -u WEZTERM_PANE`
 # scrub is REQUIRED — a `cli list` made from inside a WezTerm pane targets that
 # pane's own mux domain, returning just the local pane, unless those vars are
 # cleared so it addresses the GUI. Prints nothing when WezTerm is unreachable
 # (Ghostty, headless), so callers degrade gracefully. WEZTERM_BIN overrides.
 #
-# Its callers live in mux/zellij.zsh and mux/tmux.zsh, both of which are sourced
-# by THIS file above mux::* — and both are only ever reached through
-# mux::client_sessions (defined here), so mux::wezterm_panes is always defined
-# by the time either fires.
+# Its caller lives in mux/tmux.zsh, which is sourced by THIS file above
+# mux::* — and is only ever reached through mux::client_sessions (defined
+# here), so mux::wezterm_panes is always defined by the time it fires.
 mux::wezterm_panes() {
   local wez="${WEZTERM_BIN:-/opt/homebrew/bin/wezterm}"
   command -v "$wez" >/dev/null 2>&1 || wez=wezterm
@@ -245,7 +233,6 @@ mux::resolve_session() {
   case "$b" in
     tmux) _mux_tx_resolve_session "$@" ;;
     rex) _mux_rx_resolve_session "$@" ;;
-    zellij | none) resolve_session "$@" ;;   # zellij impl also serves "none" (socket scan)
     *) _mux::unknown_backend resolve_session ;;
   esac
 }
@@ -254,7 +241,7 @@ mux::attached_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_attached_sessions ;;
     rex) _mux_rx_attached_sessions ;;
-    zellij | none) zellij_attached_sessions ;;
+    none) return 0 ;;   # outside any session: nothing attached, not an error
     *) _mux::unknown_backend attached_sessions ;;
   esac
 }
@@ -271,9 +258,9 @@ mux::attached_sessions() {
 # the anonymous one), and a single verb would have to re-probe the server to
 # rediscover what the query already established.
 #
-# The three-way reuse policy is the caller's; both backends merely implement
-# it. Keeping it mirrored is the whole point of the knob — it is meant to
-# change which mux starts, never how the system behaves.
+# The three-way reuse policy is the caller's; the backend merely implements
+# it. The knob is meant to change which mux starts, never how the system
+# behaves.
 
 # _mux::launch_backend [backend] — which mux these verbs drive. The caller
 # resolves it ONCE via mux::default_backend and passes it to each verb, so the
@@ -281,20 +268,18 @@ mux::attached_sessions() {
 # omitted or unrecognised value resolves it here instead.
 _mux::launch_backend() {
   case "${1:-}" in
-    zellij | tmux) print -r -- "$1" ;;
+    tmux) print -r -- "$1" ;;
     *) mux::default_backend ;;
   esac
 }
 
 # mux::session_state <name> [backend] — missing | idle | busy.
-#   missing  no live session by that name (zellij: an EXITED record counts as
-#            missing, since it must be swept before a fresh one can be made)
+#   missing  no live session by that name
 #   idle     the session is live with no client attached → reattach it
 #   busy     the session already has a client → the caller wants its own
 mux::session_state() {
   [[ -n "${1:-}" ]] || return 2
   case "$(_mux::launch_backend "${2:-}")" in
-    zellij) _mux_zj_session_state "$1" ;;
     *) _mux_tx_session_state "$1" ;;
   esac
 }
@@ -309,7 +294,6 @@ mux::session_state() {
 mux::exec_attach() {
   [[ -n "${1:-}" ]] || return 2
   case "$(_mux::launch_backend "${2:-}")" in
-    zellij) _mux_zj_exec_attach "$1" ;;
     *) _mux_tx_exec_attach "$1" ;;
   esac
 }
@@ -317,14 +301,12 @@ mux::exec_attach() {
 mux::exec_new() {
   [[ -n "${1:-}" ]] || return 2
   case "$(_mux::launch_backend "${2:-}")" in
-    zellij) _mux_zj_exec_new "$1" ;;
     *) _mux_tx_exec_new "$1" ;;
   esac
 }
 
 mux::exec_anonymous() {
   case "$(_mux::launch_backend "${1:-}")" in
-    zellij) _mux_zj_exec_anonymous ;;
     *) _mux_tx_exec_anonymous ;;
   esac
 }
@@ -336,20 +318,16 @@ mux::exec_anonymous() {
 mux::current_session() {
   case "$(mux::backend)" in
     tmux) _mux_tx_resolve_session ;;
-    zellij) [[ -n "${ZELLIJ_SESSION_NAME:-}" ]] && print -r -- "$ZELLIJ_SESSION_NAME" ;;
     rex) _mux_rx_resolve_session ;;
     *) _mux::unknown_backend current_session ;;
   esac
 }
 
 # mux::list_sessions — every session the backend knows about, one per line.
-# NOT the same set on both sides, and deliberately so: zellij also lists
-# EXITED sessions, because it can resurrect them, while tmux only has live
-# ones. Callers that mean "sessions I could switch to" want exactly that.
+# Callers mean "sessions I could switch to".
 mux::list_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_list_sessions ;;
-    zellij) _mux_zj_list_sessions ;;
     rex) _mux_rx_list_sessions ;;
     *) _mux::unknown_backend list_sessions ;;
   esac
@@ -357,13 +335,11 @@ mux::list_sessions() {
 
 # mux::kill_session <name> — end that session for good. "For good" is the
 # contract, not just "kill": after this returns, mux::list_sessions must no
-# longer report the name, so the session picker's row can clear. That costs
-# zellij an extra step (see _mux_zj_kill_session) and tmux none.
+# longer report the name, so the session picker's row can clear.
 mux::kill_session() {
   [[ -n "${1:-}" ]] || return 2
   case "$(mux::backend)" in
     tmux) _mux_tx_kill_session "$1" ;;
-    zellij) _mux_zj_kill_session "$1" ;;
     rex) _mux_rx_kill_session "$1" ;;
     *) _mux::unknown_backend kill_session ;;
   esac
@@ -376,7 +352,6 @@ mux::rename_session() {
   [[ -n "${1:-}" ]] || return 2
   case "$(mux::backend)" in
     tmux) _mux_tx_rename_session "$1" "${2:-}" ;;
-    zellij) _mux_zj_rename_session "$1" "${2:-}" ;;
     rex) _mux_rx_rename_session "$1" "${2:-}" ;;
     *) _mux::unknown_backend rename_session ;;
   esac
@@ -386,21 +361,20 @@ mux::client_sessions() {
   case "$(mux::backend)" in
     tmux) _mux_tx_client_sessions ;;
     rex) _mux_rx_client_sessions ;;
-    zellij | none) zellij_wezterm_sessions ;;
+    none) return 0 ;;   # outside any session: no clients, not an error
     *) _mux::unknown_backend client_sessions ;;
   esac
 }
 
 # mux::dump_screen [--full] — pane text to stdout. Default is the VIEWPORT on
-# both backends; --full prepends the scrollback. Until this had a consumer the
-# two sides disagreed silently (zellij returned the viewport, tmux the whole
+# every backend; --full prepends the scrollback. Until this had a consumer the
+# backends disagreed silently (one returned the viewport, tmux the whole
 # history), so the flag exists to make the contract say which one you meant.
 mux::dump_screen() {
   local full=0
   [[ "${1:-}" == --full ]] && full=1
   case "$(mux::backend)" in
     tmux) _mux_tx_dump_screen "$full" ;;
-    zellij) _mux_zj_dump_screen "$full" ;;
     rex) _mux_rx_dump_screen "$full" ;;
     *) _mux::unknown_backend dump_screen ;;
   esac
@@ -409,7 +383,7 @@ mux::dump_screen() {
 # --- panes / tabs / info (spec §3, D19) ------------------------------------
 #
 # ONE parser per call, here: each backend receives the same normalized
-# positionals, so the two implementations cannot drift on what a flag means.
+# positionals, so the implementations cannot drift on what a flag means.
 # Every call returns non-zero outside a session rather than guessing a
 # backend — a consumer that can degrade (yazi-quick-look, tm-tab) tests
 # `mux::available` first and takes its own inline path.
@@ -417,8 +391,7 @@ mux::dump_screen() {
 # mux::split <direction> [--size N] [--name NAME] [--close-on-exit]
 #            [--cwd DIR] -- <cmd...>
 #   direction: right | left | down | up
-#   --size is honoured natively by tmux (-l) and IGNORED by zellij, whose
-#   `run` cannot size a pane; a zellij caller resizes afterwards.
+#   --size is honoured natively by tmux (-l).
 mux::split() {
   local dir="${1:-right}"; shift 2>/dev/null || :
   local size="" name="" cwd="" close=0
@@ -433,7 +406,6 @@ mux::split() {
     esac
   done
   case "$(mux::backend)" in
-    zellij) _mux_zj_split "$dir" "$size" "$name" "$close" "$cwd" -- "$@" ;;
     tmux)   _mux_tx_split "$dir" "$size" "$name" "$close" "$cwd" -- "$@" ;;
     rex)    _mux_rx_split "$dir" "$size" "$name" "$close" "$cwd" -- "$@" ;;
     *) _mux::unknown_backend split ;;
@@ -442,13 +414,12 @@ mux::split() {
 
 # mux::popup <width> <height> [--title T] [--name N] [--cwd DIR] -- <cmd...>
 #   Geometry: a bare integer is CELLS, an integer with % is a percentage of
-#   the tab viewport (both backends agree; the tmux side converts, since
-#   display-popup percentages measure the full client).
-#   --name and --title are the same thing (zellij pane name ↔ popup title);
-#   both spellings are accepted so call sites read naturally.
-#   --frame asks for a bordered, unpinned float (the image preview): on
-#   zellij it overrides the global `pane_frames false`; on tmux it is a
-#   no-op, since popups always own their border.
+#   the tab viewport (the tmux side converts, since display-popup
+#   percentages measure the full client).
+#   --name and --title are the same thing; both spellings are accepted so
+#   call sites read naturally.
+#   --frame asks for a bordered, unpinned float (the image preview). It is
+#   accepted and ignored: tmux popups always own their border.
 mux::popup() {
   local w="${1:-80%}" h="${2:-80%}"
   shift 2 2>/dev/null || :
@@ -464,7 +435,6 @@ mux::popup() {
     esac
   done
   case "$(mux::backend)" in
-    zellij) _mux_zj_popup "$w" "$h" "$title" "$cwd" "$session" "$frame" -- "$@" ;;
     tmux)   _mux_tx_popup "$w" "$h" "$title" "$cwd" "$session" -- "$@" ;;
     rex)    _mux_rx_popup "$w" "$h" "$title" "$cwd" "$session" -- "$@" ;;
     *) _mux::unknown_backend popup ;;
@@ -472,12 +442,11 @@ mux::popup() {
 }
 
 # mux::new_tab [--session S] [--name N] [--cwd DIR] [-- <cmd...>]
-#   A tmux window IS a zellij tab. --session targets another session by name
+#   A "tab" is a tmux window. --session targets another session by name
 #   (tab-edit dispatches into the session its client is attached to).
 #   --singleton reuses a tab of the same NAME when one is already open,
 #   instead of stacking a second. tmux respawns the command in place (the tab
-#   keeps its index); zellij has no such verb, so it closes and reopens, which
-#   moves the tab to the end. Same guarantee — one tab — either way.
+#   keeps its index).
 mux::new_tab() {
   local session="" name="" cwd="" singleton=0
   while (($#)); do
@@ -491,7 +460,6 @@ mux::new_tab() {
     esac
   done
   case "$(mux::backend)" in
-    zellij) _mux_zj_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
     tmux)   _mux_tx_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
     rex)    _mux_rx_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
     *) _mux::unknown_backend new_tab ;;
@@ -504,10 +472,9 @@ mux::new_tab() {
 #   tab/window switch), unlike mux::popup's client-level modal (job-runner
 #   design §6 rev 4). Width/height are CELL counts only — no percent form,
 #   since every caller sizes this from a value it already computed (troupe's
-#   own --measure), unlike mux::popup's viewport-relative use. Zellij has no
-#   float-pane twin yet (spec: deferred) — always fails here, so the driver
-#   gates on mux::has_float_pane first rather than discovering the gap via a
-#   failed launch.
+#   own --measure), unlike mux::popup's viewport-relative use. Fails outside a
+#   session, so the driver gates on mux::has_float_pane first rather than
+#   discovering the gap via a failed launch.
 mux::float_pane() {
   case "$(mux::backend)" in
     tmux) _mux_tx_float_pane "$@" ;;
@@ -517,8 +484,8 @@ mux::float_pane() {
 }
 
 # mux::has_float_pane — capability probe for mux::float_pane: does the
-# resolved backend/binary actually support it? Zellij and "none" always
-# fail (no twin, no backend); tmux delegates to the real `list-commands`
+# resolved backend/binary actually support it? "none" always fails (no
+# backend); tmux delegates to the real `list-commands`
 # probe (3.7b+ carries `new-pane`, older builds don't).
 mux::has_float_pane() {
   case "$(mux::backend)" in
@@ -531,13 +498,12 @@ mux::has_float_pane() {
 # mux::send_text [--pane P] <text> — inject literal text into a pane. Without
 # --pane the write lands in the FOCUSED pane, which is wrong whenever a float
 # is up: the id keeps the write on the pane the caller meant even while a
-# closing modal owns focus. P is the backend's own id spelling (zellij
-# "terminal_N", tmux "%N") — the caller already has one or the other.
+# closing modal owns focus. P is the backend's own id spelling (tmux "%N") —
+# the caller already has it.
 mux::send_text() {
   local pane=""
   [[ "${1:-}" == --pane ]] && { pane="${2-}"; shift 2; }
   case "$(mux::backend)" in
-    zellij) _mux_zj_send_text "$1" "$pane" ;;
     tmux)   _mux_tx_send_text "$1" "$pane" ;;
     rex)    _mux_rx_send_text "$1" "$pane" ;;
     *) _mux::unknown_backend send_text ;;
@@ -552,19 +518,15 @@ mux::send_key() {
     *) return 2 ;;
   esac
   case "$(mux::backend)" in
-    zellij) _mux_zj_send_key "$1" ;;
     tmux)   _mux_tx_send_key "$1" ;;
     rex)    _mux_rx_send_key "$1" ;;
     *) _mux::unknown_backend send_key ;;
   esac
 }
 
-# mux::current_tab / mux::focus_tab <n> — 1-based tab index, both backends
-# (zellij's list-tabs is 0-based; the +1 lives in the backend, not in
-# callers — that arithmetic was duplicated at every zellij call site).
+# mux::current_tab / mux::focus_tab <n> — 1-based tab index on every backend.
 mux::current_tab() {
   case "$(mux::backend)" in
-    zellij) _mux_zj_current_tab ;;
     tmux)   _mux_tx_current_tab ;;
     rex)    _mux_rx_current_tab ;;
     *) _mux::unknown_backend current_tab ;;
@@ -575,7 +537,6 @@ mux::current_tab() {
 # scopes tab-nested entries by title, so the index cannot stand in for it.
 mux::current_tab_name() {
   case "$(mux::backend)" in
-    zellij) _mux_zj_current_tab_name ;;
     tmux)   _mux_tx_current_tab_name ;;
     rex)    _mux_rx_current_tab_name ;;
     *) _mux::unknown_backend current_tab_name ;;
@@ -585,7 +546,6 @@ mux::current_tab_name() {
 mux::focus_tab() {
   [[ -n "${1:-}" ]] || return 2
   case "$(mux::backend)" in
-    zellij) _mux_zj_focus_tab "$1" ;;
     tmux)   _mux_tx_focus_tab "$1" ;;
     rex)    _mux_rx_focus_tab "$1" ;;
     *) _mux::unknown_backend focus_tab ;;
@@ -599,19 +559,16 @@ mux::focus_tab() {
 # welcome screen shows itself only when this reads 1.
 mux::pane_count() {
   case "$(mux::backend)" in
-    zellij) _mux_zj_pane_count ;;
     tmux)   _mux_tx_pane_count ;;
     rex)    _mux_rx_pane_count ;;
     *) _mux::unknown_backend pane_count ;;
   esac
 }
 
-# mux::pane_cwd [pid] — working directory of the focused pane. tmux answers
-# from its own format; zellij has no such query, so there the pane's root
-# PID is required and the kernel answers (copy-pwd's resolution).
+# mux::pane_cwd — working directory of the focused pane, answered by the
+# backend itself (tmux from its own format).
 mux::pane_cwd() {
   case "$(mux::backend)" in
-    zellij) _mux_zj_pane_cwd "${1:-}" ;;
     tmux)   _mux_tx_pane_cwd ;;
     rex)    _mux_rx_pane_cwd ;;
     *) _mux::unknown_backend pane_cwd ;;
@@ -623,7 +580,7 @@ mux::terminal_size() {
   case "$(mux::backend)" in
     tmux) _mux_tx_terminal_size ;;
     rex) _mux_rx_terminal_size ;;
-    zellij | none) _mux_zj_terminal_size ;;   # zellij impl also serves "none" (tty fallback)
+    none) { stty size </dev/tty 2>/dev/null || printf '24 80\n'; } | awk '{ print $2, $1 }' ;;   # the controlling tty
     *) _mux::unknown_backend terminal_size ;;
   esac
 }
@@ -637,7 +594,6 @@ mux::backend_for_pid() {
   local comm=""
   [[ -n "${1:-}" ]] && comm=$(ps -p "$1" -o comm= 2>/dev/null)
   case "$comm" in
-    *zellij*) print -r -- zellij ;;
     *tmux*)   print -r -- tmux ;;
     *) mux::backend ;;
   esac
@@ -647,7 +603,6 @@ mux::backend_for_pid() {
 # TILED pane (floats excluded: a transient modal is not the pane's context).
 mux::focused_command() {
   case "$(mux::backend_for_pid "${1:-}")" in
-    zellij) _mux_zj_focused_command "${1:-}" ;;
     tmux)   _mux_tx_focused_command "${1:-}" ;;
     rex)    _mux_rx_focused_command "${1:-}" ;;
     *) _mux::unknown_backend focused_command ;;

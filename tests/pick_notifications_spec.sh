@@ -12,7 +12,7 @@ Describe 'pick-notifications'
     # through harmlessly (their history append is the observable).
     export CLIPBOARD_BRIDGE_SOCKET="$TEST_TMP/no-such-socket"
     export HS="$TEST_TMP/no-such-hs"
-    unset TMUX ZELLIJ 2>/dev/null || :
+    unset TMUX 2>/dev/null || :
     mkdir -p "$JOB_PUEUE_LOG_DIR"
     jq -nc '{ts:1755400000,icon:"i",text:"plain toast",sound:"",style:"plain",kind:"generic",source:"x"}' >> "$NOTIFY_HISTORY_FILE"
     jq -nc '{ts:1755400100,icon:"c",text:"Build done",sound:"Glass",style:"plain",kind:"job",source:"job",meta:{job_id:"1-1",pueue_id:7,result:"Success"}}' >> "$NOTIFY_HISTORY_FILE"

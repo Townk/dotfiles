@@ -11,8 +11,7 @@
 # pane-focus-in hook (status.conf), covering the case where the focused pane
 # changes without anyone cd'ing.
 #
-# Cheap by construction: one backgrounded call per cd, only inside tmux, and
-# nothing at all in a zellij pane (zj-hud computes its own).
+# Cheap by construction: one backgrounded call per cd, only inside tmux.
 [[ -o interactive ]] || return 0
 
 _mux_tab_path_stamp() {

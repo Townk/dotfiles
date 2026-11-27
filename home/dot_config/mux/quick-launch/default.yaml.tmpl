@@ -1,14 +1,11 @@
 {{- $hasRex := or (lookPath "rex") (stat (joinPath .chezmoi.homeDir ".config/rex")) -}}
 {{- $hasQmk := and (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk")) (stat (joinPath .chezmoi.homeDir "Projects/platforms/keyboards/qmk-config")) -}}
 {{- $hasWeztermPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/quicklaunch.wezterm")) (stat (joinPath .chezmoi.homeDir "Projects/apps/wezterm/statusbar.wezterm")) -}}
-{{- $hasZellijPlugins := and (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-context-keys/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-prompt-jumper/")) (stat (joinPath .chezmoi.homeDir "Projects/apps/zellij/zj-hud")) -}}
 # default.yaml — managed quick-launch targets, backend-agnostic.
 #
-# These live under ~/.config/mux/, not ~/.config/zellij/, because the picker
-# and the dispatcher serve zellij and tmux from the same file: a "workspace" is
-# a session and a "tab" is a tab or a window, whichever mux the calling pane is
-# in. Only entries that edit a backend's OWN config (config.kdl, the zellij
-# plugins) are zellij-specific, and they say so in their labels.
+# The picker and the dispatcher serve tmux and Rex from the same file: a
+# "workspace" is a session and a "tab" is a tab or a window, whichever mux the
+# calling pane is in.
 #
 # Consumed by ~/.config/mux/scripts/quick-launch via the Alt+w P/T/W leader
 # binds. Every target is focus-or-create. Schema + merge rules:
@@ -111,44 +108,6 @@ workspaces:
           cwd: ~/Projects/apps/wezterm/quicklaunch.wezterm
           args: ["plugin/init.lua"]
 {{ end }}
-{{ if $hasZellijPlugins }}
-  - id: zellij-plugins
-    name: Zellij Plugins
-    icon: "􏬆 "
-    tabs:
-      - id: zellij-config
-        name: Zellij Config
-        icon: "􏬆 "
-        action:
-          type: Edit
-          label: Edit Zellij configuration
-          cwd: ~/.config/zellij
-          args: ["config.kdl"]
-      - id: zj-context-keys-plugin
-        name: Context Keys Plugin
-        icon: "󰌏 "
-        action:
-          type: Edit
-          label: Edit Context Keys Plugin
-          cwd: ~/Projects/apps/zellij/zj-context-keys
-          args: ["src/main.rs"]
-      - id: zj-prompt-jumper-plugin
-        name: Prompt Jumper Plugin
-        icon: "󱕘 "
-        action:
-          type: Edit
-          label: Edit Prompt Jumper Plugin
-          cwd: ~/Projects/apps/zellij/zj-prompt-jumper
-          args: ["src/main.rs"]
-      - id: zj-hud-plugin
-        name: Shell Hud Plugin
-        icon: " "
-        action:
-          type: Edit
-          label: Edit Shell Hud Plugin
-          cwd: ~/Projects/apps/zellij/zj-hud
-          args: ["src/main.rs"]
-{{ end }}
 
 tabs:
   - id: launcher-items
@@ -177,15 +136,6 @@ tabs:
       label: Edit Brewbundle file
       cwd: ~/.config/packages
       args: ["Brewfile"]
-
-  - id: zellij-config
-    name: Zellij Config
-    icon: "􏬆 "
-    action:
-      type: Edit
-      label: Edit Zellij configuration
-      cwd: ~/.config/zellij
-      args: ["config.kdl"]
 
   - id: wezterm-config
     name: Wezterm Config

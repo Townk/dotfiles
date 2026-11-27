@@ -37,16 +37,14 @@ source ~/.local/lib/mux-bootstrap.zsh
 
 _zsh_should_autoattach_mux() {
   # Cross-nesting guard (mux migration spec §2/D17, pulled forward in Phase 0):
-  # never autostart a multiplexer inside *either* mux's pane. mux::in_session
-  # tests $ZELLIJ and $TMUX both: tmux.conf scrubs the stale ZELLIJ* vars from
-  # pane envs (cross-mux hygiene), so a $ZELLIJ test alone would let a tmux
-  # pane's shell through and nest.
+  # never autostart a multiplexer inside a mux pane. mux::in_session tests
+  # $TMUX.
   ! mux::in_session || return 1
   # Rex is a terminal AND a multiplexer: its own sessions/tabs/panes replace
-  # the mux, so nesting tmux or zellij inside it only doubles the chrome and
-  # steals its keys. $REX_SESSION is set in every Rex pane's environment. This
-  # is not folded into mux::in_session — that one answers "am I in a tmux or
-  # zellij pane", which the dispatch verbs rely on, and a Rex pane is neither.
+  # the mux, so nesting tmux inside it only doubles the chrome and steals its
+  # keys. $REX_SESSION is set in every Rex pane's environment. This is not
+  # folded into mux::in_session — that one answers "am I in a tmux pane",
+  # which the dispatch verbs rely on, and a Rex pane is not one.
   [[ -z "${REX_SESSION:-}" ]] || return 1
   [[ -t 0 && -t 1 ]] || return 1
 
@@ -60,9 +58,9 @@ _zsh_should_autoattach_mux() {
   return 1
 }
 
-# Theme override layer: resolve the effective palette + Zellij `system` theme
-# (canonical ⊕ loose ~/.config/theme/override.toml) BEFORE the Zellij attach
-# below, so the session loads the tinted theme and zj-hud's bar follows it.
+# Theme override layer: resolve the effective palette + tmux theme
+# (canonical ⊕ loose ~/.config/theme/override.toml) BEFORE the mux attach
+# below, so the session loads the tinted theme.
 # Exports the palette env vars for the shell/fzf/dialogs/viewers (inherited
 # across the exec and by the panes). A no-op when no override.toml exists.
 # Absolute path — libexec is never on PATH (and PATH isn't set up yet here anyway).
@@ -75,7 +73,7 @@ _zsh_should_autoattach_mux() {
 # override is active, else canonical). chezmoi-system.zsh is fork-free and guarded.
 source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
 
-# gpg-agent forward drift notice — SSH login shells only, BEFORE the Zellij
+# gpg-agent forward drift notice — SSH login shells only, BEFORE the mux
 # attach below. The forwarded agent socket path embeds the remote uid + gpgconf's
 # homedir hash, so a re-provisioned box can leave the client's
 # ~/.ssh/config.d/<host>.conf pointing at a stale path. ssh-prepare-connection
@@ -125,24 +123,25 @@ unset _gpgfwd_marker
 
 # Auto-attach the multiplexer for interactive shells.
 # Done before the rest of init so the outer shell doesn't pay for setup
-# twice — the shell spawned inside the mux re-runs .zshrc with $ZELLIJ or
-# $TMUX set, so the guard above short-circuits this block.
+# twice — the shell spawned inside the mux re-runs .zshrc with $TMUX set, so
+# the guard above short-circuits this block.
 #
 # WHICH mux starts here is the "outside a session" knob (spec §2): the loose
 # ~/.config/mux/backend file if it names one, else the chezmoi .muxBackend
 # default baked in below. This is *only* about what a bare terminal launches
 # — dispatch inside a live session is runtime detection (mux::backend reading
-# $TMUX/$ZELLIJ), so flipping this knob never strands an open session.
+# $TMUX / $REX_SESSION), so flipping this knob never strands an open session.
+# tmux is the only value it accepts since zellij support was removed.
 #
-# "Main" session reuse, mirrored on both backends:
-#   - doesn't exist (or only as EXITED) → wipe stale record, create+attach
-#   - live, no clients                  → reattach (resume the existing one)
-#   - live, has a client                → spawn a fresh anonymous session
-#                                         (so Cmd+N etc. get their own mux)
+# "Main" session reuse:
+#   - doesn't exist          → create+attach
+#   - live, no clients       → reattach (resume the existing one)
+#   - live, has a client     → spawn a fresh anonymous session
+#                              (so Cmd+N etc. get their own mux)
 if _zsh_should_autoattach_mux; then
-  # Remote logins print a full-screen MOTD (pam_motd) before Zellij grabs the
+  # Remote logins print a full-screen MOTD (pam_motd) before the mux grabs the
   # alternate screen. Wipe the primary buffer + scrollback first so it doesn't
-  # flash on attach, nor reappear when Zellij restores the primary buffer on
+  # flash on attach, nor reappear when the mux restores the primary buffer on
   # exit. SSH-scoped so local startup is untouched.
   [[ -n "$SSH_CONNECTION" ]] && printf '\e[H\e[2J\e[3J'
   # Record "Main" as the most-recently-used workspace in the quick-launch
@@ -168,8 +167,7 @@ if _zsh_should_autoattach_mux; then
 
   # The reuse dance. Every backend-specific command lives behind these verbs —
   # binary lookup (which must not assume $PATH: it is extended further down this
-  # file), Zellij's EXITED-record sweep and plugin prefetch, tmux's exact-match
-  # `-t=` anchoring. The exec_* calls replace this shell and do not return, so
+  # file), tmux's exact-match `-t=` anchoring. The exec_* calls replace this shell and do not return, so
   # the recency seed has to happen before them, and only on the two paths that
   # actually land in Main.
   # Matching the three states EXPLICITLY, with no default arm: when no backend

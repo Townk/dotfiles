@@ -1,20 +1,20 @@
 #!/usr/bin/env zsh
 # theme-apply — resolve the EFFECTIVE theme (canonical ⊕ loose override) into the
-# runtime files the shell, dialogs, ai-playbook, the file viewers, and Zellij
-# (hence the zj-hud bar) read.
+# runtime files the shell, dialogs, ai-playbook, the file viewers, and tmux
+# read.
 #
-#   canonical : ~/.config/theme/chezmoi-system.{json,zsh}  and the Zellij theme
-#               ~/.config/zellij/themes/chezmoi-system-base.kdl
+#   canonical : ~/.config/theme/chezmoi-system.{json,zsh}  and the tmux theme
+#               ~/.config/tmux/themes/chezmoi-system-base.conf
 #               — all chezmoi-generated from theme.yaml; NEVER modified here.
 #   override  : ~/.config/theme/override.toml  — loose, per-machine, OPTIONAL.
 #               Flat `token = "hex"` ('#' optional), e.g. `base = "#1c232f"`
 #               (this session's WezTerm tint). Any palette token; `base` is the
 #               common one.
 #   effective : $XDG_CACHE_HOME/theme/chezmoi-system.{json,zsh}  (shell consumers, via
-#               THEME_PALETTE_FILE/JSON) and ~/.config/zellij/themes/chezmoi-system.kdl
-#               (the theme `config.kdl` loads; zj-hud's bar follows it).
+#               THEME_PALETTE_FILE/JSON) and ~/.config/tmux/themes/chezmoi-system.conf
+#               (the theme tmux.conf sources).
 #
-# Run early in shell init, BEFORE the Zellij attach, so `chezmoi-system.kdl` exists when
+# Run early in shell init, BEFORE the mux attach, so `chezmoi-system.conf` exists when
 # the session starts (see dot_zshrc). With no override.toml the effective files
 # equal the canonical ones — nothing changes. Idempotent + cheap: a stamped
 # staleness check makes the common (unchanged) case a few stats.
@@ -22,40 +22,23 @@ emulate -L zsh
 set -uo pipefail
 
 theme_dir="${XDG_CONFIG_HOME:-$HOME/.config}/theme"
-zellij_themes="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/themes"
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/theme"
 canon_json="$theme_dir/chezmoi-system.json"
 canon_zsh="$theme_dir/chezmoi-system.zsh"
-canon_kdl="$zellij_themes/chezmoi-system-base.kdl"
 override="$theme_dir/override.toml"
 eff_json="$cache/chezmoi-system.json"
 eff_zsh="$cache/chezmoi-system.zsh"
-eff_kdl="$zellij_themes/chezmoi-system.kdl"
 tmux_themes="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/themes"
 canon_tmux="$tmux_themes/chezmoi-system-base.conf"
 eff_tmux="$tmux_themes/chezmoi-system.conf"
 stamp="$cache/.stamp"
-nonce="$cache/zellij-reload-nonce"
 
 [[ -r "$canon_json" && -r "$canon_zsh" ]] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 mkdir -p "$cache" || exit 0
 
-# Force a live Zellij reload so a RUNNING session re-reads the freshly regenerated
-# effective theme (chezmoi-system.kdl). Zellij watches config.kdl, NOT the themes
-# dir, so write a fresh token to the loose (untracked) nonce file and re-render
-# config.kdl (which inlines it in a comment) via a SCOPED apply — config.kdl ONLY,
-# never a bare `chezmoi apply`. No-op without chezmoi or a rendered config.kdl.
-bump_reload_nonce() {
-  command -v chezmoi >/dev/null 2>&1 || return 0
-  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/zellij/config.kdl"
-  [[ -f "$cfg" ]] || return 0
-  print -r -- "${RANDOM}${RANDOM}$(date +%s)" >"$nonce" 2>/dev/null || return 0
-  chezmoi apply "$cfg" >/dev/null 2>&1 || true
-}
-
-# Live-reload the tmux side (D15): unlike Zellij (config-watcher + nonce), a
-# running tmux server re-reads colors on `source-file`. Default socket only;
+# Live-reload the tmux side (D15): a running tmux server re-reads colors on
+# `source-file`. Default socket only;
 # named -L/-S sockets (none in this config yet) would need their own dispatch.
 reload_tmux() {
   command -v tmux >/dev/null 2>&1 || return 0
@@ -87,7 +70,6 @@ else
 fi
 mt "$override";   key="o:$REPLY"
 mt "$canon_json"; key+=" p:$REPLY"
-mt "$canon_kdl";  key+=" k:$REPLY"
 mt "$canon_tmux"; key+=" t:$REPLY"
 key+=" s:$remote"
 # $(<f) reads in-process (no fork); the -r guard replaces cat's 2>/dev/null —
@@ -95,7 +77,6 @@ key+=" s:$remote"
 stamp_val=""
 [[ -r "$stamp" ]] && stamp_val="$(<"$stamp")"
 if [[ -f "$eff_json" && -f "$eff_zsh" && "$stamp_val" == "$key" \
-   && ( ! -r "$canon_kdl" || -f "$eff_kdl" ) \
    && ( ! -r "$canon_tmux" || -f "$eff_tmux" ) ]]; then
   exit 0
 fi
@@ -122,9 +103,7 @@ else
   rm -f "$eff_json.tmp"
   cp "$canon_json" "$eff_json"
   cp "$canon_zsh" "$eff_zsh"
-  [[ -r "$canon_kdl" ]] && sed 's/chezmoi-system-base {/chezmoi-system {/' "$canon_kdl" >"$eff_kdl"
   [[ -r "$canon_tmux" ]] && cp "$canon_tmux" "$eff_tmux" && reload_tmux
-  bump_reload_nonce
   print -r -- "$key" >"$stamp"
   exit 0
 fi
@@ -140,33 +119,6 @@ if awk -v ins="$ov_lines" '
 else
   rm -f "$eff_zsh.tmp"
   cp "$canon_zsh" "$eff_zsh"
-fi
-
-# --- effective Zellij theme: substitute each overridden token's "R G B" triple
-# in the canonical theme. zj-hud's bar follows the theme background, so a `base`
-# override tints the bar; KDL color values sit at end-of-line, so anchor on
-# " R G B$" to avoid matching a longer number. ---------------------------------
-if [[ -r "$canon_kdl" ]]; then
-  # Inline twin of theme::hex_rgb (theme-common.zsh) — same "R G B" output. Kept
-  # inline for the same reason as the remote-detection triple above: theme-apply
-  # runs as a bare `zsh` with a sandboxed $HOME and deliberately loads no lib
-  # layer, so it must not `source theme-common.zsh`. Keep the two in lockstep.
-  rgb() { local h="${1#\#}"; print -r -- "$(( 16#${h:0:2} )) $(( 16#${h:2:2} )) $(( 16#${h:4:2} ))"; }
-  # Rename the block to `chezmoi-system` (the name config.kdl loads), then substitute
-  # each overridden token's "R G B" triple (KDL color values sit at end-of-line).
-  typeset -a sed_args
-  sed_args=(-e 's/chezmoi-system-base {/chezmoi-system {/')
-  while IFS=$'\t' read -r tok hex; do
-    [[ -n "$tok" ]] || continue
-    chex=$(jq -r --arg t "$tok" '.palette[$t] // empty' "$canon_json")
-    [[ -n "$chex" ]] || continue
-    crgb="$(rgb "$chex")"
-    ergb="$(rgb "$hex")"
-    [[ "$crgb" == "$ergb" ]] && continue
-    sed_args+=(-e "s/ ${crgb}\$/ ${ergb}/")
-  done < <(print -r -- "$ov" | jq -r 'to_entries[] | "\(.key)\t\(.value)"' 2>/dev/null)
-  sed "${sed_args[@]}" "$canon_kdl" >"$eff_kdl.tmp" && mv "$eff_kdl.tmp" "$eff_kdl" \
-    || { rm -f "$eff_kdl.tmp"; cp "$canon_kdl" "$eff_kdl"; }
 fi
 
 # --- effective tmux theme: substitute each overridden token's #hex literal.
@@ -193,5 +145,4 @@ if [[ -r "$canon_tmux" ]]; then
   reload_tmux
 fi
 
-bump_reload_nonce
 print -r -- "$key" >"$stamp"

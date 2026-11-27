@@ -12,7 +12,7 @@
 # what is left here is the rename itself — read the current name, apply the
 # answer, carry the mode pill.
 #
-# The Zellij backend keeps the plugin's own dialog; this is tmux-only.
+# This is tmux-only.
 
 set -euo pipefail
 
@@ -34,7 +34,7 @@ case "$kind" in
 esac
 
 [[ -n "${TMUX:-}" ]] || {
-  echo "mux-rename: tmux only (zellij uses the zj-hud rename role)" >&2
+  echo "mux-rename: tmux only" >&2
   exit 1
 }
 

@@ -578,7 +578,7 @@ function preview-image() {
       preview-raster "$cache" || return 1
   fi
 
-  # PREVIEW_IMAGE_ONLY (set by the zellij click-to-open image pane): show just
+  # PREVIEW_IMAGE_ONLY (set by the click-to-open image view): show just
   # the image, no metadata, so it fills the pane without needing a scroll.
   if [[ -z ${PREVIEW_IMAGE_ONLY:-} ]] && command -v mediainfo >/dev/null 2>&1; then
     preview-mediainfo "$1"

@@ -14,7 +14,7 @@
 #
 # The session is resolved LIVE through the shim (mux::resolve_session, which
 # reads the backend from the client PROCESS — this runs in WezTerm's GUI
-# environment, where $ZELLIJ/$TMUX say nothing), so it tracks a switch in
+# environment, where $TMUX says nothing), so it tracks a switch in
 # place. Membership is checked against the registry quick-launch writes
 # whenever it launches a nested workspace.
 emulate -L zsh

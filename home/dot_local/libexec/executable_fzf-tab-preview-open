@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 #
-# fzf-tab-preview-open — open the highlighted fzf-tab candidate in a floating
-# Zellij preview pane.
+# fzf-tab-preview-open — open the highlighted fzf-tab candidate in a mux
+# preview tab.
 #
 # Called from an fzf `execute-silent(...)` binding with fzf-tab's field-2
 # display key. The helper resolves that key through fzf-tab's live compcap file.

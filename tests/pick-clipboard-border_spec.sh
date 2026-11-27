@@ -1,6 +1,6 @@
 # pick-clipboard: the borderless front-end flag (shared-lib Wave 2, group C5,
 # Decision 1). pick-clipboard now accepts --no-border on the command line —
-# matching pick-glyph / pick-gitmoji — so all four zellij picker adapters can
+# matching pick-glyph / pick-gitmoji — so every picker embedder can
 # drive the borderless look through the flag form instead of an env var. The
 # parsed `no_border` is what gates `pick_args+=(--no-border)` fed into
 # pick::start (the fzf --no-border / pick_ui[no_border] the floating pane wants).

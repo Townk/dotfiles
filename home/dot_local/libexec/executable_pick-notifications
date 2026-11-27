@@ -118,7 +118,7 @@ pn::handle() {
       local pid="${out#log:}"
       local logdir="${JOB_PUEUE_LOG_DIR:-$HOME/Library/Application Support/pueue/task_logs}"
       if [[ -n "$pid" && -f "$logdir/$pid.log" ]]; then
-        if [[ -n "${TMUX:-}${ZELLIJ:-}" ]]; then
+        if [[ -n "${TMUX:-}" ]]; then
           local muxlib="${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
           # The usual subshell probe: mux.zsh's stack must not hard-exit us.
           if ( source "$muxlib" ) >/dev/null 2>&1; then

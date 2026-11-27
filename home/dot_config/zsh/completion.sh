@@ -222,7 +222,7 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   zstyle ':fzf-tab:complete:*:*' fzf-preview \
     '[[ -d $realpath || -f $realpath ]] && preview $realpath'
 
-  # CTRL-O: pop the highlighted file into a full-size floating Zellij pane for a
+  # CTRL-O: pop the highlighted file into a full-size mux tab for a
   # larger image view — an escape hatch from cramped inline previews.
   # fzf-tab's raw fzf row keeps the display key in field 2. The helper resolves
   # it through fzf-tab's live compcap file to recover the real path, then opens

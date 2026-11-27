@@ -14,8 +14,8 @@
 #   field 1 = run:<slug>    emitted on Enter      (--output field:1)
 #   field 2 = edit:<slug>   emitted on Alt+Enter  (--key-output alt-enter:field:2)
 #
-# mux::pick is the float-aware drop-in for pick::start: a zellij floating pane
-# inside zellij, an inline fzf otherwise — returning the single selected value
+# mux::pick is the float-aware drop-in for pick::start: a floating pane
+# inside a mux, an inline fzf otherwise — returning the single selected value
 # through one channel, so the action-in-the-value scheme works in both. We then
 # run or edit the chosen playbook in the foreground (ai-playbook is no-mux by
 # default, so run/edit take over this terminal, then return).
