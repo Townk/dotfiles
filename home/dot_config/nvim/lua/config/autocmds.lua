@@ -367,6 +367,59 @@ vim.api.nvim_create_autocmd("FocusGained", {
   desc = "Invalidate the chezmoi cache when nvim regains focus",
 })
 
+-- Notices from the redirect below, held until the notifier UI exists.
+--
+-- The redirect runs for a file named on the command line, i.e. during
+-- startup, and blocks for ~400ms on its chezmoi calls. LazyVim holds early
+-- notifications for the notifier plugin, but only for 500ms; past that it
+-- puts the built-in echo notifier back and replays them through it. The
+-- redirect alone eats most of that budget, so on any start a little slower
+-- than usual the two-line notice was echoed as plain text — and two lines do
+-- not fit the command line, so nvim stopped at "Press ENTER or type command
+-- to continue". Measured at 516ms in a Rex pane and 553ms under tmux: a race
+-- at the boundary, not a property of either.
+--
+-- So the notice waits for VeryLazy (when the notifier is installed) instead
+-- of racing it. The 3s timer is the fallback for a start in which VeryLazy
+-- never fires; after startup, notices go straight through.
+local chezmoi_notify_ready = vim.v.vim_did_enter == 1
+local chezmoi_notify_queue = {}
+
+local function chezmoi_notify_flush()
+  if chezmoi_notify_ready then
+    return
+  end
+  chezmoi_notify_ready = true
+  local queued = chezmoi_notify_queue
+  chezmoi_notify_queue = {}
+  -- One tick later: VeryLazy handlers run in no promised order, and the
+  -- notifier's own may be after this one.
+  vim.schedule(function()
+    for _, n in ipairs(queued) do
+      vim.notify(n.msg, n.level)
+    end
+  end)
+end
+
+local function chezmoi_notify(msg, level)
+  if chezmoi_notify_ready then
+    vim.notify(msg, level)
+  else
+    table.insert(chezmoi_notify_queue, { msg = msg, level = level })
+  end
+end
+
+if not chezmoi_notify_ready then
+  vim.api.nvim_create_autocmd("User", {
+    group = chezmoi_group,
+    pattern = "VeryLazy",
+    once = true,
+    callback = chezmoi_notify_flush,
+    desc = "Show chezmoi redirect notices once the notifier is loaded",
+  })
+  vim.defer_fn(chezmoi_notify_flush, 3000)
+end
+
 vim.api.nvim_create_autocmd("BufReadPre", {
   group = chezmoi_group,
   callback = function(args)
@@ -405,17 +458,17 @@ vim.api.nvim_create_autocmd("BufReadPre", {
     local out = vim.fn.system({ "chezmoi-reverse", "--no-merge", target })
     local pretty = vim.fn.fnamemodify(target, ":~")
     if out:find("applied", 1, true) then
-      vim.notify(
+      chezmoi_notify(
         ("chezmoi: reconciled external changes\n%s"):format(pretty),
         vim.log.levels.INFO
       )
     elseif out:find("needs-merge", 1, true) then
-      vim.notify(
+      chezmoi_notify(
         ("chezmoi: drift in a templated region; run\n  chezmoi-reverse %s"):format(pretty),
         vim.log.levels.WARN
       )
     elseif out:find("failed", 1, true) then
-      vim.notify(
+      chezmoi_notify(
         ("chezmoi-reverse failed\n%s\n%s"):format(pretty, vim.trim(out)),
         vim.log.levels.WARN
       )
@@ -425,7 +478,7 @@ vim.api.nvim_create_autocmd("BufReadPre", {
     vim.schedule(function()
       vim.cmd.edit(vim.fn.fnameescape(source))
       pcall(vim.api.nvim_buf_delete, buf, { force = true })
-      vim.notify(
+      chezmoi_notify(
         ("chezmoi: editing source\n%s"):format(vim.fn.fnamemodify(source, ":~")),
         vim.log.levels.INFO
       )
