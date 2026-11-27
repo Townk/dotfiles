@@ -19,6 +19,7 @@ source "${${(%):-%x}:A:h}/common.zsh"
 zmodload zsh/datetime 2>/dev/null
 
 : "${JOB_STATE_ROOT:=${XDG_STATE_HOME:-$HOME/.local/state}/jobs}"
+source "${${(%):-%x}:A:h}/job/follow.zsh"
 
 # job::_pueue — resolve the pueue client. JOB_PUEUE_BIN is the test seam.
 job::_pueue() {
