@@ -31,6 +31,13 @@
 {{- end -}}
 {{- end -}}
 
+{{- /* luastr: a Lua string literal, the text as it is. `quote` will not do for a
+       label: it writes a private-use codepoint (every Nerd Font icon) as
+       \U000f0455, which Lua 5.1 does not read as a character. */ -}}
+{{- define "luastr" -}}
+"{{ . | replace "\\" "\\\\" | replace "\"" "\\\"" }}"
+{{- end -}}
+
 {{- define "rexargs" -}}
 { {{- $first := true -}}
 {{- range $k, $v := . -}}
@@ -40,13 +47,24 @@
 {{- end -}}
 
 {{- /* rexbind: dict "mode" <mode or ""> "key" <tmux key name, or a Rex spelling
-       when mode is ""> "rex" <the entry's rex value> "leave" <bool>
-       leave = this binding sits in a mode and must end it. A client action is
-       then wrapped in km_do. So is a Quick Launch picker (ql_*): the mode,
-       and with it Rex's key-hint overlay, has to be gone BEFORE the picker
-       opens, and an action cannot leave a mode while it is still running —
-       what it queues runs after it returns. Our other actions are bound
-       directly and leave the mode themselves; they are over in an instant. */ -}}
+       when mode is ""> "rex" <the entry's rex value>
+       and, for a leader-table entry only: "name" <action name> "desc" <the
+       entry's desc> "leave" <bool> "sticky" <bool>
+
+       A leader-table entry is never bound to its action directly. Rex has no
+       label on a binding — the key-hint overlay shows the bound action's
+       title — so each entry gets an action of its own, titled with its desc
+       (km_leave / km_stay in the header), and the key is bound to that.
+
+       leave = the binding must end the mode. True for a client action and
+       for a Quick Launch picker (ql_*): the mode, and with it the overlay,
+       has to be gone BEFORE the picker opens, and an action cannot leave a
+       mode while it is still running — what it queues runs after it returns.
+       Our other actions leave the mode themselves, and a sticky entry keeps
+       it: both go through km_stay. sticky also makes the wrapper repeat while
+       the key is held, as the motions it wraps do when bound directly.
+
+       A direct chord carries no name and is bound to its action as is. */ -}}
 {{- define "rexbind" -}}
 {{- $act := "" -}}
 {{- $args := dict -}}
@@ -56,8 +74,10 @@
 {{-   $act = .rex.action -}}
 {{-   $args = (.rex.args | default dict) -}}
 {{- end -}}
-{{- if and .leave (or (contains "." $act) (hasPrefix "ql_" $act)) -}}
-rex.bind("{{ if .mode }}{{ .mode }}/{{ template "rexkey" .key }}{{ else }}{{ .key }}{{ end }}", "km_do", { action = {{ $act | quote }}{{ if $args }}, args = {{ template "rexargs" $args }}{{ end }} })
+{{- if and (hasKey . "name") .leave (or (contains "." $act) (hasPrefix "ql_" $act)) -}}
+rex.bind("{{ if .mode }}{{ .mode }}/{{ template "rexkey" .key }}{{ else }}{{ .key }}{{ end }}", km_leave({{ .name | quote }}, {{ template "luastr" .desc }}, {{ $act | quote }}{{ if $args }}, {{ template "rexargs" $args }}{{ end }}))
+{{- else if hasKey . "name" -}}
+rex.bind("{{ if .mode }}{{ .mode }}/{{ template "rexkey" .key }}{{ else }}{{ .key }}{{ end }}", km_stay({{ .name | quote }}, {{ template "luastr" .desc }}, {{ .sticky }}, {{ $act | quote }}{{ if $args }}, {{ template "rexargs" $args }}{{ end }}))
 {{- else if $args -}}
 rex.bind("{{ if .mode }}{{ .mode }}/{{ template "rexkey" .key }}{{ else }}{{ .key }}{{ end }}", {{ $act | quote }}, {{ template "rexargs" $args }})
 {{- else -}}
@@ -113,20 +133,78 @@ end
 -- Modes
 ---------------------------------------------------------------------------
 
--- A leader-table entry that is not sticky: leave every mode, then do the
--- thing — tmux's `set key-table root ; <cmd>`. In that order, so that an
--- action which waits on the user (a Quick Launch picker) does not sit under
--- the mode's key-hint overlay: queued actions run one after the other, and
--- only once this one has returned.
-rex.action{
-  name  = "km_do",
-  title = "Run an action and leave the key mode",
-  args  = { action = "string", args = "object?" },
-  run   = function(ctx, args)
-    rex.client.queue("client.mode.exit_all")
-    rex.client.queue(args.action, args.args or {})
-  end,
-}
+-- Every leader-table entry is bound to an action of its own instead of to
+-- the action it runs: Rex has no label on a binding, and the key-hint
+-- overlay shows the bound action's title. Bound directly, a key read as
+-- Rex's own wording ("Focus Pane", "Enter Mode"); behind one shared wrapper,
+-- every key read as that wrapper. This way each reads as its keymap.yaml
+-- desc. Both helpers return the action's name, so they sit where rex.bind
+-- wants one; an entry with several keys asks for the same name each time and
+-- the action is defined once.
+-- Rex draws its own UI text (this overlay, tab titles) with the Symbols Nerd
+-- Font it bundles — upstream's, not ours — for every icon that copy has, and
+-- only falls back to the installed fonts for a codepoint it lacks. Our build
+-- therefore carries each Private Use icon at a second, MIRROR codepoint that
+-- no upstream font has (custom-builds/nerd-fonts/fontbuild/mirror.py), and a
+-- label is rewritten to use those, so it is drawn from our font. The offsets
+-- are MIRROR_RANGES in fontbuild/ranges.py and must match it:
+--   U+E000..U+F8FF    + 0xFA000  (three UTF-8 bytes, lead 0xEE/0xEF)
+--   U+F0000..U+F1FFF  + 0x1A000  (four UTF-8 bytes, 0xF3 0xB0/0xB1 ..)
+-- Lua 5.1 has no UTF-8 library, hence the byte arithmetic.
+local function utf8_4(cp)
+  return string.char(
+    240 + math.floor(cp / 262144),
+    128 + math.floor(cp / 4096) % 64,
+    128 + math.floor(cp / 64) % 64,
+    128 + cp % 64)
+end
+local function ui_glyphs(s)
+  s = s:gsub("[\238\239][\128-\191][\128-\191]", function(c)
+    local b1, b2, b3 = c:byte(1, 3)
+    local cp = (b1 - 224) * 4096 + (b2 - 128) * 64 + (b3 - 128)
+    if cp >= 0xE000 and cp <= 0xF8FF then return utf8_4(cp + 0xFA000) end
+  end)
+  s = s:gsub("\243[\176\177][\128-\191][\128-\191]", function(c)
+    local b1, b2, b3, b4 = c:byte(1, 4)
+    local cp = (b1 - 240) * 262144 + (b2 - 128) * 4096 + (b3 - 128) * 64 + (b4 - 128)
+    return utf8_4(cp + 0x1A000)
+  end)
+  return s
+end
+
+local km_defined = {}
+local function km_define(name, title, leave, repeats, action, args)
+  if not km_defined[name] then
+    km_defined[name] = true
+    rex.action{
+      name     = name,
+      title    = ui_glyphs(title),
+      category = "Keymap",
+      repeats  = repeats,
+      run      = function(ctx, _)
+        if leave then rex.client.queue("client.mode.exit_all") end
+        rex.client.queue(action, args or {})
+      end,
+    }
+  end
+  return name
+end
+
+-- An entry that is not sticky: leave every mode, then do the thing — tmux's
+-- `set key-table root ; <cmd>`. In that order, so that an action which waits
+-- on the user (a Quick Launch picker) does not sit under the mode's key-hint
+-- overlay: queued actions run one after the other, and only once this one
+-- has returned.
+local function km_leave(name, title, action, args)
+  return km_define(name, title, true, false, action, args)
+end
+
+-- An entry that leaves the mode stack alone: a sticky one (a motion, which
+-- repeats while the key is held), one that enters another mode, or one of
+-- our own actions, which leaves the mode itself.
+local function km_stay(name, title, repeats, action, args)
+  return km_define(name, title, false, repeats, action, args)
+end
 
 ---------------------------------------------------------------------------
 -- Quick Launch
@@ -442,6 +520,22 @@ end
 ---------------------------------------------------------------------------
 -- Leader tables — generated from keymap.yaml (.keymap.tables)
 ---------------------------------------------------------------------------
+-- Order. The overlay lists a mode's keys in the order they are bound, so the
+-- order below is the order on screen: first the entries that open something
+-- (keymap.yaml `switch: true` — another mode, copy mode, a rename prompt),
+-- then the rest as keymap.yaml lists them, then the exit keys, Escape last.
+-- An entry's action is named after its index in keymap.yaml, not after where
+-- it lands here.
+--
+-- Icons. Each label is prefixed with the entry's keymap.yaml icon, which
+-- the overlay draws (smaller than the text, and as part of the label).
+--
+-- The exit keys go through actions of ours too, though Rex's own titles would
+-- do: the overlay groups its rows by the action's category, and with two
+-- groups a short mode (session) is laid out in two columns, the right one
+-- clipping its key symbols (Rex app 0.1.0-preview.35). One category, one
+-- column.
+--
 -- The scroll / copy / search tables are deliberately absent: Rex's own copy
 -- mode and find replace them, and only the keys that ENTER them are bound.
 
@@ -450,27 +544,33 @@ rex.bind("alt+w", "client.mode.enter", { name = "prefix" })
 {{- $t := index $.keymap.tables $mode }}
 -- {{ $mode }}: {{ $t.title }}
 rex.mode({{ $mode | quote }}, { exclusive = true })
-rex.bind("{{ $mode }}/escape", "client.mode.exit_all")
-{{- if hasKey $t "parent" }}
-rex.bind("{{ $mode }}/backspace", "client.mode.exit")
-{{- end }}
-{{- if eq $mode "prefix" }}
-rex.bind("prefix/alt+w", "km_do", { action = "pane.send_key", args = { key = "alt+w" } })
-{{- end }}
-{{- range $e := $t.entries }}
-{{-   if not (hasKey $e "rex") }}{{ fail (printf "keymap.yaml: %s entry %q has no rex: answer" $mode $e.desc) }}{{ end }}
-{{-   if (kindIs "bool" $e.rex) }}
-{{-     if $e.rex }}
-{{-       range $k := $e.keys }}
-rex.bind("{{ $mode }}/{{ template "rexkey" $k }}", "client.mode.enter", { name = {{ $e.to | quote }} })
+{{- range $first := list true false }}
+{{-   if and (not $first) (eq $mode "prefix") }}
+rex.bind("prefix/alt+w", km_leave("km_prefix_send_leader", "Send Alt+W to the pane", "pane.send_key", { key = "alt+w" }))
+{{-   end }}
+{{-   range $i, $e := $t.entries }}
+{{-     if not (hasKey $e "rex") }}{{ fail (printf "keymap.yaml: %s entry %q has no rex: answer" $mode $e.desc) }}{{ end }}
+{{-     if eq $first (and (hasKey $e "switch") $e.switch) }}
+{{-       $title := $e.desc }}
+{{-       if hasKey $e "icon" }}{{ $title = printf "%s  %s" $e.icon $e.desc }}{{ end }}
+{{-       if (kindIs "bool" $e.rex) }}
+{{-         if $e.rex }}
+{{-           range $k := $e.keys }}
+rex.bind("{{ $mode }}/{{ template "rexkey" $k }}", km_stay({{ printf "km_%s_%d" $mode $i | quote }}, {{ template "luastr" $title }}, false, "client.mode.enter", { name = {{ $e.to | quote }} }))
+{{-           end }}
+{{-         end }}
+{{-       else }}
+{{-         range $k := $e.keys }}
+{{ template "rexbind" (dict "mode" $mode "key" $k "rex" $e.rex "sticky" (and (hasKey $e "sticky") $e.sticky) "leave" (not (and (hasKey $e "sticky") $e.sticky)) "name" (printf "km_%s_%d" $mode $i) "desc" $title) }}
+{{-         end }}
 {{-       end }}
-{{-     end }}
-{{-   else }}
-{{-     range $k := $e.keys }}
-{{ template "rexbind" (dict "mode" $mode "key" $k "rex" $e.rex "leave" (not (and (hasKey $e "sticky") $e.sticky))) }}
 {{-     end }}
 {{-   end }}
 {{- end }}
+{{- if hasKey $t "parent" }}
+rex.bind("{{ $mode }}/backspace", km_stay("km_exit", "Back", false, "client.mode.exit"))
+{{- end }}
+rex.bind("{{ $mode }}/escape", km_stay("km_exit_all", "Exit", false, "client.mode.exit_all"))
 {{ end }}
 ---------------------------------------------------------------------------
 -- Direct chords — generated from keymap.yaml (.keymap.direct)

@@ -570,7 +570,7 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 |---|---|---|---|---|
 | Leader | `prefix M-w` | `alt+w` → mode `prefix` | ✅ | `prefix/alt+w` sends a literal `alt+w` to the pane |
 | Mode tables | `set key-table <t>` | exclusive Rex modes `prefix tab pane resize move session` | ✅ | same names; `escape` leaves all, `backspace` goes back one |
-| Mode stack | `switch` / `sticky` / neither | `client.mode.enter` / bare action / `km_do` (action, then `client.mode.exit_all`) | ✅ | our own actions are bound directly and leave the mode themselves: a prompt cannot be shown from an action run via `rex.invoke` |
+| Mode stack | `switch` / `sticky` / neither | every entry gets its own action, titled with its icon and `desc` for the key-hint overlay: `km_stay` → `client.mode.enter` / `km_stay` (repeating) → the action / `km_leave` → `client.mode.exit_all`, then the action | ✅ | our own actions are bound directly and leave the mode themselves: a prompt cannot be shown from an action run via `rex.invoke` |
 | Scroll / Copy / Search tables | `copy-mode-vi` + mode tables | not generated — Rex copy mode and Find | ❌ | by decision: native UX. Only the keys that enter them are bound (`prefix l`, `prefix V`, `⌘↑`, `⌘K`, `⌘F`) |
 | Which-key panel | `mux-whichkey` popup | none — Rex's own key hints | ❌ | by decision |
 | Direct chords | terminal sends MEH CSI-u → `bind -n` | `rex.bind("cmd+…")` | ✅ | one list (`keymap.direct`) instead of three files |
@@ -620,6 +620,6 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 | a pane no client has shown reports 80x24 | on a headless scratch server every pane is 80 columns wide whatever its share; the resize spec's expected ratios follow from that, not from real geometry |
 | `rex do <action> -s S -b B key=value` runs an `init.lua` action on the server with `ctx.session_id` / `ctx.block_id` set, in one round trip (~19 ms) | the route by which a program inside a pane (nvim) reaches a config action; it works only for actions that stay on the server — no `rex.client.queue` |
 | Rex's Lua has no `table.unpack` | copy arrays with a loop |
-| what an action queues with `rex.client.queue` runs only after the action returns | an action that waits on the user (a picker) cannot leave its mode first; the mode's key-hint overlay stays up over the picker. `km_do` leaves the mode, THEN queues the picker action |
+| what an action queues with `rex.client.queue` runs only after the action returns | an action that waits on the user (a picker) cannot leave its mode first; the mode's key-hint overlay stays up over the picker. the `km_leave` actions leave the mode, THEN queue the picker action |
 | the `quick-launch` script runs under `set -e`; specs that source its libraries do not | `cond && ((n++))` from zero is fatal only in the real script — it ended a workspace build before `@select:` was printed. The spec for it runs the script itself |
 | `⌘,` opens Rex's own Settings (`client.settings`) | editing the config file was a WezTerm habit (no settings UI there); on Rex the file is a Quick Launch tab, `rex-config` |
