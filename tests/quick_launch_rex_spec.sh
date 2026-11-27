@@ -195,7 +195,12 @@ Describe 'quick-launch on Rex'
       RX_SOCK="/tmp/qlrx-$$.sock"
       RX_SERVER="unix://$RX_SOCK"
       : > "$RX_STATE/init.lua"
-      command rex server run --listen "$RX_SERVER" --state-dir "$RX_STATE/state" \
+      # Panes inherit the server's environment, so this ZDOTDIR is what every
+      # shell the dispatch starts will read: an interactive one leaves a mark,
+      # and none of them touches the developer's real ~/.zshrc.
+      mkdir -p "$RX_STATE/zdot"
+      print -r -- ': >> "$ZDOTDIR/interactive-ran"' >"$RX_STATE/zdot/.zshrc"
+      ZDOTDIR="$RX_STATE/zdot" command rex server run --listen "$RX_SERVER" --state-dir "$RX_STATE/state" \
         --config "$RX_STATE/init.lua" --restore=false >"$RX_STATE/server.log" 2>&1 &
       RX_PID=$!
       local i
@@ -292,6 +297,54 @@ Describe 'quick-launch on Rex'
       }
       When call pane_window
       The output should equal "ok"
+    End
+
+    # Second live finding: the app's focus stayed on the old pane although
+    # the server had moved it. No client action focuses a block by id, so the
+    # split leaves focus alone and reports the side the new pane is on.
+    It 'splits a new pane without taking focus and names the side it is on'
+      side() {
+        local before out
+        before=$(view "$RX_SID" | jq -r '.windows[0].focused_block_id')
+        out=$(ql_dispatch pane side-pane) || return 1
+        print -r -- "$out"
+        [[ "$(view "$RX_SID" | jq -r '.windows[0].focused_block_id')" == "$before" ]] && print -r -- focus-unmoved
+      }
+      QL_JSON=$(jq -c '.panes += [{"id":"side-pane","name":"SidePane","direction":"right","action":{"type":"Run","args":["sleep 60"]}}]' <<<"$QL_JSON")
+      When call side
+      The line 1 of output should equal "@focus:right"
+      The line 2 of output should equal "focus-unmoved"
+    End
+
+    It 'runs a command through an interactive shell, as a tmux pane would'
+      interactive() {
+        local log="$RX_STATE/rex-argv.log"
+        cat >"$RX_STATE/rexwrap" <<EOS
+#!/bin/sh
+echo "\$*" >>"$log"
+exec rex "\$@"
+EOS
+        chmod +x "$RX_STATE/rexwrap"
+        MUX_REX_BIN="$RX_STATE/rexwrap" ql_dispatch pane logs2 >/dev/null || return 1
+        MUX_REX_BIN="$RX_STATE/rexwrap" ql_dispatch tab dev2 >/dev/null || return 1
+        grep -c -- '--interactive -- /bin/zsh -c' "$log"
+      }
+      QL_JSON=$(jq -c '.panes += [{"id":"logs2","name":"Logs2","action":{"type":"Run","args":["sleep 60"]}}] | .tabs += [{"id":"dev2","name":"Dev2","action":{"type":"Run","args":["sleep 60"]}}]' <<<"$QL_JSON")
+      When call interactive
+      The output should equal "2"
+    End
+
+    It 'asks for an interactive shell in a floating pane too'
+      float_inter() {
+        local mark="$RX_STATE/zdot/interactive-ran" i
+        rm -f "$mark"
+        ql_dispatch pane pad2 >/dev/null || return 1
+        for i in {1..30}; do [[ -e "$mark" ]] && break; sleep 0.1; done
+        [[ -e "$mark" ]] && print -r -- true
+      }
+      QL_JSON=$(jq -c '.panes += [{"id":"pad2","name":"Pad2","direction":"floating","size":"50%","action":{"type":"Run","args":["sleep 60"]}}]' <<<"$QL_JSON")
+      When call float_inter
+      The output should equal "true"
     End
 
     It 'says nothing about windows while building a workspace'

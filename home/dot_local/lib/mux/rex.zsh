@@ -227,6 +227,9 @@ _mux_rx_fraction() {
 
 # _mux_rx_layer <w> <h> <title> <cwd> <session> -- <cmd...> — a centered
 # floating layer running <cmd> (or a shell). Prints the new block id.
+# $_MUX_RX_LAYER_INTERACTIVE=1 runs <cmd> through an INTERACTIVE shell (the
+# block option behind `rex run --interactive`), for a caller whose command
+# expects what ~/.zshrc sets up.
 _mux_rx_layer() {
   local w="$1" h="$2" title="$3" cwd="$4" session="$5"
   shift 5
@@ -243,6 +246,7 @@ _mux_rx_layer() {
 
   local req
   req="$(jq -cn --arg fw "$fw" --arg fh "$fh" --arg title "$title" --arg cwd "$cwd" \
+    --arg inter "${_MUX_RX_LAYER_INTERACTIVE:-0}" \
     '$ARGS.positional as $cmd
      | ($fw | tonumber) as $w | ($fh | tonumber) as $h
      | { bounds: [((1 - $w) / 2), ((1 - $h) / 2), $w, $h],
@@ -251,6 +255,7 @@ _mux_rx_layer() {
            { flavor: "com.superlogical.terminal.shell",
              options: ( {}
                + (if ($cmd | length) > 0 then { command: $cmd } else {} end)
+               + (if ($cmd | length) > 0 and $inter == "1" then { interactive: true } else {} end)
                + (if $cwd != "" then { cwd: $cwd } else {} end) ) }
            + (if $title != "" then { label: $title } else {} end) ) } }' \
     --args -- "$@")" || return 1

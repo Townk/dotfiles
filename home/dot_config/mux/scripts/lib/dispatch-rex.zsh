@@ -26,6 +26,18 @@
 #     server, and the app's tab selection does not follow (found in the
 #     first live session — a new tab opened behind the one in view). So tab
 #     and pane opens print `@select:<session-id> <window-id>` as well.
+#   * And for the focused PANE. A split made with --focus moves the focus on
+#     the server, yet the app stayed on the pane it was in (second finding
+#     of that session; the palette closing puts the app's focus back where
+#     it was). There is no client action that focuses a block by id, only
+#     by direction — so an interactive pane open splits WITHOUT taking
+#     focus and prints `@focus:<direction>`: the new pane is, by
+#     construction, the neighbour in that direction of the pane the app is
+#     still on, and the Lua action queues `pane.focus` that way.
+#   * A command runs through an INTERACTIVE shell (`--interactive`). Rex
+#     otherwise gives a command the login environment only, and a tmux pane
+#     has always had everything ~/.zshrc exports — EDITOR, the fzf and theme
+#     variables, the mise session. Targets were written against that.
 #   * There is no nested_mux, no tint and no separate-window launcher: Rex is
 #     the terminal, so a `Remote` workspace is simply a session whose pane
 #     runs ssh, and its keys are not in competition with ours.
@@ -73,9 +85,12 @@ ql_rx_window_of() {
 # command line, or to nothing for an interactive shell. The line is a shell
 # string (ql_action_command joins with `&&`, prefixes `cd …;`), so it needs a
 # shell; Rex already runs a block's command inside the login environment.
+# `--interactive` rides in front of the `--`: it is a flag of the rex
+# command the argv is appended to, and it only means something with a
+# command (a bare shell block is interactive already).
 ql_rx_argv() {
   reply=()
-  [[ -n "${1:-}" ]] && reply=(-- "${SHELL:-/bin/zsh}" -c "$1")
+  [[ -n "${1:-}" ]] && reply=(--interactive -- "${SHELL:-/bin/zsh}" -c "$1")
   return 0
 }
 
@@ -141,20 +156,26 @@ ql_rx_open_pane() {
   if ql_is_floating_direction "$dir"; then
     local w h
     read -r w h < <(ql_rx_float_size "$(jq -r '.size // "80%"' <<<"$pane")")
-    QL_RX_LAST_BLOCK="$(REX_SESSION="$session" REX_BLOCK="$anchor" \
-      _mux_rx_layer "$w" "$h" "$name" "$cwd" "$session" "${reply[@]}")"
+    # _mux_rx_layer builds the block itself, so the interactive shell is
+    # asked for by variable and the CLI flag is dropped from the argv.
+    QL_RX_LAST_BLOCK="$(REX_SESSION="$session" REX_BLOCK="$anchor" _MUX_RX_LAYER_INTERACTIVE=1 \
+      _mux_rx_layer "$w" "$h" "$name" "$cwd" "$session" "${(@)reply:#--interactive}")"
     [[ -n "$QL_RX_LAST_BLOCK" ]]
     return
   fi
 
   local -a flags=(-s "$session" --label "$name" --json)
   [[ -n "$anchor" ]] && flags+=(-b "$anchor")
+  local focus_dir=down
   case "$dir" in
-    up) flags+=(--split=above) ;;
-    right) flags+=(--split=right) ;;
-    left) flags+=(--split=left) ;;
+    up) flags+=(--split=above); focus_dir=up ;;
+    right) flags+=(--split=right); focus_dir=right ;;
+    left) flags+=(--split=left); focus_dir=left ;;
     *) flags+=(--split=below) ;;
   esac
+  # Opened on request: leave the focus where the app has it and let the
+  # caller move it (see the header). While building, focus is irrelevant.
+  (( building )) || flags+=(--focus=false)
   local size
   size="$(jq -r '.size // empty' <<<"$pane")"
   [[ "$size" == <->% ]] && flags+=(--ratio "${size%\%}")
@@ -167,7 +188,9 @@ ql_rx_open_pane() {
     out="$(_mux_rx_run split "${flags[@]}" 2>/dev/null)" || return 1
   fi
   QL_RX_LAST_BLOCK="$(ql_rx_first_block "$out")"
-  [[ -n "$QL_RX_LAST_BLOCK" ]]
+  [[ -n "$QL_RX_LAST_BLOCK" ]] || return 1
+  (( building )) || print -r -- "@focus:$focus_dir"
+  return 0
 }
 
 # ql_rx_open_tab <tab-json> [session]

@@ -132,7 +132,8 @@ rex.action{
 -- to another session, or to another tab of this one. Both are client
 -- actions the script has no way to perform: it can make a window the
 -- session's active one on the server, and the app's tab selection stays
--- where it was.
+-- where it was. A newly split pane answers `@focus:<direction>` for the
+-- same reason.
 
 local function split_tabs(line)
   local fields = {}
@@ -181,6 +182,14 @@ local function quick_launch(kind, title)
     local window = opened.stdout:match("@select:%S+ (window:%S+)")
     if session then
       rex.client.queue("session.select", { session_id = session, window_id = window })
+    end
+    -- A new pane is split off the focused one without taking focus, and
+    -- the script names the side it is on: the app's focus does not follow
+    -- a focus change made on the server while the palette is closing, and
+    -- no client action focuses a pane by id.
+    local side = opened.stdout:match("@focus:(%a+)")
+    if side then
+      rex.client.queue("pane.focus", { direction = side })
     end
   end
 end
