@@ -596,3 +596,22 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 | `rex config check` does not validate action names (they depend on the client) | the spec checks our own action names; client action names were checked once against the live app's list |
 | `edit-terminal-config` reuses `$ZELLIJ` for the binary path | "am I in zellij" must be asked before that line — the Rex branch silently never fired |
 | `chezmoi execute-template` in a spec reads the DEFAULT source's data, not the worktree's | specs that depend on new `.chezmoidata` pass `-S "$SHELLSPEC_PROJECT_ROOT"` |
+
+## Rex — context keys (2026-11-26)
+
+| Behavior | tmux impl | Rex impl | Status | Notes |
+|---|---|---|---|---|
+| `Ctrl+h/j/k/l`, `Ctrl+arrows` | root binds, `ps` probe of the pane tty → `send-keys` or `select-pane` | Lua FUNCTION binds, same `ps` probe via `rex.exec` → return false (key passes) or `rex.session.focus_direction` | ✅ | no wrap at the edge on either |
+| nvim → mux hand-off at the last split | smart-splits tmux backend | smart-splits `move.at_edge` → `rex focus <direction>` | ✅ | outside Rex the hook wraps, the default it replaced |
+| `Ctrl+Shift+h/j/k/l`, `Ctrl+Shift+arrows` | `@pane-is-vim` → `send-keys` or `resize-pane 2` | action `ctx_resize`: vim → `pane.send_key`, else `pane.resize` amount 2 | 🟡 | an ACTION, not a function: resize-by-direction exists only as a client action, and only an action may queue one |
+| resize from inside nvim reaching the mux pane | smart-splits tmux backend resizes the tmux pane when nvim has one window | none | ❌ | smart-splits has no edge hook for resize |
+| ctrl+shift spellings | three per chord (WezTerm, Ghostty, plain) | one | ✅ | Rex is the terminal |
+
+### Platform gotchas — Rex key functions
+
+| Fact | Consequence |
+|---|---|
+| Rex's `process` method reports the foreground process GROUP's leader | a program started by a zsh widget (fzf on Ctrl+T) runs in the shell's group and reads as `zsh` — the same blind spot as tmux's `pane_current_command`; the probe lists the tty with `ps` instead (2 ms) |
+| a key FUNCTION may call `rex.session.*`, `rex.block.call`, `rex.exec`, but not `rex.client.queue` | a conditional that must end in a client action (resize) has to be an action, and re-send the key with `pane.send_key` instead of returning false |
+| `rex.block_id` is nil in a `rex do` script even with `$REX_BLOCK` set | a spec that runs shipped helpers as a script passes the pane as an argument |
+| the app follows a focus change made on the server, except while its palette is closing | `rex.session.focus_direction` is enough from a key; a picker has to defer |

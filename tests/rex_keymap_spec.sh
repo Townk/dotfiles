@@ -209,6 +209,125 @@ Describe 'generated Rex config'
     End
   End
 
+  # Ctrl+h/j/k/l and Ctrl+arrows: one motion across Rex panes and nvim
+  # splits. Hand-written in the template header, like their tmux twins.
+  Describe 'context keys'
+    It 'binds the eight navigation keys to functions, each to its direction'
+      nav() {
+        local k
+        for k in 'ctrl+h"] = "left"' 'ctrl+j"] = "down"' 'ctrl+k"] = "up"' 'ctrl+l"] = "right"' \
+                 'ctrl+left"] = "left"' 'ctrl+down"] = "down"' 'ctrl+up"] = "up"' 'ctrl+right"] = "right"'; do
+          grep -qF "[\"$k" "$RK_LUA" || print -r -- "missing: $k"
+        done
+      }
+      When call nav
+      The output should equal ""
+    End
+
+    It 'binds the eight resize keys'
+      resize() { grep -c -E '^  \["ctrl\+shift\+(h|j|k|l|left|down|up|right)"\] = "(left|down|up|right)"' "$RK_LUA" || true; }
+      When call resize
+      # two lines of four
+      The output should equal "2"
+    End
+
+    # The pass-through rule is a restatement of the tmux probe's regex. If
+    # one grows a name the other must too, so the spec reads the regex out of
+    # keymap-base.conf and checks the Lua comment still quotes it.
+    It 'quotes the same vim-family rule as the tmux probe'
+      same_rule() {
+        grep -qF 'g?(view|l?n?vim?x?)(diff)?' home/dot_config/tmux/keymap-base.conf.tmpl || { print -r -- "tmux regex moved"; return; }
+        grep -qF 'g?(view|l?n?vim?x?)(diff)?' "$RK_LUA" || print -r -- "lua comment no longer quotes it"
+        grep -qF '|fzf)$' home/dot_config/tmux/keymap-base.conf.tmpl || print -r -- "tmux no longer passes fzf"
+      }
+      When call same_rule
+      The output should equal ""
+    End
+
+    Describe 'the probe, run by Rex'
+      rex_missing() { ! command -v rex >/dev/null 2>&1; }
+      Skip if 'rex is not installed' rex_missing
+
+      rx() { command rex --autostart=false -S "$CK_SERVER" "$@"; }
+      start_server() {
+        CK_STATE=$(mktemp -d)
+        CK_SOCK="/tmp/ckrx-$$.sock"
+        CK_SERVER="unix://$CK_SOCK"
+        : > "$CK_STATE/init.lua"
+        command rex server run --listen "$CK_SERVER" --state-dir "$CK_STATE/state" \
+          --config "$CK_STATE/init.lua" --restore=false >"$CK_STATE/server.log" 2>&1 &
+        CK_PID=$!
+        local i
+        for i in {1..50}; do rx whoami >/dev/null 2>&1 && break; sleep 0.1; done
+        # The helpers exactly as shipped, cut out of the rendered config, with
+        # a tail that reports what they decide for the pane the script runs
+        # against.
+        {
+          awk '/^local TERMINAL = /,/^-- Navigation is a FUNCTION bind/' "$RK_LUA" | sed '$d'
+          # A key function gets the focused pane in ctx.block_id; a script
+          # has no focused pane, so the spec names one.
+          print -r -- 'local ctx = { block_id = rex.args.block }'
+          print -r -- 'return { nav = pane_runs(ctx, is_vim_or_fzf), resize = pane_runs(ctx, is_vim),'
+          print -r -- '  names = { is_vim("nvim"), is_vim("vim"), is_vim("vi"), is_vim("view"), is_vim("gvimdiff"), is_vim("lnvim"),'
+          print -r -- '            is_vim("zsh"), is_vim("gzip"), is_vim("fzf"), is_vim_or_fzf("fzf"), is_vim("vimtutor") } }'
+        } >"$CK_STATE/probe.lua"
+        # Stand-ins named like the real programs: the probe reads comm.
+        mkdir -p "$CK_STATE/bin"
+        ln -s /bin/sleep "$CK_STATE/bin/nvim"
+        ln -s /bin/sleep "$CK_STATE/bin/fzf"
+      }
+      stop_server() {
+        rx server stop >/dev/null 2>&1
+        kill "$CK_PID" 2>/dev/null
+        rm -rf "$CK_STATE" "$CK_SOCK"
+      }
+      BeforeAll 'start_server'
+      AfterAll 'stop_server'
+
+      # probe <command...> — start a pane running that command and ask the
+      # shipped helpers about it.
+      probe() {
+        local sid bid
+        sid=$(rx new "p-$RANDOM" --shell none --json -- "$@" | jq -r '.session_id')
+        bid=$(rx block ls -s "$sid" --json | jq -r '.blocks[0].block_id')
+        sleep 0.3
+        rx do -s "$sid" "$CK_STATE/probe.lua" "block=$bid" | jq -c "$PROBE_FILTER"
+      }
+
+      It 'moves focus from a pane running a plain program'
+        PROBE_FILTER='{nav, resize}'
+        When call probe /bin/sleep 30
+        The output should equal '{"nav":false,"resize":false}'
+      End
+
+      It 'passes both key families to a pane running nvim'
+        PROBE_FILTER='{nav, resize}'
+        When call probe "$CK_STATE/bin/nvim" 30
+        The output should equal '{"nav":true,"resize":true}'
+      End
+
+      It 'passes navigation, but not resize, to fzf'
+        PROBE_FILTER='{nav, resize}'
+        When call probe "$CK_STATE/bin/fzf" 30
+        The output should equal '{"nav":true,"resize":false}'
+      End
+
+      # The case Rex's own foreground report gets wrong: the program runs
+      # inside the SHELL's process group, as fzf does from a zsh widget.
+      It 'sees a program started inside the shell'"'"'s own process group'
+        PROBE_FILTER='{nav}'
+        When call probe /bin/zsh -fc "$CK_STATE/bin/fzf 30; true"
+        The output should equal '{"nav":true}'
+      End
+
+      It 'recognises the vim family and nothing near it'
+        PROBE_FILTER='.names'
+        When call probe /bin/sleep 30
+        The output should equal '[true,true,true,true,true,true,false,false,false,true,false]'
+      End
+    End
+  End
+
   Describe 'as Rex reads it'
     rex_missing() { ! command -v rex >/dev/null 2>&1; }
     Skip if 'rex is not installed' rex_missing
@@ -217,7 +336,7 @@ Describe 'generated Rex config'
       When call rex config check "$RK_LUA"
       The status should be success
       The output should include "modes: 6"
-      The output should include "actions: 6"
+      The output should include "actions: 7"
     End
 
     It 'defines every one of our actions that a binding names'

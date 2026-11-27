@@ -240,6 +240,109 @@ rex.action{
 }
 
 ---------------------------------------------------------------------------
+-- Context keys — vim/fzf-aware navigation and resize
+---------------------------------------------------------------------------
+-- Ctrl+h/j/k/l and Ctrl+arrows are ONE motion across Rex panes and nvim
+-- splits: when nvim (or fzf, which wants Ctrl+j/k for its list) is running
+-- in the pane the key goes to it, otherwise Rex moves the pane focus. nvim's
+-- half is smart-splits, whose edge handler calls `rex focus <direction>`
+-- when there is no split further that way (nvim/lua/plugins/nav.lua).
+-- Hand-written, not generated: like their tmux twins in keymap-base.conf,
+-- these are conditionals, not table entries.
+--
+-- "What is running in the pane" is asked of `ps`, not of Rex. Rex reports
+-- the foreground process GROUP's leader, and a program started by a zsh
+-- widget — fzf on Ctrl+T, on completion — runs inside the shell's own
+-- group, so Rex says `zsh` (spiked 2026-11-26). tmux has the identical
+-- blind spot in pane_current_command and the identical cure: list the
+-- pane's tty. Same rule as its regex, including the state filter — a
+-- suspended (T) vim must not swallow the key.
+
+local TERMINAL = "com.superlogical.terminal"
+local pane_ttys = {} -- block id → tty; a block keeps its tty for life
+
+local function pane_tty(block)
+  if pane_ttys[block] then return pane_ttys[block] end
+  local p = rex.block.call(TERMINAL, "process", { block_id = block })
+  local pid = p and p.child and p.child.pid
+  if not pid then return nil end
+  local r = rex.exec({ "/bin/ps", "-o", "tty=", "-p", tostring(pid) })
+  local tty = r and r.ok and r.stdout:match("%S+") or nil
+  if tty == "??" then tty = nil end
+  pane_ttys[block] = tty
+  return tty
+end
+
+-- The vim family, as keymap-base.conf's probe spells it:
+--   g?(view|l?n?vim?x?)(diff)?
+local function is_vim(name)
+  name = name:gsub("^g", ""):gsub("diff$", "")
+  return name == "view" or name:match("^l?n?vim?x?$") ~= nil
+end
+
+local function is_vim_or_fzf(name)
+  return name == "fzf" or is_vim(name)
+end
+
+-- True when a live process on the focused pane's tty satisfies `wanted`.
+local function pane_runs(ctx, wanted)
+  local block = ctx.block_id
+  if not block then return false end
+  local tty = pane_tty(block)
+  if not tty then return false end
+  local r = rex.exec({ "/bin/ps", "-o", "state=", "-o", "comm=", "-t", tty })
+  if not (r and r.ok) then return false end
+  for line in r.stdout:gmatch("[^\n]+") do
+    local state, comm = line:match("^(%S+)%s+(.-)%s*$")
+    if state and not state:match("^[TXZ]") then
+      local name = (comm:match("([^/]+)$") or comm):gsub("^%-", "")
+      if wanted(name) then return true end
+    end
+  end
+  return false
+end
+
+-- Navigation is a FUNCTION bind: returning false hands the key to the
+-- terminal untouched, which is what nvim and fzf should see. The focus move
+-- is made on the server (a key function may not queue client actions); the
+-- app follows it.
+for key, direction in pairs({
+  ["ctrl+h"] = "left", ["ctrl+j"] = "down", ["ctrl+k"] = "up", ["ctrl+l"] = "right",
+  ["ctrl+left"] = "left", ["ctrl+down"] = "down", ["ctrl+up"] = "up", ["ctrl+right"] = "right",
+}) do
+  rex.bind(key, function(ctx, ev)
+    if pane_runs(ctx, is_vim_or_fzf) then return false end
+    rex.session.focus_direction{ direction = direction }
+    return true
+  end)
+end
+
+-- Resize has to be an ACTION: the only resize-by-direction is the client's
+-- `pane.resize`, and only an action may queue a client action. So the
+-- pass-through branch re-sends the key to the pane instead of returning
+-- false. Vim only — fzf has no use for these.
+rex.action{
+  name    = "ctx_resize",
+  title   = "Resize Pane, or Pass the Key to Vim",
+  args    = { direction = "string", key = "string" },
+  repeats = true,
+  run     = function(ctx, args)
+    if pane_runs(ctx, is_vim) then
+      rex.client.queue("pane.send_key", { key = args.key })
+    else
+      rex.client.queue("pane.resize", { direction = args.direction, amount = 2 })
+    end
+  end,
+}
+
+for key, direction in pairs({
+  ["ctrl+shift+h"] = "left", ["ctrl+shift+j"] = "down", ["ctrl+shift+k"] = "up", ["ctrl+shift+l"] = "right",
+  ["ctrl+shift+left"] = "left", ["ctrl+shift+down"] = "down", ["ctrl+shift+up"] = "up", ["ctrl+shift+right"] = "right",
+}) do
+  rex.bind(key, "ctx_resize", { direction = direction, key = key })
+end
+
+---------------------------------------------------------------------------
 -- Leader tables — generated from keymap.yaml (.keymap.tables)
 ---------------------------------------------------------------------------
 -- The scroll / copy / search tables are deliberately absent: Rex's own copy
