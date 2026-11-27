@@ -82,6 +82,44 @@ EOS
     The output should equal "rc=0"
   End
 
+  # The shapes a workspace's name takes in the Quick Launch YAML: `name:` may
+  # be the first key of a list item, may carry a comment or quotes, and may be
+  # absent altogether — the name then defaults to the `id`.
+  ql_keeps() {  # ql_keeps <yaml line> — one session my-project, no Main
+    print -r -- "$1" >"$MS_HOME/.config/mux/quick-launch/proj.yaml"
+    sessions my-project; hook; renames
+  }
+
+  It 'does not rename a workspace named in the first key of a list item'
+    When call ql_keeps '  - name: my-project'
+    The output should equal "rc=0"
+  End
+
+  It 'does not rename a workspace whose name line carries a comment'
+    When call ql_keeps '    name: my-project   # the firmware tree'
+    The output should equal "rc=0"
+  End
+
+  It 'does not rename a workspace with a quoted name'
+    When call ql_keeps "    name: 'my-project'"
+    The output should equal "rc=0"
+  End
+
+  It 'does not rename a workspace known only by its id'
+    When call ql_keeps '  - id: my-project'
+    The output should equal "rc=0"
+  End
+
+  It 'reads a Quick Launch fragment in a subdirectory'
+    nested() {
+      mkdir -p "$MS_HOME/.config/mux/quick-launch/launch.d"
+      print -r -- 'id: my-project' >"$MS_HOME/.config/mux/quick-launch/launch.d/p.yaml"
+      sessions my-project; hook; renames
+    }
+    When call nested
+    The output should equal "rc=0"
+  End
+
   It 'still renames a generated session beside a Quick Launch workspace'
     run() {
       print -r -- '    name: my-project' >"$MS_HOME/.config/mux/quick-launch/proj.yaml"

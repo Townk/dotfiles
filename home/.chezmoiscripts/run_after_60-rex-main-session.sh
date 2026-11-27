@@ -12,8 +12,8 @@
 #   * NEVER START A SERVER, and never fail the apply: no rex, no jq, no
 #     server, or an unreadable listing is a silent no-op.
 #   * Only a label of the shape Rex generates (two lowercase words, one
-#     hyphen) is a candidate, and never one that is a name in the Quick Launch
-#     config — a workspace called my-project is the owner's name.
+#     hyphen) is a candidate, and never one that is a name or an id in the
+#     Quick Launch config — a workspace called my-project is the owner's name.
 #   * "Oldest" is the first in `rex ls`, which lists sessions in creation
 #     order unless they were moved by hand.
 
@@ -41,12 +41,19 @@ if printf '%s\n' "$sessions" | cut -f2 | grep -qx 'Main'; then
   exit 0
 fi
 
-# Every `name:` in the Quick Launch config, one per line.
+# Every name the Quick Launch config gives a workspace, tab or pane, one per
+# line: the value of each `name:` and of each `id:` (a workspace with no name
+# is called by its id). Read with sed rather than a YAML parser so the apply
+# needs nothing installed; the key may open a list item ("- name: x"), and
+# the value may be quoted or followed by a comment. Reading too many names is
+# the safe direction: a label found here is simply never renamed.
 ql_dir="$HOME/.config/mux/quick-launch"
 ql_names=""
 if [ -d "$ql_dir" ]; then
-  ql_names="$(find "$ql_dir" -name '*.yaml' -type f -exec sed -n 's/^[[:space:]]*name:[[:space:]]*//p' {} + 2>/dev/null \
-    | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/")"
+  ql_names="$(find "$ql_dir" -name '*.yaml' -type f -exec sed -n -E \
+    's/^[[:space:]]*(-[[:space:]]+)?(name|id):[[:space:]]*//p' {} + 2>/dev/null \
+    | sed -E -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]+$//' \
+      -e 's/^"(.*)"$/\1/' -e "s/^'(.*)'\$/\1/")"
 fi
 
 printf '%s\n' "$sessions" | while IFS="$(printf '\t')" read -r id label; do
