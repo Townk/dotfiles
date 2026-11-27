@@ -41,6 +41,15 @@ _mux_self="${(%):-%x}"
 source "$(dirname "$_mux_self")/mux/rex.zsh"
 unset _mux_self
 
+# Rex server 0.1.0-preview.25 stopped exporting $REX_SESSION into panes; only
+# $REX_BLOCK is left. Everything here (the .zshrc autostart guard, mux::backend,
+# the dispatch scripts, nvim) keys on $REX_SESSION, so restore it. A pane's
+# full block ID is accepted wherever Rex takes a session (`-s "$REX_BLOCK"`),
+# so it stands in for the session ID.
+if [[ -z "${REX_SESSION:-}" && -n "${REX_BLOCK:-}" ]]; then
+  export REX_SESSION="$REX_BLOCK"
+fi
+
 # $MUX_BACKEND is an explicit override for callers that are NOT in a session
 # and know better: WezTerm's hooks (mux-open, nested-session-check) and
 # tab-edit resolve the backend from the client PROCESS (mux::backend_for_pid)
