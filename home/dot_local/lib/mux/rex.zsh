@@ -284,15 +284,31 @@ _mux_rx_popup() {
 # the layer's block is gone.
 
 # _mux_rx_modal_layer <w> <h> <title> -- <rex-modal args and target…> — open
-# the layer over OUR block. Prints the layer's block id; empty on failure.
+# the layer over OUR block, in OUR directory (a layer's command otherwise
+# starts in the server's, and a picker's preview of a relative path misses).
+# Prints the layer's block id; empty on failure.
 _mux_rx_modal_layer() {
   local w="$1" h="$2" title="$3"
   shift 3
   [[ "${1-}" == "--" ]] && shift
   local modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
-  _mux_rx_layer "$w" "$h" "$title" "" "" -- \
+  _mux_rx_layer "$w" "$h" "$title" "$PWD" "" -- \
     env "COLORTERM=${COLORTERM:-truecolor}" "$modal" --origin "${REX_BLOCK:-}" "$@"
 }
+
+# _mux_rx_close_block <block> — close a layer we opened; quiet either way.
+_mux_rx_close_block() {
+  [[ -n "${1:-}" ]] || return 0
+  _mux_rx_run --timeout 3s block close -s "$1" "$1" >/dev/null 2>&1
+  return 0
+}
+
+# The floats below share one way of being interrupted. An INT/TERM handler
+# cannot return from the function it interrupts, so it only closes the layer
+# (and notes that it ran, for a signal that lands before the layer exists);
+# the wait then sees the layer gone and the function leaves by its usual
+# path, temp files removed, with 130. Without it the float outlived its
+# caller, and answering that orphan found nobody listening.
 
 # _mux_rx_await_modal <layer block> <reader pid> — wait for the reader to
 # finish (the modal answered). Returns 1 after abandoning it because nobody
@@ -347,7 +363,9 @@ _mux_rx_pick_float() {
   out=$(mktemp "${TMPDIR:-/tmp}/rxpick-out.XXXXXX") || { rm -f -- "$tmp" "$fifo"; return 1; }
   # As in the tmux twin: these helpers run inside `$(…)`, where an EXIT trap
   # fires too late, so every return path removes the temps itself.
-  trap 'rm -f -- "$fifo" "$tmp" "$out"' INT TERM
+  setopt localoptions localtraps
+  local block="" interrupted=0
+  trap 'interrupted=1; _mux_rx_close_block "$block"' INT TERM
 
   # Stage rows to a file: the layer's command cannot read our stdin pipe.
   cat >"$tmp"
@@ -355,17 +373,22 @@ _mux_rx_pick_float() {
   cat "$fifo" >"$out" 2>/dev/null &
   local reader_pid=$!
 
-  local block
   block="$(_mux_rx_modal_layer "$pane_w" "$pane_h" "$header" -- \
     --title "$header" --no-chrome --capture "$fifo" \
     -- "$picklist" "${pick_args[@]}" --no-border --height -1 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp")"
   if [[ -z "$block" ]]; then
-    # No layer: no writer will ever come, so unblock and reap the reader.
+    # No layer: no writer will ever come, so unblock and reap the reader,
+    # then pick inline — the picker the caller asked for, without the float.
     kill "$reader_pid" 2>/dev/null
     wait "$reader_pid" 2>/dev/null
-    rm -f -- "$fifo" "$tmp" "$out"
-    return 1
+    rm -f -- "$fifo" "$out"
+    local rc=0
+    (( interrupted )) && rc=130
+    (( rc )) || pick::start "${pick_args[@]}" <"$tmp" || rc=$?
+    rm -f -- "$tmp"
+    return $rc
   fi
+  (( interrupted )) && _mux_rx_close_block "$block"
 
   local answered=0
   _mux_rx_await_modal "$block" "$reader_pid" && answered=1
@@ -405,7 +428,9 @@ _mux_rx_float() {
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/rxinput-fifo.XXXXXX")
   mkfifo -m 600 "$fifo" 2>/dev/null || return 1
   out=$(mktemp "${TMPDIR:-/tmp}/rxinput-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
-  trap 'rm -f -- "$fifo" "$out"' INT TERM
+  setopt localoptions localtraps
+  local block="" interrupted=0
+  trap 'interrupted=1; _mux_rx_close_block "$block"' INT TERM
 
   # Same measured-height contract as the other floats (input-common's
   # --measure); fall back to the per-type defaults.
@@ -439,15 +464,18 @@ _mux_rx_float() {
   cat "$fifo" >"$out" 2>/dev/null &
   local reader_pid=$!
 
-  local block
   block="$(_mux_rx_modal_layer "$pane_w" "$_measured_h" "$title" -- \
     "${modal_args[@]}" -- "$widget" --type "$type" -- "${wargs[@]}")"
   if [[ -z "$block" ]]; then
+    # No layer: ask inline, as outside a multiplexer.
     kill "$reader_pid" 2>/dev/null
     wait "$reader_pid" 2>/dev/null
     rm -f -- "$fifo" "$out"
-    return 1
+    (( interrupted )) && return 130
+    input::"$type" "${wargs[@]}"
+    return
   fi
+  (( interrupted )) && _mux_rx_close_block "$block"
 
   local answered=0
   _mux_rx_await_modal "$block" "$reader_pid" && answered=1

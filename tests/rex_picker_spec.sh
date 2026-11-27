@@ -12,6 +12,8 @@ Describe 'rex-picker'
 #!/bin/sh
 printf '%s\n' "\$*" >>"$RP_TMP/rex.log"
 case " \$* " in
+  *" session.view "*) cat "$RP_TMP/view.json" 2>/dev/null; exit 0 ;;
+  *" block call "*" process"*) echo '{"foreground":{"cwd":"$RP_TMP","name":"zsh"}}'; exit 0 ;;
   *" session.new_layer "*)
     cat >"$RP_TMP/req.json"
     [ "\${STUB_LAYER:-ok}" = ok ] || exit 1
@@ -94,5 +96,29 @@ env COLORTERM=truecolor PICK_GLYPH_PADDING=0,2,0,2 /home/u/.config/mux/scripts/r
   It 'rejects --resume for a picker that has none'
     When call picker clipboard --resume
     The output should equal "rc=2"
+  End
+
+  It 'opens the picker in the directory of the pane it was called for'
+    run() { picker gitmoji >/dev/null; jq -r '.layout.block.options.cwd' "$RP_TMP/req.json"; }
+    When call run
+    The output should equal "$RP_TMP"
+  End
+
+  It 'does nothing when the key is pressed inside a float'
+    # The second press of a picker key lands in the first picker's float; a
+    # float opened for it would type its result into that picker.
+    print -r -- '{"windows":[{"layers":[{"kind":"tiled","blocks":[{"block_id":"block:shell"}]},{"kind":"floating","blocks":[{"block_id":"block:origin"}]}]}]}' >"$RP_TMP/view.json"
+    run() { picker gitmoji; [[ -e "$RP_TMP/req.json" ]] && print opened || print "not opened"; }
+    When call run
+    The output should equal "rc=0
+not opened"
+  End
+
+  It 'still opens over a tiled pane when another float exists'
+    print -r -- '{"windows":[{"layers":[{"kind":"tiled","blocks":[{"block_id":"block:origin"}]},{"kind":"floating","blocks":[{"block_id":"block:other"}]}]}]}' >"$RP_TMP/view.json"
+    run() { picker gitmoji; [[ -e "$RP_TMP/req.json" ]] && print opened || print "not opened"; }
+    When call run
+    The output should equal "rc=0
+opened"
   End
 End

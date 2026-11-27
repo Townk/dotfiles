@@ -18,6 +18,7 @@ EOS
     cat >"$RM_TMP/target" <<EOS
 #!/bin/sh
 { echo "title=\${MUX_MODAL_TITLE-unset} zj=\${ZJ_MODAL_TITLE-unset}"
+  echo "tmux=\${TMUX-unset} zellij=\${ZELLIJ-unset}" >"$RM_TMP/mux.log"
   echo "pane=\${PICK_INJECT_PANE-unset} rex=\${PICK_INJECT_REX-unset} target=\${MUX_MODAL_TARGET_PANE-unset}"; } >"$RM_TMP/env.log"
 printf '%s\n' "\$1"
 exit "\${2:-0}"
@@ -28,9 +29,26 @@ EOS
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  modal() {
+  raw_modal() {
     env -u REX_SESSION REX_BLOCK=block:layer MUX_REX_BIN="$RM_TMP/rex" MUX_LIB="$LIB" TMPDIR="$RM_TMP" \
-      zsh "$MODAL" "$@" 2>"$RM_TMP/err"
+      TMUX=/tmp/tmux-sock,1,0 ZELLIJ=0 zsh "$MODAL" "$@" 2>"$RM_TMP/err"
+  }
+  # The modal answers only into a FIFO, as its callers give it. `--capture
+  # FILE` here stands a FIFO in for FILE and drains it into FILE, so the
+  # examples can read the answer back as a plain file.
+  modal() {
+    local -a args=("$@")
+    local i=${args[(i)--capture]} rc=0
+    if (( i > ${#args} )); then raw_modal "$@"; return; fi
+    local file="${args[i+1]}" fifo="$RM_TMP/cap.fifo"
+    mkfifo "$fifo"
+    cat "$fifo" >"$file" &
+    local reader=$!
+    args[i+1]="$fifo"
+    raw_modal "${args[@]}" || rc=$?
+    wait "$reader"
+    rm -f "$fifo"
+    return $rc
   }
   sent() { cat "$RM_TMP/rex.log" 2>/dev/null || true; }
   seen() { cat "$RM_TMP/env.log"; }
@@ -47,6 +65,20 @@ EOS
       run() { modal --no-chrome --capture "$RM_TMP/out" -- "$RM_TMP/target" "" 130; print -r -- "rc=$? size=$(wc -c <"$RM_TMP/out" | tr -d ' ')"; }
       When call run
       The output should equal "rc=0 size=0"
+    End
+
+    It 'never leaves the answer behind as a regular file'
+      # The caller gave up and removed its FIFO: nothing is listening.
+      run() { raw_modal --no-chrome --capture "$RM_TMP/gone" -- "$RM_TMP/target" x; print -r -- "rc=$?"; [[ -e "$RM_TMP/gone" ]] && print stray || print clean; }
+      When call run
+      The output should equal "rc=0
+clean"
+    End
+
+    It 'hides an inherited tmux or zellij from the target'
+      run() { modal --no-chrome --capture "$RM_TMP/out" -- "$RM_TMP/target" x; cat "$RM_TMP/mux.log"; }
+      When call run
+      The output should equal "tmux=unset zellij=unset"
     End
 
     It 'types nothing into any block'

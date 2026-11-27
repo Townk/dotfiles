@@ -389,6 +389,7 @@ Describe 'mux/rex.zsh — float launch guard'
       echo '    fi'
       echo '    print -r -- "{\"block_ids\":[\"block:layer\"]}"'
       echo '    exit 0 ;;'
+      echo '  *" block close "*) rm -f "$STUB_ALIVE"; exit 0 ;;'
       echo '  *" block inspect "*) [[ -n "${STUB_INSPECT_RC:-}" ]] && exit "$STUB_INSPECT_RC"; [[ -e "$STUB_ALIVE" ]] && exit 0; exit 3 ;;'
       echo 'esac'
       echo 'exit 1'
@@ -430,15 +431,56 @@ Describe 'mux/rex.zsh — float launch guard'
     The line 3 of output should equal "0"
   End
 
-  It '_mux_rx_pick_float returns non-zero promptly and leaks nothing when the layer cannot be created'
+  It '_mux_rx_pick_float picks inline, leaking nothing, when the layer cannot be created'
     export STUB_MODE=fail
+    pick::start() { print -r -- "inline[$*][$(cat)]"; }
+    Data
+      #|claude  Claude Code
+    End
+    When call run_and_report 8 _mux_rx_pick_float 70% 60% Pick --output field:1
+    The output should equal "inline[--output field:1][claude  Claude Code]"
+    The error should equal ""
+    The status should be success
+  End
+
+  It '_mux_rx_pick_float passes the inline picker'"'"'s own status on'
+    export STUB_MODE=fail
+    pick::start() { cat >/dev/null; return 130; }
     Data
       #|claude  Claude Code
     End
     When call run_and_report 8 _mux_rx_pick_float 70% 60% Pick --output field:1
     The output should equal ""
-    The error should equal ""
-    The status should equal 1
+    The status should equal 130
+  End
+
+  It 'opens the float in the caller'"'"'s directory'
+    where() {
+      cd "$TEST_TMP" || return 1
+      print -r -- 'a  A' | _mux_rx_pick_float 70% 60% Pick --output field:1 >/dev/null
+      [[ "$(jq -r '.layout.block.options.cwd' "$STUB_REQ")" == "$PWD" ]] && print same
+    }
+    When call where
+    The output should equal "same"
+  End
+
+  It 'closes its float when the caller is interrupted'
+    export STUB_MODE=slow
+    interrupted() {
+      ( print -r -- 'a  A' | _mux_rx_pick_float 70% 60% Pick --output field:1 ) &
+      local pid=$!
+      local i; for i in {1..40}; do [[ -e "$STUB_ALIVE" ]] && break; sleep 0.1; done
+      sleep 0.3
+      kill -TERM "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      print -r -- "rc=$?"
+      grep -c 'block close .*block:layer' "$STUB_ARGV_LOG"
+      ls "$TEST_TMP" | grep -c -E 'rxpick|rxinput' || true
+    }
+    When call run_and_report 12 interrupted
+    The line 1 of output should equal "rc=130"
+    The line 2 of output should equal "1"
+    The line 3 of output should equal "0"
   End
 
   It '_mux_rx_pick_float reports a cancel as 130'
@@ -487,12 +529,30 @@ Describe 'mux/rex.zsh — float launch guard'
 Quit"
   End
 
-  It '_mux_rx_float returns non-zero promptly and leaks nothing when the layer cannot be created'
+  It '_mux_rx_float asks inline, leaking nothing, when the layer cannot be created'
     export STUB_MODE=fail
-    When call run_and_report 8 _mux_rx_float --type confirm --title Quit -- "Really?"
-    The output should equal ""
+    input::confirm() { print -rn -- "inline[$*]"; }
+    When call run_and_report 8 _mux_rx_float --type confirm --title Quit -- --title Quit "Really?"
+    The output should equal "inline[--title Quit Really?]"
     The error should equal ""
-    The status should equal 1
+    The status should be success
+  End
+
+  It '_mux_rx_float closes its float when the caller is interrupted'
+    export STUB_MODE=slow
+    interrupted() {
+      ( _mux_rx_float --type confirm --title Quit -- "Really?" ) &
+      local pid=$!
+      local i; for i in {1..40}; do [[ -e "$STUB_ALIVE" ]] && break; sleep 0.1; done
+      sleep 0.3
+      kill -TERM "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      print -r -- "rc=$?"
+      grep -c 'block close .*block:layer' "$STUB_ARGV_LOG"
+    }
+    When call run_and_report 12 interrupted
+    The line 1 of output should equal "rc=130"
+    The line 2 of output should equal "1"
   End
 
   It '_mux_rx_float returns 130 when the layer is closed by hand'

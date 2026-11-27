@@ -61,6 +61,9 @@ done
 # The targets need fzf, jq and friends; the bootstrap restores $REX_SESSION
 # from $REX_BLOCK and gives us the rex binary.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+# A server started from inside tmux or zellij hands their variables down; the
+# target must not take this layer for a pane of theirs.
+unset TMUX TMUX_PANE ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
 rex_bin="$(_mux_rx_bin 2>/dev/null)" || rex_bin=""
 
@@ -203,7 +206,10 @@ if [[ -n "$capture" ]]; then
   # FIFO reader always unblocks (mirror of the other modals' contract).
   result=""
   tmp=$(mktemp "${TMPDIR:-/tmp}/rexmodal.XXXXXX")
-  trap 'printf "%s" "$result" > "$capture"; rm -f -- "$tmp"' EXIT
+  # Only ever into a FIFO: once the caller has given up (interrupted, timed
+  # out) it removes its FIFO, and a plain redirect would then leave the
+  # answer behind as a stray regular file.
+  trap '[[ -p "$capture" ]] && printf "%s" "$result" > "$capture"; rm -f -- "$tmp"' EXIT
   "${cmd[@]}" >"$tmp" || true
   result=$(cat "$tmp")
   result="${result%$'\n'}"

@@ -63,7 +63,19 @@ fi
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
 modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
 
-block="$(_mux_rx_layer "$w" "$h" "$title" "" "" -- \
+# A second press of a picker key lands in the first picker's float, and a
+# float opened over THAT would type its result into the picker. A key pressed
+# inside a float does nothing, as in a tmux popup.
+in_float="$(_mux_rx_view 2>/dev/null | jq -r --arg b "$REX_BLOCK" '
+  [.windows[]?.layers[]? | select(.kind != "tiled") | .blocks[]?.block_id] | index($b) != null' 2>/dev/null)" || in_float=""
+[[ "$in_float" == true ]] && exit 0
+
+# Open in the directory of the pane the key was pressed in (the action runs
+# from the server's), so a preview of a relative path resolves.
+cwd="$(_mux_rx_pane_cwd 2>/dev/null)" || cwd=""
+[[ -d "$cwd" ]] || cwd=""
+
+block="$(_mux_rx_layer "$w" "$h" "$title" "$cwd" "" -- \
   env COLORTERM=truecolor "${env_args[@]}" "$modal" --origin "$REX_BLOCK" --title "$title" \
   "${modal_args[@]}" --no-chrome -- "${cmd[@]}")"
 [[ -n "$block" ]] || {
