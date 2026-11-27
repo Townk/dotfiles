@@ -18,6 +18,15 @@ Idempotent: an existing mirror entry is left alone, so re-running adds nothing.
 """
 from .ranges import MIRROR_RANGES, mirror_cp
 
+# The one built font that carries the aliases: the variable-width Symbols font.
+# A mirror codepoint is only ever reached through an app's font FALLBACK, and
+# the system picks the fallback font itself among every installed font that has
+# the codepoint. With the aliases in all three outputs it picked the embedded
+# JetBrains Mono, whose icons are shrunk to a 0.6em cell — far smaller than the
+# 0.83em of the font the app would otherwise have used. In a single font there
+# is nothing to pick between, and this one matches upstream's sizing.
+MIRROR_FONT = "SymbolsNerdFont-Regular.ttf"
+
 # cmap subtable formats that can hold a codepoint above U+FFFF.
 _WIDE_FORMATS = (12, 13)
 

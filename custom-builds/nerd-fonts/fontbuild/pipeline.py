@@ -149,7 +149,9 @@ def run(argv):
 
         # 7a: alias every Private Use icon at its mirror codepoint (cmap only).
         # Before the stash, so recalibrate-fa.sh's restored copies keep them.
-        print("  %s: mirrored %d icon codepoint(s)" % (base, mirror.mirror_font(font)))
+        # ONE font only — see mirror.MIRROR_FONT.
+        if base == mirror.MIRROR_FONT:
+            print("  %s: mirrored %d icon codepoint(s)" % (base, mirror.mirror_font(font)))
 
         # 7b: stash pristine (pre-scale) copy, then normalize icon sizing.
         font.save(os.path.join(args.prescale_dir, base))

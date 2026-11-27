@@ -94,8 +94,9 @@ or disable with `JSON_OUT_DIR=""`.
 
 ### Mirror codepoints
 
-Every Private Use icon is also mapped at a second, **mirror** codepoint in
-Plane 16 (`fontbuild/mirror.py`, rule in `fontbuild/ranges.py`):
+In the variable-width `SymbolsNerdFont-Regular.ttf` — and only there — every
+Private Use icon is also mapped at a second, **mirror** codepoint in Plane 16
+(`fontbuild/mirror.py`, rule in `fontbuild/ranges.py`):
 
 ```
 U+E000..U+F8FF    -> U+108000..U+1098FF   (codepoint + 0xFA000)
@@ -115,10 +116,16 @@ out of `glyphs.json`, so the pickers do not list every icon twice. The block
 starts at U+108000 to stay clear of this build's other Plane-16 allocations
 and of SF Symbols, which Apple's SF Pro fonts carry at U+100000..U+103835.
 
-To add them to already-built fonts without a rebuild:
+Only one font carries them on purpose. A mirror codepoint is reached through
+font fallback, and macOS chooses the fallback font among all installed fonts
+that have the codepoint; given the choice it used the embedded JetBrains Mono,
+whose icons are sized for a 0.6em cell and came out visibly small.
+
+To add them to an already-built font without a rebuild:
 
 ```bash
-PYTHONPATH=. build/.venv/bin/python -m fontbuild mirror build/output/*.ttf build/work/prescale/*.ttf
+PYTHONPATH=. build/.venv/bin/python -m fontbuild mirror \
+  build/output/SymbolsNerdFont-Regular.ttf build/work/prescale/SymbolsNerdFont-Regular.ttf
 ```
 
 ### Unicode donor glyphs
