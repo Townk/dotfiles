@@ -52,7 +52,8 @@ run_and_report() {
 
   local f
   for f in "$TEST_TMP"/*fifo*(N) "$TEST_TMP"/txpick.*(N) "$TEST_TMP"/zjpick.*(N) \
-           "$TEST_TMP"/*-out.*(N) "$TEST_TMP"/txinput*(N) "$TEST_TMP"/zjinput*(N); do
+           "$TEST_TMP"/*-out.*(N) "$TEST_TMP"/txinput*(N) "$TEST_TMP"/zjinput*(N) \
+           "$TEST_TMP"/rxpick.*(N) "$TEST_TMP"/rxinput*(N); do
     [[ "${f:t}" == guard* ]] && continue
     print -r -- "LEAK:${f:t}" >&2
   done
@@ -351,5 +352,183 @@ Describe 'mux/zellij.zsh — float launch guard (HI-7)'
     The output should equal ""
     The error should equal ""
     The status should equal 1
+  End
+End
+
+# The Rex twins. A Rex float is a floating LAYER (session.new_layer) whose
+# command is rex-modal; the answer comes back through the same capture FIFO.
+# Two failure shapes are Rex's own: the layer cannot be created, and — a layer
+# being a real pane — it is closed by hand before the modal ever answers. In
+# both the float must return promptly and leave nothing behind.
+Describe 'mux/rex.zsh — float launch guard'
+  Include home/dot_local/lib/mux.zsh
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    export TMPDIR="$TEST_TMP"
+    unset TMUX ZELLIJ MUX_BACKEND MUX_REX_CONSUMERS
+    export REX_SESSION=session:s1 REX_BLOCK=block:origin
+    stub="$TEST_TMP/rex"
+    {
+      echo '#!/usr/bin/env zsh'
+      echo 'print -r -- "$*" >> "$STUB_ARGV_LOG"'
+      echo 'case " $* " in'
+      echo '  *" session.new_layer "*)'
+      echo '    req=$(cat); print -r -- "$req" > "$STUB_REQ"'
+      echo '    [[ "${STUB_MODE:-ok}" == fail ]] && exit 1'
+      echo '    : > "$STUB_ALIVE"'
+      echo '    fifo=$(print -r -- "$req" | jq -r ".layout.block.options.command as \$c | \$c[(\$c | index(\"--capture\")) + 1]")'
+      echo '    if [[ "${STUB_MODE:-ok}" == closed ]]; then'
+      echo '      # The layer is closed by hand: it goes away and nobody writes.'
+      echo '      { sleep 0.4; rm -f "$STUB_ALIVE" } &!'
+      echo '    else'
+      echo '      { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER-picked}" >&3; exec 3>&-; rm -f "$STUB_ALIVE" } &!'
+      echo '    fi'
+      echo '    print -r -- "{\"block_ids\":[\"block:layer\"]}"'
+      echo '    exit 0 ;;'
+      echo '  *" block inspect "*) [[ -e "$STUB_ALIVE" ]] && exit 0; exit 3 ;;'
+      echo 'esac'
+      echo 'exit 1'
+    } > "$stub"
+    chmod +x "$stub"
+    export MUX_REX_BIN="$stub" STUB_ARGV_LOG="$TEST_TMP/argv.log" STUB_REQ="$TEST_TMP/req.json" \
+      STUB_ALIVE="$TEST_TMP/alive" STUB_MODE=ok STUB_ANSWER=picked
+  }
+  cleanup() {
+    rm -rf "$TEST_TMP"
+    unset MUX_REX_BIN STUB_ARGV_LOG STUB_REQ STUB_ALIVE STUB_MODE STUB_ANSWER TMPDIR REX_SESSION REX_BLOCK
+  }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  layer_cmd() { jq -r '.layout.block.options.command | join(" ")' "$STUB_REQ"; }
+
+  It '_mux_rx_pick_float returns the selection and leaves no temp files (happy path)'
+    export STUB_ANSWER=claude
+    Data
+      #|claude  Claude Code
+    End
+    When call run_and_report 8 _mux_rx_pick_float 70% 60% Pick --output field:1
+    The output should equal "claude"
+    The error should equal ""
+    The status should be success
+  End
+
+  It '_mux_rx_pick_float runs pick-list under rex-modal, capturing, over our block'
+    shape() {
+      print -r -- 'a  A' | _mux_rx_pick_float 70% 60% Pick --output field:1 >/dev/null
+      layer_cmd | grep -c -E 'rex-modal --origin block:origin --title Pick --no-chrome --capture [^ ]+ -- [^ ]*/pick-list --output field:1 .*-- [^ ]*rxpick\.'
+      jq -c '.bounds | map(. * 100 | round)' "$STUB_REQ"
+      grep -c -v -- '--autostart=false' "$STUB_ARGV_LOG" || true
+    }
+    When call shape
+    The line 1 of output should equal "1"
+    The line 2 of output should equal "[15,20,70,60]"
+    The line 3 of output should equal "0"
+  End
+
+  It '_mux_rx_pick_float returns non-zero promptly and leaks nothing when the layer cannot be created'
+    export STUB_MODE=fail
+    Data
+      #|claude  Claude Code
+    End
+    When call run_and_report 8 _mux_rx_pick_float 70% 60% Pick --output field:1
+    The output should equal ""
+    The error should equal ""
+    The status should equal 1
+  End
+
+  It '_mux_rx_pick_float reports a cancel as 130'
+    export STUB_ANSWER=""
+    Data
+      #|claude  Claude Code
+    End
+    When call run_and_report 8 _mux_rx_pick_float 70% 60% Pick --output field:1
+    The output should equal ""
+    The error should equal ""
+    The status should equal 130
+  End
+
+  It '_mux_rx_pick_float returns 130 and leaks nothing when the layer is closed by hand'
+    export STUB_MODE=closed
+    Data
+      #|claude  Claude Code
+    End
+    When call run_and_report 8 _mux_rx_pick_float 70% 60% Pick --output field:1
+    The output should equal ""
+    The error should equal ""
+    The status should equal 130
+  End
+
+  It '_mux_rx_float returns the answer and leaves no temp files (happy path)'
+    export STUB_ANSWER=yes
+    When call run_and_report 8 _mux_rx_float --type confirm --title Quit -- "Really?"
+    The output should equal "yes"
+    The error should equal ""
+    The status should be success
+  End
+
+  It '_mux_rx_float runs input-widget under rex-modal and lets the modal paint the title'
+    shape() {
+      _mux_rx_float --type confirm --title Quit -- "Really?" >/dev/null
+      layer_cmd | grep -c -E 'rex-modal --origin block:origin --title Quit --capture [^ ]+ -- [^ ]*/input-widget --type confirm -- Really\?$'
+      layer_cmd | grep -c -- '--no-chrome' || true
+    }
+    When call shape
+    The output should equal "1
+0"
+  End
+
+  It '_mux_rx_float passes no stray --title when none is given'
+    shape() { _mux_rx_float --type confirm -- "Really?" >/dev/null; layer_cmd | grep -c -- '--title' || true; }
+    When call shape
+    The output should equal "0"
+  End
+
+  It '_mux_rx_float returns non-zero promptly and leaks nothing when the layer cannot be created'
+    export STUB_MODE=fail
+    When call run_and_report 8 _mux_rx_float --type confirm --title Quit -- "Really?"
+    The output should equal ""
+    The error should equal ""
+    The status should equal 1
+  End
+
+  It '_mux_rx_float returns 130 when the layer is closed by hand'
+    export STUB_MODE=closed
+    When call run_and_report 8 _mux_rx_float --type confirm --title Quit -- "Really?"
+    The output should equal ""
+    The error should equal ""
+    The status should equal 130
+  End
+
+  Describe 'dispatch'
+    It 'floats widgets in a Rex pane without the consumer knob'
+      When call _mux::widgets_float
+      The status should be success
+    End
+
+    It 'routes mux::confirm through the Rex float'
+      export STUB_ANSWER=yes
+      When call run_and_report 8 mux::confirm --title Quit "Really?"
+      The output should equal "yes"
+      The status should be success
+    End
+
+    It 'fails mux::confirm closed when the layer is closed by hand'
+      export STUB_MODE=closed
+      When call run_and_report 8 mux::confirm --title Quit "Really?"
+      The output should equal "no"
+      The status should equal 130
+    End
+
+    It 'routes mux::pick through the Rex float'
+      export STUB_ANSWER=claude
+      Data
+        #|claude  Claude Code
+      End
+      When call run_and_report 8 mux::pick --output field:1
+      The output should equal "claude"
+      The status should be success
+    End
   End
 End

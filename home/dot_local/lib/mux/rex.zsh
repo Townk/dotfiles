@@ -273,6 +273,179 @@ _mux_rx_popup() {
   _mux_rx_layer "$@" >/dev/null
 }
 
+# --- widget floats ----------------------------------------------------------
+# The Rex twins of _mux_tx_pick_float / _mux_tx_float (same argv, same
+# contract): the widget runs in a floating layer whose command is rex-modal,
+# and the answer comes back through a capture FIFO.
+#
+# What differs from tmux is how a float ENDS without answering. A tmux popup
+# is a process this shell waits on. A Rex layer is a real pane created by an
+# API call that returns at once, and it can be closed by hand — its command is
+# then killed before it ever opens the FIFO, and a bare `cat "$fifo"` would
+# block forever. So the reader runs in the background and is abandoned once
+# the layer's block is gone.
+
+# _mux_rx_modal_layer <w> <h> <title> -- <rex-modal args and target…> — open
+# the layer over OUR block. Prints the layer's block id; empty on failure.
+_mux_rx_modal_layer() {
+  local w="$1" h="$2" title="$3"
+  shift 3
+  [[ "${1-}" == "--" ]] && shift
+  local modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
+  _mux_rx_layer "$w" "$h" "$title" "" "" -- \
+    env "COLORTERM=${COLORTERM:-truecolor}" "$modal" --origin "${REX_BLOCK:-}" "$@"
+}
+
+# _mux_rx_await_modal <layer block> <reader pid> — wait for the reader to
+# finish (the modal answered). Returns 1 after abandoning it because the
+# layer is gone and nothing was written. `block inspect` exits 3 for a block
+# the server no longer knows; any other failure (a server hiccup) is not
+# proof the layer died, so only 3 counts.
+_mux_rx_await_modal() {
+  local block="$1" reader="$2" rc=0
+  while kill -0 "$reader" 2>/dev/null; do
+    rc=0
+    _mux_rx_run --timeout 3s block inspect -s "$block" "$block" >/dev/null 2>&1 || rc=$?
+    if (( rc == 3 )); then
+      # Gone. The modal writes its answer as it exits, so give a reader that
+      # is mid-read a moment before calling it abandoned.
+      sleep 0.3
+      kill -0 "$reader" 2>/dev/null || break
+      kill "$reader" 2>/dev/null
+      wait "$reader" 2>/dev/null
+      return 1
+    fi
+    sleep 0.2
+  done
+  wait "$reader" 2>/dev/null
+  return 0
+}
+
+# _mux_rx_pick_float <pane_w> <pane_h> <header> <pick::start args…>  (rows on stdin)
+_mux_rx_pick_float() {
+  local pane_w="$1" pane_h="$2" header="$3"
+  shift 3
+  local -a pick_args=("$@")
+  local picklist="$HOME/.local/libexec/pick-list"
+
+  local tmp fifo out
+  tmp=$(mktemp "${TMPDIR:-/tmp}/rxpick.XXXXXX") || return 1
+  fifo=$(mktemp -u "${TMPDIR:-/tmp}/rxpick-fifo.XXXXXX")
+  if ! mkfifo -m 600 "$fifo" 2>/dev/null; then
+    rm -f -- "$tmp"
+    return 1
+  fi
+  out=$(mktemp "${TMPDIR:-/tmp}/rxpick-out.XXXXXX") || { rm -f -- "$tmp" "$fifo"; return 1; }
+  # As in the tmux twin: these helpers run inside `$(…)`, where an EXIT trap
+  # fires too late, so every return path removes the temps itself.
+  trap 'rm -f -- "$fifo" "$tmp" "$out"' INT TERM
+
+  # Stage rows to a file: the layer's command cannot read our stdin pipe.
+  cat >"$tmp"
+
+  cat "$fifo" >"$out" 2>/dev/null &
+  local reader_pid=$!
+
+  local block
+  block="$(_mux_rx_modal_layer "$pane_w" "$pane_h" "$header" -- \
+    --title "$header" --no-chrome --capture "$fifo" \
+    -- "$picklist" "${pick_args[@]}" --no-border --height -1 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp")"
+  if [[ -z "$block" ]]; then
+    # No layer: no writer will ever come, so unblock and reap the reader.
+    kill "$reader_pid" 2>/dev/null
+    wait "$reader_pid" 2>/dev/null
+    rm -f -- "$fifo" "$tmp" "$out"
+    return 1
+  fi
+
+  local answered=0
+  _mux_rx_await_modal "$block" "$reader_pid" && answered=1
+
+  local result=""
+  (( answered )) && result=$(cat "$out")
+  rm -f -- "$fifo" "$tmp" "$out"
+
+  [[ -n "$result" ]] || return 130
+  print -r -- "$result"
+}
+
+# _mux_rx_float --type T [--title TITLE] [--pane-width W] [--pane-height H] -- <widget args…>
+# The layer IS the pane and draws no frame of its own around the widget, so —
+# as with tmux's borderless popup — the measured height is used as it is.
+# --borderless and --pane-x/-y are accepted and ignored: a layer is always
+# centered over the window.
+_mux_rx_float() {
+  local type="line" title="" pane_w="" pane_h=""
+  local -a wargs
+  while (($#)); do
+    case "$1" in
+      --type)        type="${2:-line}"; shift 2 ;;
+      --title)       title="${2-}"; shift 2 ;;
+      --borderless)  shift 2 ;;
+      --pane-width)  pane_w="${2-}"; shift 2 ;;
+      --pane-height) pane_h="${2-}"; shift 2 ;;
+      --pane-x | --pane-y) shift 2 ;;
+      --) shift; wargs+=("$@"); break ;;
+      *) shift ;;
+    esac
+  done
+
+  local widget="$HOME/.local/libexec/input-widget"
+
+  local fifo out
+  fifo=$(mktemp -u "${TMPDIR:-/tmp}/rxinput-fifo.XXXXXX")
+  mkfifo -m 600 "$fifo" 2>/dev/null || return 1
+  out=$(mktemp "${TMPDIR:-/tmp}/rxinput-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
+  trap 'rm -f -- "$fifo" "$out"' INT TERM
+
+  # Same measured-height contract as the other floats (input-common's
+  # --measure); fall back to the per-type defaults.
+  local _measured_h=""
+  if [[ -n "$pane_w" ]] && [[ "$pane_w" != *% ]]; then
+    _measured_h="$(input::"$type" --measure --width "$pane_w" "${wargs[@]}" </dev/null 2>/dev/null)"
+  fi
+  if [[ "$_measured_h" != <-> ]]; then
+    if [[ -n "$pane_h" ]]; then
+      _measured_h="$pane_h"
+    else
+      case "$type" in
+        confirm) _measured_h=12 ;;
+        line)    _measured_h=12 ;;
+        text)    _measured_h=16 ;;
+        choose)  _measured_h=14 ;;
+        form)    _measured_h=18 ;;
+        *)       _measured_h=14 ;;
+      esac
+    fi
+  fi
+  [[ -n "$pane_w" ]] || pane_w="60%"
+
+  local -a modal_args=(--capture "$fifo")
+  [[ -n "$title" ]] && modal_args=(--title "$title" "${modal_args[@]}")
+
+  cat "$fifo" >"$out" 2>/dev/null &
+  local reader_pid=$!
+
+  local block
+  block="$(_mux_rx_modal_layer "$pane_w" "$_measured_h" "$title" -- \
+    "${modal_args[@]}" -- "$widget" --type "$type" -- "${wargs[@]}")"
+  if [[ -z "$block" ]]; then
+    kill "$reader_pid" 2>/dev/null
+    wait "$reader_pid" 2>/dev/null
+    rm -f -- "$fifo" "$out"
+    return 1
+  fi
+
+  local answered=0
+  _mux_rx_await_modal "$block" "$reader_pid" && answered=1
+
+  local result=""
+  (( answered )) && result=$(cat "$out")
+  rm -f -- "$fifo" "$out"
+  [[ -n "$result" ]] || return 130
+  print -rn -- "$result"
+}
+
 # _mux_rx_new_tab <session> <name> <cwd> <singleton> -- <cmd...>
 # Singleton: an existing window of that label is closed and re-created, the
 # equivalent of tmux's `respawn-window -k` (a stale `tm` tab is replaced, not

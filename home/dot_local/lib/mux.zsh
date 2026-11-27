@@ -36,14 +36,14 @@ source "$(dirname "$_mux_self")/input-common.zsh"
 unset _mux_self
 
 # _mux::widgets_float — true when the current backend renders widgets as
-# floating modals (Phase 2: both backends; "none" renders inline).
-# Only the backends with a float implementation below. A Rex pane is a real
-# session (mux::available is true there) but its widget float is not built
-# yet, so pickers and dialogs keep rendering inline in it — exactly what they
-# did before Rex was a backend at all.
+# floating modals ("none" renders inline). Only the backends with a float
+# implementation below. Rex asks _mux_rx_available rather than mux::available:
+# that one stays false in a Rex pane until $MUX_REX_CONSUMERS is set, a gate
+# for consumers that are NOT ported yet — and the widget float is ported.
 _mux::widgets_float() {
   case "$(mux::backend)" in
     zellij | tmux) mux::available ;;
+    rex) _mux_rx_available ;;
     *) return 1 ;;
   esac
 }
@@ -53,6 +53,7 @@ _mux::float() {
   case "$(mux::backend)" in
     zellij) _mux_zj_float "$@" ;;
     tmux) _mux_tx_float "$@" ;;
+    rex) _mux_rx_float "$@" ;;
     *) return 1 ;;
   esac
 }
@@ -60,6 +61,7 @@ _mux::pick_float() {
   case "$(mux::backend)" in
     zellij) _mux_zj_pick_float "$@" ;;
     tmux) _mux_tx_pick_float "$@" ;;
+    rex) _mux_rx_pick_float "$@" ;;
     *) return 1 ;;
   esac
 }

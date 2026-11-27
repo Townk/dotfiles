@@ -1,0 +1,129 @@
+#!/usr/bin/env zsh
+# rex-modal — Rex backend of the shared floating-modal scaffolding. The
+# interface mirrors tmux-modal and zellij-modal exactly; it runs INSIDE a Rex
+# floating layer (session.new_layer, opened by _mux_rx_layer) whose command
+# it is, so the layer closes when this script exits.
+#
+# Usage:
+#   rex-modal [--origin BLOCK_ID] --title TEXT [--inject | --capture FILE]
+#             [--no-chrome] -- CMD [ARGS...]
+#
+#   --origin BLOCK_ID The block the result is typed into. Unlike a tmux popup,
+#                     a layer is a pane of its own with its own $REX_BLOCK, so
+#                     the opener must pass the block it was opened over; there
+#                     is nothing to self-resolve.
+#   --title TEXT      Header block (blank, "▓▓▓ <title>", rule); with
+#                     --no-chrome the title is handed to the target via
+#                     MUX_MODAL_TITLE (+ ZJ_MODAL_TITLE, pick-common's reader).
+#   --inject          Picker mode: capture CMD's stdout, strip the single
+#                     trailing newline, type it into the origin (`rex send`).
+#   --capture FILE    Capture mode: write the result to FILE (a FIFO the
+#                     spawner blocks on) via an EXIT trap, so the reader
+#                     unblocks on every exit path including ESC/cancel.
+#   -- CMD ...        Target command; stdout is the payload, /dev/tty stays
+#                     with the target's interactive UI.
+#
+# Env overrides: MUX_REX_BIN (tests), MUX_LIB.
+
+set -euo pipefail
+
+title=""
+inject=0
+capture=""
+no_chrome=0
+origin=""
+cmd=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --origin) origin="${2-}"; shift 2 ;;
+    --origin=*) origin="${1#*=}"; shift ;;
+    --title) title="${2-}"; shift 2 ;;
+    --title=*) title="${1#*=}"; shift ;;
+    --inject) inject=1; shift ;;
+    --no-chrome) no_chrome=1; shift ;;
+    --capture) capture="${2-}"; shift 2 ;;
+    --capture=*) capture="${1#*=}"; shift ;;
+    --) shift; cmd=("$@"); break ;;
+    *)
+      echo "rex-modal: unknown option: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+[[ ${#cmd[@]} -gt 0 ]] || {
+  echo "rex-modal: no target command (expected '-- CMD ...')" >&2
+  exit 2
+}
+
+# A layer's command starts from the SERVER's environment, which has neither
+# the login shell's PATH nor (since server 0.1.0-preview.25) $REX_SESSION.
+# The targets need fzf, jq and friends; the bootstrap restores $REX_SESSION
+# from $REX_BLOCK and gives us the rex binary.
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+rex_bin="$(_mux_rx_bin 2>/dev/null)" || rex_bin=""
+
+if (( no_chrome )); then
+  # "fzf owns the box": hand the title to the target; draw nothing.
+  if [[ -n "$title" ]]; then
+    export MUX_MODAL_TITLE="$title"
+    export ZJ_MODAL_TITLE="$title"   # pick-common's current reader
+  fi
+else
+  # Shared dialog theme — same single source the other two modals use.
+  source "${MUX_LIB:-$HOME/.local/lib}/theme-common.zsh"
+  dialog_bg="$(theme::sgr_bg "$C_ROLE_UI_DIALOG_BG")"
+  printf '%s\e[2J\e[H' "$dialog_bg"
+  if [[ -n "$title" ]]; then
+    rule="$(theme::rule)"
+    printf '%s\e[K\n' "$dialog_bg"
+    printf '%s  %s▓▓▓ %s%s\e[K\n' "$dialog_bg" "$THEME_H1" "$title" "$dialog_bg"
+    printf '%s  %s%s%s\e[K\n' "$dialog_bg" "$THEME_SEPARATOR" "$rule" "$dialog_bg"
+  fi
+  printf '\e[39;22m'
+fi
+
+if [[ -n "$capture" ]]; then
+  # Capture mode: EXIT trap writes the result on every exit path so the
+  # FIFO reader always unblocks (mirror of the other modals' contract).
+  result=""
+  tmp=$(mktemp "${TMPDIR:-/tmp}/rexmodal.XXXXXX")
+  trap 'printf "%s" "$result" > "$capture"; rm -f -- "$tmp"' EXIT
+  "${cmd[@]}" >"$tmp" || true
+  result=$(cat "$tmp")
+  result="${result%$'\n'}"
+  exit 0
+fi
+
+if ((!inject)); then
+  # Action mode: the target owns the outcome. Export the origin so
+  # per-backend kill/rename paths can address it.
+  [[ -z "$origin" ]] || export MUX_MODAL_TARGET_PANE="$origin"
+  exec "${cmd[@]}"
+fi
+
+# Picker mode: run the target with the background-sink env exported so
+# insert-without-dismiss binds write into the origin mid-session
+# (pick::background_sink's Rex branch), then type the final selection.
+tmp=$(mktemp "${TMPDIR:-/tmp}/rexmodal.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+if [[ -n "$origin" && -n "$rex_bin" ]]; then
+  PICK_INJECT_PANE="$origin" PICK_INJECT_REX="$rex_bin" \
+    "${cmd[@]}" >"$tmp" || true
+else
+  "${cmd[@]}" >"$tmp" || true
+fi
+
+# Strip the single trailing newline so we don't auto-submit at a shell
+# prompt. Embedded newlines (multi-select concatenation) are preserved.
+# No U+FE0F strip here, unlike tmux-modal: that works around tmux's cell
+# widths disagreeing with zsh's, and Rex's grid is libghostty's.
+result=$(cat "$tmp")
+result="${result%$'\n'}"
+
+[[ -n "$result" && -n "$origin" && -n "$rex_bin" ]] || exit 0
+
+# A block id is accepted wherever Rex takes a session, so the origin names
+# both the session and the block.
+"$rex_bin" --autostart=false send -s "$origin" -b "$origin" -- "$result"
