@@ -326,6 +326,114 @@ Describe 'generated Rex config'
         The output should equal '[true,true,true,true,true,true,false,false,false,true,false]'
       End
     End
+
+    # Resize moves a border on the server (session.resize_pane), not through
+    # the client's pane.resize: nvim has to reach it from the CLI, and a
+    # shell pane and an nvim pane must resize the same way.
+    It 'resizes on the server, through one function'
+      shape() {
+        grep -c -F 'rex.client.queue("pane.resize"' "$RK_LUA" || true
+        grep -c -E '^      resize_by\(ctx\.session_id, ctx\.block_id, args\.direction, RESIZE_STEP\)$' "$RK_LUA" || true
+        grep -c -E '^    return resize_by\(ctx\.session_id, ctx\.block_id, args\.direction, args\.cells\)$' "$RK_LUA" || true
+      }
+      When call shape
+      The line 1 of output should equal "0"
+      The line 2 of output should equal "1"
+      The line 3 of output should equal "1"
+    End
+
+    Describe 'the resize action, run by Rex'
+      rex_missing() { ! command -v rex >/dev/null 2>&1; }
+      Skip if 'rex is not installed' rex_missing
+
+      rx() { command rex --autostart=false -S "$RZ_SERVER" "$@"; }
+      # The layout  A | ((B | D) / C)  — a border on every side of B.
+      start_server() {
+        RZ_STATE=$(mktemp -d)
+        RZ_SOCK="/tmp/rzrx-$$.sock"
+        RZ_SERVER="unix://$RZ_SOCK"
+        # The action exactly as shipped, cut out of the rendered config.
+        {
+          print -r -- 'local TERMINAL = "com.superlogical.terminal"'
+          awk '/^local RESIZE_STEP = /,/^-- The key side is an ACTION/' "$RK_LUA" | sed '$d'
+        } >"$RZ_STATE/init.lua"
+        command rex server run --listen "$RZ_SERVER" --state-dir "$RZ_STATE/state" \
+          --config "$RZ_STATE/init.lua" --restore=false >"$RZ_STATE/server.log" 2>&1 &
+        RZ_PID=$!
+        local i
+        for i in {1..50}; do rx whoami >/dev/null 2>&1 && break; sleep 0.1; done
+      }
+      stop_server() {
+        rx server stop >/dev/null 2>&1
+        kill "$RZ_PID" 2>/dev/null
+        rm -rf "$RZ_STATE" "$RZ_SOCK"
+      }
+      BeforeAll 'start_server'
+      AfterAll 'stop_server'
+
+      # A fresh four-pane session per example: RZ_SID, RZ_A … RZ_D.
+      layout() {
+        RZ_SID=$(rx new "z-$RANDOM" --shell none --json -- /bin/sleep 60 | jq -r '.session_id')
+        RZ_A=$(rx block ls -s "$RZ_SID" --json | jq -r '.blocks[0].block_id')
+        RZ_B=$(rx run -s "$RZ_SID" -b "$RZ_A" --split right --shell none --json -- /bin/sleep 60 | jq -r '.block_ids[0]')
+        RZ_C=$(rx run -s "$RZ_SID" -b "$RZ_B" --split below --shell none --json -- /bin/sleep 60 | jq -r '.block_ids[0]')
+        RZ_D=$(rx run -s "$RZ_SID" -b "$RZ_B" --split right --shell none --json -- /bin/sleep 60 | jq -r '.block_ids[0]')
+      }
+      # ratios — the three splits, outermost first: A|rest, top/C, B|D.
+      ratios() {
+        rx api call -s "$RZ_SID" session.view | jq -c '
+          .windows[0].layers[0].layout.split as $h
+          | [$h.ratio, $h.after.split.ratio, $h.after.split.before.split.ratio]
+          | map(. * 10000 | round / 10000)'
+      }
+      # resize <pane> <direction> <cells> — then print the ratios.
+      resize() {
+        layout
+        local pane=${(P)${:-RZ_$1}}
+        rx do pane_resize_by -b "$pane" "direction=$2" "cells=$3" -s "$RZ_SID" >/dev/null
+        ratios
+      }
+
+      # No client shows these panes, so each reports 80x24 and the window is
+      # taken to be (80 / the pane's share) wide: 160 columns seen from A.
+      It 'moves the border on the pressed side'
+        When call resize A right 4
+        The output should equal '[0.525,0.5,0.5]'
+      End
+
+      # B covers a quarter of the width, so the same 80 columns read as a
+      # 320-column window here: 4 cells are half the ratio they were from A.
+      It 'moves the same border back from the other pane'
+        When call resize B left 4
+        The output should equal '[0.4875,0.5,0.5]'
+      End
+
+      It 'moves the border on the other side for a pane at the far edge'
+        When call resize D right 4
+        The output should equal '[0.5,0.5,0.525]'
+      End
+
+      It 'picks the nearest border on that side in a nested layout'
+        When call resize B right 4
+        The output should equal '[0.5,0.5,0.525]'
+      End
+
+      It 'moves a horizontal border'
+        When call resize B down 2
+        The output should equal '[0.5,0.5417,0.5]'
+      End
+
+      It 'does nothing when there is no border on that axis'
+        When call resize A down 2
+        The output should equal '[0.5,0.5,0.5]'
+      End
+
+      It 'reports whether it moved anything'
+        report() { layout; rx do pane_resize_by -b "$RZ_A" "direction=$1" cells=2 -s "$RZ_SID"; }
+        When call report down
+        The output should equal 'false'
+      End
+    End
   End
 
   Describe 'as Rex reads it'
@@ -336,7 +444,7 @@ Describe 'generated Rex config'
       When call rex config check "$RK_LUA"
       The status should be success
       The output should include "modes: 6"
-      The output should include "actions: 7"
+      The output should include "actions: 8"
     End
 
     It 'defines every one of our actions that a binding names'

@@ -602,9 +602,10 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 | Behavior | tmux impl | Rex impl | Status | Notes |
 |---|---|---|---|---|
 | `Ctrl+h/j/k/l`, `Ctrl+arrows` | root binds, `ps` probe of the pane tty → `send-keys` or `select-pane` | Lua FUNCTION binds, same `ps` probe via `rex.exec` → return false (key passes) or `rex.session.focus_direction` | ✅ | no wrap at the edge on either |
-| nvim → mux hand-off at the last split | smart-splits tmux backend | smart-splits `move.at_edge` → `rex focus <direction>` | ✅ | outside Rex the hook wraps, the default it replaced |
-| `Ctrl+Shift+h/j/k/l`, `Ctrl+Shift+arrows` | `@pane-is-vim` → `send-keys` or `resize-pane 2` | action `ctx_resize`: vim → `pane.send_key`, else `pane.resize` amount 2 | 🟡 | an ACTION, not a function: resize-by-direction exists only as a client action, and only an action may queue one |
-| resize from inside nvim reaching the mux pane | smart-splits tmux backend resizes the tmux pane when nvim has one window | none | ❌ | smart-splits has no edge hook for resize |
+| nvim → mux hand-off at the last split | smart-splits tmux backend | a Rex backend for smart-splits, inline in nvim's `plugins/nav.lua`: `move` → `rex focus <direction>` | ✅ | outside Rex the backend does not detect, and core wraps as it does with no backend |
+| `Ctrl+Shift+h/j/k/l`, `Ctrl+Shift+arrows` | `@pane-is-vim` → `send-keys` or `resize-pane 2` | action `ctx_resize`: vim → `pane.send_key`, else move a border 2 cells on the server (`session.resize_pane`) | ✅ | tmux's rule: the key moves a border in the pressed direction — the nearest on that side, or the nearest on the other side for a pane at the edge. An ACTION, not a function: the vim branch queues a client action |
+| resize from inside nvim reaching the mux pane | smart-splits tmux backend resizes the tmux pane when nvim has one window | the Rex backend's `resize` → `rex do pane_resize_by direction=… cells=…`, the same code the Rex keys run | ✅ | core calls it when the nvim window fills the axis. Step is 2 cells on both sides (`RESIZE_STEP`), asserted equal by spec |
+| smart-splits multiplexer backends | — | — | ⚠️ | v3 moved every backend out of core. The nvim config installs none for tmux, so nvim → tmux hand-off most likely does not work today (headless: no backend resolves with `$TMUX` set; not confirmed in a real pane). Open, neovim silo |
 | ctrl+shift spellings | three per chord (WezTerm, Ghostty, plain) | one | ✅ | Rex is the terminal |
 
 ### Platform gotchas — Rex key functions
@@ -615,3 +616,7 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 | a key FUNCTION may call `rex.session.*`, `rex.block.call`, `rex.exec`, but not `rex.client.queue` | a conditional that must end in a client action (resize) has to be an action, and re-send the key with `pane.send_key` instead of returning false |
 | `rex.block_id` is nil in a `rex do` script even with `$REX_BLOCK` set | a spec that runs shipped helpers as a script passes the pane as an argument |
 | the app follows a focus change made on the server, except while its palette is closing | `rex.session.focus_direction` is enough from a key; a picker has to defer |
+| `rex resize` (CLI) is unimplemented in preview.21; the server API has `session.resize_pane`, which takes a RATIO for one split | resize-by-cells is our own arithmetic over the `session.view` layout tree (binary splits, `rect` as fractions of the window); the window's cells are derived from the pane's own size ÷ its share, so a step can be off by a cell |
+| a pane no client has shown reports 80x24 | on a headless scratch server every pane is 80 columns wide whatever its share; the resize spec's expected ratios follow from that, not from real geometry |
+| `rex do <action> -s S -b B key=value` runs an `init.lua` action on the server with `ctx.session_id` / `ctx.block_id` set, in one round trip (~19 ms) | the route by which a program inside a pane (nvim) reaches a config action; it works only for actions that stay on the server — no `rex.client.queue` |
+| Rex's Lua has no `table.unpack` | copy arrays with a loop |

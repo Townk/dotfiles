@@ -13,23 +13,30 @@
 -- from within a :terminal buffer.
 --------------------------------------------------------------------------------
 
--- Rex: the multiplexer smart-splits has no backend for.
+-- Rex: a smart-splits backend.
 --
--- Under tmux, smart-splits' tmux backend carries a motion past nvim's last
--- split into the next tmux pane. Rex is terminal and multiplexer in one and
--- smart-splits does not know it, so in a Rex pane it sees "no multiplexer"
--- and falls back to `move.at_edge` — by default, wrapping around inside
--- nvim. This is that hook: in a Rex pane, hand the motion to Rex.
+-- smart-splits v3 ships no multiplexer backends; each is a table it calls
+-- when a motion or a resize runs out of nvim windows. Rex is terminal and
+-- multiplexer in one and nobody publishes a backend for it, so this file
+-- carries one. With it:
+--   - a move past nvim's last split goes on into the next Rex pane;
+--   - a resize, when the nvim window fills the whole axis (nothing of nvim's
+--     own to resize), moves the Rex pane's border instead.
 --
 -- A Rex pane is one with $REX_BLOCK and neither $TMUX nor $ZELLIJ — the same
--- precedence the shell side uses, so a tmux started inside a Rex pane keeps
--- its own backend. The CLI lives in $REX_BIN_DIR (Rex exports it into every
+-- precedence the shell side uses, so a tmux started inside a Rex pane is not
+-- mistaken for Rex. The CLI lives in $REX_BIN_DIR (Rex exports it into every
 -- pane; the Mac app keeps the binary inside its bundle, off the login PATH).
 --
--- The Rex half is in ~/.config/rex/init.lua: its Ctrl+h/j/k/l and
--- Ctrl+arrow binds pass the key to nvim when nvim is in the pane, and move
--- the pane focus themselves otherwise.
+-- The Rex half is in ~/.config/rex/init.lua: its Ctrl(+Shift)+h/j/k/l and
+-- arrow binds pass the key to nvim when nvim is in the pane and act
+-- themselves otherwise, and its `pane_resize_by` action is what `resize`
+-- below calls — one resize behaviour for a shell pane and an nvim pane.
 local M = {}
+
+-- Cells per resize step. Rex's own resize keys use the same number
+-- (RESIZE_STEP in init.lua), so a step is a step whichever side handles it.
+M.RESIZE_STEP = 2
 
 function M.in_rex()
   return (vim.env.REX_BLOCK or "") ~= ""
@@ -45,26 +52,38 @@ function M.rex_bin()
   return "rex"
 end
 
--- smart-splits' `move.at_edge`: called when there is no nvim window further
--- in ctx.direction. Outside Rex this is the default it replaces (wrap).
-function M.at_edge(ctx)
-  if not M.in_rex() then
-    ctx.wrap()
-    return
-  end
-  local cmd = { M.rex_bin(), "--autostart=false", "focus", ctx.direction }
+-- Fire and forget: a blocked keypress is worse than a missed motion, and a
+-- missing neighbour or border is not an error worth a message.
+local function rex(...)
+  local cmd = { M.rex_bin(), "--autostart=false", ... }
   if (vim.env.REX_SESSION or "") ~= "" then
     vim.list_extend(cmd, { "-s", vim.env.REX_SESSION })
   end
-  -- Fire and forget: a missing neighbour is not an error worth a message.
   pcall(vim.system, cmd, { detach = true })
+  return true
 end
+
+M.rex_backend = {
+  name = "rex",
+  protocol_version = "^3.0.0",
+  detect = M.in_rex,
+  move = function(direction)
+    return rex("focus", direction)
+  end,
+  resize = function(direction, opts)
+    local cells = opts and opts.amount or M.RESIZE_STEP
+    return rex("do", "pane_resize_by", "-b", vim.env.REX_BLOCK, "direction=" .. direction, "cells=" .. cells)
+  end,
+}
 
 return {
   {
     "mrjones2014/smart-splits.nvim",
     opts = {
-      move = { at_edge = M.at_edge },
+      resize = { amount = M.RESIZE_STEP },
+      -- Outside Rex no backend detects, which is the normal case there, not
+      -- something to warn about on every start.
+      mux = { backend = M.rex_backend, warn_if_unusable = false },
     },
     keys = {
       {

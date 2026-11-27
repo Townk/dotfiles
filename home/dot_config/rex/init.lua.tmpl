@@ -317,10 +317,102 @@ for key, direction in pairs({
   end)
 end
 
--- Resize has to be an ACTION: the only resize-by-direction is the client's
--- `pane.resize`, and only an action may queue a client action. So the
--- pass-through branch re-sends the key to the pane instead of returning
--- false. Vim only — fzf has no use for these.
+-- Resize moves a BORDER, on the server, by cells. The layout of a tiled
+-- layer is a binary tree — a node is { rect, block_id } or { rect, split =
+-- { direction, ratio, before, after } }, rect = { x, y, w, h } as fractions
+-- of the window — and `session.resize_pane` sets one split's ratio.
+--
+-- Which border: tmux's rule. The key moves a border in the pressed
+-- direction — the nearest one on that side of the pane, or, for a pane at
+-- that edge, the nearest one on the other side. No split on that axis:
+-- nothing happens.
+--
+-- It is server-side so nvim can reach it too (`rex do pane_resize_by`, see
+-- nvim's plugins/nav.lua): one behaviour for a shell pane and an nvim pane.
+local RESIZE_STEP = 2 -- cells; nvim's smart-splits is set to the same
+
+-- Splits from the root down to the block, as { node, split, side } steps.
+local function split_path(node, block, acc)
+  if node.block_id then return node.block_id == block and acc or nil end
+  for _, side in ipairs({ "before", "after" }) do
+    local step = {}
+    for i, v in ipairs(acc) do step[i] = v end -- Rex's Lua has no table.unpack
+    step[#step + 1] = { node = node, split = node.split, side = side }
+    local found = split_path(node.split[side], block, step)
+    if found then return found end
+  end
+  return nil
+end
+
+local function any_leaf(node)
+  while node.split do node = node.split.before end
+  return node.block_id
+end
+
+local function leaf_rect(node, block)
+  if node.block_id then return node.block_id == block and node.rect or nil end
+  return leaf_rect(node.split.before, block) or leaf_rect(node.split.after, block)
+end
+
+local function resize_by(session, block, direction, cells)
+  if not (session and block) then return false end
+  local horizontal = direction == "left" or direction == "right"
+  local axis = horizontal and "horizontal" or "vertical"
+  local sign = (direction == "right" or direction == "down") and 1 or -1
+  local dim = horizontal and 3 or 4 -- rect index: width or height
+
+  local view = rex.session.view({ session_id = session })
+  for _, w in ipairs(view and view.windows or {}) do
+    for _, layer in ipairs(w.layers or {}) do
+      local path = layer.kind == "tiled" and layer.layout and split_path(layer.layout, block, {}) or nil
+      if path then
+        local want, hit = sign == 1 and "before" or "after", nil
+        for i = #path, 1, -1 do
+          if path[i].split.direction == axis and path[i].side == want then hit = path[i] break end
+        end
+        if not hit then
+          for i = #path, 1, -1 do
+            if path[i].split.direction == axis then hit = path[i] break end
+          end
+        end
+        if not hit then return false end
+
+        -- Cells → ratio. The window's cells on this axis follow from the
+        -- pane's own size and the fraction of the window it covers; borders
+        -- are ignored, so a step can be off by a cell.
+        local size = rex.block.call(TERMINAL, "size", { block_id = block })
+        local own = size and (horizontal and size.columns or size.rows)
+        local frac = leaf_rect(layer.layout, block)[dim]
+        if not own or own <= 0 or frac <= 0 then return false end
+        local extent = hit.node.rect[dim] * (own / frac)
+        local ratio = hit.split.ratio + sign * cells / extent
+        ratio = math.max(0.05, math.min(0.95, ratio))
+        rex.session.resize_pane({
+          session_id      = session,
+          direction       = axis,
+          before_block_id = any_leaf(hit.split.before),
+          after_block_id  = any_leaf(hit.split.after),
+          ratio           = ratio,
+        })
+        return true
+      end
+    end
+  end
+  return false
+end
+
+rex.action{
+  name  = "pane_resize_by",
+  title = "Resize Pane by Cells",
+  args  = { direction = "string", cells = "number" },
+  run   = function(ctx, args)
+    return resize_by(ctx.session_id, ctx.block_id, args.direction, args.cells)
+  end,
+}
+
+-- The key side is an ACTION, not a function bind, because its pass-through
+-- branch re-sends the key to the pane — a client action, which only an
+-- action may queue. Vim only — fzf has no use for these.
 rex.action{
   name    = "ctx_resize",
   title   = "Resize Pane, or Pass the Key to Vim",
@@ -330,7 +422,7 @@ rex.action{
     if pane_runs(ctx, is_vim) then
       rex.client.queue("pane.send_key", { key = args.key })
     else
-      rex.client.queue("pane.resize", { direction = args.direction, amount = 2 })
+      resize_by(ctx.session_id, ctx.block_id, args.direction, RESIZE_STEP)
     end
   end,
 }
