@@ -64,6 +64,120 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
 rex_bin="$(_mux_rx_bin 2>/dev/null)" || rex_bin=""
 
+# tty_rows — the pane's height in rows, or nothing.
+tty_rows() {
+  local sz
+  sz="$(stty size </dev/tty 2>/dev/null)" || return 1
+  [[ "${sz%% *}" == <-> ]] || return 1
+  print -r -- "${sz%% *}"
+}
+
+# snap_to_rows — trim the layer to a whole number of rows.
+#
+# A layer's height is a fraction of the window, so its last row is usually a
+# partial one: a blank band under whatever the target draws, up to a row tall
+# (a picker's bottom border then sits above an "extra line"). Rex exposes no
+# pixel sizes to compute the exact fraction from, so it is found by trying:
+# keep the row count the layer settled on, and bisect its height down to the
+# smallest one that still holds that many rows. A resize reaches the pty in
+# 20-100 ms (measured), so each probe waits for the size to settle.
+#
+# The search costs about a second, so its answer is remembered per
+# geometry (rows x columns at the height asked for) in
+# $XDG_CACHE_HOME/mux/rex-snap; a later float of the same shape applies it in
+# one step and only checks it still holds every row. Runs before the target
+# draws anything. $MUX_REX_MODAL_SNAP=0 skips it; $MUX_REX_MODAL_SNAP_LOG
+# names a file to trace it into.
+snap_to_rows() {
+  [[ "${MUX_REX_MODAL_SNAP:-1}" != 0 && -n "$rex_bin" && -n "${REX_BLOCK:-}" ]] || return 0
+  local log="${MUX_REX_MODAL_SNAP_LOG:-/dev/null}"
+
+  # A new layer's pty starts at a default size and is resized when the app
+  # lays it out. Wait for two equal reads before trusting the size.
+  local size="" prev="" i
+  for i in {1..20}; do
+    size="$(stty size </dev/tty 2>/dev/null)" || return 0
+    [[ -n "$prev" && "$size" == "$prev" ]] && break
+    prev="$size"
+    sleep 0.03
+  done
+  local rows="${size%% *}" cols="${size##* }"
+  [[ "$rows" == <-> && "$cols" == <-> ]] && (( rows > 2 )) || return 0
+
+  local layer
+  layer="$("$rex_bin" --autostart=false api call -s "$REX_BLOCK" session.view 2>/dev/null | jq -r --arg b "$REX_BLOCK" '
+    .windows[]?.layers[]? | select(.kind != "tiled") | select([.blocks[]?.block_id] | index($b))
+    | "\(.layer_id) \(.bounds[0]) \(.bounds[1]) \(.bounds[2]) \(.bounds[3])"' 2>/dev/null)" || return 0
+  local -a l=(${=layer})
+  (( ${#l} == 5 )) || return 0
+  local id="${l[1]}"
+  local -F x="${l[2]}" y="${l[3]}" w="${l[4]}" h="${l[5]}"
+  print -r -- "start rows=$rows cols=$cols bounds=$x,$y,$w,$h" >>"$log"
+
+  # set_h <height> — resize around the same centre, then report the rows.
+  set_h() {
+    "$rex_bin" --autostart=false api call -s "$REX_BLOCK" session.resize_layer \
+      "$(printf '{"layer_id":"%s","bounds":[%.5f,%.5f,%.5f,%.5f]}' "$id" "$x" $(( y + (h - $1) / 2 )) "$w" "$1")" \
+      >/dev/null 2>&1 || return 1
+    # The new size reaches the pty in 20-100 ms, not at a fixed delay: wait
+    # for two equal reads rather than trusting the first.
+    local a="" b="" n
+    sleep 0.08
+    for n in 1 2 3 4 5; do
+      b="$(tty_rows)" || return 1
+      [[ "$b" == "$a" ]] && break
+      a="$b"
+      sleep 0.04
+    done
+    print -r -- "$b"
+  }
+
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/mux/rex-snap"
+  local key="$(printf '%dx%d@%.4f' "$rows" "$cols" "$h")"
+  local now="" known=""
+  known="$(awk -v k="$key" '$1 == k { v = $2 } END { print v }' "$cache" 2>/dev/null)"
+  if [[ "$known" == <->.<-> ]] && (( known > 0 && known <= h )); then
+    now="$(set_h $known)" || return 0
+    print -r -- "cached h=$known rows=$now" >>"$log"
+    [[ "$now" == "$rows" ]] && return 0
+    # The window changed under the same geometry: forget it and search.
+    now="$(set_h $h)" || return 0
+  fi
+
+  # hi holds `rows` rows (it is what the layer has). Walk lo down a row's
+  # worth at a time until it holds fewer, then bisect between the two.
+  local -F hi=$h lo=$h step=$(( h / rows )) mid
+  for i in 1 2 3; do
+    lo=$(( lo - step ))
+    (( lo > 0 )) || return 0
+    now="$(set_h $lo)" || return 0
+    print -r -- "walk h=$lo rows=$now" >>"$log"
+    (( now < rows )) && break
+    hi=$lo
+  done
+  if (( now >= rows )); then
+    set_h $hi >/dev/null
+    return 0
+  fi
+  for i in 1 2; do
+    mid=$(( (lo + hi) / 2 ))
+    now="$(set_h $mid)" || break
+    print -r -- "bisect h=$mid rows=$now" >>"$log"
+    if (( now >= rows )); then hi=$mid; else lo=$mid; fi
+  done
+  # Settle on the smallest height known to hold every row, and remember it.
+  now="$(set_h $hi)"
+  print -r -- "final h=$hi rows=$now" >>"$log"
+  if [[ "$now" == "$rows" ]]; then
+    mkdir -p "${cache:h}" 2>/dev/null
+    { grep -v "^$key " "$cache" 2>/dev/null | tail -n 40; printf '%s %.5f\n' "$key" "$hi"; } >"$cache.$$" 2>/dev/null \
+      && mv -f "$cache.$$" "$cache" 2>/dev/null
+  fi
+  return 0
+}
+# Best effort: under `set -e` nothing in here may end the modal.
+snap_to_rows || true
+
 if (( no_chrome )); then
   # "fzf owns the box": hand the title to the target; draw nothing.
   if [[ -n "$title" ]]; then
