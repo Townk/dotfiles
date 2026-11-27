@@ -1,0 +1,52 @@
+#!/usr/bin/env zsh
+# rex-edit-scrollback — open the scrollback of the pane it was called for
+# ($REX_BLOCK) in the editor, in a new tab named "scrollback".
+#
+# The Rex twin of tmux's copy-mode `V` (keymap-base.conf: capture-pane into a
+# temp file, `nvim +$` in a new window): the whole scrollback as plain text,
+# soft-wrapped lines joined, the editor opened at the end, where the newest
+# output is. The temp file is removed when the editor exits.
+#
+# Exit 1 when there is no pane, nothing could be captured, or no tab opened.
+# Env overrides: MUX_LIB, MUX_REX_BIN (tests).
+
+set -eu
+
+[[ -n "${REX_BLOCK:-}" ]] || {
+  print -ru2 -- "rex-edit-scrollback: \$REX_BLOCK is not set (not called for a Rex pane)"
+  exit 1
+}
+
+source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+rex_bin="$(_mux_rx_bin 2>/dev/null)" || rex_bin=""
+[[ -n "$rex_bin" ]] || { print -ru2 -- "rex-edit-scrollback: no rex binary"; exit 1; }
+
+file="$(mktemp "${TMPDIR:-/tmp}/rex-scrollback.XXXXXX")"
+# A block id is accepted wherever Rex takes a session.
+if ! "$rex_bin" --autostart=false capture -s "$REX_BLOCK" -b "$REX_BLOCK" --trim --unwrap >"$file" 2>/dev/null ||
+  [[ ! -s "$file" ]]; then
+  rm -f -- "$file"
+  print -ru2 -- "rex-edit-scrollback: could not capture the pane"
+  exit 1
+fi
+
+# Through the login shell (window new's default), so $EDITOR and PATH are the
+# user's. `+$` — open at the last line — is understood by the vi family; any
+# other editor is given the file alone.
+runner='ed="${VISUAL:-${EDITOR:-nvim}}"
+case "${ed##*/}" in
+  vi | vim | nvim | view | lvim | gvim | mvim) $=ed "+\$" "$1" ;;
+  *) $=ed "$1" ;;
+esac
+rm -f -- "$1"'
+
+cwd="$(_mux_rx_pane_cwd 2>/dev/null)" || cwd=""
+typeset -a where=()
+[[ -d "$cwd" ]] && where=(-c "$cwd")
+
+if ! "$rex_bin" --autostart=false window new -s "$REX_BLOCK" "${where[@]}" scrollback -- \
+  zsh -c "$runner" rex-edit-scrollback "$file" >/dev/null 2>&1; then
+  rm -f -- "$file"
+  print -ru2 -- "rex-edit-scrollback: could not open a tab"
+  exit 1
+fi

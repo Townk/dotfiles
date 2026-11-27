@@ -5,6 +5,7 @@
 # Dispatches on the runtime mux:
 #   zellij → exec zellij-modal (args passthrough — identical interface)
 #   tmux   → wrap the modal in `display-popup -E` running tmux-modal inside.
+#   rex    → a floating layer running rex-modal; returns when it closes.
 #
 # Usage (superset of zellij-modal):
 #   mux-modal [--width W] [--height H] [--title TEXT] [--borderless]
@@ -52,6 +53,67 @@ if [[ -n "${ZELLIJ:-}" ]]; then
   # forwarded) and --no-discover is already zellij-modal vocabulary —
   # strip nothing else.
   exec "$HOME/.config/zellij/scripts/zellij-modal" "${fwd[@]}"
+fi
+
+if [[ -z "${TMUX:-}" && -n "${REX_BLOCK:-}" ]]; then
+  # Rex: a floating layer running rex-modal, over the calling block and in
+  # its directory. `display-popup -E` blocks until the popup closes and so
+  # must this: a layer is created and returns at once, so wait for its block
+  # to go away. --borderless is the layer's only form and --no-discover is
+  # zellij vocabulary; rex-modal takes the rest as it is.
+  source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+  typeset -a rargs=()
+  title="" capture=""
+  i=1
+  while (( i <= ${#fwd} )); do
+    a="${fwd[i]}"
+    case "$a" in
+      --) rargs+=("${(@)fwd[i,-1]}"); break ;;
+      --no-discover) ;;
+      --title) title="${fwd[i+1]-}"; rargs+=("$a") ;;
+      --title=*) title="${a#*=}"; rargs+=("$a") ;;
+      --capture) capture="${fwd[i+1]-}"; rargs+=("$a") ;;
+      --capture=*) capture="${a#*=}"; rargs+=("$a") ;;
+      *) rargs+=("$a") ;;
+    esac
+    (( i += 1 ))
+  done
+
+  modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
+  block=""
+  trap '_mux_rx_close_block "$block"' INT TERM
+  block="$(_mux_rx_layer "$width" "$height" "$title" "$PWD" "" -- \
+    env "COLORTERM=${COLORTERM:-truecolor}" "$modal" --origin "$REX_BLOCK" "${rargs[@]}")" || block=""
+  [[ -n "$block" ]] || {
+    echo "mux-modal: could not open a floating layer" >&2
+    exit 1
+  }
+
+  # Until the layer is gone. `block inspect` exits 3 for a block the server
+  # no longer knows and 4 with no server; any other failure is not proof, so
+  # a run of them ($MUX_MODAL_REX_MISSES, default 25 polls, about 5 s) ends
+  # the wait too.
+  misses=0 limit="${MUX_MODAL_REX_MISSES:-25}"
+  while (( misses < limit )); do
+    rc=0
+    _mux_rx_run --timeout 3s block inspect -s "$block" "$block" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      0) misses=0 ;;
+      3 | 4) break ;;
+      *) (( misses += 1 )) ;;
+    esac
+    sleep 0.2
+  done
+
+  # A layer closed by hand never answers. A caller still reading the capture
+  # FIFO would wait forever, so give it its end of file: a non-blocking open
+  # succeeds only while someone is reading, and the answer, when there was
+  # one, has been read by now.
+  if [[ -n "$capture" && -p "$capture" ]]; then
+    zmodload zsh/system 2>/dev/null || true
+    if sysopen -w -o nonblock -u fd "$capture" 2>/dev/null; then exec {fd}>&-; fi
+  fi
+  exit 0
 fi
 
 [[ -n "${TMUX:-}" ]] || {
