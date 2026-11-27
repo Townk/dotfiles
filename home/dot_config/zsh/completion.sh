@@ -107,6 +107,24 @@ export FZF_DEFAULT_OPTS="
 --bind 'ctrl-alt-f:change-preview(preview {})'
 "
 
+# Kitty images left by a preview. Outside tmux, `preview` draws a picture
+# straight on the terminal and flags it (see "Kitty images in an fzf preview
+# pane" there); fzf does not take it down when it closes, so the last
+# picture previewed stayed over the prompt. Every fzf started from this
+# shell — completion, Ctrl+T, a bare `fzf` — ends by removing the images
+# when, and only when, a preview flagged one for this terminal.
+if [[ "${TERM_PROGRAM:-}" == rex || "${TERM_PROGRAM:l}" == ghostty ]]; then
+  fzf() {
+    command fzf "$@"
+    local rc=$? flag="${TMPDIR:-/tmp}/preview-kitty.${TTY:t}"
+    if [[ -z "${TMUX:-}" && -e "$flag" ]]; then
+      printf '\e_Ga=d,d=A\e\\' >"$TTY" 2>/dev/null
+      rm -f -- "$flag"
+    fi
+    return $rc
+  }
+fi
+
 # fzf shell integration: completion (the `**<TAB>` fuzzy trigger) + key
 # bindings (Ctrl+T paste files, Alt+C cd). `command` bypasses any `fzf` alias.
 if command -v fzf >/dev/null; then

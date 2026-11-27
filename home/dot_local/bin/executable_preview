@@ -242,6 +242,17 @@ function preview-raster() {
       done
     fi
     cat -- "$out"
+    if kitty_direct; then
+      # A direct Kitty image is one escape sequence and ONE line to fzf,
+      # whatever it covers on screen: what follows (the file's details) was
+      # printed from the next line and ran underneath the picture. chafa
+      # says how many rows it placed (`r=`); move down past them.
+      local _rows
+      _rows="$(LC_ALL=C command grep -a -o -m1 ',r=[0-9]*' "$out" 2>/dev/null | head -n 1)"
+      _rows="${_rows#,r=}"
+      [[ "$_rows" == <-> ]] && (( _rows > 1 )) && printf '\n%.0s' {2..$_rows}
+    fi
+    kitty_mark
   } always {
     rm -f -- "$out"
   }
@@ -249,6 +260,44 @@ function preview-raster() {
 
 # Opportunistic cache prune: at most once a day (stamp file), drop rasters
 # untouched for 30 days. Called backgrounded from main().
+
+# --- Kitty images in an fzf preview pane -------------------------------------
+#
+# Outside tmux a Kitty image is placed straight on the terminal: it is not
+# text in fzf's preview pane, and fzf neither repaints over it nor removes it
+# (measured in Rex, 2026-11-27: every picture previewed stayed on screen, over
+# the next preview and after fzf closed). Inside tmux the same protocol is
+# unicode placeholders — plain cells — and clears with the pane.
+#
+# So the picture is ours to take down. Drawing one leaves a flag for this
+# terminal; the next preview (of anything) and the shell's fzf wrapper
+# (zsh/completion.sh) find the flag, tell the terminal to delete its images,
+# and remove it. Flag-gated so a terminal that never previewed a picture is
+# never told to delete the ones a user printed themselves.
+function kitty_direct() {
+  [[ -n ${FZF_PREVIEW_LINES:-} && -z ${TMUX:-} ]] || return 1
+  [[ "$(get_chafa_format_args)" == "-f kitty" ]]
+}
+
+function kitty_flag() {
+  local t="${PREVIEW_TTY_NAME:-${$(ps -o tty= -p $$ 2>/dev/null)// /}}"
+  print -r -- "${TMPDIR:-/tmp}/preview-kitty.${t##*/}"
+}
+
+function kitty_mark() {
+  kitty_direct && : >"$(kitty_flag)"
+  return 0
+}
+
+function kitty_wipe() {
+  kitty_direct || return 0
+  local f
+  f="$(kitty_flag)"
+  [[ -e $f ]] || return 0
+  # To the terminal itself, not through fzf's preview parser.
+  printf '\e_Ga=d,d=A\e\\' >"${PREVIEW_TTY:-/dev/tty}" 2>/dev/null
+  rm -f -- "$f"
+}
 
 function get_chafa_format_args() {
   local protocols
@@ -741,6 +790,7 @@ function main() {
 
   geometry
   raster::prune &!
+  kitty_wipe
 
   # --- Pre-dispatch guards ---
   # Each guard rules out a class of failure mode before committing to

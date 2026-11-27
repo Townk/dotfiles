@@ -554,3 +554,84 @@ Describe 'preview: option-shaped filenames'
     The output should not include 'Usage: preview'
   End
 End
+
+# Outside tmux a Kitty image is placed on the terminal itself, and fzf does
+# not take it down: `preview` flags a picture it drew in an fzf pane and the
+# next preview removes the terminal's images before drawing anything.
+Describe 'preview: Kitty images in an fzf pane'
+  SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
+
+  setup() {
+    KP_TMP=$(mktemp -d)
+    export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/cache"
+  }
+  cleanup() { rm -rf "$KP_TMP"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # kp <env assignments…> -- <zsh code run with the script's functions>
+  kp() {
+    local -a envs=()
+    while [[ "$1" != -- ]]; do envs+=("$1"); shift; done
+    shift
+    env -u TMUX -u FZF_PREVIEW_LINES -u ITERM_SESSION_ID -u LC_TERMINAL TERM_PROGRAM=rex \
+      TMPDIR="$KP_TMP" PREVIEW_TTY="$KP_TMP/tty" PREVIEW_TTY_NAME=ttys042 PREVIEW_NO_RUN=1 \
+      PREVIEW_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "${envs[@]}" \
+      zsh -c "source '$SCRIPT'; $1"
+  }
+  sent() {
+    [[ -s "$KP_TMP/tty" ]] || { print none; return; }
+    print -r -- "${${(j: :)${=$(od -An -c "$KP_TMP/tty")}}}"
+  }
+
+  It 'flags a picture drawn in an fzf pane of a Kitty terminal'
+    flagged() { kp FZF_PREVIEW_LINES=20 -- 'kitty_mark'; ls "$KP_TMP"; }
+    When call flagged
+    The output should equal "preview-kitty.ttys042"
+  End
+
+  It 'deletes the terminal'"'"'s images before the next preview, once'
+    wiped() {
+      kp FZF_PREVIEW_LINES=20 -- 'kitty_mark; kitty_wipe; kitty_wipe'
+      sent
+      ls "$KP_TMP" | grep -c 'preview-kitty' || true
+    }
+    When call wiped
+    The line 1 of output should equal '033 _ G a = d , d = A 033 \'
+    The line 2 of output should equal "0"
+  End
+
+  It 'deletes nothing in a terminal where no picture was previewed'
+    untouched() { kp FZF_PREVIEW_LINES=20 -- 'kitty_wipe'; sent; }
+    When call untouched
+    The output should equal "none"
+  End
+
+  It 'stays out of it inside tmux, where the picture is cells'
+    in_tmux() { kp FZF_PREVIEW_LINES=20 TMUX=/tmp/s,1,0 PATH="$KP_TMP:$PATH" -- 'kitty_mark; kitty_wipe'; sent; ls "$KP_TMP" | grep -c 'preview-kitty' || true; }
+    When call in_tmux
+    The output should equal "none
+0"
+  End
+
+  # The picture is one line to fzf however many rows it covers; the details
+  # that follow must start below it, not underneath it.
+  It 'moves down past the rows the picture covers before anything else is printed'
+    below() {
+      printf '%s\n' '#!/bin/sh' "printf '\\033_Ga=T,f=32,c=40,r=6,m=0;AAAA\\033\\\\\\n'" >"$KP_TMP/chafa"
+      chmod +x "$KP_TMP/chafa"
+      : >"$KP_TMP/pic.png"
+      kp FZF_PREVIEW_LINES=20 FZF_PREVIEW_COLUMNS=50 PATH="$KP_TMP:$PATH" -- "preview-raster '$KP_TMP/pic.png'; print after" | tr -cd '\n' | wc -c | tr -d ' '
+    }
+    When call below
+    # the image's own line, five more to clear its six rows, and "after"
+    The output should equal "7"
+  End
+
+  It 'stays out of it outside fzf (yazi, the viewer)'
+    no_fzf() { kp -- 'kitty_mark; kitty_wipe'; sent; ls "$KP_TMP" | grep -c 'preview-kitty' || true; }
+    When call no_fzf
+    The output should equal "none
+0"
+  End
+End
