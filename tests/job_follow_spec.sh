@@ -628,6 +628,32 @@ j1
 follower-gone"
     End
 
+    # In a ( … ) subshell zsh's $$ is the parent shell's pid: a follower
+    # file naming it would look live for as long as that shell lives.
+    It 'records its own pid, not the calling shell'"'"'s, when inline'
+      meta "Remux"
+      check() {
+        JOB_FOLLOW_POLL=0.1 REX_BLOCK=blk-1 zsh -f -c '
+          source "$1" >/dev/null 2>&1 || exit 99
+          job::_rex_open_tab() { :; }
+          ( job::follow --inline j1 ) > /dev/null &
+          i=0
+          until [ -s "$JOB_STATE_ROOT/j1/follower" ]; do
+            (( ++i > 50 )) && { echo no-follower; exit 1; }
+            sleep 0.1
+          done
+          read -r block pid < "$JOB_STATE_ROOT/j1/follower"
+          [ "$pid" != "$$" ] && echo not-caller || echo caller
+          echo "1700000000 Success 0" > "$JOB_STATE_ROOT/j1/result"
+          wait
+          kill -0 "$pid" 2>/dev/null && echo alive || echo gone
+        ' -- "$JOBLIB"
+      }
+      When call check
+      The output should equal "not-caller
+gone"
+    End
+
     It 'asks for a key after success'
       meta "Remux"; result Success 0
       check() {

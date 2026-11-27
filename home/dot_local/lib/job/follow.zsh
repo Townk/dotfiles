@@ -5,6 +5,9 @@
 # JOB_STATE_ROOT is defaulted.
 
 zmodload zsh/zselect 2>/dev/null
+# $sysparams[pid]: the follower's real pid. An inline follower runs in a
+# ( … ) subshell, where $$ is still the calling shell's.
+zmodload zsh/system 2>/dev/null
 
 # job::_follow_msg <text> — sanitize and base64 a report message. Rex rejects
 # a msg that decodes to control characters (C0, DEL and the C1 range
@@ -196,7 +199,8 @@ job::_follow_on_hup() {
 # job::_follow_stop — kill the log child and remove the follower file if it
 # is still this follower's (an inline follower hands its job to a new tab,
 # whose follower may already have written its own). Runs in job::follow's
-# dynamic scope: it reads and clears that function's `child`, `dir`, `me`.
+# dynamic scope: it reads and clears that function's `child`, `dir`, `me`
+# (`<REX_BLOCK> <real pid>`).
 job::_follow_stop() {
   if [ -n "${child:-}" ]; then
     kill "$child" 2>/dev/null || :
@@ -226,7 +230,8 @@ job::follow() {
     shift
   fi
   local id="${1:?job::follow: id required}"
-  local dir="$JOB_STATE_ROOT/$id" me="${REX_BLOCK:-} $$" child=""
+  local self="${sysparams[pid]:-$$}" dir="$JOB_STATE_ROOT/$id" child=""
+  local me="${REX_BLOCK:-} $self"
   local poll="${JOB_FOLLOW_POLL:-1}" ttl="${JOB_FOLLOW_DONE_TTL:-3600}"
   local pueue task_id phase body last="" end REPLY instance=""
   local -i finished n
@@ -253,8 +258,8 @@ job::follow() {
     fi
     exit 130
   }
-  print -r -- "$me" > "$dir/.follower.$$" \
-    && mv -f -- "$dir/.follower.$$" "$dir/follower" || :
+  print -r -- "$me" > "$dir/.follower.$self" \
+    && mv -f -- "$dir/.follower.$self" "$dir/follower" || :
   # The server this tab lives under, for job::_follow_on_hup. Inline never
   # cancels, so it does not ask.
   (( inline )) || instance=$(job::_follow_instance)
