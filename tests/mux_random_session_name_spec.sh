@@ -95,6 +95,70 @@ ZSH
       ' zsh "$MSN_COMPLETION"
   }
 
+  generate_title() {
+    env MUX_LIB="$MSN_LIB" MUX_BACKEND=tmux MUX_TMUX_BIN="$MSN_TMP/tmux" \
+      zsh "$MSN_SCRIPT" --title "$@"
+  }
+  # Every Title Case name the script can produce, one per line, read from the
+  # script's own word lists so the two cannot drift.
+  all_title_names() {
+    zsh -f -c '
+      src=$(<"$1")
+      adjectives=(${=${${src#*adjectives=\(}%%\)*}})
+      nouns=(${=${${src#*nouns=\(}%%\)*}})
+      for a in $adjectives; do for n in $nouns; do print -r -- "${(C)a} ${(C)n}"; done; done
+    ' zsh "$MSN_SCRIPT"
+  }
+
+  It 'prints a Title Case name with --title'
+    When call generate_title
+    The status should be success
+    The output should match pattern '[A-Z][a-z]* [A-Z][a-z]*'
+    The lines of output should equal 1
+  End
+
+  It 'changes no session with --title'
+    title_then_calls() { generate_title >/dev/null; rename_calls; }
+    When call title_then_calls
+    The output should equal "0"
+  End
+
+  # Review focus: "unused" is checked against the form that is printed. With
+  # every Title Case name taken except the Zippy ones, a Zippy one is the only
+  # possible answer. (One adjective in 65 is left free rather than one name in
+  # 4,000: the script gives up after 1,000 draws.)
+  It 'skips a name whose Title Case form is taken'
+    only_zippy_free() {
+      export STUB_SESSIONS="$(all_title_names | grep -v '^Zippy ')"
+      generate_title
+    }
+    When call only_zippy_free
+    The status should be success
+    The output should start with "Zippy "
+  End
+
+  It 'still treats a hyphenated name as free when only --title names are taken'
+    lower_free() {
+      export STUB_SESSIONS="$(all_title_names)"
+      generate
+    }
+    When call lower_free
+    The status should be success
+    The output should match pattern '[a-z]*-[a-z]*'
+  End
+
+  It 'rejects --title with --apply-current'
+    When call generate_title --apply-current
+    The status should equal 2
+    The stderr should include "--title"
+  End
+
+  It 'documents --title'
+    When call zsh "$MSN_SCRIPT" --help
+    The output should include "--title"
+    The output should include "Wandering Glade"
+  End
+
   It 'documents generation, mutation, backend selection, output, and failures'
     When call zsh "$MSN_SCRIPT" --help
     The status should be success

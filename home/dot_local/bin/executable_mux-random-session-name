@@ -2,6 +2,7 @@
 # Generate an unused Zellij-style adjective-noun name for a mux session.
 #
 #   mux-random-session-name                   print an unused name (no mutation)
+#   mux-random-session-name --title           the same, as "Wandering Glade"
 #   mux-random-session-name --apply-current   generate and rename the current session
 #   mux-random-session-name --apply SESSION   generate and rename a named session
 
@@ -15,6 +16,7 @@ mux-random-session-name — generate an unused random mux session name
 
 USAGE
   mux-random-session-name
+  mux-random-session-name --title
   mux-random-session-name --apply-current
   mux-random-session-name --apply SESSION
 
@@ -25,6 +27,14 @@ DESCRIPTION
   With no options, only the generated name is printed; no session is changed.
   Applying a name is always explicit and retries if another process claims the
   generated name before the rename completes.
+
+TITLE CASE
+  --title
+      Print the name as capitalised words separated by a space, such as
+      "Wandering Glade", for a multiplexer that shows session names in its own
+      interface (Rex). The name is checked for being unused in that form. No
+      session is changed, and --title cannot be combined with --apply or
+      --apply-current.
 
 MUTATING MODES
   --apply-current
@@ -58,6 +68,7 @@ EXIT STATUS
 EXAMPLES
   mux-random-session-name
   name=$(mux-random-session-name)
+  name=$(mux-random-session-name --title)
   mux-random-session-name --apply-current
   mux-random-session-name --apply Main
   MUX_BACKEND=zellij mux-random-session-name --apply scratch
@@ -66,8 +77,16 @@ EOF
 
 mode=generate
 target=""
+title=0
 case "${1:-}" in
   "")
+    ;;
+  --title)
+    title=1
+    (($# == 1)) || {
+      print -ru2 -- "mux-random-session-name: --title only generates a name; it takes no other arguments"
+      exit 2
+    }
     ;;
   --apply-current)
     mode=apply-current
@@ -148,7 +167,13 @@ name_used() {
 }
 
 for _attempt in {1..1000}; do
-  candidate="${adjectives[$(( RANDOM % ${#adjectives} + 1 ))]}-${nouns[$(( RANDOM % ${#nouns} + 1 ))]}"
+  adjective="${adjectives[$(( RANDOM % ${#adjectives} + 1 ))]}"
+  noun="${nouns[$(( RANDOM % ${#nouns} + 1 ))]}"
+  if (( title )); then
+    candidate="${(C)adjective} ${(C)noun}"
+  else
+    candidate="${adjective}-${noun}"
+  fi
   name_used "$candidate" && continue
 
   if [[ "$mode" == generate ]]; then

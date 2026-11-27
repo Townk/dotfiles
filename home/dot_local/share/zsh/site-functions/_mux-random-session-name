@@ -27,8 +27,9 @@ __mux-random-session-name-sessions() {
 _mux-random-session-name() {
   _arguments -s \
     '(- *)'{-h,--help}'[show detailed help and exit]' \
-    '(-h --help --apply)--apply-current[generate and apply a name to the current session]' \
-    '(-h --help --apply-current)--apply[generate and apply a name to a named session]:session:__mux-random-session-name-sessions'
+    '(-h --help --apply --apply-current)--title[print the name in Title Case, such as "Wandering Glade"]' \
+    '(-h --help --apply --title)--apply-current[generate and apply a name to the current session]' \
+    '(-h --help --apply-current --title)--apply[generate and apply a name to a named session]:session:__mux-random-session-name-sessions'
 }
 
 _mux-random-session-name "$@"
