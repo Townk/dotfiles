@@ -178,7 +178,10 @@ job::start() {
     # is untrusted (could error, could hang) — never attempt to drive the
     # dashboard here, just say so and let the GUI HUD be the surface.
     if [ -t 2 ]; then
-      if [ -n "${REX_BLOCK:-}" ]; then
+      # REX_BLOCK is inherited by a tmux or zellij started inside a Rex
+      # pane, whose own panes are where we are then: Rex is detected last
+      # (as in mux::backend).
+      if [ -n "${REX_BLOCK:-}" ] && [ -z "${TMUX:-}" ] && [ -z "${ZELLIJ:-}" ]; then
         # A Rex pane: follow right here instead of opening a dashboard. In a
         # SUBSHELL — the follower traps signals and `exit`s on Ctrl+C, and
         # that must never take down the shell that called job::start. Its

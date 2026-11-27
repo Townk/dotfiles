@@ -618,6 +618,7 @@ j1"
     It 'follows a --modal job inline in a Rex pane, with no watch or tab'
       inline() {
         export JOB_SANDBOX REX_BLOCK=block:x
+        unset TMUX ZELLIJ
         run_tty job::start --modal --title "watched" -- sleep 1 || return 1
         id=$(ls "$JOB_STATE_ROOT" | grep '^[0-9]' | head -n1)
         [ "$(calls)" = "follow --inline $id" ] || { calls; return 2; }
@@ -626,6 +627,24 @@ j1"
       }
       When call inline
       The output should equal "tabs=0"
+    End
+
+    # A tmux or zellij started inside a Rex pane inherits REX_BLOCK, but its
+    # own panes are where we are: Rex is detected last.
+    It 'opens the watch dashboard inside tmux or zellij in a Rex pane'
+      nested() {
+        export JOB_SANDBOX REX_BLOCK=block:x
+        unset ZELLIJ
+        TMUX="fake/sock,1,0" run_tty job::start --modal --title "watched" \
+          -- sleep 1 || return 1
+        unset TMUX
+        ZELLIJ=0 run_tty job::start --modal --title "watched" \
+          -- sleep 1 || return 2
+        calls | sed 's/ *$//'
+      }
+      When call nested
+      The output should equal "watch
+watch"
     End
 
     It 'still opens the watch dashboard for a --modal job outside Rex'
@@ -642,6 +661,7 @@ j1"
     It 'keeps the caller alive when the inline follower exits'
       survive() {
         export JOB_SANDBOX REX_BLOCK=block:x
+        unset TMUX ZELLIJ
         script -q /dev/null zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99
           job::follow() { exit 7; }
