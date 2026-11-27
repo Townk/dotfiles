@@ -44,9 +44,11 @@ cwd="$(_mux_rx_pane_cwd 2>/dev/null)" || cwd=""
 typeset -a where=()
 [[ -d "$cwd" ]] && where=(-c "$cwd")
 
-if ! "$rex_bin" --autostart=false window new -s "$REX_BLOCK" "${where[@]}" scrollback -- \
-  zsh -c "$runner" rex-edit-scrollback "$file" >/dev/null 2>&1; then
+if ! out="$("$rex_bin" --autostart=false window new -s "$REX_BLOCK" --json "${where[@]}" scrollback -- \
+  zsh -c "$runner" rex-edit-scrollback "$file" 2>/dev/null)"; then
   rm -f -- "$file"
   print -ru2 -- "rex-edit-scrollback: could not open a tab"
   exit 1
 fi
+# The app stays on the tab it was showing unless it is told to move.
+_mux_rx_show_window "$REX_BLOCK" "$(print -r -- "$out" | jq -r '.window_id // empty' 2>/dev/null)" || :

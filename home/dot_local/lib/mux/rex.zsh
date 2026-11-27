@@ -504,7 +504,41 @@ _mux_rx_float() {
   print -rn -- "$result"
 }
 
+# _mux_rx_show_window <session> <window id> — make the app show that tab.
+#
+# A window made (or focused) on the server becomes the session's active
+# window there, and the app goes on showing the tab it was on: measured on
+# app 0.1.0-preview.37 for `window new`, `window focus` and `focus <block>`
+# alike. Only a client action moves the app, so this runs the app's own
+# `session.select` on it — on $REX_CLIENT when the caller knows which app
+# asked, otherwise on every connected app that has the session open (tmux's
+# rule: a new window shows on every client attached to the session). Best
+# effort: an app that does not allow remote control stays where it is.
+_mux_rx_show_window() {
+  local session="$1" window="$2" sid clients c
+  [[ -n "$window" ]] || return 1
+  [[ -n "$session" ]] || session="$(_mux_rx_session)" || return 1
+  sid="$(_mux_rx_view "$session" | jq -r '.session_id // empty' 2>/dev/null)"
+  [[ -n "$sid" ]] || return 1
+  if [[ -n "${REX_CLIENT:-}" ]]; then
+    clients="$REX_CLIENT"
+  else
+    clients="$(_mux_rx_run --timeout 3s client ls --json 2>/dev/null | jq -r --arg s "$sid" '
+      (.clients // .)[]?
+      | select(.info.kind? == "app" and .connection_state? == "connected")
+      | select((.session_ids // []) | index($s))
+      | .client_id' 2>/dev/null)"
+  fi
+  [[ -n "$clients" ]] || return 1
+  for c in ${(f)clients}; do
+    _mux_rx_run --timeout 3s -C "$c" do -s "$sid" session.select \
+      "session_id=$sid" "window_id=$window" >/dev/null 2>&1 || :
+  done
+  return 0
+}
+
 # _mux_rx_new_tab <session> <name> <cwd> <singleton> -- <cmd...>
+# The new tab is shown (_mux_rx_show_window), as tmux's new-window does.
 # Singleton: an existing window of that label is closed and re-created, the
 # equivalent of tmux's `respawn-window -k` (a stale `tm` tab is replaced, not
 # stacked). Rex has no respawn, so the window id changes; the label does not.
@@ -522,15 +556,18 @@ _mux_rx_new_tab() {
     done
   fi
 
-  local -a flags=(-s "$session")
+  local -a flags=(-s "$session" --json)
   [[ -n "$cwd" ]] && flags+=(-c "$cwd")
   local -a label=()
   [[ -n "$name" ]] && label=("$name")
+  local out
   if (($#)); then
-    _mux_rx_run window new "${flags[@]}" "${label[@]}" -- "$@" >/dev/null 2>&1
+    out="$(_mux_rx_run window new "${flags[@]}" "${label[@]}" -- "$@" 2>/dev/null)" || return 1
   else
-    _mux_rx_run window new "${flags[@]}" "${label[@]}" >/dev/null 2>&1
+    out="$(_mux_rx_run window new "${flags[@]}" "${label[@]}" 2>/dev/null)" || return 1
   fi
+  _mux_rx_show_window "$session" "$(print -r -- "$out" | jq -r '.window_id // empty' 2>/dev/null)" || :
+  return 0
 }
 
 # _mux_rx_send_text <text> [block] — literal text, no trailing newline.
@@ -583,7 +620,11 @@ _mux_rx_current_tab_name() {
 _mux_rx_focus_tab() {
   local s
   s="$(_mux_rx_session)" || return 1
-  _mux_rx_run window focus -s "$s" "$1" >/dev/null 2>&1
+  _mux_rx_run window focus -s "$s" "$1" >/dev/null 2>&1 || return 1
+  # And the app, which does not follow the server's active window.
+  [[ "$1" == <-> ]] && _mux_rx_show_window "$s" "$(_mux_rx_view "$s" |
+    jq -r --argjson n "$1" '.windows[$n - 1].window_id // empty' 2>/dev/null)"
+  return 0
 }
 
 # Session-wide, as on tmux (`list-panes -s`).

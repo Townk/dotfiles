@@ -19,7 +19,10 @@ line two
     [ "\${STUB_WINDOW:-ok}" = ok ] || exit 1
     # Run what the tab would run, with a fake editor, so the examples see it.
     while [ "\$1" != "--" ]; do shift; done; shift
-    VISUAL= EDITOR="\${STUB_EDITOR:-$ES_TMP/nvim}" "\$@"; exit 0 ;;
+    VISUAL= EDITOR="\${STUB_EDITOR:-$ES_TMP/nvim}" "\$@" >/dev/null
+    echo '{"window_id":"window:new","block_ids":["block:new"]}'; exit 0 ;;
+  *" session.view "*) echo '{"session_id":"session:s","windows":[]}'; exit 0 ;;
+  *" client ls "*) echo '{"clients":[{"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","session_ids":["session:s"]}]}'; exit 0 ;;
 esac
 exit 0
 EOS
@@ -41,12 +44,18 @@ EOS
   leftovers() { ls "$ES_TMP" | grep -c '^rex-scrollback\.' || true; }
 
   It 'opens the captured scrollback at its end, in a tab named scrollback'
-    run() { edit; sed -e "s|$ES_TMP/rex-scrollback\.[A-Za-z0-9]*|FILE|" "$ES_TMP/editor.log"; grep -c 'window new -s block:origin -c .* scrollback -- ' "$ES_TMP/rex.log"; }
+    run() { edit; sed -e "s|$ES_TMP/rex-scrollback\.[A-Za-z0-9]*|FILE|" "$ES_TMP/editor.log"; grep -c 'window new -s block:origin --json -c .* scrollback -- ' "$ES_TMP/rex.log"; }
     When call run
     The output should equal "rc=0
 args=+\$ FILE
 text=line one|line two|
 1"
+  End
+
+  It 'makes the app show the new tab'
+    run() { edit >/dev/null; grep -c -- '-C client:mac do -s session:s session.select session_id=session:s window_id=window:new' "$ES_TMP/rex.log"; }
+    When call run
+    The output should equal "1"
   End
 
   It 'captures the calling pane whole: trimmed, soft wraps joined, no server started'

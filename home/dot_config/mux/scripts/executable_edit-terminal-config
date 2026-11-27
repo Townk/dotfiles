@@ -86,8 +86,12 @@ if [[ "$ENV_TYPE" == REX ]]; then
   if [[ -n "$_win" ]]; then
     _mux_rx_run window focus -s "$REX_SESSION" "$_win" >/dev/null
   else
-    _mux_rx_run window new -s "$REX_SESSION" "$TAB_NAME" -- "$NVIM" "$TARGET_FILE" >/dev/null
+    _win="$(_mux_rx_run window new -s "$REX_SESSION" --json "$TAB_NAME" -- "$NVIM" "$TARGET_FILE" |
+      jq -r '.window_id // empty')"
   fi
+  # Either way the app has to be told: it does not follow the server's
+  # active window.
+  _mux_rx_show_window "$REX_SESSION" "$_win" || :
 elif [[ -n "${TMUX:-}" ]]; then
   TMUX_BIN=${commands[tmux]:-tmux}
   if "$TMUX_BIN" list-windows -F '#{window_name}' 2>/dev/null | grep -Fxq "$TAB_NAME"; then
