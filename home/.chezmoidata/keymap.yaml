@@ -1274,6 +1274,8 @@ keymap:
   - {key: cmd+shift+down, desc: next prompt, rex: client.prompt.next}
   - {key: cmd+f, desc: search scrollback, rex: client.find.open}
   - {key: 'cmd+,', desc: terminal settings, rex: client.settings}
+  # Not a Cmd chord: cmd+shift+p, the usual palette key, is Quick Launch pane.
+  - {key: ctrl+shift+p, desc: command palette, rex: client.palette.toggle}
   - {key: cmd+n, desc: new window, rex: client.window.new}
   - {key: cmd+r, desc: reload config, rex: client.config.reload}
   # rex: needs the scrollback-to-editor script ported (phase 5)
