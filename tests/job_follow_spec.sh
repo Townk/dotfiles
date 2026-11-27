@@ -98,16 +98,20 @@ EOS
     End
 
     It 'sanitizes a message Rex would reject'
-      long() { printf 'a%.0s' $(seq 3000); }
-      meta "Remux"
-      printf '1700000000 -1 line1\nline2\tx%s\n' "$(long)" > "$JOB_STATE_ROOT/j1/progress"
+      meta_hostile() {
+        local t
+        t=$(printf 'line1\nline2\tx\302\205y%s' "$(printf 'a%.0s' $(seq 3000))")
+        jq -n --arg t "$t" '{title:$t,notify:"all"}' > "$JOB_STATE_ROOT/j1/meta.json"
+        echo "1700000000 Success 0" > "$JOB_STATE_ROOT/j1/result"
+      }
       check() {
-        local body decoded
+        local body bad n
+        meta_hostile
         body=$(report running) || return 1
-        decoded=$(printf '%s' "${body##*msg=}" | base64 -D | LC_ALL=C tr -d '\040-\176')
-        # decoded now holds only bytes outside printable ASCII: must be empty
-        [ -z "$decoded" ] || { echo "bad bytes"; return 0; }
-        local n
+        # Drop every printable ASCII byte and every UTF-8 letter; what is
+        # left are control bytes (C0, DEL, and the C2 80-9F C1 encodings).
+        bad=$(printf '%s' "${body##*msg=}" | base64 -D | perl -CS -ne 'print if /[\x00-\x1f\x7f-\x9f]/')
+        [ -z "$bad" ] || { echo "control chars"; return 0; }
         n=$(printf '%s' "${body##*msg=}" | base64 -D | wc -c | tr -d ' ')
         [ "$n" -le 2048 ] && echo ok || echo "too long $n"
       }

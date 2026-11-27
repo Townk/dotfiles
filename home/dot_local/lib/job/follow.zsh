@@ -4,13 +4,13 @@
 # elsewhere.
 
 # job::_follow_msg <text> — sanitize and base64 a report message. Rex rejects
-# a msg that decodes to control characters or more than 2,048 bytes, so
-# control characters become spaces and the text is cut on a character
-# boundary (iconv -c drops the partial character a byte cut can leave).
+# a msg that decodes to control characters (C0, DEL and the C1 range
+# U+0080-U+009F) or more than 2,048 bytes, so control characters become
+# spaces and the text is cut on a character boundary (iconv -c drops the
+# partial character a byte cut can leave).
 job::_follow_msg() {
-  local text="${1//[$'\001'-$'\037'$'\177']/ }"
-  print -rn -- "$text" | head -c 2048 | iconv -c -f UTF-8 -t UTF-8 \
-    | base64 | tr -d '\n'
+  print -rn -- "$1" | perl -CS -0777 -pe 's/[\x00-\x1f\x7f-\x9f]/ /g' \
+    | head -c 2048 | iconv -c -f UTF-8 -t UTF-8 | base64 | tr -d '\n'
 }
 
 # job::_follow_report <id> <queued|running> — print the OSC 7501 body for the
