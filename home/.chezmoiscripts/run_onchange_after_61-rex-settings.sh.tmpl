@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+# Push the Rex app settings in chezmoi's data to this machine's Rex app.
+#
+# The Rex app keeps fonts and pane chrome in its own preferences, not in a
+# file. The list is `rexSettings` in .chezmoidata/mux.yaml; the generated
+# init.lua carries it as the `settings_apply` action, and this hook runs that
+# action on every connected Mac app of this machine whenever the list changes.
+# It runs after 59-reload-rex, which is what makes the running server know the
+# new list.
+#
+# Rules:
+#   * NEVER START A SERVER, and never fail the apply: no rex, no jq, no server
+#     or no app is a silent no-op. A new machine gets its settings the first
+#     time the app is open during an apply, or from "Apply Settings from
+#     Dotfiles" in the command palette.
+#   * Only apps connected over the local socket: an iPad on the tailnet has
+#     its own fonts and its own screen.
+#   * The app must allow remote control (Settings → Developer) to be told
+#     anything; when it does not, the action fails and this says so once.
+#
+# settings: {{ .rexSettings | toJson | sha256sum }}
+
+rex="${MUX_REX_BIN:-}"
+if [ -z "$rex" ]; then
+  rex="$(command -v rex 2>/dev/null || true)"
+fi
+if [ -z "$rex" ]; then
+  app="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+  [ -x "$app" ] && rex="$app"
+fi
+[ -n "$rex" ] && [ -x "$rex" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+
+clients="$("$rex" --autostart=false client ls --json 2>/dev/null)" || exit 0
+
+# "<client id> <a session it shows>" per local, connected Mac app. `rex do`
+# needs a session to act in once there is more than one.
+targets="$(printf '%s' "$clients" | jq -r '
+  (.clients // .)[]?
+  | select(.info.kind? == "app" and .info.platform? == "macos"
+           and .connection_state? == "connected" and .principal.transport? == "unix")
+  | select((.session_ids // []) | length > 0)
+  | "\(.client_id) \(.session_ids[0])"' 2>/dev/null)" || exit 0
+[ -n "$targets" ] || exit 0
+
+printf '%s\n' "$targets" | while read -r client session; do
+  if "$rex" --autostart=false -C "$client" do -s "$session" settings_apply >/dev/null 2>&1; then
+    echo "🎛️  Applied the Rex app settings."
+  else
+    echo "⚠️  Could not apply the Rex app settings (is remote control on in the app?); run 'Apply Settings from Dotfiles' from its command palette." >&2
+  fi
+done
+
+exit 0
+
+# vim:ft=sh

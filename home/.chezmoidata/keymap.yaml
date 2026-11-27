@@ -1276,8 +1276,7 @@ keymap:
   - {key: ctrl+shift+p, desc: command palette, rex: client.palette.toggle}
   - {key: cmd+n, desc: new window, rex: client.window.new}
   - {key: cmd+r, desc: reload config, rex: client.config.reload}
-  # rex: needs the scrollback-to-editor script ported (phase 5)
-  - {key: cmd+shift+f, desc: edit scrollback, rex: false}
+  - {key: cmd+shift+f, desc: edit scrollback, rex: edit_scrollback}
   - {key: cmd+shift+v, desc: clipboard history, rex: {action: float_picker, args: {picker: clipboard}}}
   # tmux binds these two in its root table (keymap-base.conf), not from a Cmd
   # chord; Rex binds the same keys itself.

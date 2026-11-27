@@ -305,8 +305,12 @@ _mux_rx_modal_layer() {
   shift 3
   [[ "${1-}" == "--" ]] && shift
   local modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
+  # A height in cells is a promise to the target: it drew, or will draw, for
+  # exactly that many rows. rex-modal makes the layer keep it.
+  local -a rows=()
+  [[ "$h" == <-> ]] && rows=("MUX_REX_MODAL_ROWS=$h")
   _mux_rx_layer "$w" "$h" "$title" "$PWD" "" -- \
-    env "COLORTERM=${COLORTERM:-truecolor}" "$modal" --origin "${REX_BLOCK:-}" "$@"
+    env "COLORTERM=${COLORTERM:-truecolor}" "${rows[@]}" "$modal" --origin "${REX_BLOCK:-}" "$@"
 }
 
 # _mux_rx_close_block <block> — close a layer we opened; quiet either way.

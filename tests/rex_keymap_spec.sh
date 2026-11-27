@@ -252,8 +252,13 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
       The output should be present
     End
 
-    It 'emits nothing for a refused chord'
-      refused() { grep -c -E '^rex\.bind\("cmd\+shift\+f",' "$RK_LUA" || true; }
+    It 'binds Cmd+Shift+F to the scrollback editor'
+      When call line 'rex.bind("cmd+shift+f", "edit_scrollback")'
+      The output should be present
+    End
+
+    It 'refuses no direct chord any more'
+      refused() { yq -o=json '.keymap.direct' home/.chezmoidata/keymap.yaml | jq '[.[] | select(.rex == false)] | length'; }
       When call refused
       The output should equal "0"
     End
@@ -341,6 +346,14 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
       write_harness() {
         cat >"$RK_TMP/harness.lua" <<'LUA'
 -- lua harness.lua <init.lua> <action> [name=blank|fails|error] [create=fails|noid] [leave]
+-- This machine's own ~/.config/rex/tailscale must not reach the examples.
+do
+  local open = io.open
+  io.open = function(path, mode)
+    if tostring(path):match("/%.config/rex/tailscale$") then return nil end
+    return open(path, mode)
+  end
+end
 local init, action = arg[1], arg[2]
 local opt = {}
 for i = 3, #arg do
@@ -542,6 +555,14 @@ log warn'
     write_job_harness() {
       cat >"$RK_TMP/job_harness.lua" <<'LUA'
 -- lua job_harness.lua <init.lua> <action> [key=value | flag]…
+-- This machine's own ~/.config/rex/tailscale must not reach the examples.
+do
+  local open = io.open
+  io.open = function(path, mode)
+    if tostring(path):match("/%.config/rex/tailscale$") then return nil end
+    return open(path, mode)
+  end
+end
 --   session=ID  what .rex_session holds (left out: no such file)
 --   here=ID     the focused pane's session (default session:jobs)
 --   owns=yes|no|odd|killed|error   how `job owns-block` ends
@@ -917,6 +938,212 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
         report() { layout; rx do pane_resize_by -b "$RZ_A" "direction=$1" cells=2 -s "$RZ_SID"; }
         When call report down
         The output should equal 'false'
+      End
+    End
+  End
+
+  # The actions and key functions added for the last ports — the scrollback
+  # editor, the app settings, Alt+Enter, the Time Machine keys, Tailscale at
+  # start — run under a real Lua interpreter against a stub `rex` that
+  # records every call. Steps are run in order against ONE load of the file,
+  # so a stamp set by one step is seen by the next.
+  Describe 'late ports under Lua with a stub rex'
+    port_lua_bin() { command -v lua 2>/dev/null || command -v luajit 2>/dev/null || command -v lua5.1 2>/dev/null; }
+    Skip if 'no Lua interpreter is installed' [ -z "$(port_lua_bin)" ]
+
+    write_port_harness() {
+      cat >"$RK_TMP/port_harness.lua" <<'LUA'
+-- lua port_harness.lua <init.lua> [opt=value]… [step]…
+--   ps=NAME      the program `ps` reports on the focused pane's tty
+--   marker=yes   ~/.config/rex/tailscale exists
+--   act:NAME[:k=v,k=v]   run an action          key:KEY   press a bound key
+local init = arg[1]
+local opt, steps = {}, {}
+for i = 2, #arg do
+  local k, v = arg[i]:match("^(%w+)=(.*)$")
+  if k and not arg[i]:match("^act:") and not arg[i]:match("^key:") then opt[k] = v else steps[#steps + 1] = arg[i] end
+end
+local function inert()
+  return setmetatable({}, { __index = function() return inert() end, __call = function() return inert() end })
+end
+local function out(...) io.write(table.concat({ ... }, " "), "\n") end
+local function short(p) return (tostring(p):gsub("^.*/%.local/", "~/.local/"):gsub("^.*/%.config/", "~/.config/")) end
+
+local actions, keys = {}, {}
+local real_open = io.open
+io.open = function(path, mode)
+  if path:match("/%.config/rex/tailscale$") then
+    if opt.marker == "yes" then return { close = function() end } end
+    return nil
+  end
+  return real_open(path, mode)
+end
+
+local exec = setmetatable({
+  start = function(argv)
+    local a = {}
+    for i, v in ipairs(argv) do a[i] = short(v) end
+    out("start", table.concat(a, " "))
+    return {}
+  end,
+}, { __call = function(_, argv)
+  if argv[1] == "/bin/ps" and argv[3] == "tty=" then return { ok = true, stdout = "ttys001\n" } end
+  if argv[1] == "/bin/ps" then return { ok = true, stdout = "Ss   -zsh\nS+   " .. (opt.ps or "zsh") .. "\n" } end
+  local a = {}
+  for i, v in ipairs(argv) do a[i] = short(v) end
+  out("exec", table.concat(a, " "))
+  return { ok = true, code = 0, stdout = "", stderr = "" }
+end })
+
+rex = setmetatable({
+  action = function(def) actions[def.name] = def end,
+  bind = function(key, target) if type(target) == "function" then keys[key] = target end end,
+  log = function(level, msg) out("log", level, msg) end,
+  exec = exec,
+  block = { call = function(_, method, a)
+    if method == "process" then return { child = { pid = 1 } } end
+    -- Control bytes as decimal escapes, so the examples can spell them.
+    local data = (a.data or ""):gsub("%c", function(c) return "\\" .. c:byte() end)
+    out("block", method, a.block_id, '"' .. data .. '"')
+    return {}
+  end },
+  session = setmetatable({
+    focus_direction = function(a) out("focus", a.direction) end,
+  }, { __index = function() return inert() end }),
+  client = { queue = function(name, a)
+    if a and a.value ~= nil then out("queue", name, type(a.value) .. ":" .. tostring(a.value)) else out("queue", name) end
+  end },
+}, { __index = function() return inert() end })
+
+dofile(init)
+local ctx = { session_id = "session:s", block_id = "block:here" }
+for _, step in ipairs(steps) do
+  local kind, name, rest = step:match("^(%a+):([^:]+):?(.*)$")
+  if kind == "act" then
+    local args = {}
+    for k, v in rest:gmatch("([%w_]+)=([^,]*)") do args[k] = v end
+    assert(actions[name], "the config defines no action " .. name).run(ctx, args)
+  else
+    local fn = assert(keys[name], "no key function is bound to " .. name)
+    out("key", name, tostring(fn(ctx, {})))
+  end
+end
+LUA
+    }
+    BeforeAll write_port_harness
+
+    port() { "$(port_lua_bin)" "$RK_TMP/port_harness.lua" "$RK_LUA" "$@"; }
+
+    Describe 'edit_scrollback'
+      It 'runs the scrollback script for the focused pane'
+        When call port act:edit_scrollback
+        The output should equal "exec ~/.config/mux/scripts/rex-edit-scrollback"
+      End
+    End
+
+    Describe 'settings_apply'
+      It 'queues every setting in the data, with its value typed as written'
+        typed() { port act:settings_apply | grep -E 'typography\.(font|size)|ligatures'; }
+        When call typed
+        The output should equal "queue client.setting.terminal.typography.font string:JetBrains Mono
+queue client.setting.terminal.typography.size number:19
+queue client.setting.terminal.advanced_fonts.ligatures boolean:true"
+      End
+
+      It 'queues one action per entry of rexSettings'
+        counted() {
+          port act:settings_apply | grep -c '^queue client\.setting\.'
+          yq '.rexSettings | length' home/.chezmoidata/mux.yaml
+        }
+        When call counted
+        The line 1 of output should equal "$(yq '.rexSettings | length' home/.chezmoidata/mux.yaml)"
+        The line 2 of output should not equal "0"
+      End
+    End
+
+    Describe 'Alt+Enter'
+      It 'toggles full screen over a shell'
+        When call port ps=zsh act:fullscreen_unless_fzf
+        The output should equal "queue client.window.fullscreen.toggle"
+      End
+
+      It 'hands the key to fzf, as the bytes a terminal sends'
+        When call port ps=/opt/homebrew/bin/fzf act:fullscreen_unless_fzf
+        The output should equal 'block write block:here "\27\13"'
+      End
+
+      It 'is bound to the action'
+        When call line 'rex.bind("alt+enter", "fullscreen_unless_fzf")'
+        The output should be present
+      End
+    End
+
+    Describe 'Time Machine keys'
+      It 'leaves every key to a pane that is not stamped'
+        When call port key:J key:K key:A key:H key:L key:S key:shift+up key:shift+down
+        The output should equal "key J false
+key K false
+key A false
+key H false
+key L false
+key S false
+key shift+up false
+key shift+down false"
+      End
+
+      It 'routes the scrub keys of a stamped timeline, detached, by session path'
+        When call port act:tm_ctx:block=block:here,ctx=tm,session=/s/one key:J key:shift+up key:A
+        The output should equal "start ~/.local/libexec/system-backup-tm route --session /s/one --pane block:here --send J shift+down
+key J true
+start ~/.local/libexec/system-backup-tm route --session /s/one --pane block:here --send S-Up shift+up
+key shift+up true
+start ~/.local/libexec/system-backup-tm route --session /s/one --pane block:here --send A apply
+key A true"
+      End
+
+      It 'moves focus with H and L, and keeps S for the diff lens'
+        When call port act:tm_ctx:block=block:here,ctx=tm,session=/s/one key:H key:L key:S
+        The output should equal "focus left
+key H true
+focus right
+key L true
+key S false"
+      End
+
+      It 'writes both diffnav toggles for S in the diff lens, tree first'
+        When call port act:tm_ctx:block=block:here,ctx=tm-diff,session=/s/one key:S
+        The output should equal 'block write block:here "es"
+key S true'
+      End
+
+      It 'passes everything through in the yazi lens'
+        When call port act:tm_ctx:block=block:here,ctx=tm-explore,session=/s/one key:J key:H key:S
+        The output should equal "key J false
+key H false
+key S false"
+      End
+
+      It 'only stamps the pane it was told'
+        When call port act:tm_ctx:block=block:other,ctx=tm,session=/s/one key:J
+        The output should equal "key J false"
+      End
+
+      It 'forgets a pane stamped with an empty context'
+        When call port act:tm_ctx:block=block:here,ctx=tm,session=/s/one act:tm_ctx:block=block:here,ctx=,session= key:J
+        The output should equal "key J false"
+      End
+    End
+
+    Describe 'Tailscale at start'
+      It 'does nothing on a machine that has not asked for it'
+        When call port
+        The output should equal ""
+      End
+
+      It 'turns tailnet serving on again, never starting a server, when the marker exists'
+        on() { port marker=yes | grep -c '^start /bin/sh -c .*--autostart=false server tailscale on rex-tailscale .*/MacOS/rex$'; }
+        When call on
+        The output should equal "1"
       End
     End
   End

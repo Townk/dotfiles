@@ -23,6 +23,7 @@ set -eu
 #
 # init.lua:    {{ include "dot_config/rex/init.lua.tmpl" | sha256sum }}
 # keymap data: {{ include ".chezmoidata/keymap.yaml" | sha256sum }}
+# app settings (rendered into init.lua): {{ .rexSettings | toJson | sha256sum }}
 
 conf="$HOME/.config/rex/init.lua"
 

@@ -433,6 +433,44 @@ rex.action{
 }
 
 ---------------------------------------------------------------------------
+-- Editing the scrollback
+---------------------------------------------------------------------------
+-- The focused pane's whole scrollback in $EDITOR, in a new tab — tmux's
+-- copy-mode `V`. The capture and the tab are rex-edit-scrollback's.
+rex.action{
+  name  = "edit_scrollback",
+  title = "Edit the Scrollback",
+  args  = { leave = "boolean?" },
+  run   = function(ctx, args)
+    if args.leave then rex.client.queue("client.mode.exit_all") end
+    run_script(ctx, { SCRIPTS .. "/rex-edit-scrollback" })
+  end,
+}
+
+---------------------------------------------------------------------------
+-- App settings
+---------------------------------------------------------------------------
+-- The app keeps fonts and pane chrome in its own preferences, not in a
+-- file. The list lives in chezmoi's data (.chezmoidata/mux.yaml,
+-- rexSettings) and this action pushes it to the app that ran it. An entry
+-- the app refuses is refused alone; the rest still apply.
+local REX_SETTINGS = {
+{{- range .rexSettings }}
+  { {{ .action | quote }}, {{ if kindIs "string" .value }}{{ template "luastr" .value }}{{ else }}{{ .value }}{{ end }} },
+{{- end }}
+}
+
+rex.action{
+  name  = "settings_apply",
+  title = "Apply Settings from Dotfiles",
+  run   = function()
+    for _, s in ipairs(REX_SETTINGS) do
+      rex.client.queue(s[1], { value = s[2] })
+    end
+  end,
+}
+
+---------------------------------------------------------------------------
 -- Sessions
 ---------------------------------------------------------------------------
 -- Rex shows the current session's label in the tab bar once there is more
@@ -737,3 +775,122 @@ rex.bind("{{ $mode }}/escape", km_stay("km_exit_all", "Exit", false, "client.mod
 {{ template "rexbind" (dict "mode" "" "key" $d.key "rex" $d.rex "leave" false) }}
 {{- end }}
 {{- end }}
+
+---------------------------------------------------------------------------
+-- Alt+Enter — full screen, unless fzf wants the key
+---------------------------------------------------------------------------
+-- Alt+Enter toggles the window's full screen everywhere except over fzf,
+-- where it is a picker key (the pickers' "insert and stay"). An ACTION, not
+-- a key function: only an action may queue the client's toggle, so for fzf
+-- it writes the key into the pane itself, as the bytes a terminal sends.
+rex.action{
+  name  = "fullscreen_unless_fzf",
+  title = "Toggle Full Screen",
+  run   = function(ctx)
+    if ctx.block_id and pane_runs(ctx, function(name) return name == "fzf" end) then
+      rex.block.call(TERMINAL, "write", { block_id = ctx.block_id, data = "\27\r" })
+      return
+    end
+    rex.client.queue("client.window.fullscreen.toggle")
+  end,
+}
+rex.bind("alt+enter", "fullscreen_unless_fzf")
+
+---------------------------------------------------------------------------
+-- Time Machine keys
+---------------------------------------------------------------------------
+-- A `tm` scrub session's panes take bare capitals: J/K (and Shift+arrows)
+-- step the timeline, A applies, H/L move between the lens and the timeline,
+-- and S in the diff lens toggles its two layout switches. Bare capitals are
+-- far too hot to claim everywhere, so each is a key FUNCTION that returns
+-- false — the key goes to the pane untouched — unless the focused pane is
+-- stamped. tmux keeps the stamp in a pane option (@ctx, @tm_session); Rex
+-- has none, so system-backup-tm sets it here, through `tm_ctx`:
+--
+--   tm          the timeline pane   → routed
+--   tm-diff     the diff lens       → routed, plus S
+--   tm-explore  the yazi lens       → nothing: yazi binds these keys itself
+--
+-- The table lives in this config's memory: a config reload forgets it, and
+-- the keys are plain again until the pane's next verb stamps it. A stamp
+-- that outlives its session unstamps itself (system-backup-tm route).
+local TM = HOME .. "/.local/libexec/system-backup-tm"
+local tm_panes = {} -- block id → { ctx = …, session = <session dir> }
+
+rex.action{
+  name  = "tm_ctx",
+  title = "Time Machine: Mark a Pane",
+  args  = { block = "string", ctx = "string?", session = "string?" },
+  run   = function(_, args)
+    if args.ctx == nil or args.ctx == "" then
+      tm_panes[args.block] = nil
+    else
+      tm_panes[args.block] = { ctx = args.ctx, session = args.session or "" }
+    end
+  end,
+}
+
+local function tm_pane(ctx)
+  local t = ctx.block_id and tm_panes[ctx.block_id]
+  if t and t.ctx ~= "tm-explore" then return t end
+  return nil
+end
+
+-- key → { the name tmux gives the key (replayed by a self-heal), the route }
+for key, r in pairs({
+  ["J"] = { "J", "shift+down" }, ["K"] = { "K", "shift+up" },
+  ["shift+down"] = { "S-Down", "shift+down" }, ["shift+up"] = { "S-Up", "shift+up" },
+  ["A"] = { "A", "apply" },
+}) do
+  rex.bind(key, function(ctx)
+    local t = tm_pane(ctx)
+    if not t then return false end
+    -- Detached: a held key fires one route per repeat, and each supersedes
+    -- the last by killing it.
+    local h, err = rex.exec.start(
+      { TM, "route", "--session", t.session, "--pane", ctx.block_id, "--send", r[1], r[2] },
+      { env = pane_env(ctx), detach = true })
+    if h == nil then rex.log("warn", "tm route " .. r[2] .. ": " .. tostring(err)) end
+    return true
+  end)
+end
+
+for key, direction in pairs({ ["H"] = "left", ["L"] = "right" }) do
+  rex.bind(key, function(ctx)
+    if not tm_pane(ctx) then return false end
+    rex.session.focus_direction{ direction = direction }
+    return true
+  end)
+end
+
+-- diffnav cannot couple its own `e` (file tree) and `s` (side by side), so
+-- write both. The order matters: hide the tree first so the pane grows.
+rex.bind("S", function(ctx)
+  local t = tm_pane(ctx)
+  if not (t and t.ctx == "tm-diff") then return false end
+  rex.block.call(TERMINAL, "write", { block_id = ctx.block_id, data = "es" })
+  return true
+end)
+
+---------------------------------------------------------------------------
+-- Tailscale
+---------------------------------------------------------------------------
+-- `rex server tailscale on` lasts until the server stops, and on macOS the
+-- app starts the server with flags of its own, so there is no start flag to
+-- set. A machine that should serve its sessions over the tailnet says so
+-- with a file, ~/.config/rex/tailscale (untracked, per machine, like
+-- ~/.config/mux/backend); this turns it on again each time the config is
+-- loaded. `on` is idempotent, and the enrolled identity is kept by the
+-- server, so nothing is asked.
+do
+  local f = io.open(HOME .. "/.config/rex/tailscale", "r")
+  if f then
+    f:close()
+    local bundled = HOME .. "/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+    -- A moment later: at start the server is still reading this file.
+    local h, err = rex.exec.start(
+      { "/bin/sh", "-c", 'sleep 3; rex="$1"; [ -x "$rex" ] || rex=rex; exec "$rex" --autostart=false server tailscale on', "rex-tailscale", bundled },
+      { detach = true })
+    if h == nil then rex.log("warn", "tailscale on: " .. tostring(err)) end
+  end
+end

@@ -795,6 +795,48 @@ EOF
       The status should be success
       The contents of file "$FIX/sessions/s.test/rung" should equal 1
     End
+
+    # Rex keeps the stamp in its config's table (the tm_ctx action) and the
+    # pane is a block id; the self-heal is the same two steps.
+    rex_stub() {
+      printf '%s\n' '#!/bin/sh' "printf '%s\\n' \"\$*\" >>\"$FIX/rx.calls\"" >"$FIX/rex"
+      chmod +x "$FIX/rex"
+    }
+
+    It 'self-heals a stale stamp on Rex: unstamps the block and writes the key'
+      route_dead_rex() {
+        rex_stub
+        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh "$BIN" route \
+          --session "$FIX/sessions/s.gone" --pane block:7 --send J shift+down
+      }
+      When run route_dead_rex
+      The status should be success
+      The contents of file "$FIX/sessions/s.test/rung" should equal 1
+      The contents of file "$FIX/rx.calls" should include "--autostart=false --timeout 3s do -s block:7 tm_ctx block=block:7 ctx= session="
+      The contents of file "$FIX/rx.calls" should include 'block call -s block:7 -b block:7 write {"data":"J"}'
+    End
+
+    It 'writes a stale Shift+Up on Rex as the bytes a terminal sends'
+      route_dead_rex_up() {
+        rex_stub
+        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh "$BIN" route \
+          --session "$FIX/sessions/s.gone" --pane block:7 --send S-Up shift+up
+      }
+      When run route_dead_rex_up
+      The status should be success
+      The contents of file "$FIX/rx.calls" should include 'write {"data":"\u001b[1;2A"}'
+    End
+
+    It 'steps a live session named from a Rex pane'
+      route_live_rex() {
+        rex_stub
+        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh "$BIN" route \
+          --session "$FIX/sessions/s.test" --pane block:7 --send J shift+down
+      }
+      When run route_live_rex
+      The status should be success
+      The contents of file "$FIX/sessions/s.test/rung" should equal 2
+    End
   End
 
   Describe 'apply flow'

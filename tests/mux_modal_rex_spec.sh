@@ -52,6 +52,12 @@ cwd-ok
 Jobs"
   End
 
+  It 'tells rex-modal the exact row count of a height given in cells'
+    run() { modal --width 57 --height 15 -- true; cmdline | cut -d' ' -f1-4; }
+    When call run
+    The output should equal "env COLORTERM=truecolor MUX_REX_MODAL_ROWS=15 /home/u/.config/mux/scripts/rex-modal"
+  End
+
   It 'does not return while the layer is open'
     export STUB_LIFE=1.2
     run() {

@@ -25,7 +25,21 @@ source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
 # Stamped per VERB (never at load): `route` runs in a run-shell that owns no
 # pane of its own, where `set -p` would stamp whatever pane happens to be
 # active. $TMUX_PANE is the guard — it is set only in a real pane.
+#
+# Rex has no pane options. Its config keeps the same two values in a table
+# keyed by block id, set through the `tm_ctx` action (init.lua, "Time Machine
+# keys"), and its key functions read that table instead of a format string.
+_tm_rex() {  # _tm_rex <rex args…> — never starts a server, never hangs a verb
+  local bin="${MUX_REX_BIN:-}"
+  [[ -n "$bin" ]] || bin="$(command -v rex 2>/dev/null)" || return 1
+  "$bin" --autostart=false --timeout 3s "$@"
+}
+
 tm_stamp() {  # tm_stamp <ctx> [session-dir]
+  if [[ -z "${TMUX:-}" && -n "${REX_BLOCK:-}" ]]; then
+    _tm_rex do -s "$REX_BLOCK" tm_ctx "block=$REX_BLOCK" "ctx=$1" "session=${2:-}" >/dev/null 2>&1 || :
+    return 0
+  fi
   [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || return 0
   command -v tmux >/dev/null 2>&1 || return 0
   tmux set -p -t "$TMUX_PANE" @ctx "$1" 2>/dev/null || :
@@ -47,6 +61,14 @@ tl_focused() {
     # window itself is in the background.
     tmux display -p -t "$TMUX_PANE" '#{&&:#{pane_active},#{window_active}}' \
       2>/dev/null || print 1
+    return
+  fi
+  if [[ -n "${REX_BLOCK:-}" ]]; then
+    # The focused pane of the session's active window, as on tmux.
+    local f
+    f=$(_tm_rex api call -s "$REX_BLOCK" session.view 2>/dev/null | jq -r '
+      .active_window_id as $a | .windows[]? | select(.window_id == $a) | .focused_block_id // empty' 2>/dev/null)
+    if [[ -z "$f" || "$f" == "$REX_BLOCK" ]]; then print 1; else print 0; fi
     return
   fi
   print 1
@@ -342,6 +364,21 @@ tm_route() {
     # after teardown) must NEVER swallow the key: unstamp the pane so the
     # binds stop matching, and deliver the keystroke the user actually
     # pressed. Silence here meant dead J/K/A in a plain shell.
+    if [[ ! -d "$sess" && "$pane" == block:* ]]; then
+      # Rex: the same self-heal. Unstamp the block, then write the key the
+      # user pressed, as the bytes a terminal sends for it.
+      _tm_rex do -s "$pane" tm_ctx "block=$pane" "ctx=" "session=" >/dev/null 2>&1 || :
+      local _b=""
+      case "${send:-$key}" in
+        S-Up | shift+up) _b=$'\e[1;2A' ;;
+        S-Down | shift+down) _b=$'\e[1;2B' ;;
+        apply) _b=A ;;
+        ?) _b="$send" ;;
+      esac
+      [[ -n "$_b" ]] && _tm_rex block call -s "$pane" -b "$pane" write \
+        "$(jq -cn --arg d "$_b" '{data: $d}')" >/dev/null 2>&1 || :
+      return 0
+    fi
     if [[ ! -d "$sess" ]]; then
       [[ -n "$pane" ]] && {
         tmux set -p -t "$pane" @ctx "" 2>/dev/null || :

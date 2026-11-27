@@ -853,7 +853,9 @@ job::watch() {
   fi
 
   while true; do
-    if [ -n "${TMUX:-}" ]; then
+    # A float where there is one to be had: tmux's popup, or a Rex floating
+    # layer (mux-modal has an arm for each).
+    if [ -n "${TMUX:-}" ] || [ -n "${REX_BLOCK:-}" ]; then
       action=$(job::_dashboard_float "$troupe" "$select_id" "$resize_h")
       rc=$?
     else

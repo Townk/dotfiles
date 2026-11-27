@@ -656,6 +656,24 @@ EOF
       The output should equal 'rc=0|themed=yes|calls=1|modal_calls=0'
     End
 
+    # A Rex pane floats too: mux-modal has a Rex arm (a floating layer), so
+    # the dashboard is the same box over the pane instead of taking it over.
+    It 'floats troupe through mux-modal in a Rex pane, with the same single chrome'
+      float_rex() {
+        id=$(run_job job::start -- sleep 9) || return 1
+        export JOB_FAKE_TROUPE_ACTION=""
+        REX_BLOCK=block:here run_job job::watch 2>"$JOB_SANDBOX/watch.err"
+        rc=$?
+        local geom="no"
+        grep -qF -- "--borderless --no-chrome --width 57 --height 15 --capture" "$JOB_FAKE_MODAL_LOG" \
+          && geom="yes"
+        printf 'rc=%s|geom=%s|calls=%s' "$rc" "$geom" \
+          "$(grep -c "jobs --state-root $JOB_STATE_ROOT" "$JOB_FAKE_TROUPE_LOG")"
+      }
+      When call float_rex
+      The output should equal 'rc=0|geom=yes|calls=1'
+    End
+
     It 'treats a literal "empty" action the same as dismissed — done, one invocation (binary-skew compat with an older troupe)'
       literal_empty() {
         id=$(run_job job::start -- true) || return 1

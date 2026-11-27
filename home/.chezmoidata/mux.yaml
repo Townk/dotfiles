@@ -120,3 +120,27 @@ muxHiddenProcs:
   - claude
   - pi
   - pi-coding-agent
+
+# Rex app settings. The Rex app keeps its settings (fonts, pane chrome) in its
+# own preferences, not in a file, so they are listed here and pushed by the
+# `settings_apply` action in ~/.config/rex/init.lua: `chezmoi apply` runs it on
+# this machine's connected Mac app whenever this list changes, and "Apply
+# Settings from Dotfiles" in the command palette runs it by hand (needed once
+# on a new machine, and on any app that connected later).
+#
+# Each entry is a `client.setting.*` action and its value; `rex -C <app>
+# actions` lists them, and an action refuses a value it does not know with the
+# list of the ones it does. A setting changed in the app and not here is put
+# back at the next apply — change it here.
+rexSettings:
+  - {action: client.setting.terminal.typography.font, value: JetBrains Mono}
+  - {action: client.setting.terminal.typography.style, value: SemiBold}
+  - {action: client.setting.terminal.typography.size, value: 19}
+  - {action: client.setting.terminal.typography.line_height, value: 15}
+  # The custom-built symbols font first: Rex bundles its own "Symbols Nerd
+  # Font", and only the Mono family name reaches ours.
+  - {action: client.setting.terminal.advanced_fonts.fallback_fonts, value: "Symbols Nerd Font Mono, Apple Color Emoji, Menlo"}
+  - {action: client.setting.terminal.advanced_fonts.ligatures, value: true}
+  - {action: client.setting.interface.panes.headers, value: hidden}
+  - {action: client.setting.interface.panes.density, value: comfortable}
+  - {action: client.setting.interface.active_panes.fade, value: both}

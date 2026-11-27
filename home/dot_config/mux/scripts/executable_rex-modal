@@ -135,22 +135,43 @@ snap_to_rows() {
     print -r -- "$b"
   }
 
+  # The row count to end on: the one the caller sized the float for in cells
+  # ($MUX_REX_MODAL_ROWS — a widget that measured itself, the job dashboard),
+  # else the one the layer came with. A cell height is turned into a fraction
+  # of a window whose own size is an estimate, so the layer can arrive a row
+  # short or a row over; a box drawn for exactly N rows then loses its top
+  # border, or sits above a blank line.
+  local -i want=$rows
+  [[ "${MUX_REX_MODAL_ROWS:-}" == <-> ]] && (( MUX_REX_MODAL_ROWS > 2 )) && want=$MUX_REX_MODAL_ROWS
+
   local cache="${XDG_CACHE_HOME:-$HOME/.cache}/mux/rex-snap"
-  local key="$(printf '%dx%d@%.4f' "$rows" "$cols" "$h")"
-  local now="" known=""
+  local key="$(printf '%d:%dx%d@%.4f' "$want" "$rows" "$cols" "$h")"
+  local now="$rows" known=""
   known="$(awk -v k="$key" '$1 == k { v = $2 } END { print v }' "$cache" 2>/dev/null)"
-  if [[ "$known" == <->.<-> ]] && (( known > 0 && known <= h )); then
+  if [[ "$known" == <->.<-> ]] && (( known > 0 && known < 1 )); then
     now="$(set_h $known)" || return 0
     print -r -- "cached h=$known rows=$now" >>"$log"
-    [[ "$now" == "$rows" ]] && return 0
+    [[ "$now" == "$want" ]] && return 0
     # The window changed under the same geometry: forget it and search.
     now="$(set_h $h)" || return 0
   fi
 
-  # hi holds `rows` rows (it is what the layer has). Walk lo down a row's
-  # worth at a time until it holds fewer, then bisect between the two.
   local -F hi=$h lo=$h step=$(( h / rows )) mid
-  for i in 1 2 3; do
+  # Too short for what the caller drew for: grow until it holds every row.
+  for i in 1 2 3 4; do
+    (( now >= want )) && break
+    hi=$(( hi + step * (want - now) ))
+    (( hi < 0.98 )) || { hi=0.98; }
+    now="$(set_h $hi)" || return 0
+    print -r -- "grow h=$hi rows=$now" >>"$log"
+  done
+  (( now >= want )) || return 0
+  rows=$want
+  lo=$hi
+
+  # hi holds `rows` rows. Walk lo down a row's worth at a time until it
+  # holds fewer, then bisect between the two.
+  for i in {1..$(( 3 + (now > want ? now - want : 0) ))}; do
     lo=$(( lo - step ))
     (( lo > 0 )) || return 0
     now="$(set_h $lo)" || return 0
@@ -171,7 +192,7 @@ snap_to_rows() {
   # Settle on the smallest height known to hold every row, and remember it.
   now="$(set_h $hi)"
   print -r -- "final h=$hi rows=$now" >>"$log"
-  if [[ "$now" == "$rows" ]]; then
+  if [[ "$now" == "$want" ]]; then
     mkdir -p "${cache:h}" 2>/dev/null
     { grep -v "^$key " "$cache" 2>/dev/null | tail -n 40; printf '%s %.5f\n' "$key" "$hi"; } >"$cache.$$" 2>/dev/null \
       && mv -f "$cache.$$" "$cache" 2>/dev/null

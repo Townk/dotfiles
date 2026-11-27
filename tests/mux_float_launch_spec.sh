@@ -555,6 +555,18 @@ Quit"
     The line 2 of output should equal "1"
   End
 
+  It '_mux_rx_float promises the widget its measured rows, a percent picker none'
+    rows() {
+      _mux_rx_float --type confirm --title Quit --pane-height 11 -- "Really?" >/dev/null
+      layer_cmd | grep -c 'MUX_REX_MODAL_ROWS=[0-9][0-9]* [^ ]*rex-modal'
+      print -r -- 'a  A' | _mux_rx_pick_float 70% 60% Pick --output field:1 >/dev/null
+      layer_cmd | grep -c 'MUX_REX_MODAL_ROWS' || true
+    }
+    When call rows
+    The output should equal "1
+0"
+  End
+
   It '_mux_rx_float returns 130 when the layer is closed by hand'
     export STUB_MODE=closed
     When call run_and_report 8 _mux_rx_float --type confirm --title Quit -- "Really?"
