@@ -443,6 +443,36 @@ FAKE
       When call cancel
       The output should equal '1'
     End
+
+    It 'removes a queued job from the queue and records it as Killed'
+      queued_cancel() {
+        id=$(run_job job::start --title q -- sleep 9) || return 1
+        print -r -- '{"tasks":{"7":{"status":{"Queued":{}}}}}' > "$JOB_SANDBOX/status.json"
+        JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" run_job job::cancel "$id"; print -r -- "rc=$?"
+        grep -c '^remove 7$' "$JOB_FAKE_LOG"; grep -c '^kill' "$JOB_FAKE_LOG"
+        cut -d' ' -f2 "$JOB_STATE_ROOT/$id/result"
+      }
+      When call queued_cancel
+      The output should equal "rc=0
+1
+0
+Killed"
+    End
+
+    It 'still kills a running job'
+      running_cancel() {
+        id=$(run_job job::start --title r -- sleep 9) || return 1
+        print -r -- '{"tasks":{"7":{"status":{"Running":{}}}}}' > "$JOB_SANDBOX/status.json"
+        JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" run_job job::cancel "$id"; print -r -- "rc=$?"
+        grep -c '^kill 7$' "$JOB_FAKE_LOG"; grep -c '^remove' "$JOB_FAKE_LOG"
+        [ -e "$JOB_STATE_ROOT/$id/result" ] && print -r -- result || print -r -- no-result
+      }
+      When call running_cancel
+      The output should equal "rc=0
+1
+0
+no-result"
+    End
   End
 
   Describe 'job::list'

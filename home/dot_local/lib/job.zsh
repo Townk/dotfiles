@@ -214,13 +214,26 @@ job::waiting() {
 # job::cancel <id> — signal the task's whole process group via pueue kill.
 # Cancel is not a failure: the task's own TERM trap keeps its contract
 # (partial markers, exit 130, …) and the callback sees result=Killed.
+#
+# A Queued/Stashed task cannot be killed (pueue kill fails and leaves it
+# queued): it is removed instead, and — since pueue fires no completion
+# callback for a removed task — the Killed result is recorded here.
 job::cancel() {
-  local id="${1:?job::cancel: id required}" pueue task_id
+  local id="${1:?job::cancel: id required}" pueue task_id state
   pueue=$(job::_pueue) || return 1
   task_id=$(jq -r '.pueue_id' "$JOB_STATE_ROOT/$id/meta.json" 2>/dev/null) \
     || return 1
   [[ "$task_id" == <-> ]] || return 1
-  "$pueue" kill "$task_id" || return $?
+  # An unreadable status leaves state empty and falls through to kill.
+  state=$("$pueue" status --json 2>/dev/null \
+    | jq -r --arg t "$task_id" '.tasks[$t].status | keys[0]' 2>/dev/null) || state=""
+  case "$state" in
+    Queued | Stashed)
+      "$pueue" remove "$task_id" || return $?
+      print -r -- "$EPOCHSECONDS Killed " > "$JOB_STATE_ROOT/$id/result"
+      ;;
+    *) "$pueue" kill "$task_id" || return $? ;;
+  esac
   job::_statusbar_sync 2>/dev/null || :
 }
 
