@@ -1,0 +1,72 @@
+#!/usr/bin/env zsh
+# rex-picker <glyph|gitmoji|clipboard|notifications> [--resume]
+#
+# Open one of the key-bound pickers as a floating layer over the block it was
+# called for ($REX_BLOCK), under rex-modal. The Rex twin of the tmux bindings
+# in keymap-base.conf / keymap.yaml (`tmux-popup … tmux-modal … -- pick-*`):
+# the same sizes, titles, environment and commands, kept in ONE table here so
+# the Rex config holds a single action instead of a command line per key.
+#
+# Returns once the layer exists; the picker types its own result into the
+# origin (rex-modal --inject). Exit 1 when no layer could be opened.
+#
+# Env overrides: MUX_LIB, MUX_REX_MODAL, MUX_REX_BIN (tests).
+
+set -eu
+
+name="${1:-}"
+resume=0
+[[ "${2:-}" == "--resume" ]] && resume=1
+
+libexec="$HOME/.local/libexec"
+typeset -a env_args=() cmd=() modal_args=()
+case "$name" in
+  glyph)
+    w=70% h=60% title="Glyph Picker"
+    env_args=(PICK_GLYPH_PADDING=0,2,0,2)
+    cmd=("$libexec/pick-glyph")
+    modal_args=(--inject)
+    ;;
+  gitmoji)
+    w=70% h=60% title="Gitmoji Picker"
+    env_args=(PICK_GITMOJI_PADDING=0,2,0,2)
+    cmd=("$libexec/pick-gitmoji")
+    modal_args=(--inject)
+    ;;
+  clipboard)
+    w=70% h=75% title="Clipboard history"
+    cmd=("$libexec/pick-clipboard")
+    modal_args=(--inject)
+    ;;
+  notifications)
+    # Not injected: the picker acts on its own selection.
+    w=70% h=60% title="Notifications"
+    cmd=("$libexec/pick-notifications")
+    ;;
+  *)
+    print -ru2 -- "usage: rex-picker <glyph|gitmoji|clipboard|notifications> [--resume]"
+    exit 2
+    ;;
+esac
+if (( resume )); then
+  case "$name" in
+    glyph | gitmoji) cmd+=(--resume); title="$title (resumed)" ;;
+    *) print -ru2 -- "rex-picker: $name has no --resume"; exit 2 ;;
+  esac
+fi
+
+[[ -n "${REX_BLOCK:-}" ]] || {
+  print -ru2 -- "rex-picker: \$REX_BLOCK is not set (not called for a Rex pane)"
+  exit 1
+}
+
+source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
+
+block="$(_mux_rx_layer "$w" "$h" "$title" "" "" -- \
+  env COLORTERM=truecolor "${env_args[@]}" "$modal" --origin "$REX_BLOCK" --title "$title" \
+  "${modal_args[@]}" --no-chrome -- "${cmd[@]}")"
+[[ -n "$block" ]] || {
+  print -ru2 -- "rex-picker: could not open a floating layer for $name"
+  exit 1
+}

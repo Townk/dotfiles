@@ -1709,6 +1709,9 @@ clip::inject_by_id() {
   text="$(clip::text_by_id "$id")"
   if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_ZELLIJ:-}" ]]; then
     ${(z)PICK_INJECT_ZELLIJ} action write-chars --pane-id "$PICK_INJECT_PANE" -- "$text"
+  elif [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_REX:-}" ]]; then
+    # Rex twin (rex-modal): one binary path, never word-split.
+    "$PICK_INJECT_REX" --autostart=false send -s "$PICK_INJECT_PANE" -b "$PICK_INJECT_PANE" -- "$text"
   elif command -v pbcopy >/dev/null 2>&1; then
     printf '%s' "$text" | pbcopy
   fi

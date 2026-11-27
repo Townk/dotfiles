@@ -822,6 +822,13 @@ pick::background_sink() {
     ${(z)PICK_INJECT_TMUX} send-keys -t "$PICK_INJECT_PANE" -l -- "${text//$'\uFE0F'/}"
     return 0
   fi
+  # Rex twin: rex-modal exports PICK_INJECT_REX (the rex binary, ONE path —
+  # it lives under "Application Support", so it is never word-split) beside
+  # PICK_INJECT_PANE (the origin block id, which also names its session).
+  if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_REX:-}" ]]; then
+    "$PICK_INJECT_REX" --autostart=false send -s "$PICK_INJECT_PANE" -b "$PICK_INJECT_PANE" -- "$text"
+    return 0
+  fi
   local clip; clip="$(pick::detect_clip)"
   [[ -n "$clip" ]] && printf '%s' "$text" | ${(z)clip}
   return 0

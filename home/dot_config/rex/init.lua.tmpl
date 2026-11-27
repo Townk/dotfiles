@@ -400,6 +400,27 @@ rex.action{
 }
 
 ---------------------------------------------------------------------------
+-- Pickers
+---------------------------------------------------------------------------
+-- The glyph, gitmoji, clipboard and notification pickers, each a floating
+-- layer over the focused pane. What a picker runs (size, title, command,
+-- whether its result is typed into the pane) is a table in
+-- ~/.config/mux/scripts/rex-picker, copied from the tmux bindings; this is
+-- only the way in. `resume` reopens a picker where it was left (glyph and
+-- gitmoji have it). `leave` as in close_guarded.
+rex.action{
+  name  = "float_picker",
+  title = "Open a Picker",
+  args  = { picker = "string", resume = "boolean?", leave = "boolean?" },
+  run   = function(ctx, args)
+    if args.leave then rex.client.queue("client.mode.exit_all") end
+    local argv = { SCRIPTS .. "/rex-picker", args.picker }
+    if args.resume then argv[#argv + 1] = "--resume" end
+    run_script(ctx, argv)
+  end,
+}
+
+---------------------------------------------------------------------------
 -- Sessions
 ---------------------------------------------------------------------------
 -- Rex shows the current session's label in the tab bar once there is more

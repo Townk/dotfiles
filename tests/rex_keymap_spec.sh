@@ -253,7 +253,7 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
     End
 
     It 'emits nothing for a refused chord'
-      refused() { grep -c -E '^rex\.bind\("cmd\+shift\+(f|v)",' "$RK_LUA" || true; }
+      refused() { grep -c -E '^rex\.bind\("cmd\+shift\+f",' "$RK_LUA" || true; }
       When call refused
       The output should equal "0"
     End
@@ -354,6 +354,52 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
       leave() { body | grep -c -F 'if args.leave then rex.client.queue("client.mode.exit_all") end'; }
       When call leave
       The output should equal "1"
+    End
+  End
+
+  # The key-bound pickers (glyph, gitmoji, clipboard, notifications) open as
+  # floating layers through ONE action; the table of what each one runs lives
+  # in ~/.config/mux/scripts/rex-picker.
+  Describe 'picker keys'
+    body() { awk '/name  = "float_picker",/,/^}/' "$RK_LUA"; }
+    bound() { grep -c -E -- "$1" "$RK_LUA" || true; }
+
+    It 'defines float_picker, running rex-picker for the focused block'
+      shape() {
+        body | grep -c -F 'SCRIPTS .. "/rex-picker"'
+        body | grep -c -F 'if args.resume then'
+        body | grep -c -F 'if args.leave then rex.client.queue("client.mode.exit_all") end'
+      }
+      When call shape
+      The output should equal "1
+1
+1"
+    End
+
+    It 'binds the leader keys, resuming the two repeat pickers'
+      leader() {
+        bound '^rex\.bind\("prefix/shift\+u", km_stay\("km_prefix_[0-9]+", "[^"]*glyph picker \(repeat\)", false, "float_picker", \{ leave = true, picker = "glyph", resume = true \}\)\)$'
+        bound '^rex\.bind\("prefix/shift\+g", km_stay\("km_prefix_[0-9]+", "[^"]*gitmoji picker \(repeat\)", false, "float_picker", \{ leave = true, picker = "gitmoji", resume = true \}\)\)$'
+        bound '^rex\.bind\("prefix/c", km_stay\("km_prefix_[0-9]+", "[^"]*clipboard history", false, "float_picker", \{ leave = true, picker = "clipboard" \}\)\)$'
+        bound '^rex\.bind\("prefix/shift\+n", km_stay\("km_prefix_[0-9]+", "[^"]*notification history", false, "float_picker", \{ leave = true, picker = "notifications" \}\)\)$'
+      }
+      When call leader
+      The output should equal "1
+1
+1
+1"
+    End
+
+    It 'binds the direct chords'
+      direct() {
+        bound '^rex\.bind\("ctrl\+shift\+u", "float_picker", \{ picker = "glyph" \}\)$'
+        bound '^rex\.bind\("ctrl\+shift\+g", "float_picker", \{ picker = "gitmoji" \}\)$'
+        bound '^rex\.bind\("cmd\+shift\+v", "float_picker", \{ picker = "clipboard" \}\)$'
+      }
+      When call direct
+      The output should equal "1
+1
+1"
     End
   End
 

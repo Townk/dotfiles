@@ -405,8 +405,7 @@ keymap:
       - keys:
         - U
         desc: glyph picker (repeat)
-        # rex: needs the widget float (phase 5)
-        rex: false
+        rex: {action: float_picker, args: {picker: glyph, resume: true, leave: true}}
         icon: 󰥸
         color: mauve
         cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GLYPH_PADDING=0,2,0,2 "$HOME/.config/mux/scripts/tmux-modal --title \"Glyph Picker (resumed)\"
@@ -415,8 +414,7 @@ keymap:
       - keys:
         - G
         desc: gitmoji picker (repeat)
-        # rex: needs the widget float (phase 5)
-        rex: false
+        rex: {action: float_picker, args: {picker: gitmoji, resume: true, leave: true}}
         icon: 󰥸
         color: mauve
         cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 60 -E -B -e COLORTERM=truecolor -e PICK_GITMOJI_PADDING=0,2,0,2 "$HOME/.config/mux/scripts/tmux-modal --title \"Gitmoji Picker (resumed)\"
@@ -425,8 +423,7 @@ keymap:
       - keys:
         - c
         desc: clipboard history
-        # rex: needs the widget float (phase 5)
-        rex: false
+        rex: {action: float_picker, args: {picker: clipboard, leave: true}}
         icon: 󱛢
         color: mauve
         cmd: run-shell -b '$HOME/.config/mux/scripts/tmux-popup 70 75 -E -B -e COLORTERM=truecolor "$HOME/.config/mux/scripts/tmux-modal --title \"Clipboard history\" --inject --no-chrome -- $HOME/.local/libexec/pick-clipboard"'
@@ -434,8 +431,7 @@ keymap:
       - keys:
         - N
         desc: notification history
-        # rex: needs the widget float (phase 5)
-        rex: false
+        rex: {action: float_picker, args: {picker: notifications, leave: true}}
         icon: 󰂚
         color: mauve
         # `|| [ $? -eq 130 ]`: ESC/cancel is the picker's CLEAN exit (the
@@ -1282,5 +1278,8 @@ keymap:
   - {key: cmd+r, desc: reload config, rex: client.config.reload}
   # rex: needs the scrollback-to-editor script ported (phase 5)
   - {key: cmd+shift+f, desc: edit scrollback, rex: false}
-  # rex: the clipboard picker needs the widget float (phase 5)
-  - {key: cmd+shift+v, desc: clipboard history, rex: false}
+  - {key: cmd+shift+v, desc: clipboard history, rex: {action: float_picker, args: {picker: clipboard}}}
+  # tmux binds these two in its root table (keymap-base.conf), not from a Cmd
+  # chord; Rex binds the same keys itself.
+  - {key: ctrl+shift+u, desc: glyph picker, rex: {action: float_picker, args: {picker: glyph}}}
+  - {key: ctrl+shift+g, desc: gitmoji picker, rex: {action: float_picker, args: {picker: gitmoji}}}

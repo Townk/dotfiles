@@ -529,7 +529,7 @@ Rex floating **layer**.
 | `mux::backend` | `$TMUX` | `$REX_SESSION`, checked LAST | ✅ | a tmux/zellij started by hand inside a Rex pane inherits `REX_SESSION`, and there the inner mux must win |
 | `mux::available` | in a session + binary | same, **plus `$MUX_REX_CONSUMERS`** | 🟡 | the consumer gate stays shut on Rex until each consumer is ported; the verbs answer regardless. Temporary knob |
 | `mux::in_session` | `$TMUX`/`$ZELLIJ` | unchanged — false in Rex | ❌ | it means "in a tmux or zellij pane"; `.zshrc` has its own Rex refusal |
-| widgets (`mux::pick`/`confirm`/`choose`/`form`) | popup float | inline | ⏳ | `_mux::widgets_float` admits tmux/zellij only |
+| widgets (`mux::pick`/`confirm`/`choose`/`form`) | popup float | floating layer running `rex-modal` (`_mux_rx_pick_float` / `_mux_rx_float`), answer through the capture FIFO | ✅ | not behind `$MUX_REX_CONSUMERS`. NOT modal: the layer is a real pane, and one closed by hand reads as a cancel (130) |
 | current/list/kill/rename session | `display`, `list-sessions`, … | `rex ls --json`, `rex kill`, `rex session rename` | ✅ | sessions are addressed by LABEL; rename defaults to our session by id |
 | `mux::resolve_session <pid>` | `list-clients` by pid | fails | ❌ | the Rex app is ONE process attached to many sessions — no single answer |
 | `mux::attached_sessions` | `session_attached` | sessions held by a client of kind `app` | ✅ | every CLI call is itself a client and must not count |
@@ -579,7 +579,8 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 | Locked mode, detach | key tables / `detach-client` | none | ❌ | nothing to lock away; a Rex app does not detach |
 | Alarms (`u`/`i`/`k`) | `monitor-activity/silence` | none | ❌ | Rex's activity sidebar |
 | Border toggle, sync panes, last tab, join-pane, swap-with-next | tmux commands | none | ❌ | no Rex equivalent; each has its reason beside `rex: false` in `keymap.yaml` |
-| Glyph / gitmoji / clipboard / notification pickers, `⌘⇧V`, `⌘⇧F` | popup pickers | none yet | ⏳ | need the widget float (phase 5) |
+| Glyph / gitmoji / clipboard / notification pickers, `⌘⇧V`, `⌃⇧U`, `⌃⇧G` | `tmux-popup` + `tmux-modal --inject` per binding | one action, `float_picker`, running `rex-picker <name>`: a floating layer under `rex-modal --inject`; the result is typed into the origin with `rex send` | ✅ | the per-picker table (size, title, env, command) lives in `rex-picker`. No U+FE0F strip on Rex |
+| Edit scrollback (`⌘⇧F`) | scrollback-to-editor script | none yet | ⏳ | a separate port |
 | Watch tasks (`J`) | `job watch` dashboard in a popup | `jobs_show` → `session.select` on the Jobs session | ✅ | each job has its own tab there; the job picker is not ported because Rex's Activity panel replaces it; with no Jobs session it logs and does nothing |
 | New session (`s` in the session mode) | `mux-new-session` (random name, detached, then switch) | `session_new_named`: a Title Case name from `mux-random-session-name --title`, `session.create`, then `session.select` | ✅ | Rex shows the session label in the tab bar; its own generated names are hyphenated. Sessions made with Rex's own buttons keep Rex's names |
 | `rotate-window` (move `h`/`l`) | rotate | `pane.move.left/right` | 🟡 | moves the pane instead of rotating the layout |
