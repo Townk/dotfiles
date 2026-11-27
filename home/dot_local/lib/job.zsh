@@ -181,8 +181,10 @@ job::start() {
       if [ -n "${REX_BLOCK:-}" ]; then
         # A Rex pane: follow right here instead of opening a dashboard. In a
         # SUBSHELL — the follower traps signals and `exit`s on Ctrl+C, and
-        # that must never take down the shell that called job::start.
-        ( job::follow --inline "$id" ) || :
+        # that must never take down the shell that called job::start. Its
+        # stdout goes to the terminal (stderr): callers read the job id
+        # through $(…), and the log and reports must not land in it.
+        ( job::follow --inline "$id" ) >&2 || :
       else
         job::watch
       fi

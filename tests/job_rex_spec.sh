@@ -655,6 +655,29 @@ j1"
       The output should equal "after rc=0"
     End
 
+    # Callers read the id through $(…): the inline follower's log and
+    # reports must reach the terminal, not that capture.
+    It 'prints only the job id from a --modal job followed inline'
+      captured() {
+        local id
+        export JOB_SANDBOX REX_BLOCK=block:x
+        unset TMUX ZELLIJ
+        script -q /dev/null zsh -f -c '
+          source "$1" >/dev/null 2>&1 || exit 99
+          job::follow() { print -r -- follower-marker; }
+          jid=$(job::start --modal --title "watched" -- sleep 1)
+          print -r -- "$jid" > "$JOB_SANDBOX/jid"
+        ' -- "$JOBLIB" > "$JOB_SANDBOX/tty" 2>&1
+        id=$(ls "$JOB_STATE_ROOT" | grep '^[0-9]' | head -n1)
+        [ "$(cat "$JOB_SANDBOX/jid")" = "$id" ] && echo id-only \
+          || echo "jid=$(cat "$JOB_SANDBOX/jid")"
+        grep -c follower-marker "$JOB_SANDBOX/tty" || :
+      }
+      When call captured
+      The output should equal "id-only
+1"
+    End
+
     It 'does nothing and succeeds when no server answers'
       down() {
         export JOB_FAKE_REX_WHOAMI_RC=4
