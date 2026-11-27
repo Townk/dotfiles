@@ -1182,6 +1182,16 @@ bkp::tm::launch() {
         local _here
         _here=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
         [[ -n "$_here" ]] && (( _here > 27 )) && _split+=(--size $(( _here - 25 )))
+      elif [[ "$(mux::backend)" == rex && -t 0 ]]; then
+        # Rex splits by ratio, so the same arithmetic as a percentage of this
+        # pane: the lens takes everything but the timeline's 24 columns and
+        # the divider (measured: `--ratio N` gives the NEW pane N percent).
+        # Rounded DOWN: a whole percent is a column or two, and the timeline
+        # is the pane that cannot spare any — its hint line wraps below 24.
+        local _here
+        _here=$(stty size < /dev/tty 2>/dev/null | awk '{ print $2 }')
+        [[ -n "$_here" ]] && (( _here > 27 )) &&
+          _split+=(--size "$(( (_here - 25) * 100 / _here ))%")
       fi
       mux::split "${_split[@]}" -- "$BKP_TM_BIN" lens "$s" >/dev/null ||
         { [[ -f "$s/mount.pid" ]] && bkp::umount "$(<"$s/mount.pid")" "$s/mnt"; rm -rf "$s"; return 1 }

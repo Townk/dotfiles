@@ -37,8 +37,19 @@ mode="${1:-refresh}"
 probe_local() {
   "$OSASCRIPT" <<'APPLESCRIPT' 2>/dev/null
 tell application "System Events"
-    if not (exists process "Ghostty") then return "NOT_RUNNING"
-    set p to first process whose name is "Ghostty"
+    -- The terminal the human is using: Ghostty or Rex. The one in front
+    -- when one of them is; otherwise the first that is running.
+    set term to ""
+    set front to name of first process whose frontmost is true
+    if front is "Ghostty" or front is "Rex" then
+        set term to front
+    else if exists process "Ghostty" then
+        set term to "Ghostty"
+    else if exists process "Rex" then
+        set term to "Rex"
+    end if
+    if term is "" then return "NOT_RUNNING"
+    set p to first process whose name is term
     if (count of windows of p) = 0 then return "NO_WINDOWS"
     tell window 1 of p
         if value of attribute "AXFullScreen" is true then return "NATIVE_FULLSCREEN"

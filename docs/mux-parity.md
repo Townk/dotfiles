@@ -529,7 +529,7 @@ Rex floating **layer**.
 | Verb | tmux impl | Rex impl | Status | Notes |
 |---|---|---|---|---|
 | `mux::backend` | `$TMUX` | `$REX_SESSION`, checked LAST | ✅ | a tmux/zellij started by hand inside a Rex pane inherits `REX_SESSION`, and there the inner mux must win |
-| `mux::available` | in a session + binary | same, **plus `$MUX_REX_CONSUMERS`** | 🟡 | the consumer gate stays shut on Rex until each consumer is ported; the verbs answer regardless. Temporary knob |
+| `mux::available` | in a session + binary | same | ✅ | the `$MUX_REX_CONSUMERS` knob that held Rex's consumers back is gone (2026-11-27): quick view, the fzf-tab preview, the welcome screen and the Time Machine tab, lens split and apply floats take their mux path in a Rex pane |
 | `mux::in_session` | `$TMUX`/`$ZELLIJ` | unchanged — false in Rex | ❌ | it means "in a tmux or zellij pane"; `.zshrc` has its own Rex refusal |
 | widgets (`mux::pick`/`confirm`/`choose`/`form`) | popup float | floating layer running `rex-modal` (`_mux_rx_pick_float` / `_mux_rx_float`), answer through the capture FIFO | ✅ | not behind `$MUX_REX_CONSUMERS`. NOT modal: the layer is a real pane, and one closed by hand reads as a cancel (130) |
 | current/list/kill/rename session | `display`, `list-sessions`, … | `rex ls --json`, `rex kill`, `rex session rename` | ✅ | sessions are addressed by LABEL; rename defaults to our session by id |

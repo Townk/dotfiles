@@ -24,7 +24,7 @@ pub fn fullscreen_toggle(fields: &Fields, ctx: &Ctx) -> Result<Response, ProtoEr
     let terminal = validate::one_of(
         "terminal",
         validate::required_text(fields, "terminal")?,
-        &["ghostty", "wezterm"],
+        &["ghostty", "wezterm", "rex"],
     )?;
 
     let toggle = &ctx.tools.fullscreen_toggle;

@@ -94,20 +94,22 @@ Describe 'mux shim — Rex backend'
       print -r -- '#!/bin/sh' > "$GATE_TMP/rex"; chmod +x "$GATE_TMP/rex"
       export MUX_REX_BIN="$GATE_TMP/rex"
     }
-    unstub_bin() { rm -rf "$GATE_TMP"; unset MUX_REX_BIN REX_SESSION MUX_REX_CONSUMERS; }
+    unstub_bin() { rm -rf "$GATE_TMP"; unset MUX_REX_BIN REX_SESSION; }
     BeforeEach 'stub_bin'
     AfterEach 'unstub_bin'
 
-    It 'keeps mux::available false in a Rex pane by default'
+    # The consumers are ported: a Rex pane is a mux like any other, with no
+    # knob (it was $MUX_REX_CONSUMERS while they were not).
+    It 'reports a Rex pane as available'
       REX_SESSION="session:x"
       When call mux::available
-      The status should be failure
+      The status should be success
     End
 
-    It 'turns mux::available on with MUX_REX_CONSUMERS'
-      REX_SESSION="session:x" MUX_REX_CONSUMERS=1
+    It 'reports nothing available outside any pane'
+      unset REX_SESSION TMUX
       When call mux::available
-      The status should be success
+      The status should be failure
     End
 
     It 'reports the backend itself as usable either way'

@@ -292,7 +292,7 @@ Describe 'mux/rex.zsh — float launch guard'
   setup() {
     TEST_TMP=$(mktemp -d)
     export TMPDIR="$TEST_TMP"
-    unset TMUX MUX_BACKEND MUX_REX_CONSUMERS
+    unset TMUX MUX_BACKEND
     export REX_SESSION=session:s1 REX_BLOCK=block:origin
     stub="$TEST_TMP/rex"
     {

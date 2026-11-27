@@ -52,6 +52,33 @@ fn fullscreen_toggle_names_the_terminal_and_flips_the_mirror() {
     );
 }
 
+/// Rex joined the closed set when it became a terminal the origin runs: the
+/// helper is told `rex` and does the rest.
+#[test]
+fn fullscreen_toggle_accepts_rex() {
+    let dir = testutil::tempdir("gui-toggle-rex");
+    let mut ctx = common::ctx_mut(dir.path(), "boxA");
+    let log = dir.path().join("log");
+    ctx.tools.fullscreen_toggle = write_stub(
+        dir.path(),
+        "toggle",
+        &format!("printf 'toggle terminal=%s\\n' \"$MUX_TERMINAL\" >> {}", log.display()),
+    );
+    ctx.tools.fullscreen_probe = write_stub(dir.path(), "probe", "exit 0");
+
+    let mut client = common::served(std::sync::Arc::new(ctx), Endpoint::Trusted);
+    client.hello_default();
+    client.expect_caps();
+    client.send_request(
+        &Fields::new()
+            .with("op", b"window.fullscreen.toggle".to_vec())
+            .with("terminal", b"rex".to_vec()),
+    );
+    let (kind, _) = client.next().expect("an answer");
+    assert_eq!(kind, Kind::Response);
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), "toggle terminal=rex\n");
+}
+
 #[test]
 fn fullscreen_toggle_refuses_an_unknown_terminal_before_spawning() {
     let dir = testutil::tempdir("gui-toggle-bad");

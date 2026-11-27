@@ -17,7 +17,10 @@ get_terminal_image_protocol() {
   # 1. STEP ONE: Accumulate ALL protocols natively supported by the Host
   if [ "$term_prog" = "Alacritty" ] || [ "$term_prog" = "Apple_Terminal" ]; then
     : # Explicitly skip adding anything to the array
-  elif [ "$term_prog" = "Ghostty" ] || [ "$term_prog" = "Kitty" ]; then
+  elif [ "$term_prog" = "Ghostty" ] || [ "$term_prog" = "ghostty" ] || [ "$term_prog" = "Kitty" ] || [ "$term_prog" = "rex" ]; then
+    # Rex draws with libghostty: Kitty graphics, no sixel. Measured
+    # 2026-11-27 — it answers the Kitty query with OK and its device
+    # attributes carry no sixel flag. It names itself in lower case.
     host_support+=("Kitty")
   elif [ -n "$iterm_sess" ] || [ "$lc_term" = "iTerm2" ]; then
     host_support+=("iTerm2" "Sixel")
@@ -45,7 +48,7 @@ get_terminal_image_protocol() {
     tmux_outer=$(tmux show-environment TERM_PROGRAM 2>/dev/null)
     case "${tmux_outer#TERM_PROGRAM=}" in
       WezTerm) final_capability+=("Sixel") ;;
-      Ghostty) final_capability+=("Kitty") ;;
+      Ghostty | ghostty | rex) final_capability+=("Kitty") ;;
     esac
   else
     # 3. STEP THREE: Direct Connection -> Inherit all natively supported protocols

@@ -41,6 +41,56 @@ EOF
     The status should be success
   End
 
+  # Rex toggles through the app's own action, on this machine's app: found by
+  # asking the server (the script may run under the bridge daemon, in no pane).
+  Describe 'in Rex'
+    rex_stub() {
+      cat >"$TEST_TMP/rex" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >>"$TEST_TMP/rex.log"
+case " \$* " in
+  *" client ls "*) cat "$TEST_TMP/clients.json" ;;
+  *" client.window.fullscreen.toggle "*) [ "\${STUB_REX_DO:-ok}" = ok ] ;;
+esac
+EOS
+      chmod +x "$TEST_TMP/rex"
+      print -r -- '{"clients":[{"client_id":"client:ipad","info":{"kind":"app"},"connection_state":"connected","principal":{"transport":"tailscale"},"session_ids":["session:a"]},{"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","principal":{"transport":"unix"},"session_ids":["session:a","session:b"]}]}' >"$TEST_TMP/clients.json"
+      export MUX_REX_BIN="$TEST_TMP/rex"
+    }
+    BeforeEach rex_stub
+    AfterEach 'unset MUX_REX_BIN STUB_REX_DO MUX_TERMINAL'
+    toggled() { zsh home/dot_config/mux/scripts/executable_terminal-toggle-fullscreen 2>&1; print -r -- "rc=$?"; grep 'fullscreen' "$TEST_TMP/rex.log" 2>/dev/null || true; }
+
+    It 'runs the app action on the local app, never starting a server'
+      export TERM_PROGRAM=rex
+      When call toggled
+      The output should equal "rc=0
+--autostart=false --timeout 5s -C client:mac do -s session:a client.window.fullscreen.toggle"
+    End
+
+    It 'is what the bridge asks for by name'
+      export MUX_TERMINAL=rex SSH_CONNECTION="fe80::1 1 fe80::2 22"
+      When call toggled
+      The line 1 of output should equal "rc=0"
+      The line 2 of output should include "-C client:mac do"
+    End
+
+    It 'fails with a reason when no app is connected here'
+      export TERM_PROGRAM=rex
+      print -r -- '{"clients":[]}' >"$TEST_TMP/clients.json"
+      When call toggled
+      The output should equal "terminal-toggle-fullscreen: no Rex app is connected on this machine
+rc=1"
+    End
+
+    It 'fails with a reason when the app refuses'
+      export TERM_PROGRAM=rex STUB_REX_DO=refused
+      When call toggled
+      The line 1 of output should include "refused the fullscreen toggle"
+      The line 2 of output should equal "rc=1"
+    End
+  End
+
   # An explicit terminal wins over detection. The bridge runs this on the
   # ORIGIN from a socket service with no TERM_PROGRAM and, quite possibly,
   # its own SSH_* set from whatever login started it — detection would give
@@ -132,6 +182,19 @@ EOF
       When call state_detect
       The output should include "rc=0"
       The output should include "window.fullscreen.toggle|wezterm"
+    End
+
+    It 'names Rex when that is what the connect-time state says'
+      recob_script 'ok'
+      state_rex() {
+        mkdir -p "$XDG_STATE_HOME/mux"
+        printf 'rex' > "$XDG_STATE_HOME/mux/peer-term"
+        run_it
+        printf '%s|%s' "$(recob_op 1)" "$(recob_field 1 terminal)"
+      }
+      When call state_rex
+      The output should include "rc=0"
+      The output should include "window.fullscreen.toggle|rex"
     End
 
     # ...while the explicit env override still outranks the pushed state.

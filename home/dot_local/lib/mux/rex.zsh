@@ -157,8 +157,9 @@ _mux_rx_dump_screen() {
 
 # _mux_rx_split <dir> <size> <name> <close> <cwd> -- <cmd...>
 # Prints the new block id. --size is honoured only as a PERCENTAGE (`30%`):
-# Rex splits by ratio, and a cell count has no ratio without knowing the
-# anchor's size — dropped rather than guessed, as zellij dropped every size.
+# Rex splits by ratio: a size is honoured as a percentage (the NEW pane's
+# share) and a cell count is dropped rather than guessed — it has no ratio
+# without knowing the anchor's size. A caller that knows it converts.
 # <close> is accepted and ignored, as on tmux: a block closes with its command.
 _mux_rx_split() {
   local dir="$1" size="$2" name="$3" close="$4" cwd="$5"

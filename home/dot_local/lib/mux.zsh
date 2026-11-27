@@ -35,13 +35,10 @@ unset _mux_self
 
 # _mux::widgets_float — true when the current backend renders widgets as
 # floating modals ("none" renders inline). Only the backends with a float
-# implementation below. Rex asks _mux_rx_available rather than mux::available:
-# that one stays false in a Rex pane until $MUX_REX_CONSUMERS is set, a gate
-# for consumers that are NOT ported yet — and the widget float is ported.
+# implementation below.
 _mux::widgets_float() {
   case "$(mux::backend)" in
-    tmux) mux::available ;;
-    rex) _mux_rx_available ;;
+    tmux | rex) mux::available ;;
     *) return 1 ;;
   esac
 }

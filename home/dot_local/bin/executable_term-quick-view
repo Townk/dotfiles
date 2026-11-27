@@ -53,8 +53,29 @@ export PATH="${XDG_DATA_HOME:-$HOME/.local/share}/mise/shims:$HOME/.local/bin:/o
 if [[ "$_mode" == view ]]; then
   source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
   _self="${0:A}"
+  if mux::available && [[ "$(mux::backend)" == rex ]]; then
+    # Rex: a floating layer over what you were looking at — a look, then a
+    # key, and you are back where you were, with no tab to come back from. A
+    # layer is an ordinary pane, so the picture is drawn in it as anywhere
+    # (measured 2026-11-27: Kitty graphics render in a floating layer). The
+    # label is the singleton's identity, as the tab's name is on tmux: a
+    # second call replaces the float instead of stacking another.
+    local _s="${MUX_SESSION:-}" _old
+    [[ -n "$_s" ]] || _s="$(_mux_rx_session)" || exit 1
+    for _old in "${(@f)$(_mux_rx_view "$_s" | jq -r --arg n "$TERM_QUICK_VIEW_NAME" '
+        .windows[]?.layers[]? | select(.kind != "tiled") | .blocks[]?
+        | select(.label == $n) | .block_id' 2>/dev/null)}"; do
+      [[ -n "$_old" ]] && _mux_rx_close_block "$_old"
+    done
+    # Kitty graphics named outright: the layer's command starts from the
+    # server's environment, and chafa does not know Rex by name anyway.
+    [[ -n "$(_mux_rx_layer "${TERM_QUICK_VIEW_FLOAT_W:-80%}" "${TERM_QUICK_VIEW_FLOAT_H:-80%}" \
+      "$TERM_QUICK_VIEW_NAME" "" "$_s" -- \
+      env "TERM_QUICK_VIEW_ARGS=${TERM_QUICK_VIEW_ARGS:--f kitty}" "$_self" --render "$file")" ]]
+    exit $?
+  fi
   if mux::available; then
-    # A TAB on every backend: a full tab reads better for a picture and
+    # A TAB on tmux: a full tab reads better for a picture and
     # keeps one implementation. The NAME is the singleton's identity: it
     # must match what the renderer names the tab, or a second call opens a
     # second one.
@@ -112,7 +133,12 @@ fi
 if [[ -z "${TERM_QUICK_VIEW_ARGS:-}" ]]; then
   _outer="${TERM:-}"
   [[ -n "${TMUX:-}" ]] && _outer="$(tmux display -p '#{client_termname}' 2>/dev/null)"
-  if [[ "$_outer" == *ghostty* ]]; then
+  # Rex is the same renderer (libghostty) under another name, and says so in
+  # $TERM_PROGRAM, not $TERM: Kitty graphics, no sixel. chafa does not know
+  # the name and would fall back to character art.
+  _prog="${TERM_PROGRAM:-}"
+  [[ -n "${TMUX:-}" ]] && _prog="${$(tmux show-environment TERM_PROGRAM 2>/dev/null)#TERM_PROGRAM=}"
+  if [[ "$_outer" == *ghostty* || "$_prog" == rex ]]; then
     if [[ -n "${TMUX:-}" ]]; then
       # Chafa added tmux passthrough in 1.14. A stale system Chafa must not
       # turn an otherwise usable preview into a blank pane.
@@ -162,6 +188,21 @@ _cols="" _rows=""
 if [[ -n "${TMUX:-}" ]]; then
   _geo="$(tmux display -p -t "${TMUX_PANE:-}" '#{pane_width} #{pane_height}' 2>/dev/null)"
   [[ "$_geo" == <->" "<-> ]] && { _cols="${_geo%% *}"; _rows="${_geo##* }" }
+fi
+# Rex has the same birth defect and no pane-size query that is ahead of the
+# tty: a new tab's pty is 80x24 until the app lays the tab out, a fraction of
+# a second later (measured 2026-11-27: the picture was centred for 80 columns
+# in a 130-column tab). So wait for the size to move off 80x24, for at most
+# a little over a second — a tab that really is 80x24 just pays that once.
+if [[ -z "${TMUX:-}" && -n "${REX_BLOCK:-}" ]]; then
+  for _i in {1..12}; do
+    _geo="$(stty size </dev/tty 2>/dev/null)"
+    [[ "$_geo" == "24 80" ]] || break
+    sleep 0.1
+  done
+  # Read from the tty itself: `tput` below answers from $COLUMNS/$LINES when
+  # the environment carries them, and those are the birth size too.
+  [[ "$_geo" == <->" "<-> ]] && { _rows="${_geo%% *}"; _cols="${_geo##* }" }
 fi
 [[ -n "$_cols" ]] || _cols="$(tput cols 2>/dev/null || echo 80)"
 [[ -n "$_rows" ]] || _rows="$(tput lines 2>/dev/null || echo 24)"

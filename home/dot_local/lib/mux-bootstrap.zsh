@@ -79,15 +79,13 @@ _mux::unknown_backend() {
 }
 
 # mux::available is the gate CONSUMERS test before taking a mux-driven path
-# (a popup preview, a scrub tab) instead of their inline one. On Rex it stays
-# FALSE unless $MUX_REX_CONSUMERS is set: the verbs below all answer in a Rex
-# pane, but the consumers behind this gate have not been ported and validated
-# there yet, and a half-ported popup is worse than the inline path they take
-# today. The knob is how each one is tried; it goes away when they are done.
+# (a popup preview, a scrub tab) instead of their inline one. (Rex was held
+# shut here behind $MUX_REX_CONSUMERS while its consumers were ported; they
+# are, and the knob is gone.)
 mux::available() {
   case "$(mux::backend)" in
     tmux) _mux_tx_available ;;
-    rex) [[ -n "${MUX_REX_CONSUMERS:-}" ]] && _mux_rx_available ;;
+    rex) _mux_rx_available ;;
     *) return 1 ;;
   esac
 }

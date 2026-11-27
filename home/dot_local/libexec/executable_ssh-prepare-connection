@@ -181,6 +181,7 @@ step_mount() {
   case "${term_program:l}" in
     *wezterm*) peer_term="wezterm" ;;
     *ghostty*) peer_term="ghostty" ;;
+    rex) peer_term="rex" ;;
   esac
   if [[ -z "$peer_term" ]]; then
     [[ -n "${WEZTERM_PANE:-}${WEZTERM_EXECUTABLE:-}" ]] && peer_term="wezterm"
