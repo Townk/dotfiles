@@ -77,6 +77,29 @@ Describe 'yazi-quick-look: dispatch'
 
   # One viewer for every entry point now: yazi hands off to term-quick-view,
   # which owns the tab-or-float choice per backend.
+  # In Rex the terminal viewer wins everywhere — at the desk too, where the
+  # macOS panel would otherwise open.
+  It 'Rex pane on the local Mac: the terminal viewer, not the macOS panel'
+    When run zsh -c "
+      unset SSH_CONNECTION SSH_CLIENT SSH_TTY TMUX
+      export REX_BLOCK=block:here
+      YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
+      PATH='$STUBS':\$PATH
+      main '$TARGET'"
+    The status should be success
+    The output should equal "term-quick-view $TARGET"
+  End
+
+  It 'Rex pane over SSH: the terminal viewer too'
+    When run zsh -c "
+      unset TMUX
+      export REX_BLOCK=block:here SSH_CONNECTION='1.2.3.4 1 5.6.7.8 22'
+      YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
+      PATH='$STUBS':\$PATH
+      main '$TARGET'"
+    The output should equal "term-quick-view $TARGET"
+  End
+
   It 'SSH session inside tmux: hands off to the shared terminal viewer'
     When run zsh -c "
       export SSH_TTY=/dev/ttys000 TMUX=/tmp/sock,1,0

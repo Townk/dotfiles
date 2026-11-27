@@ -26,6 +26,8 @@
 # right after a normal close. The pane is gated to sessions where Quick
 # Look can't reach the screen at all.
 #
+# In a Rex pane: always the terminal viewer (see main), never the panel.
+#
 # SSH or non-macOS: Quick Look can't reach this screen — float the unified
 # `preview` render in the mux instead (same UX as the fzf-tab floating
 # preview): a tmux popup or a Rex layer, whichever backend this pane is
@@ -69,6 +71,16 @@ stage_for_panel() {
 
 main() {
   (( $# )) || return 0
+
+  # In a Rex pane the terminal viewer comes first, wherever the human is
+  # sitting (the owner's ruling, 2026-11-27): it opens as a floating layer
+  # over yazi, shows the same render as every other quick look in the
+  # terminal, and works the same at the desk, over screen sharing and over
+  # SSH — where the macOS panel below cannot reach the screen at all.
+  if [[ -z "${TMUX:-}" && -n "${REX_BLOCK:-}" ]] && command -v term-quick-view >/dev/null 2>&1; then
+    term-quick-view "$1"
+    return $?
+  fi
 
   # Local GUI only (a remote client can't drive LaunchServices). The negated
   # canonical remote-detection triple (== mux::is_remote, mux-bootstrap.zsh),
