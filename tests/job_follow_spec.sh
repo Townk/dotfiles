@@ -35,12 +35,15 @@ EOS
     # and exits JOB_FAKE_REX_WHOAMI_RC. Everything else exits
     # JOB_FAKE_REX_RC (3 = block gone, 4 = server unreachable, 0 = block
     # still there) — read from JOB_FAKE_REX_RC_FILE when it exists, so a
-    # test can change the answer while a hangup is being decided.
+    # test can change the answer while a hangup is being decided. Every
+    # call also writes the JOB_CLI it sees to JOB_FAKE_REX_CLI_SEEN.
     export JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log"
     export JOB_FAKE_REX_INSTANCE=srv-1
+    export JOB_FAKE_REX_CLI_SEEN="$JOB_SANDBOX/cli.seen"
     cat > "$JOB_SANDBOX/rex" <<'EOS'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
+printf '%s\n' "${JOB_CLI-unset}" > "$JOB_FAKE_REX_CLI_SEEN"
 case "$*" in
   *' whoami '*)
     [ "${JOB_FAKE_REX_WHOAMI_RC:-0}" = 0 ] || exit "$JOB_FAKE_REX_WHOAMI_RC"
@@ -61,8 +64,16 @@ EOS
     # job::_rex_log writes under $XDG_CACHE_HOME/jobs, never the real cache.
     export XDG_CACHE_HOME="$JOB_SANDBOX/cache"
     # The hangup decision waits a second before asking the server; only the
-    # example that proves the wait keeps it.
+    # examples that prove the wait keep it.
     export JOB_FOLLOW_HUP_WAIT=0
+    # The CLI a follower starts its detached hangup decision through: the
+    # front-end under `zsh -f`, so this repo's ~/.zshenv cannot re-export
+    # XDG vars over the sandbox.
+    printf '#!/bin/sh\nexec zsh -f "%s" "$@"\n' \
+      "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job" \
+      > "$JOB_SANDBOX/job"
+    chmod +x "$JOB_SANDBOX/job"
+    export JOB_CLI="$JOB_SANDBOX/job"
     : > "$JOB_FAKE_LOG"
     mkdir -p "$JOB_STATE_ROOT/j1"
   }
@@ -485,6 +496,24 @@ not-opened"
       done
     }
     reports() { grep -o "${OSC}[^$(printf '\033')]*" "$JOB_SANDBOX/out" | sed "s/^${OSC}//"; }
+    # The hangup decision runs detached, after the follower has exited:
+    # bounded poll (5 s) until it has logged its outcome.
+    decided() {
+      local i=0
+      until grep -q ': hangup of blk-1: \(inspect\|closed\)' \
+        "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null; do
+        i=$((i + 1)); [ "$i" -gt 50 ] && { echo undecided; return 1; }
+        sleep 0.1
+      done
+    }
+    # Bounded poll (5 s) until the pueue log has a line matching $1.
+    pueue_logged() {
+      local i=0
+      until grep -q -- "$1" "$JOB_FAKE_LOG" 2>/dev/null; do
+        i=$((i + 1)); [ "$i" -gt 50 ] && return 1
+        sleep 0.1
+      done
+    }
 
     It 'reports progress, then done, then exits'
       meta "Remux"
@@ -580,6 +609,7 @@ child-gone"
         wait_for "$JOB_FAKE_FOLLOW_PIDFILE" || { echo no-child; return 1; }
         kill -HUP "$FPID"
         follow_wait
+        decided || return 1
         grep -c '^kill 7$' "$JOB_FAKE_LOG" || :
         kill -0 "$(cat "$JOB_FAKE_FOLLOW_PIDFILE")" 2>/dev/null && echo child-alive || echo child-gone
         [ -e "$JOB_STATE_ROOT/j1/follower" ] && echo follower-left || echo follower-gone
@@ -599,6 +629,7 @@ follower-gone"
         wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
         kill -HUP "$FPID"
         follow_wait
+        decided || return 1
         kills
         cat "$JOB_FAKE_REX_LOG"
       }
@@ -620,6 +651,7 @@ follower-gone"
         echo srv-2 > "$JOB_FAKE_REX_INSTANCE_FILE"
         kill -HUP "$FPID"
         follow_wait
+        decided || return 1
         kills
       }
       When call check
@@ -637,6 +669,7 @@ follower-gone"
         kill -0 "$FPID" 2>/dev/null && echo staying || echo gone-early
         kill -HUP "$FPID"
         follow_wait
+        decided || return 1
         kills
         [ -e "$JOB_STATE_ROOT/j1/dismissed" ] && echo dismissed || echo kept
         reports | grep -c "^state=error:" || :
@@ -646,6 +679,55 @@ follower-gone"
 rc=129
 0
 dismissed
+1"
+    End
+
+    # Rex sends a closed tab's processes SIGHUP, then kills them about a
+    # second later: the decision must outlive the follower and its group.
+    # The follower runs in a process group of its own here, as in a tab.
+    It 'cancels the job even when the tab is killed during the hangup wait'
+      meta "Remux"
+      check() {
+        export JOB_FAKE_REX_RC=3 JOB_FOLLOW_HUP_WAIT=1
+        JOB_FOLLOW_POLL=0.1 REX_BLOCK=blk-1 \
+          perl -e 'setpgrp(0, 0); exec @ARGV or die' -- zsh -f "$JOBBIN" follow j1 \
+          > "$JOB_SANDBOX/out" 2> "$JOB_SANDBOX/err" < /dev/null &
+        FPID=$!
+        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
+        kill -HUP "$FPID"
+        sleep 0.3
+        kill -9 -- "-$FPID" 2>/dev/null
+        kill -9 "$FPID" 2>/dev/null
+        wait "$FPID" 2>/dev/null
+        pueue_logged '^kill 7$' && echo cancelled || echo kept
+        decided || return 1
+      }
+      When call check
+      The output should equal "cancelled"
+    End
+
+    It 'exits at once on hangup while the decision is still running'
+      meta "Remux"
+      check() {
+        local t0
+        zmodload zsh/datetime
+        export JOB_FAKE_REX_RC=3 JOB_FOLLOW_HUP_WAIT=2
+        follow_bg j1
+        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
+        t0=$EPOCHREALTIME
+        kill -HUP "$FPID"
+        while kill -0 "$FPID" 2>/dev/null && (( EPOCHREALTIME - t0 < 3 )); do
+          sleep 0.05
+        done
+        (( EPOCHREALTIME - t0 < 0.5 )) && echo prompt || echo slow
+        wait "$FPID" 2>/dev/null
+        kills
+        decided || return 1
+        kills
+      }
+      When call check
+      The output should equal "prompt
+0
 1"
     End
 
@@ -789,6 +871,62 @@ gone"
       When call check
       The output should equal "rc=0
 1"
+    End
+  End
+
+  # The verb a follower's SIGHUP handler starts detached: the same decision
+  # (job::_follow_on_hup), run where the tab's death cannot reach it.
+  Describe 'job hup-decide'
+    JOBBIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job"
+    decide() { REX_BLOCK=blk-1 zsh -f "$JOBBIN" hup-decide j1 0 srv-1; }
+    rexlog() { sed 's/^[^ ]* //' "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null; }
+
+    It 'cancels when the tab is gone, logging that it started'
+      meta "Remux"
+      check() {
+        JOB_FAKE_REX_RC=3 decide
+        echo "rc=$? kills=$(kills)"
+        rexlog
+      }
+      When call check
+      The output should equal "rc=0 kills=1
+job j1: hangup of blk-1: deciding
+job j1: hangup of blk-1: inspect rc=3, instance same: cancelled"
+    End
+
+    It 'does not cancel a block reconcile is closing'
+      meta "Remux"
+      check() {
+        echo "$(date +%s) blk-1" > "$JOB_STATE_ROOT/.rex_closing"
+        JOB_FAKE_REX_RC=3 decide
+        echo "rc=$? kills=$(kills)"
+        rexlog
+      }
+      When call check
+      The output should equal "rc=0 kills=0
+job j1: hangup of blk-1: deciding
+job j1: hangup of blk-1: closed by reconcile: nothing"
+    End
+
+    It 'exports JOB_CLI as its own path when unset'
+      meta "Remux"
+      check() {
+        unset JOB_CLI
+        decide
+        cat "$JOB_FAKE_REX_CLI_SEEN"
+      }
+      When call check
+      The output should equal "${JOBBIN:A}"
+    End
+
+    It 'leaves a preset JOB_CLI alone'
+      meta "Remux"
+      check() {
+        JOB_CLI=/preset/job decide
+        cat "$JOB_FAKE_REX_CLI_SEEN"
+      }
+      When call check
+      The output should equal "/preset/job"
     End
   End
 End

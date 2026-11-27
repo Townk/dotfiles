@@ -5,6 +5,10 @@
 set -eu
 source "${0:A:h}/../lib/job.zsh"
 
+# A follower starts its hangup decision as `$JOB_CLI hup-decide`: it must
+# be the CLI the follower itself runs from.
+export JOB_CLI="${JOB_CLI:-${0:A}}"
+
 verb="${1:-}"
 case "$verb" in
   start | progress | cancel | list | hud | watch | log | follow)
@@ -15,8 +19,13 @@ case "$verb" in
     shift
     job::_rex_block_job "$@"
     ;;
+  hup-decide)
+    shift
+    job::_follow_hup_decide "$@" || :
+    exit 0
+    ;;
   *)
-    print -ru2 -- "usage: job <start|progress|cancel|list|hud|watch|log|follow|owns-block> ..."
+    print -ru2 -- "usage: job <start|progress|cancel|list|hud|watch|log|follow|owns-block|hup-decide> ..."
     exit 1
     ;;
 esac

@@ -208,6 +208,36 @@ job::_follow_on_hup() {
   return 0
 }
 
+# job::_follow_hup_decide <id> <inline:0|1> <instance id> — the `job
+# hup-decide` verb: job::_follow_on_hup, preceded by a log line, so a
+# decision that never completes still leaves a trace. Always returns 0.
+job::_follow_hup_decide() {
+  job::_rex_log "job ${1:-?}: hangup of ${REX_BLOCK:-no block}: deciding"
+  job::_follow_on_hup "$@" || :
+  return 0
+}
+
+# job::_follow_hup_detach <id> <inline:0|1> <instance id> — start the
+# SIGHUP decision where the tab's death cannot reach it, and return at
+# once. Rex sends a closed tab's processes SIGHUP and kills them about a
+# second later — before the decision's wait is over — so it runs as `job
+# hup-decide` in a session of its own (setsid), with the follower's
+# environment (REX_BLOCK, JOB_STATE_ROOT, the test seams). A child that
+# is already a group leader (job control on) cannot setsid: it forks
+# first. Without perl or a runnable CLI, the decision runs in-process as
+# before.
+job::_follow_hup_detach() {
+  local cli="${JOB_CLI:-$HOME/.local/libexec/job}"
+  if command -v perl >/dev/null 2>&1 && [ -x "$cli" ]; then
+    perl -MPOSIX -e '
+      if (!defined POSIX::setsid()) { exit if fork; POSIX::setsid() }
+      exec @ARGV or exit 1' "$cli" hup-decide "$@" \
+      < /dev/null > /dev/null 2>&1 &!
+    return 0
+  fi
+  job::_follow_on_hup "$@"
+}
+
 # job::_follow_stop — kill the log child and remove the follower file if it
 # is still this follower's (an inline follower hands its job to a new tab,
 # whose follower may already have written its own). Runs in job::follow's
@@ -231,9 +261,10 @@ job::_follow_stop() {
 # status report when it differs from the last one sent. It stops polling
 # when the job has a result (or its state dir is gone: exit quietly), then
 # ends as job::_follow_end says. Every exit path kills the child and removes
-# the follower file. SIGHUP goes to job::_follow_on_hup, with the Rex server
-# instance recorded at start; in --inline mode, Ctrl+C detaches instead: the
-# job keeps running in a tab of its own.
+# the follower file. SIGHUP goes to job::_follow_on_hup, started detached
+# (job::_follow_hup_detach) with the Rex server instance recorded at start;
+# in --inline mode, Ctrl+C detaches instead: the job keeps running in a tab
+# of its own.
 job::follow() {
   setopt localoptions localtraps
   local inline=0
@@ -272,9 +303,11 @@ job::follow() {
   # for the running builtin (a zselect nap) to finish, while one in a trap
   # function exits at once. localtraps drops them when this function
   # returns.
+  # SIGHUP: the local cleanup here, the decision detached (it waits, and
+  # the tab is killed about a second after the hangup).
   TRAPHUP() {
     job::_follow_stop
-    job::_follow_on_hup "$id" "$inline" "$instance"
+    job::_follow_hup_detach "$id" "$inline" "$instance"
     exit 129
   }
   TRAPTERM() {
