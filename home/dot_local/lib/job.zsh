@@ -8,6 +8,8 @@
 #                 $JOB_STATE_ROOT/<id>/progress    (one line: epoch pct msg)
 #                 $JOB_STATE_ROOT/<id>/phase       (optional: "waiting")
 #                 $JOB_STATE_ROOT/<id>/result      (written by job-callback)
+#                 $JOB_STATE_ROOT/<id>/follower    (live follower: block pid)
+#                 $JOB_STATE_ROOT/<id>/dismissed   (failed job's tab closed)
 # The progress sidecar is the whole progress wire: writers write at their own
 # cadence, the Hammerspoon reader owns display cadence and derives staleness
 # from the epoch — so there is no throttle logic on this side at all.
@@ -20,6 +22,7 @@ zmodload zsh/datetime 2>/dev/null
 
 : "${JOB_STATE_ROOT:=${XDG_STATE_HOME:-$HOME/.local/state}/jobs}"
 source "${${(%):-%x}:A:h}/job/follow.zsh"
+source "${${(%):-%x}:A:h}/job/rex.zsh"
 
 # job::_pueue — resolve the pueue client. JOB_PUEUE_BIN is the test seam.
 job::_pueue() {

@@ -1,7 +1,10 @@
-# job/follow.zsh — format a job's state as a Rex status report (OSC 7501,
-# the Program Status Protocol). SOURCED by job.zsh, after JOB_STATE_ROOT is
-# defaulted. Pure formatting: the follower loop that calls these lives
-# elsewhere.
+# job/follow.zsh — the follower: the process that runs in a job's Rex tab.
+# It shows the job's log, reports the job's state to the terminal as OSC 7501
+# (the Program Status Protocol), decides when the tab should close, and
+# cancels the job when the tab's owner closes it. SOURCED by job.zsh, after
+# JOB_STATE_ROOT is defaulted.
+
+zmodload zsh/zselect 2>/dev/null
 
 # job::_follow_msg <text> — sanitize and base64 a report message. Rex rejects
 # a msg that decodes to control characters (C0, DEL and the C1 range
@@ -64,4 +67,205 @@ job::_follow_report() {
 # job::_follow_emit <body> — write the report as one OSC 7501 sequence.
 job::_follow_emit() {
   print -rn -- $'\e]7501;'"$1"$'\e\\'
+}
+
+# job::_follow_nap <seconds> — sleep without a child process, so a trapped
+# signal (the tab closing) runs its trap at once instead of after a `sleep`
+# finishes. Fractional seconds are fine; an early wake-up is harmless, since
+# every caller loops.
+job::_follow_nap() {
+  local -i cs=$(( ${1:-1} * 100 ))
+  (( cs > 0 )) || cs=1
+  if zmodload -e zsh/zselect; then
+    zselect -t "$cs" 2>/dev/null || :
+  else
+    sleep "${1:-1}" 2>/dev/null || :
+  fi
+  return 0
+}
+
+# job::_follow_phase <pueue> <task id> — print `queued` while pueue holds the
+# task back (Queued or Stashed), else `running`. An unreadable status counts
+# as running.
+job::_follow_phase() {
+  local state=""
+  if [ -n "$1" ] && [[ "$2" == <-> ]]; then
+    state=$("$1" status --json 2>/dev/null \
+      | jq -r --arg t "$2" '.tasks[$t].status // {} | keys[0] // empty' 2>/dev/null) \
+      || state=""
+  fi
+  case "$state" in
+    Queued | Stashed) print -r -- queued ;;
+    *) print -r -- running ;;
+  esac
+}
+
+# job::_follow_end <id> <inline:0|1> — how the follower ends once the job has
+# a result: `key` (success: wait for a key or the TTL), `stay` (failure: keep
+# the tab until its owner closes it) or `exit`. An inline follower always
+# exits: it runs in the user's own terminal, not in a Jobs tab.
+job::_follow_end() {
+  local id="$1" inline="${2:-0}" dir="$JOB_STATE_ROOT/$1" epoch res code notify
+  if [ "$inline" = 1 ]; then
+    print -r -- exit
+    return 0
+  fi
+  { read -r epoch res code < "$dir/result" } 2>/dev/null || :
+  case "$res" in
+    Killed) print -r -- exit ;;
+    Success)
+      notify=$(jq -r '.notify // "all"' "$dir/meta.json" 2>/dev/null) || notify="all"
+      if [ "$notify" = "failures" ]; then
+        print -r -- exit
+      else
+        print -r -- key
+      fi
+      ;;
+    *) print -r -- stay ;;
+  esac
+}
+
+# job::_follow_on_hup <id> <inline:0|1> — the SIGHUP decision. A Jobs tab's
+# follower gets SIGHUP both when the owner closes the tab and when the Rex
+# server stops or restarts, so it asks the server about its own block: only
+# rc 3 ("block target … not found") means the tab was closed. Then a job
+# still in flight is cancelled, and a failed one is marked dismissed. Any
+# other answer — rc 4 (server unreachable), rc 0 (block still there), no
+# rex, no REX_BLOCK — leaves the job alone: a server restart must never
+# cancel. An inline follower never cancels; its terminal going away moves
+# the job to a tab of its own. Always returns 0.
+job::_follow_on_hup() {
+  local id="$1" inline="${2:-0}" dir="$JOB_STATE_ROOT/$1" rex rc=0
+  local epoch res code
+  [ -d "$dir" ] || return 0
+  if [ "$inline" = 1 ]; then
+    [ -s "$dir/result" ] || job::_rex_open_tab "$id" || :
+    return 0
+  fi
+  [ -n "${REX_BLOCK:-}" ] || return 0
+  rex=$(job::_rex) || return 0
+  "$rex" --autostart=false --timeout 3s block inspect "$REX_BLOCK" \
+    >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 3 ] || return 0
+  if [ ! -s "$dir/result" ]; then
+    job::cancel "$id" >/dev/null 2>&1 || :
+    return 0
+  fi
+  { read -r epoch res code < "$dir/result" } 2>/dev/null || :
+  case "$res" in
+    Success | Killed) ;;
+    *) touch -- "$dir/dismissed" 2>/dev/null || : ;;
+  esac
+  return 0
+}
+
+# job::_follow_stop — kill the log child and remove the follower file if it
+# is still this follower's (an inline follower hands its job to a new tab,
+# whose follower may already have written its own). Runs in job::follow's
+# dynamic scope: it reads and clears that function's `child`, `dir`, `me`.
+job::_follow_stop() {
+  if [ -n "${child:-}" ]; then
+    kill "$child" 2>/dev/null || :
+    wait "$child" 2>/dev/null || :
+    child=""
+  fi
+  if [ "$(cat "$dir/follower" 2>/dev/null)" = "$me" ]; then
+    rm -f -- "$dir/follower" 2>/dev/null || :
+  fi
+  return 0
+}
+
+# job::follow [--inline] <id> — follow a job until its tab should close.
+# Writes the `follower` file (`<REX_BLOCK> <pid>`), streams the task's log
+# through a `pueue follow` child, and every JOB_FOLLOW_POLL seconds sends a
+# status report when it differs from the last one sent. It stops polling
+# when the job has a result (or its state dir is gone: exit quietly), then
+# ends as job::_follow_end says. Every exit path kills the child and removes
+# the follower file. SIGHUP goes to job::_follow_on_hup; in --inline mode,
+# Ctrl+C detaches instead: the job keeps running in a tab of its own.
+job::follow() {
+  setopt localoptions localtraps
+  local inline=0
+  if [ "${1:-}" = "--inline" ]; then
+    inline=1
+    shift
+  fi
+  local id="${1:?job::follow: id required}"
+  local dir="$JOB_STATE_ROOT/$id" me="${REX_BLOCK:-} $$" child=""
+  local poll="${JOB_FOLLOW_POLL:-1}" ttl="${JOB_FOLLOW_DONE_TTL:-3600}"
+  local pueue task_id phase body last="" end REPLY
+  local -i finished n
+  [ -f "$dir/meta.json" ] || { log_error "job::follow: unknown job $id"; return 1; }
+
+  # TRAPxxx functions, not `trap '…' SIG`: an `exit` in a trap string waits
+  # for the running builtin (a one-hour zselect while staying) to finish,
+  # while one in a trap function exits at once. localtraps drops them when
+  # this function returns.
+  TRAPHUP() {
+    job::_follow_stop
+    job::_follow_on_hup "$id" "$inline"
+    exit 129
+  }
+  TRAPTERM() {
+    job::_follow_stop
+    exit 143
+  }
+  TRAPINT() {
+    job::_follow_stop
+    if (( inline )); then
+      [ -s "$dir/result" ] || job::_rex_open_tab "$id" || :
+      exit 0
+    fi
+    exit 130
+  }
+  print -r -- "$me" > "$dir/.follower.$$" \
+    && mv -f -- "$dir/.follower.$$" "$dir/follower" || :
+
+  pueue=$(job::_pueue) || pueue=""
+  task_id=$(jq -r '.pueue_id // empty' "$dir/meta.json" 2>/dev/null) || task_id=""
+  if [ -n "$pueue" ] && [[ "$task_id" == <-> ]]; then
+    "$pueue" follow "$task_id" &
+    child=$!
+  fi
+
+  while :; do
+    [ -d "$dir" ] || { job::_follow_stop; return 0; }
+    finished=0
+    [ -s "$dir/result" ] && finished=1
+    phase=running
+    (( finished )) || phase=$(job::_follow_phase "$pueue" "$task_id")
+    body=$(job::_follow_report "$id" "$phase" 2>/dev/null)
+    if [ -n "$body" ] && [ "$body" != "$last" ]; then
+      job::_follow_emit "$body"
+      last="$body"
+    fi
+    (( finished )) && break
+    job::_follow_nap "$poll"
+  done
+
+  end=$(job::_follow_end "$id" "$inline")
+  case "$end" in
+    key)
+      print -r -- "done — press any key to close"
+      # A closed or non-tty stdin (EOF) returns at once instead of spinning.
+      if [[ -t 0 ]]; then
+        read -sk1 -t "$ttl" 2>/dev/null || :
+      else
+        read -k1 -u0 -t "$ttl" 2>/dev/null || :
+      fi
+      ;;
+    stay)
+      while :; do job::_follow_nap 3600; done
+      ;;
+    *)
+      # Let the child print the task's last lines: `pueue follow` ends on
+      # its own once the task is done. Bounded at one second.
+      n=0
+      while [ -n "$child" ] && kill -0 "$child" 2>/dev/null && (( n++ < 10 )); do
+        job::_follow_nap 0.1
+      done
+      ;;
+  esac
+  job::_follow_stop
+  return 0
 }
