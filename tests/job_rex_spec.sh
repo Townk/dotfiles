@@ -242,6 +242,59 @@ $(printf 'b%.0s' $(seq 1 99))"
       The output should equal 0
     End
 
+    # A tty stand-in: `script` gives the child a pty, so `[ -t 2 ]` is true.
+    # The child sources job.zsh, stubs job::follow/job::watch to record their
+    # arguments, runs "$@" and writes its result to $JOB_SANDBOX/result.
+    run_tty() {
+      script -q /dev/null zsh -f -c '
+        source "$1" >/dev/null 2>&1 || exit 99; shift
+        job::follow() { print -r -- "follow $*" >> "$JOB_SANDBOX/calls"; }
+        job::watch() { print -r -- "watch $*" >> "$JOB_SANDBOX/calls"; }
+        "$@"
+      ' -- "$JOBLIB" "$@" >/dev/null 2>&1
+    }
+    calls() { cat "$JOB_SANDBOX/calls" 2>/dev/null; }
+
+    It 'follows a --modal job inline in a Rex pane, with no watch or tab'
+      inline() {
+        export JOB_SANDBOX REX_BLOCK=block:x
+        run_tty job::start --modal --title "watched" -- sleep 1 || return 1
+        id=$(ls "$JOB_STATE_ROOT" | grep '^[0-9]' | head -n1)
+        [ "$(calls)" = "follow --inline $id" ] || { calls; return 2; }
+        sleep 0.3
+        echo "tabs=$(cat "$JOB_FAKE_REX_LOG" 2>/dev/null | grep -c ' follow ' || :)"
+      }
+      When call inline
+      The output should equal "tabs=0"
+    End
+
+    It 'still opens the watch dashboard for a --modal job outside Rex'
+      outside() {
+        export JOB_SANDBOX
+        unset REX_BLOCK
+        run_tty job::start --modal --title "watched" -- sleep 1 || return 1
+        calls
+      }
+      When call outside
+      The output should equal "watch "
+    End
+
+    It 'keeps the caller alive when the inline follower exits'
+      survive() {
+        export JOB_SANDBOX REX_BLOCK=block:x
+        script -q /dev/null zsh -f -c '
+          source "$1" >/dev/null 2>&1 || exit 99
+          job::follow() { exit 7; }
+          job::start --modal --title "watched" -- sleep 1 >/dev/null
+          rc=$?
+          echo "after rc=$rc" > "$JOB_SANDBOX/after"
+        ' -- "$JOBLIB" >/dev/null 2>&1
+        cat "$JOB_SANDBOX/after"
+      }
+      When call survive
+      The output should equal "after rc=0"
+    End
+
     It 'does nothing and succeeds when no server answers'
       down() {
         export JOB_FAKE_REX_WHOAMI_RC=4

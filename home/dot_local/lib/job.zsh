@@ -178,7 +178,14 @@ job::start() {
     # is untrusted (could error, could hang) — never attempt to drive the
     # dashboard here, just say so and let the GUI HUD be the surface.
     if [ -t 2 ]; then
-      job::watch
+      if [ -n "${REX_BLOCK:-}" ]; then
+        # A Rex pane: follow right here instead of opening a dashboard. In a
+        # SUBSHELL — the follower traps signals and `exit`s on Ctrl+C, and
+        # that must never take down the shell that called job::start.
+        ( job::follow --inline "$id" ) || :
+      else
+        job::watch
+      fi
     else
       log_warn "headless: the GUI HUD is the surface"
     fi
