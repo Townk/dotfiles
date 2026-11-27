@@ -692,6 +692,67 @@ j1
 follower-gone"
     End
 
+    # One follower per job: a second one waits up to 3 s for a live one to
+    # go (an inline follower handing off exits promptly), else leaves it be.
+    It 'leaves a live follower in place and exits'
+      meta "Remux"
+      check() {
+        echo "blk-0 $$" > "$JOB_STATE_ROOT/j1/follower"
+        follow_bg j1
+        follow_wait || return 1
+        cat "$JOB_STATE_ROOT/j1/follower"
+        grep -c 'already being followed' "$JOB_SANDBOX/out" || :
+        grep -c '^follow ' "$JOB_FAKE_LOG" || :
+      }
+      When call check
+      The output should equal "rc=0
+blk-0 $$
+1
+0"
+    End
+
+    It 'does not cancel on hangup while a live follower holds the job'
+      meta "Remux"
+      check() {
+        export JOB_FAKE_REX_RC=3
+        echo "blk-0 $$" > "$JOB_STATE_ROOT/j1/follower"
+        follow_bg j1
+        sleep 0.5
+        kill -HUP "$FPID"
+        # No trap yet: the default hangup ends it (its status depends on
+        # what zsh was doing).
+        follow_wait > /dev/null || return 1
+        kills
+        cat "$JOB_STATE_ROOT/j1/follower"
+      }
+      When call check
+      The output should equal "0
+blk-0 $$"
+    End
+
+    It 'takes over from a follower that exits within the wait'
+      meta "Remux"
+      check() {
+        local holder i=0
+        # Orphaned at once, so it is reaped (not a zombie) when it exits.
+        holder=$(sh -c 'sleep 1 >/dev/null 2>&1 & echo $!')
+        echo "blk-0 $holder" > "$JOB_STATE_ROOT/j1/follower"
+        follow_bg j1
+        until [ "$(cat "$JOB_STATE_ROOT/j1/follower" 2>/dev/null)" = "blk-1 $FPID" ]; do
+          i=$((i + 1)); [ "$i" -gt 50 ] && { echo no-takeover; break; }
+          sleep 0.1
+        done
+        result Success 0
+        follow_wait || return 1
+        grep -c 'already being followed' "$JOB_SANDBOX/out" || :
+        reports | grep -c '^state=done:' || :
+      }
+      When call check
+      The output should equal "rc=0
+0
+1"
+    End
+
     # In a ( … ) subshell zsh's $$ is the parent shell's pid: a follower
     # file naming it would look live for as long as that shell lives.
     It 'records its own pid, not the calling shell'"'"'s, when inline'

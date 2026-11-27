@@ -245,9 +245,28 @@ job::follow() {
   local self="${sysparams[pid]:-$$}" dir="$JOB_STATE_ROOT/$id" child=""
   local me="${REX_BLOCK:-} $self"
   local poll="${JOB_FOLLOW_POLL:-1}" ttl="${JOB_FOLLOW_DONE_TTL:-3600}"
-  local pueue task_id phase body last="" end REPLY instance=""
+  local pueue task_id phase body last="" end REPLY instance="" block pid
   local -i finished n
+  local -F deadline
   [ -f "$dir/meta.json" ] || { log_error "job::follow: unknown job $id"; return 1; }
+
+  # One follower per job. A tab's follower never replaces a live one: an
+  # inline follower handing its job to this tab exits promptly, so wait up
+  # to 3 s for it; one still alive after that keeps the job, and this one
+  # leaves before it has a follower file or a hangup trap, so it can never
+  # cancel the job.
+  if (( ! inline )); then
+    deadline=$(( EPOCHREALTIME + 3 ))
+    while { read -r block pid < "$dir/follower" } 2>/dev/null \
+      && [[ "$pid" == <-> ]] && [ "$pid" != "$self" ] \
+      && kill -0 "$pid" 2>/dev/null; do
+      if (( EPOCHREALTIME >= deadline )); then
+        print -r -- "job $id is already being followed"
+        return 0
+      fi
+      job::_follow_nap "$poll"
+    done
+  fi
 
   # TRAPxxx functions, not `trap '…' SIG`: an `exit` in a trap string waits
   # for the running builtin (a zselect nap) to finish, while one in a trap
