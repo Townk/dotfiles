@@ -34,7 +34,8 @@ EOS
     # the "server" under a running follower), else JOB_FAKE_REX_INSTANCE —
     # and exits JOB_FAKE_REX_WHOAMI_RC. Everything else exits
     # JOB_FAKE_REX_RC (3 = block gone, 4 = server unreachable, 0 = block
-    # still there).
+    # still there) — read from JOB_FAKE_REX_RC_FILE when it exists, so a
+    # test can change the answer while a hangup is being decided.
     export JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log"
     export JOB_FAKE_REX_INSTANCE=srv-1
     cat > "$JOB_SANDBOX/rex" <<'EOS'
@@ -50,6 +51,8 @@ case "$*" in
     exit 0
     ;;
 esac
+[ -n "${JOB_FAKE_REX_RC_FILE:-}" ] && [ -f "$JOB_FAKE_REX_RC_FILE" ] \
+  && exit "$(cat "$JOB_FAKE_REX_RC_FILE")"
 exit "${JOB_FAKE_REX_RC:-0}"
 EOS
     chmod +x "$JOB_SANDBOX/rex"
@@ -57,6 +60,9 @@ EOS
     export JOB_FAKE_OPEN_LOG="$JOB_SANDBOX/opened"
     # job::_rex_log writes under $XDG_CACHE_HOME/jobs, never the real cache.
     export XDG_CACHE_HOME="$JOB_SANDBOX/cache"
+    # The hangup decision waits a second before asking the server; only the
+    # example that proves the wait keeps it.
+    export JOB_FOLLOW_HUP_WAIT=0
     : > "$JOB_FAKE_LOG"
     mkdir -p "$JOB_STATE_ROOT/j1"
   }
@@ -294,6 +300,27 @@ kept"
       export JOB_FAKE_REX_RC=0
       When call hup
       The output should equal "rc=0 kills=0"
+    End
+
+    # A stopping server can hang up its tabs while it still answers: rc 3
+    # from the same instance, then rc 4 once it is gone. The wait before
+    # asking lets it go.
+    It 'waits before asking, so a stopping server is gone by then'
+      meta "Remux"
+      stopping() {
+        local rcf="$JOB_SANDBOX/rc"
+        echo 3 > "$rcf"
+        ( sleep 0.5; echo 4 > "$rcf.tmp"; mv -f "$rcf.tmp" "$rcf" ) &
+        JOB_FAKE_REX_RC_FILE="$rcf" hup
+        wait
+      }
+      check() {
+        ( unset JOB_FOLLOW_HUP_WAIT; stopping )
+        JOB_FOLLOW_HUP_WAIT=0 stopping
+      }
+      When call check
+      The output should equal "rc=0 kills=0
+rc=0 kills=1"
     End
 
     It 'does not cancel without a block to ask about'

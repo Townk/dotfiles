@@ -147,7 +147,10 @@ job::_follow_instance() {
 # so it answers rc 3 for the old one too; the Rex app restarts its server
 # on its own, so that answer can come back fast. The instance is asked
 # AFTER the block, so a restart between the two questions shows as a
-# mismatch. On a confirmed close a job still in flight is cancelled and a
+# mismatch. Before asking it waits JOB_FOLLOW_HUP_WAIT seconds (default
+# 1): a stopping server can hang up its tabs while it still answers, rc 3
+# from the same instance; after the wait it is gone (rc 4). That costs the
+# owner one second on a real close. On a confirmed close a job still in flight is cancelled and a
 # failed one is marked dismissed. Anything else — rc 4 (server
 # unreachable), rc 0 (block still there), an empty, unreadable or different
 # instance id, no rex, no REX_BLOCK — leaves the job alone: a server restart
@@ -157,12 +160,14 @@ job::_follow_instance() {
 job::_follow_on_hup() {
   local id="$1" inline="${2:-0}" instance="${3:-}" dir="$JOB_STATE_ROOT/$1"
   local rex rc=none match=unasked action=nothing epoch res code
+  local -F hup_wait="${JOB_FOLLOW_HUP_WAIT:-1}"
   [ -d "$dir" ] || return 0
   if [ "$inline" = 1 ]; then
     [ -s "$dir/result" ] || job::_rex_open_tab "$id" || :
     return 0
   fi
   if [ -n "${REX_BLOCK:-}" ] && rex=$(job::_rex); then
+    (( hup_wait > 0 )) && job::_follow_nap "$hup_wait"
     rc=0
     "$rex" --autostart=false --timeout 3s block inspect "$REX_BLOCK" \
       >/dev/null 2>&1 || rc=$?
