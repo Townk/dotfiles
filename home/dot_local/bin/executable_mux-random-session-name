@@ -54,7 +54,8 @@ BACKEND SELECTION
   while Zellij also checks exited sessions that can be resurrected.
 
 OUTPUT
-  On success, prints exactly one generated name to standard output.
+  On success, prints exactly one generated name to standard output. On any
+  failure nothing is printed there.
 
 OPTIONS
   -h, --help
@@ -64,6 +65,10 @@ EXIT STATUS
   0  A name was generated, and applied when requested.
   1  The backend, session, or unused-name operation failed.
   2  Command-line usage was invalid.
+  3  The sessions could not be listed, so no name could be checked and none
+     was printed. Only with --title or on Rex, which accept two sessions
+     with the same name; tmux and Zellij refuse a duplicate themselves, and
+     a failed listing there means no server, hence no sessions.
 
 EXAMPLES
   mux-random-session-name
@@ -157,7 +162,19 @@ nouns=(
   tomato triceratops ukulele viola weasel xylophone yak zebra
 )
 
-sessions=("${(@f)$(mux::list_sessions 2>/dev/null || true)}")
+# A listing that FAILED is not an empty one. tmux and Zellij refuse a second
+# session with a taken name themselves, and a failed listing there is the
+# ordinary "no server, so no sessions" — the name is still good. Rex accepts
+# duplicate labels, so on Rex (and for --title, which only Rex uses) this
+# check is the only guard: without a listing, say so and print no name. The
+# caller sees status 3 and can fall back to a name the multiplexer makes.
+listing_ok=1
+listing="$(mux::list_sessions 2>/dev/null)" || listing_ok=0
+if (( ! listing_ok )) && { (( title )) || [[ "$(mux::backend)" == rex ]]; }; then
+  print -ru2 -- "mux-random-session-name: could not list the sessions; no name was checked"
+  exit 3
+fi
+sessions=("${(@f)listing}")
 name_used() {
   local existing
   for existing in "${sessions[@]}"; do

@@ -18,6 +18,7 @@ case "$1" in
     print -r -- old-name
     ;;
   list-sessions)
+    [[ -z "${STUB_LIST_FAILS:-}" ]] || exit 1
     print -l -- "${(@f)STUB_SESSIONS}"
     ;;
   rename-session)
@@ -50,10 +51,24 @@ case "$*" in
 esac
 ZSH
     chmod +x "$MSN_TMP/zellij"
+
+    # Rex: `ls --json` answers from STUB_SESSIONS (labels), or fails the way
+    # the CLI does with no server to talk to.
+    cat >"$MSN_TMP/rex" <<'ZSH'
+#!/usr/bin/env zsh
+print -r -- "$*" >>"$MSN_LOG"
+case "$*" in
+  *"ls --json"*)
+    [[ -z "${STUB_LIST_FAILS:-}" ]] || exit 4
+    print -l -- "${(@f)STUB_SESSIONS}" | jq -R '{label: .}' | jq -s '{sessions: .}'
+    ;;
+esac
+ZSH
+    chmod +x "$MSN_TMP/rex"
   }
   cleanup() {
     rm -rf "$MSN_TMP"
-    unset MSN_LOG STUB_SESSIONS STUB_COLLIDE_ONCE STUB_CLIENT_TTY
+    unset MSN_LOG STUB_SESSIONS STUB_COLLIDE_ONCE STUB_CLIENT_TTY STUB_LIST_FAILS
   }
   BeforeEach setup
   AfterEach cleanup
@@ -145,6 +160,71 @@ ZSH
     When call lower_free
     The status should be success
     The output should match pattern '[a-z]*-[a-z]*'
+  End
+
+  # Rex accepts two sessions with the same label, so there the check against
+  # the listing is the only thing that keeps a name unique. A listing that
+  # FAILED is not an empty one: the script must say it could not check
+  # (status 3, no name) rather than print a name it never compared.
+  generate_rex() {
+    env MUX_LIB="$MSN_LIB" MUX_BACKEND= TMUX= ZELLIJ= REX_SESSION=session:here \
+      MUX_REX_BIN="$MSN_TMP/rex" zsh "$MSN_SCRIPT" "$@"
+  }
+  unguarded_rex_calls() { grep -v -c -- '--autostart=false' "$MSN_LOG" || true; }
+
+  It 'prints no name, with status 3, when --title cannot list the sessions'
+    export STUB_LIST_FAILS=1
+    When call generate_title
+    The status should equal 3
+    The output should equal ""
+    The stderr should include "could not list the sessions"
+  End
+
+  It 'prints no name, with status 3, when a Rex listing fails'
+    export STUB_LIST_FAILS=1
+    When call generate_rex --title
+    The status should equal 3
+    The output should equal ""
+    The stderr should include "could not list the sessions"
+  End
+
+  It 'does the same for a hyphenated name on Rex'
+    export STUB_LIST_FAILS=1
+    When call generate_rex
+    The status should equal 3
+    The output should equal ""
+    The stderr should include "could not list the sessions"
+  End
+
+  It 'checks a --title name against the Rex listing when it can be read'
+    only_zippy_free() {
+      export STUB_SESSIONS="$(all_title_names | grep -v '^Zippy ')"
+      generate_rex --title
+    }
+    When call only_zippy_free
+    The status should be success
+    The output should start with "Zippy "
+  End
+
+  It 'never calls rex without --autostart=false'
+    calls() { generate_rex --title >/dev/null; unguarded_rex_calls; grep -c . "$MSN_LOG"; }
+    When call calls
+    The output should equal "0
+1"
+  End
+
+  # tmux and Zellij refuse a duplicate name themselves, and a listing that
+  # fails there is the ordinary "no server, so no sessions" — still a name.
+  It 'still prints a hyphenated name when a tmux listing fails'
+    export STUB_LIST_FAILS=1
+    When call generate
+    The status should be success
+    The output should match pattern '[a-z]*-[a-z]*'
+  End
+
+  It 'documents the could-not-check status'
+    When call zsh "$MSN_SCRIPT" --help
+    The output should include "3  The sessions could not be listed"
   End
 
   It 'rejects --title with --apply-current'

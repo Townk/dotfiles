@@ -14,8 +14,11 @@
 #   * Only a label of the shape Rex generates (two lowercase words, one
 #     hyphen) is a candidate, and never one that is a name or an id in the
 #     Quick Launch config — a workspace called my-project is the owner's name.
-#   * "Oldest" is the first in `rex ls`, which lists sessions in creation
-#     order unless they were moved by hand.
+#   * "Oldest" is read from the session ids, not from the order of the
+#     listing: an id is a UUIDv7 (session:01a21e20-35a5-7be6-…), whose leading
+#     48 bits are the creation time, so the ids sort in creation order as
+#     text. Should any id have another shape, the listing order is kept.
+#   * A session called Main in any case (main, MAIN) is the Main session.
 
 # The Mac app keeps the CLI inside its server bundle and only puts it on PATH
 # in the panes it starts, so an apply from any other shell needs the path.
@@ -33,11 +36,15 @@ command -v jq >/dev/null 2>&1 || exit 0
 listing="$("$rex" --autostart=false ls --json 2>/dev/null)" || exit 0
 [ -n "$listing" ] || exit 0
 
-# Tab-separated "id<TAB>label" lines, in listing order.
-sessions="$(printf '%s' "$listing" | jq -r '.sessions[]? | [.session_id, .label] | @tsv' 2>/dev/null)" || exit 0
+# Tab-separated "id<TAB>label" lines, oldest session first.
+sessions="$(printf '%s' "$listing" | jq -r '
+  def uuid7: type == "string" and test("^session:[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$");
+  [.sessions[]?]
+  | if all(.[]; .session_id | uuid7) then sort_by(.session_id) else . end
+  | .[] | [.session_id, .label] | @tsv' 2>/dev/null)" || exit 0
 [ -n "$sessions" ] || exit 0
 
-if printf '%s\n' "$sessions" | cut -f2 | grep -qx 'Main'; then
+if printf '%s\n' "$sessions" | cut -f2 | grep -qix 'main'; then
   exit 0
 fi
 

@@ -36,6 +36,15 @@ EOS
     done
     print -r -- "{\"sessions\":[$out]}" >"$MS_TMP/sessions.json"
   }
+  # sessions_by_id <uuid>=<label>... — the same, with real session ids, in
+  # the order given (which is then NOT necessarily creation order).
+  sessions_by_id() {
+    local pair out=""
+    for pair in "$@"; do
+      out="$out${out:+,}{\"session_id\":\"session:${pair%%=*}\",\"label\":\"${pair#*=}\"}"
+    done
+    print -r -- "{\"sessions\":[$out]}" >"$MS_TMP/sessions.json"
+  }
   hook() {
     env HOME="$MS_HOME" MUX_REX_BIN="${MS_REX-$MS_TMP/rex}" PATH=/usr/bin:/bin:/opt/homebrew/bin sh "$HOOK"
     print -r -- "rc=$?"
@@ -50,6 +59,36 @@ EOS
 --autostart=false session rename session:s1 Main"
   End
 
+  # "Oldest" must not depend on the order of the listing. A Rex session id is
+  # a UUIDv7, whose first 48 bits are the creation time in milliseconds, so
+  # the ids sort in creation order as plain text (seen on a live server:
+  # session:01a21e20-35a5-7be6-9cd5-bd1c13a944dd, created 2026-11-27).
+  OLD_ID=01a21e20-35a5-7be6-9cd5-bd1c13a944dd
+  MID_ID=01a21e20-4c11-7a02-8f3e-0d5b7c9e1a24
+  NEW_ID=01a21e3b-0001-7c44-b1aa-63f0e2d4c8b6
+
+  It 'renames the oldest generated-looking session whatever the listing order'
+    run() { sessions_by_id "$NEW_ID=quiet-river" "$OLD_ID=wandering-glade" "$MID_ID=jumping-yak"; hook; renames; }
+    When call run
+    The output should equal "rc=0
+--autostart=false session rename session:$OLD_ID Main"
+  End
+
+  It 'takes the oldest generated-looking one when the oldest session has a chosen name'
+    run() { sessions_by_id "$NEW_ID=quiet-river" "$MID_ID=jumping-yak" "$OLD_ID=Work"; hook; renames; }
+    When call run
+    The output should equal "rc=0
+--autostart=false session rename session:$MID_ID Main"
+  End
+
+  # Ids of any other shape say nothing about age: the listing order stands.
+  It 'keeps the listing order when a session id is not a UUIDv7'
+    run() { sessions_by_id "zzzz=quiet-river" "$OLD_ID=wandering-glade"; hook; renames; }
+    When call run
+    The output should equal "rc=0
+--autostart=false session rename session:zzzz Main"
+  End
+
   It 'skips sessions with a chosen name to reach the generated one'
     run() { sessions Work "Kind Triceratops" quiet-river; hook; renames; }
     When call run
@@ -61,6 +100,28 @@ EOS
     run() { sessions wandering-glade Main; hook; renames; }
     When call run
     The output should equal "rc=0"
+  End
+
+  # The owner types the name by hand once; however it is capitalised, it is
+  # the Main session, and a second one must not appear beside it.
+  Describe 'a Main session in another case'
+    Parameters
+      main
+      MAIN
+      mAiN
+    End
+    It "does nothing when a session is called $1"
+      run() { sessions wandering-glade "$1"; hook; renames; }
+      When call run "$1"
+      The output should equal "rc=0"
+    End
+  End
+
+  It 'still renames when a label only contains the word'
+    run() { sessions "main work" Maintenance wandering-glade; hook; renames; }
+    When call run
+    The output should equal "rc=0
+--autostart=false session rename session:s3 Main"
   End
 
   It 'does nothing when no label looks generated'
