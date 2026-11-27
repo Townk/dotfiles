@@ -574,6 +574,7 @@ which Rex binds itself (no MEH/CSI-u synthesis — Rex is the terminal).
 | Scroll / Copy / Search tables | `copy-mode-vi` + mode tables | not generated — Rex copy mode and Find | ❌ | by decision: native UX. Only the keys that enter them are bound (`prefix l`, `prefix V`, `⌘↑`, `⌘K`, `⌘F`) |
 | Which-key panel | `mux-whichkey` popup | none — Rex's own key hints | ❌ | by decision |
 | Direct chords | terminal sends MEH CSI-u → `bind -n` | `rex.bind("cmd+…")` | ✅ | one list (`keymap.direct`) instead of three files |
+| Close keys (`⌘W`, `⌘⇧W`, `pane x`, `tab x`) | `kill-pane` / `kill-window` | `close_guarded` → `pane.close` / `client.tab.close` | ✅ | asks first (`rex.ui.pick`) when the focused pane is a running job's tab in the Jobs session, since closing it cancels the job; any other close is queued at once |
 | `⌘↑` / `⌘K` | enter Scroll and scroll a line | enter copy mode | 🟡 | Rex has no scroll-by-line action |
 | Locked mode, detach | key tables / `detach-client` | none | ❌ | nothing to lock away; a Rex app does not detach |
 | Alarms (`u`/`i`/`k`) | `monitor-activity/silence` | none | ❌ | Rex's activity sidebar |

@@ -11,8 +11,12 @@ case "$verb" in
     shift
     "job::$verb" "$@"
     ;;
+  owns-block)
+    shift
+    job::_rex_block_job "$@"
+    ;;
   *)
-    print -ru2 -- "usage: job <start|progress|cancel|list|hud|watch|log|follow> ..."
+    print -ru2 -- "usage: job <start|progress|cancel|list|hud|watch|log|follow|owns-block> ..."
     exit 1
     ;;
 esac

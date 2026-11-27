@@ -441,6 +441,55 @@ j1"
     End
   End
 
+  # The close keys ask before closing a running job's tab: Rex's Lua asks
+  # `job owns-block <block>` whether the focused pane is one.
+  Describe 'job::_rex_block_job'
+    follower() { echo "$2 $3" > "$JOB_STATE_ROOT/$1/follower"; }
+
+    It 'prints the title of the running job the block follows'
+      running() {
+        meta j1 "One"; follower j1 block:b1 $$
+        meta j2 "Two"; follower j2 block:b2 $$
+        run_job job::_rex_block_job block:b2
+      }
+      When call running
+      The status should be success
+      The output should equal "Two"
+    End
+
+    It 'fails for a block whose job has finished'
+      finished() {
+        meta j1 "One"; follower j1 block:b1 $$
+        echo "1700000000 Success 0" > "$JOB_STATE_ROOT/j1/result"
+        run_job job::_rex_block_job block:b1
+      }
+      When call finished
+      The status should equal 1
+      The output should equal ""
+    End
+
+    It 'fails for a block no job follows'
+      unknown() {
+        meta j1 "One"; follower j1 block:b1 $$
+        run_job job::_rex_block_job block:b9
+      }
+      When call unknown
+      The status should equal 1
+      The output should equal ""
+    End
+
+    It 'answers through the job command as owns-block'
+      cli() {
+        meta j1 "One"; follower j1 block:b1 $$
+        zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job" \
+          owns-block block:b1
+      }
+      When call cli
+      The status should be success
+      The output should equal "One"
+    End
+  End
+
   Describe 'job::start'
     It 'opens the tab in the background after the delay'
       started() {

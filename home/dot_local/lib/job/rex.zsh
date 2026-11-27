@@ -51,6 +51,24 @@ job::_rex_jobs_session() {
     | first(.[] | select(.label == "Jobs") | .session_id) // ""' 2>/dev/null
 }
 
+# job::_rex_block_job <block_id> — print the title (the id when it has
+# none) of the RUNNING job (no `result` file) whose `follower` file names
+# that block. rc 1 when there is none. Rex's close keys ask this (as `job
+# owns-block`) before closing a pane: closing a job's tab cancels the job.
+job::_rex_block_job() {
+  local want="${1:?job::_rex_block_job: block id required}" d block pid title
+  for d in "$JOB_STATE_ROOT"/*(N/); do
+    [ -e "$d/result" ] && continue
+    block="" pid=""
+    { read -r block pid < "$d/follower" } 2>/dev/null || :
+    [ -n "$block" ] && [ "$block" = "$want" ] || continue
+    title=$(jq -r '.title // empty' "$d/meta.json" 2>/dev/null) || title=""
+    print -r -- "${title:-${d:t}}"
+    return 0
+  done
+  return 1
+}
+
 # job::_rex_open_tab_unlocked <id> — open the job's follower tab in the Jobs
 # session, creating the session when no session is labelled Jobs, and record
 # the session id in $JOB_STATE_ROOT/.rex_session and `<epoch> <block id>` of

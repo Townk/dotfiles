@@ -511,7 +511,7 @@ keymap:
       - keys:
         - x
         desc: close tab
-        rex: client.tab.close
+        rex: {action: close_guarded, args: {what: tab}}
         icon: 󰱞
         color: red
         cmd: kill-window ; set key-table root
@@ -740,7 +740,7 @@ keymap:
       - keys:
         - x
         desc: close pane
-        rex: pane.close
+        rex: {action: close_guarded, args: {what: pane}}
         icon: 󰅘
         color: red
         cmd: kill-pane ; set key-table root
@@ -1252,8 +1252,8 @@ keymap:
   - {key: cmd+shift+t, desc: quick launch tab, rex: ql_tab}
   - {key: cmd+shift+p, desc: quick launch pane, rex: ql_pane}
   - {key: cmd+t, desc: new tab, rex: client.tab.new}
-  - {key: cmd+w, desc: close pane, rex: pane.close}
-  - {key: cmd+shift+w, desc: close tab, rex: client.tab.close}
+  - {key: cmd+w, desc: close pane, rex: {action: close_guarded, args: {what: pane}}}
+  - {key: cmd+shift+w, desc: close tab, rex: {action: close_guarded, args: {what: tab}}}
   - {key: cmd+1, desc: go to tab 1, rex: {action: client.tab.goto, args: {index: 1}}}
   - {key: cmd+2, desc: go to tab 2, rex: {action: client.tab.goto, args: {index: 2}}}
   - {key: cmd+3, desc: go to tab 3, rex: {action: client.tab.goto, args: {index: 3}}}

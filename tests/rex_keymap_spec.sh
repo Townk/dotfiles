@@ -259,6 +259,40 @@ cp + 0x1A000 cp + 0xFA000 0x1A000 0xFA000 "
     End
   End
 
+  # Closing a Jobs tab cancels its job, and Rex has no close confirmation:
+  # every close key goes through close_guarded, which asks first when the
+  # focused pane follows a running job.
+  Describe 'close keys'
+    It 'defines close_guarded'
+      When call line 'name  = "close_guarded",'
+      The output should be present
+    End
+
+    It 'binds the Cmd close chords to close_guarded'
+      chords() {
+        line 'rex.bind("cmd+w", "close_guarded", { what = "pane" })'
+        line 'rex.bind("cmd+shift+w", "close_guarded", { what = "tab" })'
+      }
+      When call chords
+      The lines of output should equal 2
+    End
+
+    It 'binds the leader close entries to close_guarded'
+      leader() {
+        grep -E '^rex\.bind\("pane/x", km_stay\("km_pane_[0-9]+", "[^"]*close pane", false, "close_guarded", \{ what = "pane" \}\)\)$' "$RK_LUA"
+        grep -E '^rex\.bind\("tab/x", km_stay\("km_tab_[0-9]+", "[^"]*close tab", false, "close_guarded", \{ what = "tab" \}\)\)$' "$RK_LUA"
+      }
+      When call leader
+      The lines of output should equal 2
+    End
+
+    It 'binds nothing straight to pane.close or client.tab.close'
+      direct() { grep -c -E '^rex\.bind\(.*"(pane\.close|client\.tab\.close)"' "$RK_LUA" || true; }
+      When call direct
+      The output should equal "0"
+    End
+  End
+
   # Ctrl+h/j/k/l and Ctrl+arrows: one motion across Rex panes and nvim
   # splits. Hand-written in the template header, like their tmux twins.
   Describe 'context keys'

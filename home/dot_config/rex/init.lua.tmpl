@@ -323,6 +323,63 @@ rex.action{
 }
 
 ---------------------------------------------------------------------------
+-- Close keys — ask before closing a running job's tab
+---------------------------------------------------------------------------
+-- Each background job has a tab in the session labelled Jobs, and closing
+-- that tab cancels the job (~/.local/lib/job/rex.zsh). Rex has no close
+-- confirmation, so every close key comes here. Outside the Jobs session —
+-- read from the id the job opener records — the close is queued at once,
+-- with no process started. Inside it, `job owns-block` says whether the
+-- focused pane follows a running job; only then is the owner asked, and
+-- dismissing the question keeps the tab.
+local JOB_STATE_ROOT = {{ printf "%s/.local/state/jobs" .chezmoi.homeDir | quote }}
+local JOB_CLI = HOME .. "/.local/libexec/job"
+
+local function jobs_session()
+  local f = io.open(JOB_STATE_ROOT .. "/.rex_session", "r")
+  if not f then return nil end
+  local line = f:read("*l")
+  f:close()
+  return line and line:match("%S+")
+end
+
+rex.action{
+  name  = "close_guarded",
+  title = "Close, Asking First for a Running Job",
+  args  = { what = "string" },
+  run   = function(ctx, args)
+    local close = (args.what == "tab") and "client.tab.close" or "pane.close"
+    -- Bound from a mode through km_stay, which does not leave it.
+    rex.client.queue("client.mode.exit_all")
+    local jobs = jobs_session()
+    if not (jobs and ctx.block_id and ctx.session_id == jobs) then
+      rex.client.queue(close)
+      return
+    end
+    local r, err = rex.exec({ JOB_CLI, "owns-block", ctx.block_id },
+                            { env = pane_env(ctx), timeout = 5 })
+    if r == nil then rex.log("warn", "close_guarded: job owns-block: " .. tostring(err)) end
+    if not (r and r.ok) then
+      rex.client.queue(close)
+      return
+    end
+    local job = r.stdout:match("[^\n]+") or ctx.block_id
+    local id, why = rex.ui.pick{
+      title = "Close the running job " .. job .. "?",
+      items = {
+        { id = "close", title = "Cancel the job and close" },
+        { id = "keep",  title = "Keep it running" },
+      },
+    }
+    if id == "close" then
+      rex.client.queue(close)
+    elseif id == nil and why ~= "cancelled" then
+      rex.log("warn", "close_guarded: " .. tostring(why))
+    end
+  end,
+}
+
+---------------------------------------------------------------------------
 -- Context keys — vim/fzf-aware navigation and resize
 ---------------------------------------------------------------------------
 -- Ctrl+h/j/k/l and Ctrl+arrows are ONE motion across Rex panes and nvim
