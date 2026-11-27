@@ -632,7 +632,7 @@ pick::build_fzf_args() {
     # clears that variable. Without this a `--preview-window=…,hidden` picker
     # would have no key to reveal its preview at all. Skipped under --multi,
     # where ctrl-space is already the select-marker toggle.
-    (( ${pick_ui[multi]:-0} )) || fzf_args+=( --bind 'ctrl-space:execute-silent($HOME/.local/libexec/preview-wipe-images --keep)+toggle-preview' )
+    (( ${pick_ui[multi]:-0} )) || fzf_args+=( --bind 'ctrl-space:execute-silent($HOME/.local/libexec/preview-wipe-images)+toggle-preview' )
   fi
   # --preview-window SPEC: fzf preview-window geometry (e.g. "right:40%").
   # Additive; callers that don't pass it get fzf's default.

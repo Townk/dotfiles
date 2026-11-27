@@ -97,7 +97,7 @@ export FZF_DEFAULT_OPTS="
 --prompt '    ' --pointer ➔ --marker ✔
 --preview-window=right:60%,border-line,noinfo
 --preview 'preview {}'
---bind 'ctrl-space:execute-silent(\$HOME/.local/libexec/preview-wipe-images --keep)+toggle-preview'
+--bind 'ctrl-space:execute-silent(\$HOME/.local/libexec/preview-wipe-images)+toggle-preview'
 --bind 'ctrl-o:execute-silent(\$HOME/.local/libexec/fzf-tab-preview-open {})'
 --bind ctrl-j:down --bind ctrl-k:up
 --bind shift-up:preview-up --bind shift-down:preview-down
@@ -227,8 +227,9 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   #                  collapsed while keeping the inherited right:60% geometry.
   #                  ctrl-space reveals it on demand. Scoped to the TAB menu only
   #                  — Ctrl-T/Ctrl-R/Alt-C keep their preview on by default.
+  # No spaces inside a flag: fzf-tab splits these on them.
   zstyle ':fzf-tab:*' fzf-flags --height=~40% --preview-window=hidden \
-    '--bind=ctrl-space:execute-silent($HOME/.local/libexec/preview-wipe-images --keep)+toggle-preview'
+    '--bind=ctrl-space:execute-silent($HOME/.local/libexec/preview-wipe-images)+toggle-preview'
 
   # TAB descends into the highlighted directory and re-opens the menu — the
   # equivalent of z4h's `tab:repeat` (fzf-tab's continuous-trigger, default '/').

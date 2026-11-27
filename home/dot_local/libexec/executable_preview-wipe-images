@@ -1,5 +1,5 @@
 #!/bin/sh
-# preview-wipe-images [--keep] — take down the Kitty images `preview` drew in
+# preview-wipe-images [--forget] — take down the Kitty images `preview` drew in
 # this terminal's fzf.
 #
 # Outside tmux a Kitty image sits on the terminal itself, not in fzf's preview
@@ -9,9 +9,14 @@
 # the other half, small enough to run from a key binding: when the flag for
 # this terminal exists, tell the terminal to delete its images.
 #
-# --keep leaves the flag in place. The preview toggle uses it: showing the
-# pane again may put the picture back without a new `preview` run to flag it,
-# and the flag is what lets fzf's exit clean up.
+# The flag is LEFT in place: this is the preview toggle's helper, and showing
+# the pane again may put the picture back without a new `preview` run to flag
+# it — the flag is what lets fzf's exit clean up. --forget removes it too.
+#
+# No argument in the common case on purpose: fzf-tab splits its fzf-flags on
+# spaces, so a binding that needs one arrives at fzf cut in two (measured
+# 2026-11-27: `--bind=ctrl-space:execute-silent(… --keep)+toggle-preview`
+# reached fzf as two arguments, and the toggle did nothing useful).
 #
 # POSIX sh and no sourcing on purpose: it runs on a keypress.
 [ -n "${TMUX:-}" ] && exit 0
@@ -19,5 +24,5 @@ tty="${PREVIEW_TTY_NAME:-$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')}"
 flag="${TMPDIR:-/tmp}/preview-kitty.${tty##*/}"
 [ -e "$flag" ] || exit 0
 printf '\033_Ga=d,d=A\033\\' >"${PREVIEW_TTY:-/dev/tty}" 2>/dev/null
-[ "${1:-}" = --keep ] || rm -f -- "$flag"
+[ "${1:-}" = --forget ] && rm -f -- "$flag"
 exit 0
