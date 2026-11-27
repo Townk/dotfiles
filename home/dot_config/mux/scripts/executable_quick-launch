@@ -4,6 +4,8 @@
 #
 #   quick-launch menu  pane|tab|workspace      # fuzzy-pick, then open
 #   quick-launch open   pane|tab|workspace ID  # open a target directly
+#   quick-launch rows   pane|tab|workspace     # picker rows as TSV (Rex palette)
+#   quick-launch pick   pane|tab|workspace ID  # open + record recency (Rex palette)
 #   quick-launch layout pane|tab|workspace ID  # print the generated KDL (debug)
 #   quick-launch list  [pane|tab|workspace]    # list defined targets
 #
@@ -38,6 +40,8 @@ LIB_DIR="$SCRIPT_DIR/lib"
 . "$LIB_DIR/dispatch.zsh"
 # shellcheck source=/dev/null
 . "$LIB_DIR/dispatch-tmux.zsh"
+. "$LIB_DIR/dispatch-rex.zsh"
+. "$LIB_DIR/rows.zsh"
 
 ql_die() {
   echo "quick-launch: $*" >&2
@@ -196,6 +200,22 @@ main() {
       ql_load
       ql_dispatch "$1" "$2"
       ;;
+    rows)
+      # Plain rows for a picker that is not fzf (Rex's native palette):
+      # id, title, subtitle, icon, detail — tab-separated, already in
+      # display order. See lib/rows.zsh.
+      [[ $# -ge 1 ]] || ql_die "usage: quick-launch rows pane|tab|workspace"
+      ql_load
+      ql_rows "$1"
+      ;;
+    pick)
+      # `open`, for a pick made in such a picker: also records the choice in
+      # the recency cache, which `menu` leaves to fzf's own bookkeeping.
+      [[ $# -ge 2 ]] || ql_die "usage: quick-launch pick pane|tab|workspace ID"
+      ql_load
+      ql_record_usage "$1" "$2"
+      ql_dispatch "$1" "$2"
+      ;;
     layout)
       [[ $# -ge 2 ]] || ql_die "usage: quick-launch layout pane|tab|workspace ID"
       ql_load
@@ -209,7 +229,7 @@ main() {
       usage
       ;;
     *)
-      ql_die "unknown command '$cmd' (want menu|open|layout|list)"
+      ql_die "unknown command '$cmd' (want menu|open|rows|pick|layout|list)"
       ;;
   esac
 }

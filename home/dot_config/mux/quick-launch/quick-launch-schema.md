@@ -123,4 +123,23 @@ quick-launch menu   pane|tab|workspace        # fuzzy-pick, then open
 quick-launch open   pane|tab|workspace ID     # open directly (focus-or-create)
 quick-launch layout pane|tab|workspace ID     # print generated KDL / command
 quick-launch list  [pane|tab|workspace]       # list defined targets
+quick-launch rows   pane|tab|workspace        # picker rows as TSV (Rex palette)
+quick-launch pick   pane|tab|workspace ID     # open + record recency (Rex palette)
 ```
+
+## On Rex
+
+Rex is a backend like tmux and zellij; the targets above are unchanged. What
+differs:
+
+- The picker is Rex's native palette, fed by `quick-launch rows` (id, title,
+  subtitle, icon, detail — tab-separated, in display order). The `icon` field
+  of a target is not shown: the palette draws one of its own fixed icons,
+  chosen from the action type.
+- A workspace is a Rex session, a tab a window, a pane a block, each
+  **labelled with the target's `name`**. That label is the identity
+  focus-or-create looks up.
+- `size` on a tiled pane is honoured as a percentage (`30%`); a cell count is
+  ignored, because Rex splits by ratio. Floating sizes accept both.
+- `nested_mux` and `color` are ignored. Opening a workspace in a separate
+  window is not available yet.

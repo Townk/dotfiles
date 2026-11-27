@@ -40,7 +40,11 @@ _mux_rx_bin() {
   fi
   local c
   c="$(command -v rex 2>/dev/null)" && [[ -n "$c" ]] && { print -r -- "$c"; return 0; }
-  for c in "${REX_BIN_DIR:+$REX_BIN_DIR/rex}" /opt/homebrew/bin/rex \
+  # The Mac app ships the CLI inside its server bundle and only puts it on
+  # PATH in the panes it starts — a script run by `rex.exec`, a launchd job
+  # or a chezmoi hook finds it at this path or not at all.
+  local app="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+  for c in "${REX_BIN_DIR:+$REX_BIN_DIR/rex}" "$app" /opt/homebrew/bin/rex \
            /usr/local/bin/rex "$HOME/.local/bin/rex"; do
     [[ -n "$c" && -x "$c" ]] && { print -r -- "$c"; return 0; }
   done

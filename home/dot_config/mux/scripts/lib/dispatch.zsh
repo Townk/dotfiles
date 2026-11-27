@@ -9,6 +9,15 @@ ZJ="${ZELLIJ_BIN:-$(ql_zellij_bin || true)}"
 # searched everywhere they can be defined (top-level + nested in tabs and
 # workspaces), so an `optional` pane declared inside a workspace is still
 # launchable on its own; tabs/workspaces are matched at the top level.
+# ql_on_rex — true when this run should drive Rex: a Rex pane (or a Rex Lua
+# action, which exports the focused session) with no tmux or zellij in
+# between. Spelled out here rather than read from mux::backend because the
+# two entry branches above it are spelled the same way, and all three must
+# agree on precedence: an inner tmux/zellij started inside Rex wins.
+ql_on_rex() {
+  [[ -z "${ZELLIJ:-}" && -z "${TMUX:-}" && -n "${REX_SESSION:-}" ]]
+}
+
 ql_get_element() {
   local kind="$1" id="$2"
   case "$kind" in
@@ -36,6 +45,8 @@ ql_get_element() {
         local _live=1
         if [[ -z "${ZELLIJ:-}" && -n "${TMUX:-}" ]]; then
           ql_tx_session_exists "$id" || _live=0
+        elif ql_on_rex; then
+          ql_rx_session_exists "$id" || _live=0
         else
           ql_session_exists "$id" || _live=0
         fi
@@ -399,6 +410,10 @@ ql_dispatch() {
     ql_tx_dispatch_el "$kind" "$el"
     return
   fi
+  if ql_on_rex; then
+    ql_rx_dispatch_el "$kind" "$el"
+    return
+  fi
   case "$kind" in
     pane) ql_open_pane "$el" ;;
     tab) ql_open_tab "$el" ;;
@@ -420,6 +435,10 @@ ql_dispatch_window() {
   fi
   if [[ -z "${ZELLIJ:-}" && -n "${TMUX:-}" ]]; then
     ql_tx_open_workspace_window "$el"
+    return
+  fi
+  if ql_on_rex; then
+    ql_rx_open_workspace_window "$el"
     return
   fi
   ql_open_workspace_window "$el"
