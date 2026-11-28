@@ -9,8 +9,10 @@ Shared setup for the shellspec suite. The helpers live in `tests/spec_helper.sh`
 1. **Two suites.** FAST must finish in 60 s, COMPLETE in 180 s (`--jobs 6` on
    the owner's machine). A spec that cannot run in the fast suite says why.
 2. **No test waits.** No `sleep`, `timeout`, `read -t`, polling loop or
-   "took at least / less than N seconds" assertion in a spec. Approved
-   alternatives, in order of preference:
+   "took at least / less than N seconds" assertion in a spec (the words
+   `sleep` and `timeout` do not appear as commands at all: move time with
+   `spec_clock_advance`, and in a stub body with `spec-clock-advance`).
+   Approved alternatives, in order of preference:
    - **Model it as a count or a state file.** The fake rex's layer lives for
      `STUB_LAYER_LIFE` polls; a stub answers "gone" once a file the example
      writes says so. Assert the number of polls.
@@ -21,6 +23,13 @@ Shared setup for the shellspec suite. The helpers live in `tests/spec_helper.sh`
      `_MUX_RX_AWAIT_MISSES`, `JOB_FOLLOW_DELAY`, `JOB_FOLLOW_POLL`,
      `BKP_TM_SCRUB_DEBOUNCE` …) to shrink a bound, never to "wait less".
    - `touch -t` for a file's age, relative to the virtual now.
+   - **To join something that runs beside the example**: `wait <pid>` for a
+     child; for anything else a rendezvous, never a poll: a fake (or a
+     test-owned wrapper) writes one line to a FIFO the example made, and the
+     example blocks on `read -r _ <fifo` (`tests/job_follow_spec.sh`:
+     `started`, `decided`, `held`/`release`; `tests/job_rex_spec.sh`:
+     `joined`). A production `&!` that tests must join gets a foreground
+     mode (`SSH_PREPARE_FOREGROUND=1`).
    A wait that none of these removes is a missing production seam: leave the
    example, and list it (file, example, seam needed) for the owner.
 3. **No test reaches the desktop.** No real notification, sound, dialog, app,
@@ -50,7 +59,8 @@ Shared setup for the shellspec suite. The helpers live in `tests/spec_helper.sh`
 | `spec_path_prepend <dir>…` | The directories first on `PATH`, exported. Nothing to undo. |
 | `spec_fake_rex <dir> [arm…] [--offline arm…]` | `<dir>/rex`: answers `client ls`, `ls --json`, `session.view`, `session.new_layer`, `block inspect/close`, `block call … process`, `window new`, `whoami` from `<dir>/*.json` or defaults. `STUB_SERVER=down` exits 4. |
 | `spec_render_template <tmpl> [dest]` | `$SPEC_RENDERED`: the template rendered against this source tree. Loud on failure. |
-| `spec_clock_set [t]` / `_advance <s>` / `_now [ms]` / `_slept` | A virtual clock, with a fake `sleep` and `date` on `PATH`, shared by every child process. |
+| `spec_clock_set [t]` / `_advance <s>` / `_now [ms]` / `_slept` | A virtual clock: `common::now` / `common::sleep` in production (`$COMMON_CLOCK_FILE`), a fake `sleep` and `date` on `PATH`, shared by every child process. `spec-clock-advance <s>` is the command form, for stub bodies. |
+| `spec_clock_await <s>` / `spec_clock_guard <pid> [s]` / `_guard_off` | Stay in step with code that naps beside the example: block until IT has napped that long; kill it if it naps past a bound. |
 | `spec_notifications` / `spec_sounds` / `spec_desktop_calls [tool]` | What the code under test asked of the desktop (nothing real happened). |
 
 ### Controlling time: a worked example
@@ -81,19 +91,39 @@ What the fake `sleep`/`date` cannot reach, and what to do:
 | The code under test… | Control it with |
 | --- | --- |
 | calls `sleep N` (zsh has no builtin: it is the external one) or `date` | the clock, as is |
-| reads `$EPOCHSECONDS`/`$EPOCHREALTIME`/`$SECONDS`, naps with `zselect` (`spin::nap`, `poll::until`, `job::_follow_nap`), `read -t` | the production seam (below); until then an env seam, or leave and list |
+| waits with `common::sleep` (so: `spin::nap`, `poll::until`, `job::_follow_nap`) or reads `common::now` | the clock, as is: the production seam, below |
+| still reads `$EPOCHSECONDS`/`$EPOCHREALTIME`/`$SECONDS` directly, naps with a bare `zselect`, `read -t` | route it through the seam if it is a wait or an age/deadline decision; else an env seam, or leave and list |
 | runs `timeout N cmd` / `gtimeout` | stub `timeout` on `PATH` to log the limit and `exec` the command (see `pinentry_backend_repair_spec.sh`) |
 | passes `--timeout 3s` to a tool (`rex`, `curl`, `ssh -o ConnectTimeout`) | the tool is a stub: assert the flag in its log, and make the stub answer "timed out" by exit code |
 | compares mtimes (`find -mtime`, `(mh+24)`, `stat`) | `touch -t` the file relative to `spec_clock_now`; the comparison's "now" needs the seam |
 | is POSIX sh (apply hooks, `pinentry-auto`, `preview-wipe-images`) | the same `PATH` stubs: sh has no other clock than `date` and `sleep` |
 | resets `PATH`, or is `zsh` without `-f` under a `.zshenv` that rebuilds it | pass the tool by its `*_BIN` seam, or leave and list |
 
-Proposed production seam (NOT built; owner approves first): in
-`home/dot_local/lib/common.zsh`, `common::now` (sets `REPLY`; `-f` for
-fractional) and `common::sleep <seconds>`. Real path: `$EPOCHSECONDS` /
-`$EPOCHREALTIME` and `zselect`, no fork. When `$SPEC_CLOCK_FILE` is set they
-fold and append to that journal instead (a `while read` loop, no fork either).
-`spin::nap`, `poll::until` and `job::_follow_nap` are the first three callers.
+The production seam, in `home/dot_local/lib/common.zsh`: `common::now` (sets
+`REPLY`: seconds; `-f` fractional; `-m` milliseconds) and `common::sleep
+<seconds>`. Real path: `$EPOCHSECONDS` / `$EPOCHREALTIME` and `zselect`, no
+fork. When `$COMMON_CLOCK_FILE` names a readable file (`spec_clock_set` exports
+it, the same file as `$SPEC_CLOCK_FILE`) they fold and append to that journal
+instead. Code decides on time through these two; a timestamp that is only
+written (a log line, an id) still reads `$EPOCHSECONDS`. Two files that do not
+load common.zsh have a local equivalent honouring the same variable:
+`mux-bootstrap.zsh` (`_mux_sleep`) and `backup-drift.zsh` (`bkp::drift::_now`).
+
+What the virtual clock cannot do: hold a process still. Code napping on it
+beside the example runs at about 20,000 naps a second, and nothing can be
+slipped in between two naps from outside. So:
+
+- an event that must land at one exact point comes from a fake the code calls
+  at that point (`at_poll <n> '<snippet>'` in `job_follow_spec.sh`), not from
+  "advance, then act";
+- a signal for a zsh with trap functions is sent from such a fake too: sent
+  from outside it lands inside the nap loop, and a trap that forks from there
+  can deadlock;
+- an example whose point is an outside event landing INSIDE a bounded wait
+  that has no such call, or the absence of something over time, stays on the
+  real clock and says so in a comment (four in `job_follow_spec.sh`, one in
+  `job_rex_spec.sh`). The seam that would free them is a stepped clock:
+  `common::sleep` waiting for the test to release each nap.
 
 ## Converting a spec
 

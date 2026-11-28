@@ -142,9 +142,13 @@ job::start() {
   local id="${EPOCHREALTIME/./}-$$"
   local dir="$JOB_STATE_ROOT/$id"
   mkdir -p -- "$dir"
+  # `created` is what the Jobs reconcile measures a job's grace from, so it
+  # comes off the same clock (the id above is an id: always the real one).
+  local REPLY
+  common::now
   jq -n --arg title "$title" --arg icon "$icon" --arg group "$group" \
     --arg progress "$progress" --arg notify "$notify_mode" \
-    --argjson created "$EPOCHSECONDS" \
+    --argjson created "$REPLY" \
     '{title:$title, icon:$icon, group:$group, pueue_id:-1,
       progress:$progress, notify:$notify, created:$created}' > "$dir/meta.json"
 
@@ -462,7 +466,7 @@ job::_open_log_tab() {
       log_error "job::_open_log_tab: timed out waiting for the log tab to close"
       return 1
     fi
-    sleep 0.1
+    common::sleep 0.1
     waited=$((waited + 1))
   done
   wait "$reader_pid" 2>/dev/null

@@ -360,7 +360,7 @@ _mux::pinentry_spawn_rex() {
       if (( i % 5 == 4 )); then
         _mux_rx_block_gone "$layer" </dev/null && break
       fi
-      sleep 0.1
+      common::sleep 0.1
       (( i++ ))
     done
   fi

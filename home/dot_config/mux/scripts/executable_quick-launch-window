@@ -35,7 +35,9 @@ source "${MUX_LIB:-$HOME/.local/lib}/mux.zsh"
 QLW_SCRIPT_DIR="${0:A:h}"
 WEZTERM=${commands[wezterm]:-/opt/homebrew/bin/wezterm}
 GHOSTTY=${commands[ghostty]:-/Applications/Ghostty.app/Contents/MacOS/ghostty}
-OSASCRIPT=${commands[osascript]:-/usr/bin/osascript}
+# WIDGETS_OSASCRIPT_BIN: the same seam mux-fullscreen-probe has, so a test (or a
+# wrapper) names the binary whatever PATH holds.
+OSASCRIPT=${WIDGETS_OSASCRIPT_BIN:-${commands[osascript]:-/usr/bin/osascript}}
 export WEZTERM_BIN="$WEZTERM"
 FOCUS_WORKSPACE_PREFIX="__QL_FOCUS__="
 

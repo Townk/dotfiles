@@ -739,8 +739,10 @@ share::_croc_revoke_row() {
   zmodload zsh/datetime 2>/dev/null
   local row="$1" ref="$2" label
   local -i expires
+  local REPLY
   expires="$(printf '%s' "$row" | jq -r '.expires // 0')"
-  if (( expires == 0 || expires >= EPOCHSECONDS )); then
+  common::now
+  if (( expires == 0 || expires >= REPLY )); then
     share::croc_revoke "$ref"
     return
   fi
@@ -756,7 +758,9 @@ share::_croc_revoke_row() {
 share::_overdue_human() {
   zmodload zsh/datetime 2>/dev/null
   local -i expires="${1:-0}" delta
-  delta=$(( EPOCHSECONDS - expires ))
+  local REPLY
+  common::now
+  delta=$(( REPLY - expires ))
   (( delta > 0 )) || { printf '0m\n'; return 0; }
   if (( delta >= 604800 )); then printf '%dw\n' $(( delta / 604800 ))
   elif (( delta >= 86400 )); then printf '%dd\n' $(( delta / 86400 ))

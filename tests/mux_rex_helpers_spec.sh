@@ -392,6 +392,28 @@ rc=0 reads=4"
       The output should equal "rc=1 reads=2"
     End
 
+    It 'waits on the clock a test drives, with common.zsh loaded or not'
+      # The bootstrap does not source common.zsh; its own wait honours the
+      # same journal. Neither path reaches an external command: the fake one
+      # is taken off PATH, so only the function itself can have moved the clock.
+      on_clock() {
+        spec_clock_set 1000
+        PATH=${PATH#"$SPEC_CLOCK_BIN":}
+        fake_tty "1 1" "2 2" "3 3" "4 4"
+        mux::await_tty_size 3 0.05 >/dev/null
+        print -r -- "common=${+functions[common::sleep]} now=$(spec_clock_now ms)"
+        source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh"
+        fake_tty "1 1" "2 2" "3 3" "4 4"
+        mux::await_tty_size 3 0.05 >/dev/null
+        print -r -- "common=${+functions[common::sleep]} now=$(spec_clock_now ms)"
+        spec_clock_slept | sort | uniq -c | tr -s ' '
+      }
+      When call on_clock
+      The output should equal "common=0 now=1000150
+common=1 now=1000300
+ 6 0.05"
+    End
+
     It 'gives "cols rows" for a float outside a multiplexer, 80x24 with no tty'
       sized() { fake_tty "41 132"; _mux::tty_terminal_size; fake_tty none; _mux::tty_terminal_size; }
       When call sized

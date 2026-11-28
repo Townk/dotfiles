@@ -754,11 +754,14 @@ bkp::snap::resolve_since() {
   local ladder cutoff
   ladder=$(bkp::snap::ladder "$@") || return 2
   [[ -n "$ladder" ]] || { log_error "bkp: no snapshots yet"; return 2 }
+  local -i now
+  common::now
+  now=$REPLY
   if [[ "$when" == yesterday ]]; then
-    cutoff=$(( EPOCHSECONDS - 86400 ))
+    cutoff=$(( now - 86400 ))
   elif [[ "$when" =~ '^[0-9]+[mhdw]$' ]]; then
     bkp::duration "$when" || return 2
-    cutoff=$(( EPOCHSECONDS - REPLY ))
+    cutoff=$(( now - REPLY ))
   elif [[ "$when" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ]]; then
     strftime -r -s cutoff '%Y-%m-%d' "$when" 2>/dev/null || {
       log_error "bkp: unparseable date: $when"
@@ -1330,15 +1333,18 @@ bkp::capture::thin() {
   undo=$(print -r -- "$proj" |
     jq '[(. // [])[] | select((.tags // []) | index("bkp-undo"))]' 2>/dev/null |
     bkp::restic::parse_snapshots) || return 2
-  local line
+  local line REPLY
+  local -i now
+  common::now
+  now=$REPLY
   local -a drop=()
   if [[ -n "$undo" ]]; then
     for line in ${(f)undo}; do
-      (( EPOCHSECONDS - ${line##*$'\t'} > 604800 )) && drop+=("${line%%$'\t'*}")
+      (( now - ${line##*$'\t'} > 604800 )) && drop+=("${line%%$'\t'*}")
     done
   fi
   if [[ -n "$snaps" ]]; then
-    plan=$(print -r -- "$snaps" | bkp::thin "$EPOCHSECONDS" "$policy") || return 2
+    plan=$(print -r -- "$snaps" | bkp::thin "$now" "$policy") || return 2
     for line in ${(f)plan}; do
       [[ "$line" == drop$'\t'* ]] && drop+=("${line#drop$'\t'}")
     done
@@ -1431,10 +1437,11 @@ bkp::capture::run() {
     return 0
   }
 
-  local hb epoch age=0 overdue=1
+  local hb epoch age=0 overdue=1 REPLY
   if hb=$(bkp::drift::last capture); then
     epoch="${hb%% *}"
-    age=$(( EPOCHSECONDS - epoch ))
+    common::now
+    age=$(( REPLY - epoch ))
     (( age < 0 )) && age=0
     # Slack: the completion stamp lands D seconds (capture duration) AFTER its
     # slot, so a scheduled tick exactly one cadence later sees age = cadence-D
@@ -1611,7 +1618,9 @@ bkp::reconcile::one() {
       done
       local -A keep=()
       if (( ${#thin_lines} )); then
-        pl=$(printf '%s\n' "${thin_lines[@]}" | bkp::thin "$EPOCHSECONDS" "$policy") || return 1
+        local REPLY=""
+        common::now
+        pl=$(printf '%s\n' "${thin_lines[@]}" | bkp::thin "$REPLY" "$policy") || return 1
         for line in ${(f)pl}; do
           [[ "$line" == keep$'\t'* ]] && keep[${line#keep$'\t'}]=1
         done
@@ -1712,7 +1721,9 @@ bkp::ux::list() {
   policy=$(bkp::manifest::thin_policy "$manifest") || return 2
   snaps=$(bkp::restic "$staging" snapshots --json | bkp::restic::parse_snapshots) || return 2
   [[ -z "$snaps" ]] && return 0
-  local line id epoch tier when REPLY now="$EPOCHSECONDS"
+  local line id epoch tier when REPLY now
+  common::now
+  now=$REPLY
   for line in ${(f)snaps}; do
     id="${line%%$'\t'*}" epoch="${line##*$'\t'}"
     bkp::thin::tier_of "$now" "$epoch" "$policy" || :
@@ -1781,7 +1792,9 @@ bkp::ux::status() {
   print
 
   # ── freshness: heartbeat only, so this stays a single-file read ──
-  local now="$EPOCHSECONDS" cad hb epoch rc verdict glyph
+  local now cad hb epoch rc verdict glyph
+  common::now
+  now=$REPLY
   if   (( BKP_CAPTURE_CADENCE < 3600 ));  then cad="$(( BKP_CAPTURE_CADENCE / 60 ))m"
   elif (( BKP_CAPTURE_CADENCE < 86400 )); then cad="$(( BKP_CAPTURE_CADENCE / 3600 ))h"
   else                                         cad="$(( BKP_CAPTURE_CADENCE / 86400 ))d"
@@ -1901,7 +1914,7 @@ bkp::mount() {
       return 0
     fi
     kill -0 $pid 2>/dev/null || break
-    sleep 0.1
+    common::sleep 0.1
   done
   pkill -P $pid 2>/dev/null
   kill $pid 2>/dev/null
@@ -1927,19 +1940,19 @@ bkp::umount() {
   umount "$mp" 2>/dev/null || :
   for (( i = 0; i < 20; i++ )); do
     bkp::mounted "$mp" || return 0
-    sleep 0.1
+    common::sleep 0.1
   done
   pkill -P "$pid" 2>/dev/null
   kill "$pid" 2>/dev/null
   for (( i = 0; i < 20; i++ )); do
     bkp::mounted "$mp" || return 0
     umount "$mp" 2>/dev/null || :
-    sleep 0.1
+    common::sleep 0.1
   done
   diskutil unmount force "$mp" >/dev/null 2>&1 || :
   for (( i = 0; i < 10; i++ )); do
     bkp::mounted "$mp" || return 0
-    sleep 0.1
+    common::sleep 0.1
   done
   return 1
 }

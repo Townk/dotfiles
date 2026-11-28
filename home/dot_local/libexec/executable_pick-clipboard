@@ -727,10 +727,13 @@ clip::cache_sweep() {
   (( ttl > 0 )) || return 0
   zmodload zsh/stat 2>/dev/null || return 0
 
-  local sub iddir mt esub
+  local sub iddir mt esub REPLY
+  local -i now
+  common::now
+  now=$REPLY
   for sub in "$root"/<->/<->(N/); do
     mt=$(zstat +mtime "$sub" 2>/dev/null) || continue
-    (( EPOCHSECONDS - mt >= ttl )) || continue
+    (( now - mt >= ttl )) || continue
 
     # Localized bookkeeping rows point at staged paths. Remove those rows
     # with the expired bytes so the picker never offers an un-restorable

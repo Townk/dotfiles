@@ -97,7 +97,8 @@ EOF
   # a banner unless Rex is the app in front, where it plays its sound and
   # badges the tab instead.
   followed() {  # followed <id> <block> — a live follower for the job
-    sleep 30 &
+    # A process that stays until it is killed, with no clock in it.
+    tail -f /dev/null &
     FOLLOWER_PID=$!
     print -r -- "$2 $FOLLOWER_PID" > "$JOB_STATE_ROOT/$1/follower"
   }
@@ -164,8 +165,9 @@ EOF
 
   It 'prunes finished job dirs beyond JOB_KEEP, never active ones'
     prune() {
+      # No pause between the seeds: a job id is the start time in
+      # microseconds, so three seeds in a row are already in order by name.
       a=$(seed) || return 1
-      sleep 1
       b=$(seed) || return 1
       printf '1 Success 0\n' > "$JOB_STATE_ROOT/$a/result"
       active=$(seed) || return 1
@@ -188,7 +190,6 @@ EOF
   It 'sweeps day-stale result-less dirs, keeps fresh active ones'
     sweep() {
       ghost=$(seed) || return 1
-      sleep 1
       fresh=$(seed) || return 1
       touch -t 202001010000 "$JOB_STATE_ROOT/$ghost/meta.json" || return 2
       zsh -f "$CALLBACK" 99 "Success" 0 || return 3

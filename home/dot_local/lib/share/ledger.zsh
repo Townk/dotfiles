@@ -78,7 +78,9 @@ share::ledger_overdue() {
   zmodload zsh/datetime 2>/dev/null
   local file; file="$(share::_ledger_file)"
   [[ -f "$file" ]] || return 0
-  jq -r --argjson now "$EPOCHSECONDS" \
+  local REPLY
+  common::now
+  jq -r --argjson now "$REPLY" \
     'select(.expires > 0 and .expires < $now) | .id' "$file"
 }
 
@@ -90,11 +92,13 @@ share::ledger_overdue_rows() {
   zmodload zsh/datetime 2>/dev/null
   local backend="${1-}" file; file="$(share::_ledger_file)"
   [[ -f "$file" ]] || return 0
+  local REPLY
+  common::now
   if [[ -n "$backend" ]]; then
-    jq -c --argjson now "$EPOCHSECONDS" --arg b "$backend" \
+    jq -c --argjson now "$REPLY" --arg b "$backend" \
       'select(.backend == $b and .expires > 0 and .expires < $now)' "$file"
   else
-    jq -c --argjson now "$EPOCHSECONDS" \
+    jq -c --argjson now "$REPLY" \
       'select(.expires > 0 and .expires < $now)' "$file"
   fi
 }

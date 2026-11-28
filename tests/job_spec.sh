@@ -199,6 +199,33 @@ EOF
   }
   cleanup() { rm -rf "$JOB_SANDBOX"; }
   BeforeEach 'setup'
+
+  # tab_killer [command…] — in the background: close the log tab the fake
+  # spawner opened, once it is genuinely open; `$!` is the killer, to join
+  # with `wait`. "Open" is an event, not a delay: the tab's command is
+  # `exec 3>fifo; exec tail -f log`, so the `tail` it execs is reached only
+  # after the FIFO's write end is held open. The `tail` put first on PATH
+  # here says so on a FIFO of the example's (blocking until the killer reads
+  # it), then becomes the real tail in the same process, write end and all.
+  # The kill therefore never races the wrapped command's own blocked open
+  # (C1's real scenario: a signal hitting an ALREADY-open write end). With a
+  # command, that runs between the event and the kill (a look at mid-flight
+  # state). job::_open_log_tab's own poll for the dead reader runs on the
+  # virtual clock: its naps cost nothing, and JOB_LOGTAB_TIMEOUT_S is raised
+  # so that bound (an hour of naps) cannot pass before the kill has landed.
+  tab_killer() {
+    export JOB_FAKE_TAB_OPEN="$JOB_SANDBOX/tab-open"
+    mkfifo "$JOB_FAKE_TAB_OPEN"
+    spec_stub "$JOB_SANDBOX/tailbin" tail \
+      'if [ "$1" = -f ] && [ -p "${JOB_FAKE_TAB_OPEN:-}" ]; then echo open > "$JOB_FAKE_TAB_OPEN"; fi' \
+      'exec /usr/bin/tail "$@"'
+    spec_path_prepend "$JOB_SANDBOX/tailbin"
+    spec_clock_set
+    export JOB_LOGTAB_TIMEOUT_S=3600
+    ( read -r _ < "$JOB_FAKE_TAB_OPEN"
+      "${@:-:}"
+      kill -TERM "$(cat "$JOB_FAKE_NEWTAB_PID")" 2>/dev/null ) &
+  }
   AfterEach 'cleanup'
 
   # -f: this repo's ~/.zshenv would re-export XDG vars over the sandbox.
@@ -440,7 +467,7 @@ FAKE
   Describe 'job::cancel'
     It 'kills the recorded pueue task id'
       cancel() {
-        id=$(run_job job::start -- sleep 99) || return 1
+        id=$(run_job job::start -- work 99) || return 1
         run_job job::cancel "$id" || return 2
         grep -c '^kill 7$' "$JOB_FAKE_LOG"
       }
@@ -450,7 +477,7 @@ FAKE
 
     It 'removes a queued job from the queue and records it as Killed'
       queued_cancel() {
-        id=$(run_job job::start --title q -- sleep 9) || return 1
+        id=$(run_job job::start --title q -- work 9) || return 1
         print -r -- '{"tasks":{"7":{"status":{"Queued":{}}}}}' > "$JOB_SANDBOX/status.json"
         JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" run_job job::cancel "$id"; print -r -- "rc=$?"
         grep -c '^remove 7$' "$JOB_FAKE_LOG"; grep -c '^kill' "$JOB_FAKE_LOG"
@@ -465,7 +492,7 @@ Killed"
 
     It 'still kills a running job'
       running_cancel() {
-        id=$(run_job job::start --title r -- sleep 9) || return 1
+        id=$(run_job job::start --title r -- work 9) || return 1
         print -r -- '{"tasks":{"7":{"status":{"Running":{}}}}}' > "$JOB_SANDBOX/status.json"
         JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" run_job job::cancel "$id"; print -r -- "rc=$?"
         grep -c '^kill 7$' "$JOB_FAKE_LOG"; grep -c '^remove' "$JOB_FAKE_LOG"
@@ -482,7 +509,7 @@ no-result"
     # refuses the remove, and the job is running.
     It 'kills a queued job that started before it could be removed'
       raced_cancel() {
-        id=$(run_job job::start --title q -- sleep 9) || return 1
+        id=$(run_job job::start --title q -- work 9) || return 1
         print -r -- '{"tasks":{"7":{"status":{"Queued":{}}}}}' > "$JOB_SANDBOX/status.json"
         JOB_FAKE_REMOVE_RC=1 JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" \
           run_job job::cancel "$id"; print -r -- "rc=$?"
@@ -601,7 +628,7 @@ EOF
   Describe 'job::watch — the troupe dashboard driver'
     It 'floats troupe through mux-modal under tmux — single chrome, sized+themed — and stops on a dismissed (blank) action'
       float_dismiss() {
-        id=$(run_job job::start -- sleep 9) || return 1
+        id=$(run_job job::start -- work 9) || return 1
         export JOB_FAKE_TROUPE_ACTION=""
         # Pinned to the popup path (job-runner design §6 rev 4 added a real
         # pane-host probe ahead of this loop — JOB_FORCE_HOST=popup skips it
@@ -641,7 +668,7 @@ EOF
 
     It 'runs troupe directly outside tmux — themed — and stops on a dismissed (blank) action'
       inline_dismiss() {
-        id=$(run_job job::start -- sleep 9) || return 1
+        id=$(run_job job::start -- work 9) || return 1
         export JOB_FAKE_TROUPE_ACTION=""
         run_job job::watch 2>"$JOB_SANDBOX/watch.err"
         rc=$?
@@ -660,7 +687,7 @@ EOF
     # the dashboard is the same box over the pane instead of taking it over.
     It 'floats troupe through mux-modal in a Rex pane, with the same single chrome'
       float_rex() {
-        id=$(run_job job::start -- sleep 9) || return 1
+        id=$(run_job job::start -- work 9) || return 1
         export JOB_FAKE_TROUPE_ACTION=""
         REX_BLOCK=block:here run_job job::watch 2>"$JOB_SANDBOX/watch.err"
         rc=$?
@@ -688,7 +715,7 @@ EOF
 
     It 'cancel action: Keep running declines the confirm — no kill, relaunches (two invocations)'
       keep_running() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        id=$(run_job job::start --title "C" -- work 9) || return 1
         printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_CONFIRM_RC=1
@@ -704,8 +731,8 @@ EOF
 
     It 'cancel action: confirmed with another job live — kills once and relaunches (two invocations)'
       cancel_other_live() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
-        id2=$(run_job job::start --title "Other" -- sleep 9) || return 2
+        id=$(run_job job::start --title "C" -- work 9) || return 1
+        id2=$(run_job job::start --title "Other" -- work 9) || return 2
         printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_CONFIRM_RC=0
@@ -721,7 +748,7 @@ EOF
 
     It 'cancel action: confirmed as the LAST live job — kills once and STILL relaunches (two invocations; the dashboard shows its own empty state instead of auto-closing)'
       cancel_last_job() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        id=$(run_job job::start --title "C" -- work 9) || return 1
         printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_CONFIRM_RC=0
@@ -746,19 +773,17 @@ EOF
     # `tail -f` reaching some EOF of its own, which never happens.
     It 'logs action: opens the resolved pueue log in a mux tab, relaunches once it closes (two invocations)'
       logs_action() {
-        id=$(run_job job::start --title "L" -- sleep 9) || return 1
+        id=$(run_job job::start --title "L" -- work 9) || return 1
         mkdir -p "$JOB_PUEUE_LOG_DIR"
         : > "$JOB_PUEUE_LOG_DIR/7.log"
         printf 'logs\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
-        # Wait past the writer/reader FIFO rendezvous (a bare "PID exists"
-        # can fire while the wrapped `exec 3>fifo` is still blocked mid-open
-        # — killing THAT early races the open itself, not a live writer) so
-        # the kill lands on a genuinely-running tail -f, matching C1's real
-        # scenario (a signal hitting an ALREADY-open write end).
-        ( while [ ! -s "$JOB_FAKE_NEWTAB_PID" ]; do sleep 0.02; done
-          sleep 0.3
-          kill -TERM "$(cat "$JOB_FAKE_NEWTAB_PID")" 2>/dev/null ) &
+        # Past the writer/reader FIFO rendezvous (a bare "PID exists" can
+        # fire while the wrapped `exec 3>fifo` is still blocked mid-open —
+        # killing THAT early races the open itself, not a live writer), so
+        # the kill lands on an ALREADY-open write end, C1's real scenario:
+        # see tab_killer.
+        tab_killer
         local killer=$!
         run_job job::watch
         rc=$?
@@ -791,7 +816,7 @@ EOF
     # the re-measure round trip was genuinely skipped, not just uncounted.
     It 'resize action: relaunches immediately using the WIRE height (no re-measure), --select forwarded'
       resize_then_dismiss() {
-        id=$(run_job job::start --title "R" -- sleep 9) || return 1
+        id=$(run_job job::start --title "R" -- work 9) || return 1
         printf 'resize\t20\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch
@@ -817,7 +842,7 @@ EOF
 
     It 'resize action with no selected job: relaunches with a bare resize (no --select), wire height used, no re-measure'
       resize_no_selection() {
-        run_job job::start --title "R" -- sleep 9 >/dev/null || return 1
+        run_job job::start --title "R" -- work 9 >/dev/null || return 1
         printf 'resize\t20\n\n' > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch
@@ -844,7 +869,7 @@ EOF
     # wire), so the measure count stays pinned at the initial launch's 1.
     It 'resize action: bails out past 5 consecutive resizes with no other action (log_error, rc 1), never re-measures'
       resize_bailout() {
-        id=$(run_job job::start --title "R" -- sleep 9) || return 1
+        id=$(run_job job::start --title "R" -- work 9) || return 1
         local i
         for i in 1 2 3 4 5 6; do
           printf 'resize\t20\t%s\n' "$id"
@@ -868,7 +893,7 @@ EOF
     # short-circuit early from the first resize's count alone.
     It 'resize action: a cancel in between resets the consecutive-resize streak'
       resize_streak_resets() {
-        id=$(run_job job::start --title "R" -- sleep 9) || return 1
+        id=$(run_job job::start --title "R" -- work 9) || return 1
         {
           printf 'resize\t20\t%s\n' "$id"
           printf 'cancel\t%s\n' "$id"
@@ -947,7 +972,7 @@ EOF
 
     It 'job::start forces a repaint after enqueueing'
       start_pokes() {
-        run_job job::start --title T -- sleep 1 >/dev/null || return 1
+        run_job job::start --title T -- work 1 >/dev/null || return 1
         grep -c 'refresh-client -S' "$JOB_FAKE_TMUX_LOG"
       }
       When call start_pokes
@@ -978,8 +1003,8 @@ EOF
   Describe 'job::_watch_pane — the pane-host driver body'
     It 'streams cancel (declined) then logs then EOF: one launch, confirm once, tab opened once, no respawn, cleanup'
       choreography() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
-        lid=$(run_job job::start --title "L" -- sleep 9) || return 2
+        id=$(run_job job::start --title "C" -- work 9) || return 1
+        lid=$(run_job job::start --title "L" -- work 9) || return 2
         mkdir -p "$JOB_PUEUE_LOG_DIR"
         : > "$JOB_PUEUE_LOG_DIR/7.log"
         printf 'cancel\t%s\nlogs\t%s\n' "$id" "$lid" > "$JOB_SANDBOX/follow-actions"
@@ -988,9 +1013,7 @@ EOF
         # Same rendezvous as the popup path's logs_action example: wait for
         # the tab-open FIFO to be genuinely held open before killing it, not
         # just for the PID file to exist (see that example's own comment).
-        ( while [ ! -s "$JOB_FAKE_NEWTAB_PID" ]; do sleep 0.02; done
-          sleep 0.3
-          kill -TERM "$(cat "$JOB_FAKE_NEWTAB_PID")" 2>/dev/null ) &
+        tab_killer
         local killer=$!
         JOB_FORCE_HOST=pane run_job job::watch
         rc=$?
@@ -1009,7 +1032,7 @@ EOF
 
     It 'a confirmed cancel calls job::cancel — troupe keeps streaming, no relaunch (one launch total)'
       confirmed_cancel() {
-        id=$(run_job job::start --title "K" -- sleep 9) || return 1
+        id=$(run_job job::start --title "K" -- work 9) || return 1
         printf 'cancel\t%s\n' "$id" > "$JOB_SANDBOX/follow-actions"
         export JOB_FAKE_TROUPE_FOLLOW_ACTIONS="$JOB_SANDBOX/follow-actions"
         export JOB_FAKE_CONFIRM_RC=0
@@ -1050,15 +1073,13 @@ EOF
         mkdir -p "$JOB_STATE_ROOT"
         printf '%s' '%99' > "$JOB_STATE_ROOT/.dashboard-pane"
         export JOB_FAKE_FOCUS_RC=1
-        id=$(run_job job::start --title "S" -- sleep 9) || return 1
+        id=$(run_job job::start --title "S" -- work 9) || return 1
         mkdir -p "$JOB_PUEUE_LOG_DIR"
         : > "$JOB_PUEUE_LOG_DIR/7.log"
         printf 'logs\t%s\n' "$id" > "$JOB_SANDBOX/follow-actions"
         export JOB_FAKE_TROUPE_FOLLOW_ACTIONS="$JOB_SANDBOX/follow-actions"
-        ( while [ ! -s "$JOB_FAKE_NEWTAB_PID" ]; do sleep 0.02; done
-          cat "$JOB_STATE_ROOT/.dashboard-pane" > "$JOB_SANDBOX/statefile-midflight" 2>/dev/null
-          sleep 0.3
-          kill -TERM "$(cat "$JOB_FAKE_NEWTAB_PID")" 2>/dev/null ) &
+        peek() { cat "$JOB_STATE_ROOT/.dashboard-pane" > "$JOB_SANDBOX/statefile-midflight" 2>/dev/null; }
+        tab_killer peek
         local killer=$!
         JOB_FORCE_HOST=pane run_job job::watch
         rc=$?
@@ -1074,7 +1095,7 @@ EOF
 
     It 'spawns the fixed 15-row float (no --measure) and wires --follow --no-frame --fill-height 15, resize hook absent'
       wiring() {
-        run_job job::start --title "W" -- sleep 9 >/dev/null || return 1
+        run_job job::start --title "W" -- work 9 >/dev/null || return 1
         export JOB_FAKE_TROUPE_FOLLOW_ACTIONS=""
         JOB_FORCE_HOST=pane run_job job::watch >/dev/null
         rc=$?
@@ -1151,9 +1172,7 @@ INNER
         # rendezvous, not just "the PID exists", so the kill lands on a
         # genuinely-open write end (C1's real scenario), not a race against
         # the wrapped command's own still-blocked `exec 3>fifo`.
-        ( while [ ! -s "$JOB_FAKE_NEWTAB_PID" ]; do sleep 0.02; done
-          sleep 0.3
-          kill -TERM "$(cat "$JOB_FAKE_NEWTAB_PID")" 2>/dev/null ) &
+        tab_killer
         local killer=$!
         run_job job::_open_log_tab "L" "$JOB_SANDBOX/ctrlc.log"
         rc=$?
@@ -1170,8 +1189,9 @@ INNER
         # never actually runs anything holding the FIFO open — a wedged or
         # silently-failed real spawn looks exactly like this from
         # job::_open_log_tab's side. JOB_LOGTAB_TIMEOUT_S keeps the bound
-        # short here (real default: 10s) so the regression fails fast
-        # instead of hanging the suite if the bound ever regresses away.
+        # short here (real default: 10s), and the clock is the test's: the
+        # ten 0.1 s naps of that second cost nothing.
+        spec_clock_set
         cat > "$JOB_SANDBOX/deadnewtab" <<'EOF'
 #!/bin/sh
 exit 0
@@ -1196,7 +1216,7 @@ EOF
   Describe 'job::_watch_confirm_cancel'
     It 'cancels on confirm (rc 0) and asks with the danger-palette flags'
       confirmed() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        id=$(run_job job::start --title "C" -- work 9) || return 1
         JOB_FAKE_CONFIRM_RC=0 run_job job::_watch_confirm_cancel "$id" "C"
         rc=$?
         kills=$(grep -c '^kill 7$' "$JOB_FAKE_LOG")
@@ -1214,7 +1234,7 @@ EOF
 
     It 'declines on rc 1 — no kill, rc 1'
       declined() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        id=$(run_job job::start --title "C" -- work 9) || return 1
         JOB_FAKE_CONFIRM_RC=1 run_job job::_watch_confirm_cancel "$id" "C"
         rc=$?
         kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
@@ -1226,7 +1246,7 @@ EOF
 
     It 'declines on rc 130 (ESC cancel) — no kill, rc 1'
       esc_cancelled() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        id=$(run_job job::start --title "C" -- work 9) || return 1
         JOB_FAKE_CONFIRM_RC=130 run_job job::_watch_confirm_cancel "$id" "C"
         rc=$?
         kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
@@ -1244,7 +1264,7 @@ EOF
     # fails the one `pueue kill` call job::cancel makes here).
     It 'propagates a failed cancel (pueue kill nonzero) — treated as not-cancelled, rc 1'
       cancel_fails() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        id=$(run_job job::start --title "C" -- work 9) || return 1
         JOB_FAKE_CONFIRM_RC=0 JOB_FAKE_RC=1 \
           run_job job::_watch_confirm_cancel "$id" "C" 2>"$JOB_SANDBOX/cc.err"
         rc=$?
@@ -1268,7 +1288,7 @@ EOF
     # reaching it.
     It 'survives a source-time exit from the widget stack when fzf is missing (never crashes the caller)'
       crash_guard() {
-        id=$(run_job job::start --title "C" -- sleep 9) || return 1
+        id=$(run_job job::start --title "C" -- work 9) || return 1
         mkdir -p "$JOB_SANDBOX/minbin"
         ln -sf "$(command -v dirname)" "$JOB_SANDBOX/minbin/dirname"
         zsh -f -c '
@@ -1301,7 +1321,7 @@ EOF
   # needed pinning here).
   Describe 'job::start --modal (headless)'
     It 'prints exactly the id, skips the dashboard, rc 0 — zero troupe invocations'
-      headless() { run_job job::start --modal --title "M" -- sleep 9 </dev/null; }
+      headless() { run_job job::start --modal --title "M" -- work 9 </dev/null; }
       calls() { grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG" 2>/dev/null || echo 0; }
       When call headless
       The status should equal 0

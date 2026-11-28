@@ -75,18 +75,18 @@ job::_rex_jobs_session() {
 # two apart (job::_rex_closing). The caller holds $JOB_STATE_ROOT/.rex.lock.
 # Never fails.
 job::_rex_closing_add() {
-  local file="$JOB_STATE_ROOT/.rex_closing" epoch block
+  local file="$JOB_STATE_ROOT/.rex_closing" epoch block REPLY
   local -a lines
   (( $# )) || return 0
-  zmodload zsh/datetime 2>/dev/null
+  common::now
   {
     while read -r epoch block; do
-      [[ "$epoch" == <-> ]] && (( EPOCHSECONDS - epoch <= 60 )) \
+      [[ "$epoch" == <-> ]] && (( REPLY - epoch <= 60 )) \
         && lines+=("$epoch $block")
     done < "$file"
   } 2>/dev/null
   for block in "$@"; do
-    lines+=("$EPOCHSECONDS $block")
+    lines+=("$REPLY $block")
   done
   {
     print -rl -- "${lines[@]}" > "$file.$$" && mv -f -- "$file.$$" "$file"
@@ -98,13 +98,13 @@ job::_rex_closing_add() {
 # lists that block with an epoch at most 60 s old: reconcile is closing it,
 # its owner is not.
 job::_rex_closing() {
-  local want="$1" epoch block
+  local want="$1" epoch block REPLY
   [ -n "$want" ] || return 1
-  zmodload zsh/datetime 2>/dev/null
+  common::now
   {
     while read -r epoch block; do
       [ "$block" = "$want" ] && [[ "$epoch" == <-> ]] \
-        && (( EPOCHSECONDS - epoch <= 60 )) && return 0
+        && (( REPLY - epoch <= 60 )) && return 0
     done < "$JOB_STATE_ROOT/.rex_closing"
   } 2>/dev/null
   return 1
@@ -180,9 +180,11 @@ job::_rex_open_tab_unlocked() {
     block=$(print -r -- "$out" | jq -r '.block_ids[0] // empty' 2>/dev/null) \
       || block=""
   fi
-  zmodload zsh/datetime 2>/dev/null
+  # The stamp reconcile's grace is measured from: the clock it reads.
+  local REPLY
+  common::now
   {
-    print -r -- "$EPOCHSECONDS $block" > "$JOB_STATE_ROOT/$id/.tab.$$" \
+    print -r -- "$REPLY $block" > "$JOB_STATE_ROOT/$id/.tab.$$" \
       && mv -f -- "$JOB_STATE_ROOT/$id/.tab.$$" "$JOB_STATE_ROOT/$id/tab"
   } 2>/dev/null || :
   [ -n "$sid" ] || return 0
@@ -257,7 +259,9 @@ job::_rex_reconcile_unlocked() {
     then .blocks[].block_id // empty else error("no blocks") end' 2>/dev/null) \
     || return 1
   listed=(${(f)out})
-  zmodload zsh/datetime 2>/dev/null
+  local -i now
+  common::now
+  now=$REPLY
 
   for d in "$JOB_STATE_ROOT"/*(N/); do
     [ -f "$d/meta.json" ] || continue
@@ -270,7 +274,7 @@ job::_rex_reconcile_unlocked() {
     fi
     epoch="" block=""
     { read -r epoch block < "$d/tab" } 2>/dev/null || :
-    if [[ "$epoch" == <-> ]] && (( EPOCHSECONDS - epoch < grace )); then
+    if [[ "$epoch" == <-> ]] && (( now - epoch < grace )); then
       covered=1
       [ -n "$block" ] && keep[$block]=1
     fi
@@ -288,7 +292,7 @@ job::_rex_reconcile_unlocked() {
       # inline, or over within the delay, never had one.
       [ -e "$d/tab" ] || continue
     elif [ "$id" != "$due" ]; then
-      [[ "$created" == <-> ]] && (( EPOCHSECONDS - created < grace )) && continue
+      [[ "$created" == <-> ]] && (( now - created < grace )) && continue
     fi
     reopen+=("$id")
   done
@@ -346,7 +350,7 @@ job::_rex_schedule_tab() {
   notify=$(jq -r '.notify // "all"' "$dir/meta.json" 2>/dev/null) || notify="all"
   [ "$notify" = "none" ] && return 0
   (
-    sleep "$delay"
+    common::sleep "$delay"
     [ -d "$dir" ] && [ ! -s "$dir/result" ] || exit 0
     job::_rex_available || exit 0
     job::_rex_lock \

@@ -280,6 +280,30 @@ new"
       When call absent
       The status should be failure
     End
+
+    It 'takes a set $HS as the whole answer: no fallback to an hs on PATH'
+      # How specs used to raise real toasts: HS pointed at nothing, and the
+      # probe went on to find the real CLI on PATH.
+      set_but_missing() {
+        printf '#!/bin/sh\nexit 0\n' >"$HSDIR/hs"; chmod +x "$HSDIR/hs"
+        HS="$HSDIR/nope" PATH="$HSDIR:$PATH" notify::available --path
+      }
+      When call set_but_missing
+      The status should be failure
+      The output should equal ""
+    End
+
+    It 'still looks on PATH when $HS is unset'
+      from_path() {
+        printf '#!/bin/sh\nexit 0\n' >"$HSDIR/hs"; chmod +x "$HSDIR/hs"
+        local found
+        found=$(unset HS; PATH="$HSDIR:$PATH" notify::available --path) || return 1
+        # The default location wins where it exists; the PATH one otherwise.
+        [ "$found" = /opt/homebrew/bin/hs ] || [ "$found" = "$HSDIR/hs" ]
+      }
+      When call from_path
+      The status should be success
+    End
   End
 
   Describe 'poll::until (bounded in-process wall-clock poll)'
@@ -336,6 +360,160 @@ new"
       }
       When call probe_count
       The status should be success
+    End
+  End
+
+  Describe 'the clock seam (common::now / common::sleep)'
+    # Production reads the time and waits through these two. On the real clock
+    # neither forks; under $COMMON_CLOCK_FILE (which spec_clock_set exports
+    # next to SPEC_CLOCK_FILE) they read and advance the test's journal.
+    LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh"
+
+    Describe 'on the real clock'
+      # With nothing on PATH there is no external clock or wait to fork: had
+      # the seam reached for one, the call would fail with "command not found".
+      no_fork() { local PATH=/var/empty; "$@"; }
+
+      It 'gives whole seconds in REPLY, without a child process'
+        run() { local REPLY; common::now; [[ "$REPLY" == <-> ]] && (( REPLY > 1700000000 )) && print ok; }
+        When call no_fork run
+        The output should equal "ok"
+      End
+
+      It 'gives fractional seconds with -f, and milliseconds with -m'
+        run() {
+          local REPLY f m
+          common::now -f; f=$REPLY
+          common::now -m; m=$REPLY
+          [[ "$f" == <->.<-> && "$m" == <-> ]] || return 1
+          # The same instant, in two units: within a second of each other.
+          (( m / 1000.0 - f > -1 && m / 1000.0 - f < 1 )) && print ok
+        }
+        When call no_fork run
+        The output should equal "ok"
+      End
+
+      It 'sleeps without a child process, fractions included'
+        run() { common::sleep 0.01 && common::sleep 0 && print ok; }
+        When call no_fork run
+        The output should equal "ok"
+      End
+
+      It 'is the real clock when the variable is empty or names no file'
+        run() {
+          local REPLY
+          COMMON_CLOCK_FILE= common::now; (( REPLY > 1700000000 )) || return 1
+          COMMON_CLOCK_FILE="$SHELLSPEC_TMPBASE/no-such-journal" common::now; (( REPLY > 1700000000 )) || return 1
+          COMMON_CLOCK_FILE="$SHELLSPEC_TMPBASE/no-such-journal" common::sleep 0.01 || return 1
+          [ ! -e "$SHELLSPEC_TMPBASE/no-such-journal" ] && print ok
+        }
+        When call no_fork run
+        The output should equal "ok"
+      End
+    End
+
+    Describe 'on the virtual clock'
+      BeforeEach 'spec_clock_set 1000'
+      now() { local REPLY; common::now "$@"; print -r -- "$REPLY"; }
+
+      It 'follows the clock as the test sets and advances it'
+        run() { now; spec_clock_advance 90; now; spec_clock_advance 0.25; now; now -f; now -m; spec_clock_set 5; now; now -f; }
+        When call run
+        The output should equal "1000
+1090
+1090
+1090.250
+1090250
+5
+5.000"
+      End
+
+      It 'reads the journal as the test helper does, whatever was written to it'
+        # One format, two readers (awk in spec_helper, a read loop in
+        # common.zsh): the same journal must give both the same now.
+        run() {
+          local REPLY
+          print -rl -- "+ 7" "= 12345" "+ 200 0.2" "+ 1" "junk line" "= 99000" "+ 61001 1m 1.001" "+ 0" >>"$SPEC_CLOCK_FILE"
+          common::now -m
+          print -r -- "$REPLY $(spec_clock_now ms)"
+          common::now
+          print -r -- "$REPLY $(spec_clock_now)"
+        }
+        When call run
+        The output should equal "160001 160001
+160 160"
+      End
+
+      It 'advances by exactly what was asked, and returns at once'
+        run() {
+          local i; for i in {1..25}; do common::sleep 0.2; done
+          spec_clock_now ms
+          spec_clock_slept | sort | uniq -c | tr -s ' '
+        }
+        When call run
+        The output should equal "1005000
+ 25 0.2"
+      End
+
+      It 'records each request in seconds, in order'
+        run() {
+          common::sleep 0.05; common::sleep 0.20; common::sleep 3; spin::nap; common::sleep 1.5
+          spec_clock_slept | tr '\n' ' '
+          spec_clock_now ms
+        }
+        When call run
+        The output should equal "0.05 0.2 3 0.1 1.5 1004850"
+      End
+
+      It 'is the same clock in a child zsh that sources common.zsh'
+        run() {
+          zsh -fc 'source "$1"; common::sleep 2; common::now; print -r -- "$REPLY"; common::sleep 1; common::now -f; print -r -- "$REPLY"' zsh "$LIB"
+          now -m
+        }
+        When call run
+        The output should equal "1002
+1003.000
+1003000"
+      End
+
+      It 'loses no update when processes sleep at the same time'
+        run() {
+          local p
+          for p in 1 2 3 4; do ( local i; for i in {1..25}; do common::sleep 0.1; done ) & done
+          wait
+          now -m
+        }
+        When call run
+        The output should equal "1010000"
+      End
+    End
+
+    Describe 'poll::until on the virtual clock'
+      BeforeEach 'spec_clock_set 1000'
+
+      It 'gives up at its deadline, after as many probes as the arithmetic says'
+        run() {
+          local -i n=0
+          probe() { (( n += 1 )); false; }
+          poll::until 0.3 0.1 probe
+          print -r -- "rc=$? probes=$n now=$(spec_clock_now ms)"
+          spec_clock_slept | sort | uniq -c | tr -s ' '
+        }
+        When call run
+        The output should equal "rc=1 probes=4 now=1000300
+ 3 0.1"
+      End
+
+      It 'returns as soon as the condition holds'
+        run() {
+          local -i n=0
+          probe() { (( (n += 1) >= 3 )); }
+          poll::until 5 0.2 probe
+          print -r -- "rc=$? probes=$n now=$(spec_clock_now ms)"
+        }
+        When call run
+        The output should equal "rc=0 probes=3 now=1000400"
+      End
     End
   End
 

@@ -356,9 +356,12 @@ share::_croc_tap_record() {
   # these matches print errors into the stream or fail.
   local LC_ALL=C REPLY
   [[ "$rec" == *[^[:space:]]* ]] || return 0
+  local -i now
+  common::now
+  now=$REPLY
   if (( ! connected )); then
     if [[ "$rec" =~ '^[[:space:]]*Sending \(->' ]]; then
-      connected=1 last=0 lastw=EPOCHSECONDS
+      connected=1 last=0 lastw=$now
       share::_progress 0 "sending $label"
     fi
     return 0
@@ -366,9 +369,9 @@ share::_croc_tap_record() {
   share::_croc_pct_reply "$rec"
   pct=$REPLY
   # A multi-file send restarts the bar per file; that is just a new percent.
-  if [[ -n "$pct" ]] && { [[ "$pct" != "$last" ]] || (( EPOCHSECONDS - lastw >= beat )); }; then
+  if [[ -n "$pct" ]] && { [[ "$pct" != "$last" ]] || (( now - lastw >= beat )); }; then
     share::_progress "$pct" "sending $label"
-    last="$pct" lastw=EPOCHSECONDS
+    last="$pct" lastw=$now
   fi
   return 0
 }
@@ -487,8 +490,10 @@ share::croc_send() {
   # across a laptop sleep. Switching either is forbidden (D8): we cannot edit
   # a message that has already been sent.
   local -i deadline=0 attempt=0 wait_s=0 fast_fails=0 started=0 ran=0
+  local REPLY
   if [[ "$mode" == live && -n "${JOB_ID:-}" ]]; then
-    deadline=$(( EPOCHSECONDS + SHARE_LIVE_DEADLINE ))
+    common::now
+    deadline=$(( REPLY + SHARE_LIVE_DEADLINE ))
   fi
 
   # W2: say "waiting" BEFORE the first attempt — that is where the user looks.
@@ -500,7 +505,8 @@ share::croc_send() {
     # which as a standalone command is exit status 1, and this library is
     # sourced by a CLI running under `set -e`. It aborted every live send.
     attempt=$(( attempt + 1 ))
-    started=$EPOCHSECONDS
+    common::now
+    started=$REPLY
     if (( ${#envp} )); then
       env "${envp[@]}" "${cmd[@]}" 2>&1 | share::_croc_tap "$tmp" "$label" "$mode"
       rc=${pipestatus[1]}
@@ -509,7 +515,8 @@ share::croc_send() {
       rc=${pipestatus[1]}
     fi
     out="$(<"$tmp")"
-    ran=$(( EPOCHSECONDS - started ))
+    common::now
+    ran=$(( REPLY - started ))
     (( rc == 0 )) && break
     (( deadline > 0 )) || break
     # A rejected relay password fails identically forever; looping on it for a
@@ -533,7 +540,8 @@ share::croc_send() {
       # this run does not count against the fast-failure budget.
       fast_fails=0
     fi
-    if (( EPOCHSECONDS >= deadline )); then
+    common::now
+    if (( REPLY >= deadline )); then
       log_error "share: nobody collected this transfer before the deadline"
       break
     fi
@@ -541,7 +549,7 @@ share::croc_send() {
     (( wait_s > 60 )) && wait_s=60
     # Names the attempt ABOUT to run; the loop increments at its top.
     share::_waiting "waiting for recipient (attempt $(( attempt + 1 )))"
-    sleep "$wait_s"
+    common::sleep "$wait_s"
   done
   rm -f -- "$tmp"
   if (( rc != 0 )); then
@@ -592,7 +600,10 @@ share::croc_send() {
   if [[ "$mode" == live ]]; then
     ledger_backend=croc-live
   else
-    [[ -n "$expiration" ]] && expires_epoch=$(( EPOCHSECONDS + $(share::_duration_seconds "$expiration") ))
+    if [[ -n "$expiration" ]]; then
+      common::now
+      expires_epoch=$(( REPLY + $(share::_duration_seconds "$expiration") ))
+    fi
   fi
   # Live rows are tagged with the distinct backend "croc-live", not "croc":
   # a live transfer has no store-side id to revoke — `ref` is empty by

@@ -151,7 +151,7 @@ open_in_wezterm() {
     PANE_ID=$("$WEZTERM_BIN" cli spawn "${WEZTERM_CWD_ARGS[@]}" -- "$NVIM_BIN" "$@" 2>/dev/null)
 
     if [ -z "$PANE_ID" ]; then
-      sleep 0.5
+      common::sleep 0.5
       PANE_ID=$("$WEZTERM_BIN" cli spawn "${WEZTERM_CWD_ARGS[@]}" -- "$NVIM_BIN" "$@")
     fi
 

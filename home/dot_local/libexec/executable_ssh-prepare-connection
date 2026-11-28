@@ -131,6 +131,15 @@ step_theme() {
   rm -f "$tmp"
 }
 
+# _mount_detach — right after `cmd &` in step_mount: disown that job, so the
+# connection never waits for it. That is the `&!` this replaces, except under
+# SSH_PREPARE_FOREGROUND=1, where the job stays this shell's and the step is
+# followed by a `wait` for all of them: for a caller that must know the pushes
+# are done when the script returns (the tests, which could otherwise only poll).
+_mount_detach() {
+  [[ "${SSH_PREPARE_FOREGROUND:-}" == 1 ]] || disown
+}
+
 step_mount() {
   # Clipboard peer mount (clipboard-mount spec §3.2): mount <peer-hostname>'s
   # / read-only via rclone SFTP so a file copied on it lands here as a
@@ -166,7 +175,7 @@ step_mount() {
   print -rn -- "$peer_hostname" | ssh -o ControlPath=none -o ClearAllForwardings=yes \
     -o BatchMode=yes -o ConnectTimeout=5 "$target" \
     'd="${XDG_STATE_HOME:-$HOME/.local/state}/clipboard"; mkdir -p "$d" && cat > "$d/self-name"' \
-    >/dev/null 2>&1 &!
+    >/dev/null 2>&1 & _mount_detach
 
   # Physical-terminal push: window.fullscreen.toggle needs the terminal NAME
   # on the machine the human sits at, and the remote's detection chain cannot
@@ -191,12 +200,12 @@ step_mount() {
     print -rn -- "$peer_term" | ssh -o ControlPath=none -o ClearAllForwardings=yes \
       -o BatchMode=yes -o ConnectTimeout=5 "$target" \
       'd="${XDG_STATE_HOME:-$HOME/.local/state}/mux"; mkdir -p "$d" && cat > "$d/peer-term"' \
-      >/dev/null 2>&1 &!
+      >/dev/null 2>&1 & _mount_detach
   else
     ssh -o ControlPath=none -o ClearAllForwardings=yes \
       -o BatchMode=yes -o ConnectTimeout=5 "$target" \
       'rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/mux/peer-term"' \
-      >/dev/null 2>&1 &!
+      >/dev/null 2>&1 & _mount_detach
   fi
 
   # Credential push (RECOB spec §9.2): the remote answers this machine's
@@ -230,7 +239,7 @@ step_mount() {
         "umask 077; d=\"\${XDG_STATE_HOME:-\$HOME/.local/state}/clipboard/tunnel-tokens\";
          mkdir -p \"\$d\" && chmod 700 \"\$d\" &&
          cat > \"\$d/${recob_owner}\" && chmod 600 \"\$d/${recob_owner}\"" \
-        < "$recob_token" >/dev/null 2>&1 &!
+        < "$recob_token" >/dev/null 2>&1 & _mount_detach
     fi
   fi
 
@@ -250,7 +259,7 @@ step_mount() {
         "umask 077; d=\"\${XDG_STATE_HOME:-\$HOME/.local/state}/clipboard/mount-tokens\";
          mkdir -p \"\$d\" && chmod 700 \"\$d\" &&
          cat > \"\$d/${serve_owner}\" && chmod 600 \"\$d/${serve_owner}\"" \
-        < "$serve_token" >/dev/null 2>&1 &!
+        < "$serve_token" >/dev/null 2>&1 & _mount_detach
     fi
   fi
 
@@ -276,7 +285,7 @@ step_mount() {
           print -rn -- "$fetched" > "$d/$peer_hostname" &&
           chmod 600 "$d/$peer_hostname"
       fi
-    ) >/dev/null 2>&1 &!
+    ) >/dev/null 2>&1 & _mount_detach
   fi
 
   # Computer-name capture (VNC companion): Screen Sharing window titles
@@ -303,7 +312,7 @@ step_mount() {
         ' "$config" > "$tmp" && mv -f -- "$tmp" "$config"
       fi
     fi
-  ) >/dev/null 2>&1 &!
+  ) >/dev/null 2>&1 & _mount_detach
 
   # The mount itself (rclone/MacFUSE + Finder) is Darwin-only -- unlike the
   # identity push above, THIS part really is conditional on that (Finder is
@@ -314,7 +323,7 @@ step_mount() {
   [[ "$OSTYPE" == darwin* ]] || return 0
   local cm="${CLIPBOARD_MOUNT_BIN:-$HOME/.local/libexec/clipboard-mount}"
   [[ -x "$cm" ]] || return 0
-  "$cm" ensure "$peer_hostname" "$target" </dev/null >/dev/null 2>&1 &!
+  "$cm" ensure "$peer_hostname" "$target" </dev/null >/dev/null 2>&1 & _mount_detach
   return 0
 }
 
@@ -433,7 +442,10 @@ for step in "${steps[@]}"; do
     gpg)        step_gpg ;;
     symbols-db) step_symbols_db ;;
     theme)      step_theme ;;
-    mount)      step_mount ;;
+    mount)
+      step_mount
+      [[ "${SSH_PREPARE_FOREGROUND:-}" != 1 ]] || wait
+      ;;
     *)
       print -u2 -- "ssh-prepare-connection: unknown step '$step' (known: ${(j:, :)all_steps})"
       exit 1

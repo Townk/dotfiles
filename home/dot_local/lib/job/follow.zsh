@@ -100,11 +100,7 @@ job::_follow_emit() {
 job::_follow_nap() {
   local -i cs=$(( ${1:-1} * 100 ))
   (( cs > 0 )) || cs=1
-  if zmodload -e zsh/zselect; then
-    zselect -t "$cs" 2>/dev/null || :
-  else
-    sleep "${1:-1}" 2>/dev/null || :
-  fi
+  common::sleep "$(( cs / 100.0 ))" 2>/dev/null || :
   return 0
 }
 
@@ -332,11 +328,13 @@ job::follow() {
   # rule. An inline follower is not held to it (only job::start runs one,
   # at once, before any tab exists) and never cancels.
   if (( ! inline )); then
-    deadline=$(( EPOCHREALTIME + 3 ))
+    common::now -f
+    deadline=$(( REPLY + 3 ))
     while { read -r block pid < "$dir/follower" } 2>/dev/null \
       && [[ "$pid" == <-> ]] && [ "$pid" != "$self" ] \
       && kill -0 "$pid" 2>/dev/null; do
-      if (( EPOCHREALTIME >= deadline )); then
+      common::now -f
+      if (( REPLY >= deadline )); then
         print -r -- "job $id is already being followed"
         return 0
       fi

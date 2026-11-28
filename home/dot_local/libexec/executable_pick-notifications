@@ -76,8 +76,10 @@ hints="$(pick::hints 󰌑 re-show "󰘴 L" "job log" 󱊷 cancel)"
 # wire separators — US and RS, pick::line's format — are emitted as the jq
 # escapes u001f/u001e so this file stays control-character-free on disk.
 pn::rows() {
+  local REPLY
+  common::now
   tail -n 200 -- "$HISTORY_FILE" | jq -rs \
-    --arg now "${EPOCHSECONDS:-$(date +%s)}" \
+    --arg now "$REPLY" \
     --arg ok "$sgr_ok" --arg bad "$sgr_bad" --arg off "$sgr_off" \
     --arg gen "$sgr_gen" --arg age_c "$sgr_age" --arg reset "$reset" \
     --arg bell "$bell_glyph" '

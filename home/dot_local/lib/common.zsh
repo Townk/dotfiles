@@ -279,6 +279,117 @@ if [[ -z "${_common_tmpdir_trap_armed:-}" ]]; then
   unset _common_trap_capture _common_trap_prev _common_trap_line
 fi
 
+# --- the clock --------------------------------------------------------------
+# common::now and common::sleep are how this tree reads the time and waits,
+# wherever the answer decides something: a poll loop, a settle delay, a
+# deadline, a TTL, an age. (A timestamp that is only WRITTEN — a log line, a
+# record, an id — reads $EPOCHSECONDS / $EPOCHREALTIME directly.)
+#
+# common::now [-f | -m]
+# Set REPLY to the current time: whole epoch seconds; with -f fractional
+# seconds, as $EPOCHREALTIME gives them; with -m whole milliseconds, for
+# arithmetic that must not drift (a deadline 0.3 s away, in 0.1 s steps).
+# REPLY, not stdout: no subshell on a hot path. Declare `local REPLY` where
+# the caller's caller may be using it.
+#
+# common::sleep <seconds>
+# Wait that long; fractions allowed (0.05), a plain number only (no 5s/1m).
+# No fork: `sleep` is external in zsh, zselect is not, and zselect is not cut
+# short by a signal or a child exiting, so this is a full sleep. A zsh built
+# without the module falls back to `sleep`. The resolution is a centisecond;
+# anything positive below that waits one.
+#
+# $COMMON_CLOCK_FILE — the one reason production code knows about tests. When
+# it is set AND names a readable file, both functions use that file as the
+# clock instead of the real one: no test may wait or assert on elapsed time
+# (tests/README-scaffolding.md), and code whose subject IS time can only be
+# tested deterministically if the test owns the clock. The file is the
+# journal tests/spec_helper.sh writes (spec_clock_set exports this variable
+# next to its own SPEC_CLOCK_FILE), append-only, one line per event:
+#
+#   = <ms>             the clock was set to this many milliseconds
+#   + <ms> [request]   it advanced by this many; a sleep adds what was asked
+#
+# "now" is the last `=` plus every `+` after it; common::sleep appends one
+# `+` line (one O_APPEND write, so concurrent sleepers lose nothing) and
+# returns at once. Unset, empty, or naming no file: the real clock, always.
+# The format has two readers, this one and the awk in spec_helper.sh;
+# tests/common_spec.sh feeds both the same journal and compares.
+zmodload zsh/datetime 2>/dev/null
+# zselect times out with rc 1 and no ready fds, so module presence is probed
+# once (same guarded pattern as pick-clipboard's CLIP_PROGRESS_ZSELECT).
+zmodload zsh/zselect 2>/dev/null && typeset -g _common_have_zselect=1 \
+  || typeset -g _common_have_zselect=0
+
+_common_clock_virtual() {
+  [[ -n "${COMMON_CLOCK_FILE:-}" && -f "$COMMON_CLOCK_FILE" && -r "$COMMON_CLOCK_FILE" ]]
+}
+
+# _common_clock_fold — REPLY = the journal's now, in milliseconds.
+_common_clock_fold() {
+  local op n rest
+  local -i t=0
+  while read -r op n rest; do
+    [[ "$n" == <-> ]] || continue
+    case "$op" in
+      '=') t=$n ;;
+      '+') (( t += n )) ;;
+    esac
+  done < "$COMMON_CLOCK_FILE"
+  REPLY=$t
+}
+
+common::now() {
+  if _common_clock_virtual; then
+    _common_clock_fold
+    case "${1:-}" in
+      -m) ;;
+      -f) REPLY="$(( REPLY / 1000 )).${(l:3::0:)$(( REPLY % 1000 ))}" ;;
+      *) REPLY=$(( REPLY / 1000 )) ;;
+    esac
+    return 0
+  fi
+  case "${1:-}" in
+    -f) REPLY=${EPOCHREALTIME:-$(date +%s)} ;;
+    -m)
+      if (( ${+epochtime} )); then
+        REPLY=$(( epochtime[1] * 1000 + epochtime[2] / 1000000 ))
+      else
+        REPLY=$(( $(date +%s) * 1000 ))
+      fi
+      ;;
+    *) REPLY=${EPOCHSECONDS:-$(date +%s)} ;;
+  esac
+  return 0
+}
+
+common::sleep() {
+  local s="${1:-0}"
+  if _common_clock_virtual; then
+    local -i ms=$(( s * 1000 + 0.5 ))
+    (( ms > 0 )) || ms=0
+    # The request as the test reads it back: seconds, no trailing zeros
+    # (0.2, 3, 0.05), whatever float the caller computed it from.
+    local req=$(( ms / 1000 )) frac=${(l:3::0:)$(( ms % 1000 ))}
+    while [[ "$frac" == *0 ]]; do frac=${frac%0}; done
+    [[ -z "$frac" ]] || req+=".$frac"
+    print -r -- "+ $ms $req" >> "$COMMON_CLOCK_FILE"
+    return 0
+  fi
+  (( s > 0 )) || return 0
+  if (( _common_have_zselect )); then
+    local -i cs=$(( s * 100 + 0.5 ))
+    (( cs > 0 )) || cs=1
+    # zselect exits 1 on timeout — its NORMAL outcome with no fds. The `||`
+    # anchors it in a condition so a BARE common::sleep/poll::until under a
+    # caller's `set -e` survives (a trailing `return 0` alone never runs:
+    # errexit fires on the zselect statement itself).
+    zselect -t "$cs" 2>/dev/null || true
+    return 0
+  fi
+  sleep "$s"
+}
+
 # --- spinner ----------------------------------------------------------------
 # One spinner for the whole tree. Everything animates on STDERR, so a caller's
 # stdout stays pipeable and the frames never contaminate captured data.
@@ -297,23 +408,10 @@ spin::active() {
 # spin::nap [centiseconds]
 # One animation tick (default 0.1s) without forking: `sleep` is external in
 # zsh, so a spinner would otherwise fork+exec 10×/second for its whole life —
-# the only fork in the common silent case. zselect times out with rc 1 and no
-# ready fds, so module presence is probed once (same guarded pattern as
-# pick-clipboard's CLIP_PROGRESS_ZSELECT); a zsh built without the module
-# falls back to `sleep`.
-zmodload zsh/zselect 2>/dev/null && typeset -g _common_have_zselect=1 \
-  || typeset -g _common_have_zselect=0
+# the only fork in the common silent case. common::sleep is the fork-free
+# wait (and the clock seam).
 spin::nap() {
-  local cs="${1:-10}"
-  if (( _common_have_zselect )); then
-    # zselect exits 1 on timeout — its NORMAL outcome with no fds. The `||`
-    # anchors it in a condition so a BARE spin::nap/poll::until under a
-    # caller's `set -e` survives (a trailing `return 0` alone never runs:
-    # errexit fires on the zselect statement itself).
-    zselect -t "$cs" 2>/dev/null || true
-    return 0
-  fi
-  sleep "$(( cs / 100.0 ))"
+  common::sleep "$(( ${1:-10} / 100.0 ))"
 }
 
 # spin::wait <pid> [title]
@@ -664,7 +762,6 @@ for_each() {
 poll::until() {
   local timeout="$1" interval="$2"
   shift 2
-  zmodload zsh/datetime 2>/dev/null
   if (( interval <= 0 )); then
     "$@" && return 0
     return 1
@@ -673,10 +770,17 @@ poll::until() {
   # can't degenerate into a busy loop).
   local -i interval_cs=$(( interval * 100 ))
   (( interval_cs < 1 )) && interval_cs=1
-  local -F start=$EPOCHREALTIME
+  # The budget in whole milliseconds off the clock seam: integers, so a
+  # budget that is a multiple of the interval ends on the same probe every
+  # time. `local REPLY` keeps the caller's (and <cmd>'s) REPLY out of it.
+  local REPLY
+  local -i start_ms timeout_ms=$(( timeout * 1000 + 0.5 ))
+  common::now -m
+  start_ms=$REPLY
   while true; do
     "$@" && return 0
-    (( (EPOCHREALTIME - start) >= timeout )) && return 1
+    common::now -m
+    (( REPLY - start_ms >= timeout_ms )) && return 1
     spin::nap "$interval_cs"
   done
 }
@@ -711,16 +815,20 @@ lock::hold() {
 # --- notifications ----------------------------------------------------------
 # notify::available [--path]
 # True when the running Hammerspoon's `hs` CLI is reachable, i.e. an OSD
-# notification can actually be shown. Honors $HS as an explicit override, then
-# falls back to PATH. With --path it also prints the resolved hs path on stdout
+# notification can actually be shown. A set $HS is the whole answer (no
+# fallback: a caller that names a CLI must never reach another one); unset, the
+# Homebrew path, then PATH. With --path it also prints the resolved hs path on stdout
 # (nothing + rc 1 when unavailable). This is the probe `notify` uses to bail
 # quietly with no `hs`. It answers "can this machine paint an OSD", NOT "will
 # the user see one" — over ssh those differ, and only notify itself knows which
 # screen a message is bound for, so callers should call notify and read its rc
 # rather than pre-flighting with this.
 notify::available() {
-  local hs="${HS:-/opt/homebrew/bin/hs}"
-  [ -x "$hs" ] || hs="$(command -v hs 2>/dev/null || true)"
+  local hs="${HS:-}"
+  if [ -z "$hs" ]; then
+    hs=/opt/homebrew/bin/hs
+    [ -x "$hs" ] || hs="$(command -v hs 2>/dev/null || true)"
+  fi
   [ -n "$hs" ] && [ -x "$hs" ] || return 1
   [ "${1:-}" = --path ] && printf '%s' "$hs"
   return 0

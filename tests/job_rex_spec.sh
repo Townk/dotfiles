@@ -23,10 +23,13 @@ EOS
     chmod +x "$JOB_SANDBOX/tmux"
     export JOB_TMUX_BIN="$JOB_SANDBOX/tmux"
     # rex: records argv to JOB_FAKE_REX_LOG. `whoami` exits
-    # JOB_FAKE_REX_WHOAMI_RC (4 = no server). `ls --json` prints the
-    # JOB_FAKE_REX_LS fixture. `new` exits JOB_FAKE_REX_NEW_RC when set;
-    # otherwise it takes a moment (widening any race between two openers),
-    # adds the Jobs session to the ls fixture, and answers like the real CLI.
+    # JOB_FAKE_REX_WHOAMI_RC (4 = no server); with JOB_FAKE_REX_GATE naming a
+    # FIFO it first writes a line there, so it is held until the example
+    # reads it. `ls --json` prints the JOB_FAKE_REX_LS fixture. `new` exits
+    # JOB_FAKE_REX_NEW_RC when set; otherwise it adds the Jobs session to the
+    # ls fixture and answers like the real CLI, after JOB_FAKE_REX_NEW_DELAY
+    # seconds when that is set (one example widens a race between two openers
+    # with it: the only real wait in this file).
     # `block ls` prints the JOB_FAKE_REX_BLOCKS fixture and, like the real
     # CLI, exits 1 when the ls fixture has no Jobs session; `block close`
     # notes in JOB_FAKE_REX_CLOSING_SEEN whether $JOB_STATE_ROOT/.rex_closing
@@ -42,7 +45,10 @@ EOS
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
 case "$*" in
-  *' whoami'*) exit "${JOB_FAKE_REX_WHOAMI_RC:-0}" ;;
+  *' whoami'*)
+    [ -p "${JOB_FAKE_REX_GATE:-}" ] && echo whoami > "$JOB_FAKE_REX_GATE"
+    exit "${JOB_FAKE_REX_WHOAMI_RC:-0}"
+    ;;
   *' block ls '*)
     grep -q '"label":"Jobs"' "$JOB_FAKE_REX_LS" || exit 1
     cat "$JOB_FAKE_REX_BLOCKS"
@@ -62,7 +68,7 @@ case "$*" in
     ;;
   *' new Jobs '*)
     [ -n "${JOB_FAKE_REX_NEW_RC:-}" ] && exit "$JOB_FAKE_REX_NEW_RC"
-    sleep 0.3
+    [ -n "${JOB_FAKE_REX_NEW_DELAY:-}" ] && sleep "$JOB_FAKE_REX_NEW_DELAY"
     printf '%s\n' '{"sessions":[{"session_id":"session:main","label":"Main"},{"session_id":"session:jobs","label":"Jobs"}]}' \
       > "$JOB_FAKE_REX_LS"
     echo '{"session_id":"session:jobs","initial_windows":[{"window_id":"window:w1","block_ids":["block:b1"]}]}'
@@ -94,14 +100,25 @@ EOS
     printf '%s\n' '{"sessions":[{"session_id":"session:main","label":"Main"},{"session_id":"session:jobs","label":"Jobs"}]}' \
       > "$JOB_FAKE_REX_LS"
   }
-  # Bounded poll (5 s) until the rex log has a line matching $1.
-  wait_log() {
-    local i=0
-    until grep -q -- "$1" "$JOB_FAKE_REX_LOG" 2>/dev/null; do
-      i=$((i + 1)); [ "$i" -gt 50 ] && return 1
-      sleep 0.1
-    done
+  # joined <command…> — run it, then block until every process it left
+  # behind has ended. job::start's tab step is disowned (`&!`) and outlives
+  # the zsh that scheduled it, so there is no pid to `wait` for. It does
+  # inherit fd 9, the write end of a FIFO, and holds it until it exits: the
+  # reader below sees end-of-file when the last holder is gone. After that
+  # the rex log is final, and "no tab was opened" is a fact, not a guess
+  # about how long to look.
+  joined() {
+    local fifo joiner rc=0
+    fifo=$(mktemp -u "$JOB_SANDBOX/join.XXXXXX") && mkfifo "$fifo" || return 1
+    cat "$fifo" > /dev/null &
+    joiner=$!
+    "$@" 9> "$fifo" || rc=$?
+    wait "$joiner"
+    rm -f "$fifo"
+    return $rc
   }
+  # The rex log has a line matching $1. No polling: ask after `joined`.
+  wait_log() { grep -q -- "$1" "$JOB_FAKE_REX_LOG" 2>/dev/null; }
   opens() { grep -c ' new ' "$JOB_FAKE_REX_LOG" 2>/dev/null || :; }
 
   Describe 'job::_rex'
@@ -155,6 +172,9 @@ EOS
 
     It 'creates one session for two simultaneous jobs'
       both() {
+        # The one real wait left: the first opener's `new` takes 0.3 s, so
+        # the second reaches the lock while it is held.
+        export JOB_FAKE_REX_NEW_DELAY=0.3
         meta j1 "One"; meta j2 "Two"
         run_job job::_rex_open_tab j1 & p1=$!
         run_job job::_rex_open_tab j2 & p2=$!
@@ -226,16 +246,11 @@ $(printf 'b%.0s' $(seq 1 99))"
       waits() {
         meta j1 "Remux"
         export JOB_SANDBOX
-        zsh -f -c 'source "$1" >/dev/null 2>&1 || exit 99
+        joined zsh -f -c 'source "$1" >/dev/null 2>&1 || exit 99
           lock::hold() { print -r -- "${2:-0}" >> "$JOB_SANDBOX/locks"; }
           job::_rex_open_tab j1
           job::_rex_reconcile
           job::_rex_schedule_tab j1' -- "$JOBLIB"
-        local i=0
-        until [ "$(wc -l < "$JOB_SANDBOX/locks" 2>/dev/null | tr -d ' ')" = 3 ]; do
-          i=$((i + 1)); [ "$i" -gt 50 ] && break
-          sleep 0.1
-        done
         tr '\n' ' ' < "$JOB_SANDBOX/locks"
       }
       When call waits
@@ -599,7 +614,7 @@ block:b9"
   Describe 'job::start'
     It 'opens the tab in the background after the delay'
       started() {
-        id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
+        id=$(joined run_job job::start --title "plan check" -- true) || return 1
         wait_log " follow $id" || return 2
         grep -c " new Jobs --window=plan check --json -- $JOB_CLI follow $id" \
           "$JOB_FAKE_REX_LOG"
@@ -610,12 +625,25 @@ block:b9"
 
     It 'returns at once while the tab waits for its delay'
       # A $(…) capture waits for every holder of its pipe: a background step
-      # that kept stdout would hold this for the whole 3 s delay.
+      # that kept stdout would hold this until the step is over. The step is
+      # held at its first question to the server (the gate), which comes
+      # after the delay; the capture has to return while it is held there,
+      # and the step is still running then (its joiner has seen no
+      # end-of-file). The delay itself is on the virtual clock: 3 s asked
+      # for, none spent. A step that kept stdout would hang here.
       quick() {
-        zmodload zsh/datetime
-        local t0=$EPOCHREALTIME
-        id=$(JOB_FOLLOW_DELAY=3 run_job job::start -- sleep 1) || return 1
-        (( EPOCHREALTIME - t0 < 2 )) && echo fast || echo slow
+        local fifo joiner held=no
+        spec_clock_set 1000
+        export JOB_FAKE_REX_GATE="$JOB_SANDBOX/gate"
+        mkfifo "$JOB_FAKE_REX_GATE"
+        fifo="$JOB_SANDBOX/join"; mkfifo "$fifo"
+        cat "$fifo" > /dev/null &
+        joiner=$!
+        id=$(JOB_FOLLOW_DELAY=3 run_job job::start -- true 9> "$fifo") || return 1
+        kill -0 "$joiner" 2>/dev/null && held=yes
+        read -r _ < "$JOB_FAKE_REX_GATE"
+        wait "$joiner"
+        [ "$held" = yes ] && [ "$(spec_clock_slept)" = 3 ] && echo fast || echo slow
       }
       When call quick
       The output should equal fast
@@ -623,10 +651,10 @@ block:b9"
 
     It 'never passes a call without --autostart=false'
       calls() {
-        id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
+        id=$(joined run_job job::start --title "plan check" -- true) || return 1
         wait_log " follow $id" || return 2
         jobs_session
-        id=$(run_job job::start --title "second" -- sleep 1) || return 1
+        id=$(joined run_job job::start --title "second" -- true) || return 1
         wait_log " follow $id" || return 2
         echo "calls=$(wc -l < "$JOB_FAKE_REX_LOG" | tr -d ' ')"
         echo "without=$(grep -vc '^--autostart=false ' "$JOB_FAKE_REX_LOG")"
@@ -644,9 +672,8 @@ block:b9"
     It 'opens one tab for the scheduled job when it reconciles first'
       once() {
         jobs_session
-        id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
+        id=$(joined run_job job::start --title "plan check" -- true) || return 1
         wait_log " follow $id" || return 2
-        sleep 0.5
         echo "block_ls=$(grep -c ' block ls ' "$JOB_FAKE_REX_LOG")"
         echo "tabs=$(grep -c " follow $id" "$JOB_FAKE_REX_LOG")"
       }
@@ -659,9 +686,8 @@ block:b9"
       repaired() {
         meta j2 "Two"
         jobs_session
-        id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
+        id=$(joined run_job job::start --title "plan check" -- true) || return 1
         wait_log " follow $id" || return 2
-        sleep 0.5
         echo "j2=$(grep -c ' follow j2$' "$JOB_FAKE_REX_LOG")"
         echo "new=$(grep -c " follow $id" "$JOB_FAKE_REX_LOG")"
       }
@@ -672,17 +698,19 @@ block:b9"
 
     # The job has its result before its step is scheduled, so the step
     # cannot win a race against the result being written. A control job
-    # scheduled after it, with the same delay, proves the steps ran; the
-    # pause lets a tab opened late still show.
+    # scheduled after it, with the same delay, proves the steps ran; both
+    # steps are joined, so a tab opened late would be in the log. The delay
+    # is on the virtual clock.
     It 'opens no tab for a job that finished within the delay'
       finished() {
+        spec_clock_set 1000
         export JOB_FOLLOW_DELAY=0.5
         meta quick "quick"
         echo "1700000000 Success 0" > "$JOB_STATE_ROOT/quick/result"
-        run_job job::_rex_schedule_tab quick || return 1
-        b=$(run_job job::start --title "control" -- sleep 1) || return 1
+        joined run_job job::_rex_schedule_tab quick || return 1
+        b=$(joined run_job job::start --title "control" -- true) || return 1
         wait_log " follow $b" || return 2
-        sleep 0.3
+        [ "$(spec_clock_slept | tr '\n' ' ')" = "0.5 0.5 " ] || return 3
         grep -c " follow quick" "$JOB_FAKE_REX_LOG" || :
       }
       When call finished
@@ -691,8 +719,8 @@ block:b9"
 
     It 'opens no tab for a --notify none job'
       silent() {
-        a=$(run_job job::start --notify none --title "quiet" -- sleep 1) || return 1
-        b=$(run_job job::start --title "control" -- sleep 1) || return 1
+        a=$(joined run_job job::start --notify none --title "quiet" -- true) || return 1
+        b=$(joined run_job job::start --title "control" -- true) || return 1
         wait_log " follow $b" || return 2
         grep -c " follow $a" "$JOB_FAKE_REX_LOG" || :
       }
@@ -702,9 +730,9 @@ block:b9"
 
     It 'opens no tab for a --modal job'
       modal() {
-        a=$(run_job job::start --modal --title "watched" -- sleep 1 2>/dev/null) \
+        a=$(joined run_job job::start --modal --title "watched" -- true 2>/dev/null) \
           || return 1
-        b=$(run_job job::start --title "control" -- sleep 1) || return 1
+        b=$(joined run_job job::start --title "control" -- true) || return 1
         wait_log " follow $b" || return 2
         grep -c " follow $a" "$JOB_FAKE_REX_LOG" || :
       }
@@ -738,12 +766,12 @@ block:b9"
       inline() {
         export JOB_SANDBOX REX_BLOCK=block:x
         unset TMUX
-        run_tty job::start --modal --title "watched" -- sleep 1 || return 1
+        run_tty job::start --modal --title "watched" -- true || return 1
         id=$(cat "$JOB_SANDBOX/printed")
         [ -d "$JOB_STATE_ROOT/$id" ] || return 3
         [ "$(calls)" = "follow --inline $id" ] || { calls; return 2; }
         # A control job's tab proves a background step had time to run.
-        b=$(run_job job::start --title "control" -- sleep 1) || return 4
+        b=$(joined run_job job::start --title "control" -- true) || return 4
         wait_log " follow $b" || return 5
         echo "tabs=$(grep -c " follow $id" "$JOB_FAKE_REX_LOG" || :)"
       }
@@ -762,7 +790,7 @@ block:b9"
           job::follow() { print -r -- "follow $*" >> "$JOB_SANDBOX/calls"; }
           job::watch() { print -r -- "watch $*" >> "$JOB_SANDBOX/calls"; }
           "$@"
-        ' -- "$JOBLIB" job::start --modal --title "watched" -- sleep 1 \
+        ' -- "$JOBLIB" job::start --modal --title "watched" -- true \
           > "$JOB_SANDBOX/printed" 2> "$JOB_SANDBOX/err" < /dev/null || return 1
         [ -d "$JOB_STATE_ROOT/$(cat "$JOB_SANDBOX/printed")" ] || return 2
         echo "calls=$(calls | grep -c . || :)"
@@ -779,7 +807,7 @@ block:b9"
       nested() {
         export JOB_SANDBOX REX_BLOCK=block:x
         TMUX="fake/sock,1,0" run_tty job::start --modal --title "watched" \
-          -- sleep 1 || return 1
+          -- true || return 1
         unset TMUX
         calls | sed 's/ *$//'
       }
@@ -791,7 +819,7 @@ block:b9"
       outside() {
         export JOB_SANDBOX
         unset REX_BLOCK
-        run_tty job::start --modal --title "watched" -- sleep 1 || return 1
+        run_tty job::start --modal --title "watched" -- true || return 1
         calls
       }
       When call outside
@@ -805,7 +833,7 @@ block:b9"
         with_tty zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99
           job::follow() { exit 7; }
-          job::start --modal --title "watched" -- sleep 1 >/dev/null
+          job::start --modal --title "watched" -- true >/dev/null
           rc=$?
           echo "after rc=$rc" > "$JOB_SANDBOX/after"
         ' -- "$JOBLIB" >/dev/null 2>&1
@@ -825,7 +853,7 @@ block:b9"
         with_tty zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99
           job::follow() { print -r -- follower-marker; }
-          jid=$(job::start --modal --title "watched" -- sleep 1)
+          jid=$(job::start --modal --title "watched" -- true)
           print -r -- "$jid" > "$JOB_SANDBOX/jid"
         ' -- "$JOBLIB" > "$JOB_SANDBOX/tty" 2>&1
         id=$(only_job) || return 1
@@ -841,10 +869,9 @@ block:b9"
     It 'does nothing and succeeds when no server answers'
       down() {
         export JOB_FAKE_REX_WHOAMI_RC=4
-        id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
+        id=$(joined run_job job::start --title "plan check" -- true) || return 1
         [ -d "$JOB_STATE_ROOT/$id" ] || return 2
         wait_log ' whoami' || return 3
-        sleep 0.3
         echo "opens=$(opens)"
       }
       When call down
@@ -854,7 +881,7 @@ block:b9"
     It 'survives Rex vanishing between the check and the open'
       vanish() {
         export JOB_FAKE_REX_NEW_RC=4
-        id=$(run_job job::start --title "plan check" -- sleep 1) || return 1
+        id=$(joined run_job job::start --title "plan check" -- true) || return 1
         [ -d "$JOB_STATE_ROOT/$id" ] || return 2
         wait_log " follow $id" || return 3
         echo "session=$([ -e "$JOB_STATE_ROOT/.rex_session" ] && echo yes || echo no)"

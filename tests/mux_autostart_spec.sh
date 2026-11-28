@@ -139,7 +139,10 @@ EOS
         print -r -- "source $AS_TMP/gate.zsh"
         print -r -- '_zsh_should_autoattach_mux'
       } >"$AS_TMP/gate-case.zsh"
-      env -u TMUX REX_SESSION="$1" TERM_PROGRAM=rex zsh -i "$AS_TMP/gate-case.zsh" 2>/dev/null
+      # MUX_REX_BIN: the session is made up, and with a real rex the bootstrap
+      # would ask the developer's live server about it.
+      env -u TMUX REX_SESSION="$1" TERM_PROGRAM=rex MUX_REX_BIN=/usr/bin/false \
+        zsh -i "$AS_TMP/gate-case.zsh" 2>/dev/null
     }
     guard_order() {
       awk '/^_zsh_should_autoattach_mux\(\) \{/,/^}/' "$AS_TMP/zshrc" |

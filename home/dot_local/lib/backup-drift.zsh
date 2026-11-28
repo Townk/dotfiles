@@ -25,6 +25,18 @@ zmodload zsh/datetime 2>/dev/null   # EPOCHSECONDS
 # capture wall-clock ceiling so a wedged run can't hide forever.
 : ${BKP_CATCHUP_GRACE:=${BKP_CAPTURE_TIMEOUT:-300}}
 
+# bkp::drift::_now — REPLY = the current epoch second. Off common.zsh's clock
+# seam (common::now) when the caller has loaded it, as the workers have
+# through backup.zsh; the prompt sources only this file, and gets the real
+# clock with no further cost.
+bkp::drift::_now() {
+  if (( ${+functions[common::now]} )); then
+    common::now
+  else
+    REPLY=$EPOCHSECONDS
+  fi
+}
+
 # bkp::drift::_age <seconds> — compact human age in REPLY: 12m / 4h / 3d.
 bkp::drift::_age() {
   local s=$1
@@ -44,9 +56,11 @@ bkp::drift::stamp() {
   [[ -n "$phase" ]] || return 0
   mkdir -p "$BKP_DRIFT_STATE" 2>/dev/null || return 0
   tmp=$(mktemp "$BKP_DRIFT_STATE/.hb.XXXXXX" 2>/dev/null) || return 0
+  local REPLY
+  bkp::drift::_now
   {
     [[ -f "$f" ]] && grep -v "^$phase " "$f"
-    print -r -- "$phase $EPOCHSECONDS $rc"
+    print -r -- "$phase $REPLY $rc"
   } > "$tmp" 2>/dev/null
   mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   return 0
@@ -135,8 +149,10 @@ bkp::drift::banner() {
     esac
   done < "$f"
   [[ "$epoch" == <-> && "$epoch" -gt 0 ]] || return 0
-  local REPLY=""
-  bkp::drift::assess "$EPOCHSECONDS" "$epoch" "$rc" "$BKP_CAPTURE_CADENCE" \
+  local REPLY="" now
+  bkp::drift::_now
+  now=$REPLY REPLY=""
+  bkp::drift::assess "$now" "$epoch" "$rc" "$BKP_CAPTURE_CADENCE" \
     "$catchup" "$BKP_CATCHUP_GRACE" || return 0
   [[ -n "$REPLY" ]] || return 0
   local level="${REPLY%%$'\t'*}" msg="${REPLY#*$'\t'}"

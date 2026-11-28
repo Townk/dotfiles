@@ -177,7 +177,11 @@ share::rclone_send() {
   # it every rclone row carried expires=0 and share::ledger_overdue could
   # never flag one.
   local -i expires_epoch=0
-  [[ -n "$expiration" ]] && expires_epoch=$(( EPOCHSECONDS + $(share::_duration_seconds "$expiration") ))
+  if [[ -n "$expiration" ]]; then
+    local REPLY
+    common::now
+    expires_epoch=$(( REPLY + $(share::_duration_seconds "$expiration") ))
+  fi
 
   local id; id="$(share::gen_id)"
   share::ledger_add "$id" rclone "$endpoint" "$label" "$dest_dir" "$url" "$expires_epoch"

@@ -31,7 +31,9 @@ bkp::tm::session_new() {
 # restic call, deferred out of session_new. Rows carry the tier label so
 # the timeline renders without re-deriving policy per frame.
 bkp::tm::ladder_fill() {
-  local s="$1" ladder policy line id epoch REPLY now="$EPOCHSECONDS" anchor mnt_ids
+  local s="$1" ladder policy line id epoch REPLY now anchor mnt_ids
+  common::now
+  now=$REPLY
   anchor=$(<"$s/anchor")
   # Dedup rungs relative to the anchor: the lenses only ever show the
   # anchored subtree, so a snapshot unchanged THERE is a redundant rung
@@ -121,7 +123,7 @@ bkp::tm::refresh() {
     # moved meanwhile a newer ctl owns it — this one bows out.
     local r0
     r0=$(<"$s/rung")
-    sleep "${BKP_TM_SCRUB_DEBOUNCE:-0.25}"
+    common::sleep "${BKP_TM_SCRUB_DEBOUNCE:-0.25}"
     [[ "$(cat "$s/rung" 2>/dev/null)" == "$r0" ]] || return 0
     # NOT $$: the initial refresh runs as a backgrounded SUBSHELL of the
     # timeline pane, and zsh's $$ stays the parent's pid there — the
@@ -235,7 +237,8 @@ bkp::tm::lens_title() {
   bkp::tm::rung_line "$s" || return 0
   local epoch="${${REPLY#*$'\t'}%%$'\t'*}" anchor age
   anchor=$(<"$s/anchor")
-  local d=$(( EPOCHSECONDS - epoch ))
+  common::now
+  local d=$(( REPLY - epoch ))
   if (( d < 3600 )); then age="$(( d / 60 ))m ago"
   elif (( d < 172800 )); then age="$(( d / 3600 ))h ago"
   else age="$(( d / 86400 ))d ago"
@@ -289,7 +292,7 @@ bkp::tm::build_wait() {
   else
     while [[ -e "$s/building" && ! -e "$s/closed" &&
              "$(cat "$s/rung" 2>/dev/null)" == "$rung0" ]]; do
-      sleep 0.1
+      common::sleep 0.1
     done
   fi
   return 0
@@ -312,7 +315,7 @@ bkp::tm::lens_reload() {
 bkp::tm::session_rm() {
   rm -rf "$1" 2>/dev/null || :
   [[ -e "$1" ]] || return 0
-  sleep 0.5
+  common::sleep 0.5
   rm -rf "$1" 2>/dev/null || :
 }
 

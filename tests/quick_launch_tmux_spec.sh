@@ -165,6 +165,8 @@ EOF
       "$TEST_TMP/uname"
 
     export PATH="$TEST_TMP:$PATH"
+    # The seam wins over PATH, and spec_helper pins it to the desktop guard.
+    export WIDGETS_OSASCRIPT_BIN="$TEST_TMP/osascript"
     export TMUX=/tmp/sock,1,0
     export MUX_MODAL_TARGET_PANE=%1
     export TERMINAL_LOCATION_ONBOARD_MAP="$TEST_TMP/onboard-map.yaml"
@@ -212,6 +214,18 @@ EOF
     When call zsh home/dot_config/mux/scripts/executable_quick-launch-window \
       --new --tint blue Target -- wrapper connect
     The contents of file "$OSASCRIPT_LOG" should include "#223344"
+    The status should be success
+  End
+
+  It 'reaches osascript by WIDGETS_OSASCRIPT_BIN, ahead of the one on PATH'
+    by_seam() {
+      spec_stub "$TEST_TMP/seam" osascript 'cat >>"$STUB_LOG"'
+      WIDGETS_OSASCRIPT_BIN="$TEST_TMP/seam/osascript" \
+        zsh home/dot_config/mux/scripts/executable_quick-launch-window --new Target -- zsh -c "ssh box"
+    }
+    When call by_seam
+    The contents of file "$TEST_TMP/seam/osascript.log" should include "new surface configuration"
+    The file "$OSASCRIPT_LOG" should not be exist
     The status should be success
   End
 

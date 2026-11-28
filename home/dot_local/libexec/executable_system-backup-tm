@@ -181,7 +181,7 @@ tm_timeline() {
         last_state="$rung:$focused"
       fi
       if (( ! interactive )); then
-        sleep 1
+        common::sleep 1
         continue
       fi
       read -t 0.25 -k 1 key 2>/dev/null || continue
@@ -242,7 +242,7 @@ tm_kill_refresh() {
   local i
   for i in {1..20}; do
     kill -0 "${pids[@]}" 2>/dev/null || break
-    sleep 0.05
+    common::sleep 0.05
   done
   return 0
 }
@@ -257,7 +257,7 @@ tm_lens() {
     printf '%s⏳ waiting for the snapshot mount…%s\n' "$C_DIM" "$C_RES"
     for (( i = 0; i < 100; i++ )); do
       [[ -e "$s/ready" ]] && break
-      sleep 0.1
+      common::sleep 0.1
     done
   fi
   [[ -e "$s/ready" ]] || { log_error "bkp: session mount never came up"; bkp::tm::end "$s"; exit 1 }

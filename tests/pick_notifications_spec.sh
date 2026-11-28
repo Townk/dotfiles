@@ -6,6 +6,8 @@ Describe 'pick-notifications'
 
   setup() {
     TEST_TMP="$(mktemp -d)"
+    # The libraries of this tree, not the applied ones under $HOME.
+    export PICK_COMMON_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/pick-common.zsh"
     export NOTIFY_HISTORY_FILE="$TEST_TMP/history.jsonl"
     export JOB_PUEUE_LOG_DIR="$TEST_TMP/task_logs"
     # Dead-end the toast transports: the handler's notify calls must fall
@@ -21,7 +23,7 @@ Describe 'pick-notifications'
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset NOTIFY_HISTORY_FILE NOTIFY_UNACKED_FILE JOB_PUEUE_LOG_DIR CLIPBOARD_BRIDGE_SOCKET HS
+    unset NOTIFY_HISTORY_FILE NOTIFY_UNACKED_FILE JOB_PUEUE_LOG_DIR CLIPBOARD_BRIDGE_SOCKET HS PICK_COMMON_LIB
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'

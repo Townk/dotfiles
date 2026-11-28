@@ -11,21 +11,48 @@ Describe 'job/follow.zsh'
     export JOB_FAKE_LOG="$JOB_SANDBOX/pueue.log"
     # `follow` prints one log line and exits — or, with
     # JOB_FAKE_FOLLOW_PIDFILE set, records its pid and stays alive the way
-    # a real `pueue follow` on a running task does. `status` takes
-    # JOB_FAKE_STATUS_DELAY seconds when that is set.
+    # a real `pueue follow` on a running task does.
+    #
+    # No example waits for time; the fakes are where it is told what
+    # happened, and where it acts (files under $JOB_FAKE_EV):
+    #   follow         a FIFO: the `follow` child writes one line to it once
+    #                  it runs. The follower starts that child after writing
+    #                  its follower file, so an example that reads the line
+    #                  (`started`) knows the follower is up
+    #   polls          how many `status` calls there have been: the follower
+    #                  makes one per poll while the job has no result
+    #   at-poll-<n>    a /bin/sh snippet the fake runs during the nth status
+    #                  call (`at_poll`): the job reports progress, finishes,
+    #                  its state dir goes away, at an exact poll
+    #   status-gate    a FIFO: the status call writes to it and stays in
+    #                  flight until the example has read it AND the call is
+    #                  killed (`decides a hangup once`)
+    #   decided        a FIFO: the stand-in CLI writes to it when a detached
+    #                  hangup decision has ended (`decided`)
+    #   inspect-gate   a FIFO: rex `block inspect` writes a line to it (the
+    #                  decision has got as far as asking the server: `held`)
+    #   inspect-go     and then blocks reading this one, which holds the
+    #                  decision there until the example lets it go (`release`)
+    export JOB_FAKE_EV="$JOB_SANDBOX/ev"
+    mkdir -p "$JOB_FAKE_EV"
     cat > "$JOB_SANDBOX/pueue" <<'EOS'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 case "$1" in
   follow)
     echo "log of task $2"
-    if [ -n "${JOB_FAKE_FOLLOW_PIDFILE:-}" ]; then
-      echo $$ > "$JOB_FAKE_FOLLOW_PIDFILE"
-      exec sleep 30
-    fi
+    [ -z "${JOB_FAKE_FOLLOW_PIDFILE:-}" ] || echo $$ > "$JOB_FAKE_FOLLOW_PIDFILE"
+    [ ! -p "$JOB_FAKE_EV/follow" ] || echo follow > "$JOB_FAKE_EV/follow"
+    [ -z "${JOB_FAKE_FOLLOW_PIDFILE:-}" ] || exec tail -f /dev/null
     ;;
   status)
-    [ -n "${JOB_FAKE_STATUS_DELAY:-}" ] && sleep "$JOB_FAKE_STATUS_DELAY"
+    n=$(( $(cat "$JOB_FAKE_EV/polls" 2>/dev/null || echo 0) + 1 ))
+    echo "$n" > "$JOB_FAKE_EV/polls"
+    [ ! -f "$JOB_FAKE_EV/at-poll-$n" ] || . "$JOB_FAKE_EV/at-poll-$n"
+    if [ -p "$JOB_FAKE_EV/status-gate" ]; then
+      echo status > "$JOB_FAKE_EV/status-gate"
+      exec tail -f /dev/null
+    fi
     echo '{}'
     ;;
 esac
@@ -39,7 +66,9 @@ EOS
     # and exits JOB_FAKE_REX_WHOAMI_RC. Everything else exits
     # JOB_FAKE_REX_RC (3 = block gone, 4 = server unreachable, 0 = block
     # still there) — read from JOB_FAKE_REX_RC_FILE when it exists, so a
-    # test can change the answer while a hangup is being decided. Every
+    # test can change the answer while a hangup is being decided. With
+    # JOB_FAKE_REX_GONE_AT=<epoch> the server is gone (4) from that second
+    # of the virtual clock on: "it stopped a second after the hangup". Every
     # call also writes the JOB_CLI it sees to JOB_FAKE_REX_CLI_SEEN. With
     # JOB_FAKE_REX_OUT naming the follower's output file, the first whoami
     # notes in <that file>.at-whoami whether a report was in it by then.
@@ -67,8 +96,16 @@ case "$*" in
     exit 0
     ;;
 esac
+case "$*" in
+  *' block inspect '*)
+    if [ -p "$JOB_FAKE_EV/inspect-gate" ]; then
+      echo held > "$JOB_FAKE_EV/inspect-gate"
+      read -r _ < "$JOB_FAKE_EV/inspect-go"
+    fi ;;
+esac
 [ -n "${JOB_FAKE_REX_RC_FILE:-}" ] && [ -f "$JOB_FAKE_REX_RC_FILE" ] \
   && exit "$(cat "$JOB_FAKE_REX_RC_FILE")"
+[ -n "${JOB_FAKE_REX_GONE_AT:-}" ] && [ "$(date +%s)" -ge "$JOB_FAKE_REX_GONE_AT" ] && exit 4
 exit "${JOB_FAKE_REX_RC:-0}"
 EOS
     chmod +x "$JOB_SANDBOX/rex"
@@ -82,9 +119,14 @@ EOS
     # The CLI a follower starts its detached hangup decision through: the
     # front-end under `zsh -f`, so this repo's ~/.zshenv cannot re-export
     # XDG vars over the sandbox.
-    printf '#!/bin/sh\nexec zsh -f "%s" "$@"\n' \
-      "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job" \
-      > "$JOB_SANDBOX/job"
+    # A hangup decision runs detached from everything the example could
+    # `wait` for: once it has ended, the stand-in says so on the `decided`
+    # FIFO, if the example made one.
+    printf '%s\n' '#!/bin/sh' \
+      "zsh -f \"$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job\" \"\$@\"" \
+      'rc=$?' \
+      'if [ "$1" = hup-decide ] && [ -p "$JOB_FAKE_EV/decided" ]; then echo decided > "$JOB_FAKE_EV/decided"; fi' \
+      'exit $rc' > "$JOB_SANDBOX/job"
     chmod +x "$JOB_SANDBOX/job"
     export JOB_CLI="$JOB_SANDBOX/job"
     : > "$JOB_FAKE_LOG"
@@ -357,14 +399,15 @@ kept"
     # asking lets it go.
     It 'waits before asking, so a stopping server is gone by then'
       meta "Remux"
+      # The server answers rc 3 and is gone one second (of the virtual
+      # clock) after the hangup: the default wait is that second, so the
+      # decision asks a server that is gone; with no wait it asks one that
+      # still answers.
       stopping() {
-        local rcf="$JOB_SANDBOX/rc"
-        echo 3 > "$rcf"
-        ( sleep 0.5; echo 4 > "$rcf.tmp"; mv -f "$rcf.tmp" "$rcf" ) &
-        JOB_FAKE_REX_RC_FILE="$rcf" hup
-        wait
+        JOB_FAKE_REX_RC=3 JOB_FAKE_REX_GONE_AT=$(( $(spec_clock_now) + 1 )) hup
       }
       check() {
+        spec_clock_set 1000
         ( unset JOB_FOLLOW_HUP_WAIT; stopping )
         JOB_FOLLOW_HUP_WAIT=0 stopping
       }
@@ -504,66 +547,79 @@ not-opened"
 
   Describe 'job::follow'
     # Run through the CLI front-end, so the loop is exercised under its
-    # `set -eu`. Every background follower has a hard bound: follow_wait
-    # kills it after 5s and reports "timeout".
+    # `set -eu`. The follower runs beside the example, on the virtual clock:
+    # its polls (0.1 s each) cost nothing, and what happens to the job
+    # happens at an exact poll (at_poll) or on an event a fake reports
+    # (started, decided). Every background follower has a hard bound, in its
+    # own time: the clock guard kills it once it has napped for two hours,
+    # and follow_wait then prints rc=137.
     JOBBIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job"
     OSC="$(printf '\033]7501;')"
+    on_clock() {
+      spec_clock_set 1000
+      mkfifo "$JOB_FAKE_EV/follow"
+    }
+    # FOLLOW_REAL_CLOCK=1: for the two examples that cannot leave the real
+    # clock (each says why).
     follow_bg() {
+      if [ -n "${FOLLOW_REAL_CLOCK:-}" ]; then mkfifo "$JOB_FAKE_EV/follow"; else on_clock; fi
       JOB_FOLLOW_POLL=0.1 JOB_FOLLOW_DONE_TTL=0 REX_BLOCK=blk-1 \
         zsh -f "$JOBBIN" follow "$@" \
         > "$JOB_SANDBOX/out" 2> "$JOB_SANDBOX/err" < /dev/null &
       FPID=$!
+      [ -n "${FOLLOW_REAL_CLOCK:-}" ] || spec_clock_guard "$FPID"
     }
     follow_wait() {
-      local i=0
-      while kill -0 "$FPID" 2>/dev/null; do
-        i=$((i + 1))
-        if [ "$i" -gt 50 ]; then
-          kill -9 "$FPID" 2>/dev/null; wait "$FPID" 2>/dev/null
-          echo timeout; return 1
-        fi
-        sleep 0.1
-      done
       wait "$FPID"; echo "rc=$?"
+      spec_clock_guard_off
     }
-    wait_for() {
-      local i=0
-      until [ -e "$1" ]; do
-        i=$((i + 1)); [ "$i" -gt 50 ] && return 1
-        sleep 0.1
-      done
-    }
+    # at_poll <n> <sh snippet> — what happens during the follower's nth poll.
+    at_poll() { print -r -- "$2" > "$JOB_FAKE_EV/at-poll-$1"; }
+    # started — block until the follower has written its follower file and
+    # started its log child (which, with JOB_FAKE_FOLLOW_PIDFILE, has
+    # written its pid by then).
+    started() { local _; read -r _ < "$JOB_FAKE_EV/follow"; }
     reports() { grep -o "${OSC}[^$(printf '\033')]*" "$JOB_SANDBOX/out" | sed "s/^${OSC}//"; }
-    # The hangup decision runs detached, after the follower has exited:
-    # bounded poll (5 s) until it has logged its outcome.
-    decided() {
-      local i=0
-      until grep -q ': hangup of blk-1: \(inspect\|closed\)' \
-        "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null; do
-        i=$((i + 1)); [ "$i" -gt 50 ] && { echo undecided; return 1; }
-        sleep 0.1
-      done
+    # when_up <sh snippet> (before the follower starts) — run the snippet
+    # during the follower's second poll, once its log child is up. That is
+    # also WHERE a signal is sent from: the follower is then waiting for its
+    # status call, as it is most of the time in a real tab. Signalled from
+    # outside it would usually be caught inside a nap, which on the virtual
+    # clock is a tight loop of appends: a zsh trap function that forks from
+    # there can deadlock (seen about once in four runs).
+    when_up() {
+      at_poll 2 'read -r _ < "$JOB_FAKE_EV/follow"
+'"$1"
     }
-    # Bounded poll (5 s) until the pueue log has a line matching $1.
-    pueue_logged() {
-      local i=0
-      until grep -q -- "$1" "$JOB_FAKE_LOG" 2>/dev/null; do
-        i=$((i + 1)); [ "$i" -gt 50 ] && return 1
-        sleep 0.1
-      done
+    FOLLOWER='"$(cut -d " " -f 2 "$JOB_STATE_ROOT/j1/follower")"'
+    # The hangup decision runs detached, after the follower has exited.
+    # hangup_when_up [sh snippet to run first] arranges the SIGHUP; decided
+    # blocks until the decision's process has ended (the stand-in CLI says
+    # so). A follower that never starts a decision leaves `decided` blocked:
+    # such a regression shows as a hung example, not as a wrong line.
+    hangup_when_up() {
+      mkfifo "$JOB_FAKE_EV/decided"
+      when_up "${1:-:}
+kill -HUP $FOLLOWER"
     }
+    decided() { local _; read -r _ < "$JOB_FAKE_EV/decided"; }
+    # hold_decision (before the follower starts): the decision will stop
+    # where it asks the server. held blocks until it is there; release lets
+    # it go on.
+    hold_decision() { mkfifo "$JOB_FAKE_EV/inspect-gate" "$JOB_FAKE_EV/inspect-go"; }
+    held() { local _; read -r _ < "$JOB_FAKE_EV/inspect-gate"; }
+    release() { echo go > "$JOB_FAKE_EV/inspect-go"; }
 
     It 'reports progress, then done, then exits'
       meta "Remux"
       check() {
         local follower out working done_at
+        at_poll 2 'cp "$JOB_STATE_ROOT/j1/follower" "$JOB_FAKE_EV/follower.seen"
+                   echo "1700000000 40 a" > "$JOB_STATE_ROOT/j1/progress"'
+        at_poll 6 'echo "1700000000 Success " > "$JOB_STATE_ROOT/j1/result"'
         follow_bg j1
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        follower=$(cat "$JOB_STATE_ROOT/j1/follower")
-        echo "1700000000 40 a" > "$JOB_STATE_ROOT/j1/progress"
-        sleep 0.4
-        result Success ""
         follow_wait || return 1
+        follower=$(cat "$JOB_FAKE_EV/follower.seen")
         [ "$follower" = "blk-1 $FPID" ] && echo follower-ok || echo "follower=$follower"
         working=$(reports | grep -n "^state=working:app=job:progress=40:msg=$(b64 a)\$" | cut -d: -f1)
         done_at=$(reports | grep -n "^state=done:app=job:msg=$(b64 'Remux completed')\$" | cut -d: -f1)
@@ -584,10 +640,8 @@ follower-gone"
     It 'exits quietly when the state dir disappears'
       meta "Remux"
       check() {
+        at_poll 3 'rm -rf "$JOB_STATE_ROOT/j1"'
         follow_bg j1
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        sleep 0.2
-        rm -rf "$JOB_STATE_ROOT/j1"
         follow_wait || return 1
         cat "$JOB_SANDBOX/err"
         kills
@@ -600,10 +654,9 @@ follower-gone"
     It 'does not re-send an unchanged report'
       meta "Remux"
       check() {
+        # Five polls with nothing new to say, then the job is killed.
+        at_poll 6 'echo "1700000000 Killed 137" > "$JOB_STATE_ROOT/j1/result"'
         follow_bg j1
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        sleep 0.5
-        result Killed 137
         follow_wait || return 1
         reports | wc -l | tr -d ' '
       }
@@ -617,7 +670,7 @@ follower-gone"
       check() {
         export JOB_FAKE_FOLLOW_PIDFILE="$JOB_SANDBOX/follow.pid"
         follow_bg j1
-        wait_for "$JOB_FAKE_FOLLOW_PIDFILE" || { echo no-child; return 1; }
+        started
         result Success 0
         follow_wait || return 1
         kill -0 "$(cat "$JOB_FAKE_FOLLOW_PIDFILE")" 2>/dev/null && echo child-alive || echo child-gone
@@ -643,11 +696,10 @@ child-gone"
       meta "Remux"
       check() {
         export JOB_FAKE_REX_RC=3 JOB_FAKE_FOLLOW_PIDFILE="$JOB_SANDBOX/follow.pid"
+        hangup_when_up
         follow_bg j1
-        wait_for "$JOB_FAKE_FOLLOW_PIDFILE" || { echo no-child; return 1; }
-        kill -HUP "$FPID"
         follow_wait
-        decided || return 1
+        decided
         grep -c '^kill 7$' "$JOB_FAKE_LOG" || :
         kill -0 "$(cat "$JOB_FAKE_FOLLOW_PIDFILE")" 2>/dev/null && echo child-alive || echo child-gone
         [ -e "$JOB_STATE_ROOT/j1/follower" ] && echo follower-left || echo follower-gone
@@ -663,11 +715,10 @@ follower-gone"
       meta "Remux"
       check() {
         export JOB_FAKE_REX_RC=4
+        hangup_when_up
         follow_bg j1
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        kill -HUP "$FPID"
         follow_wait
-        decided || return 1
+        decided
         kills
         cat "$JOB_FAKE_REX_LOG"
       }
@@ -683,13 +734,11 @@ follower-gone"
       check() {
         export JOB_FAKE_REX_RC=3 JOB_FAKE_REX_INSTANCE_FILE="$JOB_SANDBOX/instance"
         echo srv-1 > "$JOB_FAKE_REX_INSTANCE_FILE"
+        # Up: it has asked the server who it is (srv-1) by then.
+        hangup_when_up 'echo srv-2 > "$JOB_FAKE_REX_INSTANCE_FILE"'
         follow_bg j1
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        sleep 0.3
-        echo srv-2 > "$JOB_FAKE_REX_INSTANCE_FILE"
-        kill -HUP "$FPID"
         follow_wait
-        decided || return 1
+        decided
         kills
       }
       When call check
@@ -697,17 +746,23 @@ follower-gone"
 0"
     End
 
+    # NOT converted (real clock, one real wait): "it stays" is the absence
+    # of an exit over time, and the loop it stays in has no call a fake
+    # could act from, so the hangup comes from outside. On the virtual clock
+    # that loop is the tight one described at when_up, and the example
+    # deadlocked about once in four runs.
     It 'stays on failure until the tab is closed, then marks it dismissed'
       meta "Remux"; result Failed 2
       check() {
         export JOB_FAKE_REX_RC=3
-        follow_bg j1
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
+        FOLLOW_REAL_CLOCK=1 follow_bg j1
+        started
         sleep 0.5
         kill -0 "$FPID" 2>/dev/null && echo staying || echo gone-early
+        mkfifo "$JOB_FAKE_EV/decided"
         kill -HUP "$FPID"
         follow_wait
-        decided || return 1
+        decided
         kills
         [ -e "$JOB_STATE_ROOT/j1/dismissed" ] && echo dismissed || echo kept
         reports | grep -c "^state=error:" || :
@@ -727,18 +782,23 @@ dismissed
       meta "Remux"
       check() {
         export JOB_FAKE_REX_RC=3 JOB_FOLLOW_HUP_WAIT=1
+        on_clock
+        # The decision is held where it asks the server, after its wait:
+        # the tab is killed while it is still undecided. (A decision that
+        # dies with the tab never takes the release: a hung example.)
+        hold_decision
+        hangup_when_up
         JOB_FOLLOW_POLL=0.1 REX_BLOCK=blk-1 \
           perl -e 'setpgrp(0, 0); exec @ARGV or die' -- zsh -f "$JOBBIN" follow j1 \
           > "$JOB_SANDBOX/out" 2> "$JOB_SANDBOX/err" < /dev/null &
         FPID=$!
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        kill -HUP "$FPID"
-        sleep 0.3
+        held
         kill -9 -- "-$FPID" 2>/dev/null
         kill -9 "$FPID" 2>/dev/null
         wait "$FPID" 2>/dev/null
-        pueue_logged '^kill 7$' && echo cancelled || echo kept
-        decided || return 1
+        release
+        decided
+        grep -q '^kill 7$' "$JOB_FAKE_LOG" && echo cancelled || echo kept
       }
       When call check
       The output should equal "cancelled"
@@ -746,21 +806,22 @@ dismissed
 
     It 'exits at once on hangup while the decision is still running'
       meta "Remux"
+      # The decision is held where it asks the server. The follower is
+      # joined while it is held there: it did not wait for it ("prompt": no
+      # outcome is logged yet). Let go, the decision cancels.
       check() {
-        local t0
-        zmodload zsh/datetime
         export JOB_FAKE_REX_RC=3 JOB_FOLLOW_HUP_WAIT=2
+        hold_decision
+        hangup_when_up
         follow_bg j1
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        t0=$EPOCHREALTIME
-        kill -HUP "$FPID"
-        while kill -0 "$FPID" 2>/dev/null && (( EPOCHREALTIME - t0 < 3 )); do
-          sleep 0.05
-        done
-        (( EPOCHREALTIME - t0 < 0.5 )) && echo prompt || echo slow
         wait "$FPID" 2>/dev/null
+        spec_clock_guard_off
+        grep -q ': hangup of blk-1: inspect' "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null \
+          && echo slow || echo prompt
         kills
-        decided || return 1
+        held
+        release
+        decided
         kills
       }
       When call check
@@ -771,22 +832,30 @@ dismissed
 
     # A $(…) in the follower's loop is a subshell with the same traps, in
     # the same process group: the tab's hangup reaches it too. The slow
-    # status keeps one in flight.
+    # status keeps one in flight: the fake says when its call is running
+    # and does not return. (The one real wait left in this file: a second,
+    # wrong decision would be started by that subshell after the follower
+    # is gone, by a process nothing here can join, so its ABSENCE is looked
+    # for after half a real second. /bin/sleep: the clock's fake is on PATH.)
     It 'decides a hangup once when a subshell of the follower is hung up too'
       meta "Remux"
       check() {
-        export JOB_FAKE_REX_RC=3 JOB_FAKE_STATUS_DELAY=1
+        local _
+        export JOB_FAKE_REX_RC=3
         export JOB_FAKE_FOLLOW_PIDFILE="$JOB_SANDBOX/follow.pid"
+        on_clock
+        mkfifo "$JOB_FAKE_EV/status-gate"
         JOB_FOLLOW_POLL=0.1 REX_BLOCK=blk-1 \
           perl -e 'setpgrp(0, 0); exec @ARGV or die' -- zsh -f "$JOBBIN" follow j1 \
           > "$JOB_SANDBOX/out" 2> "$JOB_SANDBOX/err" < /dev/null &
         FPID=$!
-        wait_for "$JOB_FAKE_FOLLOW_PIDFILE" || { echo no-child; return 1; }
-        sleep 0.3
+        # The first status call, before the follower file: let it be in flight.
+        read -r _ < "$JOB_FAKE_EV/status-gate"
+        mkfifo "$JOB_FAKE_EV/decided"
         kill -HUP -- "-$FPID"
         wait "$FPID" 2>/dev/null
-        decided || return 1
-        sleep 0.5
+        decided
+        /bin/sleep 0.5
         grep -c ': deciding$' "$XDG_CACHE_HOME/jobs/rex.log"
       }
       When call check
@@ -799,8 +868,9 @@ dismissed
       check() {
         export JOB_FAKE_REX_OUT="$JOB_SANDBOX/out"
         follow_bg j1
-        wait_for "$JOB_SANDBOX/out.at-whoami" || echo no-whoami
-        cat "$JOB_SANDBOX/out.at-whoami" 2>/dev/null
+        # The whoami comes before the follower file, which is there by now.
+        started
+        cat "$JOB_SANDBOX/out.at-whoami" 2>/dev/null || echo no-whoami
         result Success 0
         follow_wait
       }
@@ -815,10 +885,12 @@ rc=0"
       meta "Remux"
       check() {
         local block pid
+        on_clock
         JOB_FOLLOW_POLL=0.1 JOB_FOLLOW_DONE_TTL=0 zsh -f "$JOBBIN" follow j1 \
           > "$JOB_SANDBOX/out" 2> "$JOB_SANDBOX/err" < /dev/null &
         FPID=$!
-        wait_for "$JOB_STATE_ROOT/j1/follower" || echo no-follower
+        spec_clock_guard "$FPID"
+        started
         read -r block pid < "$JOB_STATE_ROOT/j1/follower"
         echo "block=$block"
         [ "$pid" = "$FPID" ] && echo own-pid || echo "pid=$pid"
@@ -835,8 +907,9 @@ rc=0"
       meta "Remux"; result Failed 2
       check() {
         follow_bg j1
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        sleep 0.3
+        started
+        # Some of the follower's own naps in the tab it keeps open.
+        spec_clock_await 0.3
         rm -rf "$JOB_STATE_ROOT/j1"
         follow_wait || return 1
         cat "$JOB_SANDBOX/err"
@@ -853,6 +926,8 @@ rc=0"
       # signal ignored on entry; a real inline follower runs in the
       # foreground, so restore the default before the follower starts.
       check() {
+        on_clock
+        when_up "kill -INT $FOLLOWER"
         JOB_FOLLOW_POLL=0.1 REX_BLOCK=blk-1 \
           perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' -- zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99; shift
@@ -860,8 +935,7 @@ rc=0"
           "$@"' -- "$JOBLIB" job::follow --inline j1 \
           > "$JOB_SANDBOX/out" 2> "$JOB_SANDBOX/err" < /dev/null &
         FPID=$!
-        wait_for "$JOB_STATE_ROOT/j1/follower" || { echo no-follower; return 1; }
-        kill -INT "$FPID"
+        spec_clock_guard "$FPID"
         follow_wait
         kills
         cat "$JOB_FAKE_OPEN_LOG"
@@ -893,12 +967,17 @@ blk-0 $$
 0"
     End
 
+    # NOT converted (real clock, one real wait): the hangup has to land
+    # INSIDE the 3 s the second follower waits for the first, a loop with
+    # nothing in it a fake could stop at. On the virtual clock that loop is
+    # over in a millisecond; sent with no wait, the signal would arrive
+    # before the code under test runs at all.
     It 'does not cancel on hangup while a live follower holds the job'
       meta "Remux"
       check() {
         export JOB_FAKE_REX_RC=3
         echo "blk-0 $$" > "$JOB_STATE_ROOT/j1/follower"
-        follow_bg j1
+        FOLLOW_REAL_CLOCK=1 follow_bg j1
         sleep 0.5
         kill -HUP "$FPID"
         # No trap yet: the default hangup ends it (its status depends on
@@ -912,18 +991,20 @@ blk-0 $$
 blk-0 $$"
     End
 
+    # NOT converted (real clock, one real wait): the first follower has to
+    # be seen alive and then end INSIDE the 3 s wait of the second, the same
+    # loop as above; here a process that lives one real second. The takeover
+    # itself is no longer polled for: the log child starts after it.
     It 'takes over from a follower that exits within the wait'
       meta "Remux"
       check() {
-        local holder i=0
+        local holder
         # Orphaned at once, so it is reaped (not a zombie) when it exits.
         holder=$(sh -c 'sleep 1 >/dev/null 2>&1 & echo $!')
         echo "blk-0 $holder" > "$JOB_STATE_ROOT/j1/follower"
-        follow_bg j1
-        until [ "$(cat "$JOB_STATE_ROOT/j1/follower" 2>/dev/null)" = "blk-1 $FPID" ]; do
-          i=$((i + 1)); [ "$i" -gt 50 ] && { echo no-takeover; break; }
-          sleep 0.1
-        done
+        FOLLOW_REAL_CLOCK=1 follow_bg j1
+        started
+        [ "$(cat "$JOB_STATE_ROOT/j1/follower" 2>/dev/null)" = "blk-1 $FPID" ] || echo no-takeover
         result Success 0
         follow_wait || return 1
         grep -c 'already being followed' "$JOB_SANDBOX/out" || :
@@ -940,15 +1021,12 @@ blk-0 $$"
     It 'records its own pid, not the calling shell'"'"'s, when inline'
       meta "Remux"
       check() {
+        on_clock
         JOB_FOLLOW_POLL=0.1 REX_BLOCK=blk-1 zsh -f -c '
           source "$1" >/dev/null 2>&1 || exit 99
           job::_rex_open_tab() { :; }
           ( job::follow --inline j1 ) > /dev/null &
-          i=0
-          until [ -s "$JOB_STATE_ROOT/j1/follower" ]; do
-            (( ++i > 50 )) && { echo no-follower; exit 1; }
-            sleep 0.1
-          done
+          read -r _ < "$JOB_FAKE_EV/follow"
           read -r block pid < "$JOB_STATE_ROOT/j1/follower"
           [ "$pid" != "$$" ] && echo not-caller || echo caller
           echo "1700000000 Success 0" > "$JOB_STATE_ROOT/j1/result"
@@ -1014,7 +1092,8 @@ job j1: hangup of blk-1: closed by reconcile: nothing"
     # without it — never the real state root.
     It 'gets the follower'"'"'s state root when that is not exported'
       check() {
-        local alt="$JOB_SANDBOX/alt"
+        local alt="$JOB_SANDBOX/alt" _
+        mkfifo "$JOB_FAKE_EV/decided"
         mkdir -p "$alt/j1"
         printf '{"title":"Remux","notify":"all","pueue_id":7}\n' > "$alt/j1/meta.json"
         JOB_FAKE_REX_RC=3 REX_BLOCK=blk-1 XDG_STATE_HOME="$JOB_SANDBOX/xdg" zsh -f -c '
@@ -1022,11 +1101,8 @@ job j1: hangup of blk-1: closed by reconcile: nothing"
           typeset +x JOB_STATE_ROOT
           JOB_STATE_ROOT="$2"
           job::_follow_hup_detach j1 0 srv-1' -- "$JOBLIB" "$alt"
-        local i=0
-        until grep -q ': hangup of blk-1: inspect' "$XDG_CACHE_HOME/jobs/rex.log" 2>/dev/null; do
-          i=$((i + 1)); [ "$i" -gt 30 ] && { echo undecided; return 0; }
-          sleep 0.1
-        done
+        # Blocks until the detached decision has ended (the stand-in CLI).
+        read -r _ < "$JOB_FAKE_EV/decided"
         echo "kills=$(kills)"
       }
       When call check
@@ -1038,13 +1114,17 @@ job j1: hangup of blk-1: closed by reconcile: nothing"
     # where a lowercase s marks a session leader.
     It 'runs in a session of its own even when started as a group leader'
       check() {
-        printf '#!/bin/sh\nps -o stat= -p $$ > "%s"\n' "$JOB_SANDBOX/stat" > "$JOB_SANDBOX/cli"
+        # The stand-in says when it has written its state; the shell that
+        # detached it stays (with its tty) until then.
+        mkfifo "$JOB_FAKE_EV/decided"
+        printf '#!/bin/sh\nps -o stat= -p $$ > "%s"\necho decided > "%s"\n' \
+          "$JOB_SANDBOX/stat" "$JOB_FAKE_EV/decided" > "$JOB_SANDBOX/cli"
         chmod +x "$JOB_SANDBOX/cli"
         JOB_CLI="$JOB_SANDBOX/cli" with_tty zsh -f -c '
           setopt monitor
           source "$1" >/dev/null 2>&1 || exit 99
           job::_follow_hup_detach j1 0 srv-1
-          sleep 0.5' -- "$JOBLIB" > /dev/null 2>&1 < /dev/null
+          read -r _ < "$JOB_FAKE_EV/decided"' -- "$JOBLIB" > /dev/null 2>&1 < /dev/null
         case "$(cat "$JOB_SANDBOX/stat" 2>/dev/null)" in
           *s*) echo session-leader ;;
           *) echo "stat=$(cat "$JOB_SANDBOX/stat" 2>/dev/null)" ;;

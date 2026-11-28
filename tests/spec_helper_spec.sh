@@ -182,6 +182,57 @@ expired"
 1063500"
     End
 
+    It 'is one clock for the fake sleep, common::sleep and a stub that takes time'
+      # COMMON_CLOCK_FILE is the name production code (common.zsh) knows the
+      # journal by: always the same file.
+      run() {
+        print -r -- "${COMMON_CLOCK_FILE#"$SPEC_CLOCK_FILE"}|$(sh -c 'echo "${COMMON_CLOCK_FILE:+exported}"')"
+        spec_stub "$SHELLSPEC_TMPBASE/slow" slow-tool 'spec-clock-advance 7'
+        zsh -fc 'source "$1"; common::sleep 0.05; sleep 0.2; "$2"; common::sleep 3; common::now -m; print -r -- "$REPLY"' \
+          zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh" "$SHELLSPEC_TMPBASE/slow/slow-tool"
+        spec_clock_now ms
+        spec_clock_slept | tr '\n' ' '
+      }
+      When call run
+      The output should equal "|exported
+1010250
+1010250
+0.05 0.2 3 "
+    End
+
+    It 'lets a test wait for what the code beside it believes has passed, not for time'
+      # A loop in the background naps on the virtual clock at full speed. The
+      # test joins it at 0.5 s of ITS time; the guard ends it at 1000 s of it
+      # (ten thousand naps: half a second, yet far past the look).
+      run() {
+        zsh -fc 'source "$1"; while :; do common::sleep 0.1; done' zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh" &
+        local pid=$!
+        spec_clock_guard "$pid" 1000
+        spec_clock_await 0.5
+        (( $(spec_clock_now ms) >= 1000500 )) && kill -0 "$pid" 2>/dev/null && print "running at 0.5"
+        wait "$pid" 2>/dev/null
+        print -r -- "killed by the guard: rc=$? past the bound: $(( $(spec_clock_now ms) >= 2000000 ))"
+        spec_clock_guard_off
+      }
+      When call run
+      The output should equal "running at 0.5
+killed by the guard: rc=137 past the bound: 1"
+    End
+
+    It 'stands a guard down without touching a process that ended by itself'
+      run() {
+        zsh -fc 'source "$1"; common::sleep 0.1' zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh" &
+        local pid=$!
+        spec_clock_guard "$pid"
+        wait "$pid"; print -r -- "rc=$?"
+        spec_clock_guard_off
+        print -r -- "guard=${SPEC_CLOCK_GUARD:-off} left=$(ls "$SHELLSPEC_TMPBASE" | grep -c '^guard\.')"
+      }
+      When call run
+      The output should equal "rc=0
+guard=off left=0"
+    End
+
     It 'loses no update when processes advance it at the same time'
       run() {
         local p
@@ -418,6 +469,49 @@ no file"
       When call run
       The output should equal 'rc=0
 hs -q -t 4 -c notify("glyph:nf-md-bell", "build done", nil)'
+    End
+
+    It 'keeps a notification on this machine when the suite runs over SSH'
+      # notify takes the clipboard-bridge route (a toast on the ORIGIN machine)
+      # whenever the shell is remote. spec_helper unsets what says so.
+      run() {
+        print -r -- "ssh=${SSH_TTY-}${SSH_CONNECTION-}${SSH_CLIENT-} via=${NOTIFY_VIA_BRIDGE-}"
+        ( source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh"
+          _notify_bridge_target && print bridge || print local
+          SSH_CONNECTION="192.0.2.1 1 192.0.2.2 22" _notify_bridge_target && print bridge || print local )
+      }
+      When call run
+      The output should equal "ssh= via=
+local
+bridge"
+    End
+
+    It 'writes the history and the unacked ledger of a toast into the tmpbase, and pokes no tmux'
+      run() {
+        say_it --ack "needs a look"
+        print -r -- "${NOTIFY_HISTORY_FILE#"$SHELLSPEC_TMPBASE"}:$(jq -r .text "$NOTIFY_HISTORY_FILE" | tail -n 1)"
+        print -r -- "${NOTIFY_UNACKED_FILE#"$SHELLSPEC_TMPBASE"}:$(wc -l <"$NOTIFY_UNACKED_FILE" | tr -d ' ')"
+        spec_desktop_calls notify-tmux
+      }
+      When call run
+      The output should equal "/.notify/history.jsonl:needs a look
+/.notify/unacked:1
+refresh-client -S"
+    End
+
+    It 'refuses a rex nobody stubbed, and answers pueue as a client with no daemon'
+      run() {
+        print -r -- "mux=$MUX_REX_BIN job=$JOB_REX_BIN"
+        ( source "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/mux-bootstrap.zsh"
+          "$(_mux_rx_bin)" --autostart=false ls --json; print -r -- "rex=$?" )
+        pueue status --json; print -r -- "pueue=$?"
+        spec_desktop_calls pueue
+      }
+      When call run
+      The output should equal "mux=/usr/bin/false job=/usr/bin/false
+rex=1
+pueue=1
+status --json"
     End
 
     It 'records a sound instead of playing it'

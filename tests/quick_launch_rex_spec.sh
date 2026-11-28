@@ -193,6 +193,10 @@ Describe 'quick-launch on Rex'
     start_server() {
       RX_STATE=$(mktemp -d)
       RX_SOCK="/tmp/qlrx-$$.sock"
+      # The real CLI, against the scratch server only: spec_helper pins
+      # MUX_REX_BIN to a rex that refuses, so no other spec reaches a live one.
+      MUX_REX_BIN=$(command -v rex)
+      export MUX_REX_BIN
       RX_SERVER="unix://$RX_SOCK"
       : > "$RX_STATE/init.lua"
       # Panes inherit the server's environment, so this ZDOTDIR is what every

@@ -15,6 +15,17 @@ unset REX_SESSION REX_BLOCK REX_SERVER
 # rex that always fails keeps every spec that starts a job off the live
 # server; the Rex specs export their own fake in setup().
 export JOB_REX_BIN=/usr/bin/false
+# The same for the mux shim's Rex (mux/rex.zsh, rex-bin.sh.tmpl): without a
+# seam it finds the live CLI on PATH, and a spec that sets REX_SESSION but no
+# scratch $REX_SERVER then queries the developer's live server. Specs that
+# stub rex export their own MUX_REX_BIN; the three that start a scratch server
+# (mux_rex, quick_launch_rex, rex_keymap) name the real binary themselves.
+export MUX_REX_BIN=/usr/bin/false
+# A suite run over SSH must look like one run at the machine: `notify` sends a
+# toast to the ORIGIN machine through the clipboard bridge whenever the shell
+# is remote (_notify_bridge_target: NOTIFY_VIA_BRIDGE, else mux::is_remote,
+# which reads these three). Specs of the bridge route set their own.
+unset SSH_TTY SSH_CONNECTION SSH_CLIENT NOTIFY_VIA_BRIDGE
 
 # tm scrub-session debounce: real sessions nap before each synthesis so a
 # held key only builds the rung the user settles on — specs step rapidly
@@ -65,6 +76,13 @@ spec_helper_own_tmpbase() {
   # export their own. HOST_SELF_ALIAS_FILE is NOT pinned (it follows HOME).
   HOST_ALIASES_FILE="$SPEC_HELPER_TMPBASE/no-host-aliases"
   export HOST_ALIASES_FILE
+  # Every `notify` appends to the notification history, and `--ack` to the
+  # unacked ledger; both follow XDG_STATE_HOME/HOME, so a spec that moves
+  # neither would write the human's real ones. A spec that asserts on them
+  # exports its own paths (or unsets these to test the default location).
+  NOTIFY_HISTORY_FILE="$SPEC_HELPER_TMPBASE/.notify/history.jsonl"
+  NOTIFY_UNACKED_FILE="$SPEC_HELPER_TMPBASE/.notify/unacked"
+  export NOTIFY_HISTORY_FILE NOTIFY_UNACKED_FILE
 }
 
 # No spec may write the REAL clipboard. Code under test resolves `pbcopy`
@@ -104,9 +122,21 @@ spec_helper_clipboard_guard() {
 #   * stubs for hs, osascript, afplay, say, terminal-notifier and open, first
 #     on PATH. Each records its call and succeeds in silence. A spec that
 #     stubs one of them itself prepends its own directory and wins;
+#   * a `pueue` there too, which records and FAILS as a client with no daemon
+#     does: no spec may read or queue into the human's real pueue. Specs that
+#     run jobs name their own through JOB_PUEUE_BIN;
 #   * the seams that name such a tool by ABSOLUTE path are pinned to the stubs:
-#     HS (notify::available falls back to /opt/homebrew/bin/hs) and
-#     WIDGETS_OSASCRIPT_BIN (mux-fullscreen-probe: /usr/bin/osascript);
+#     HS (a set HS is the whole answer of notify::available) and
+#     WIDGETS_OSASCRIPT_BIN (mux-fullscreen-probe, quick-launch-window:
+#     /usr/bin/osascript);
+#   * NOTIFY_TMUX_BIN, which defaults to `tmux` (a `refresh-client -S` to the
+#     live server on every acknowledgable toast), is pinned to a recording
+#     stub: `spec_desktop_calls notify-tmux`;
+#   * NOTIFY_HISTORY_FILE and NOTIFY_UNACKED_FILE live in the tmpbase (set
+#     with HOST_ALIASES_FILE, in spec_helper_own_tmpbase);
+#   * at the top of this file: MUX_REX_BIN and JOB_REX_BIN refuse, and the
+#     SSH_* variables are unset, so `notify` never takes the bridge route to
+#     another machine's screen;
 #   * SPEC_RUN_TOAST=0, so a spec that runs the wrapper raises no toast.
 #
 # To ASSERT on what the code under test asked of the desktop:
@@ -132,8 +162,8 @@ spec_helper_clipboard_guard() {
 #
 # SPEC_DESKTOP_AUDIT=<file>, set for a whole run, additionally appends
 # "<spec file><TAB><tool argv>" for every call that reached a guard stub, and
-# adds pass-through loggers for rex, pueue and launchctl (logged, then the
-# real one runs): the measurement behind the leak table in
+# adds pass-through loggers for rex and launchctl (logged, then the real one
+# runs): the measurement behind the leak table in
 # tests/README-scaffolding.md.
 spec_real_desktop_off() { [ "${SPEC_REAL_DESKTOP:-}" != 1 ]; }
 spec_helper_desktop_guard() {
@@ -143,16 +173,21 @@ spec_helper_desktop_guard() {
   if [ -n "${SPEC_DESKTOP_AUDIT:-}" ]; then
     _dg_audit="printf '%s\\t%s\\n' '${SHELLSPEC_SPECFILE:-?}' \"\$line\" >>'$SPEC_DESKTOP_AUDIT'"
   fi
-  for _dg_tool in hs osascript afplay say terminal-notifier open; do
+  # notify-tmux is not a tool: it is what NOTIFY_TMUX_BIN is pinned to below.
+  # pueue is the one that FAILS (a client with no daemon): succeeding would
+  # tell share::jobs_available that jobs can be queued.
+  for _dg_tool in hs osascript afplay say terminal-notifier open notify-tmux pueue; do
+    _dg_rc=0
+    [ "$_dg_tool" != pueue ] || _dg_rc=1
     printf '%s\n' '#!/bin/sh' \
       "line=\"$_dg_tool \$(printf '%s' \"\$*\" | tr '\\n' ' ')\"" \
       "printf '%s\\n' \"\$line\" >>'$SPEC_DESKTOP_GUARD/calls.log'" \
       "$_dg_audit" \
-      'exit 0' >"$SPEC_DESKTOP_GUARD/$_dg_tool"
+      "exit $_dg_rc" >"$SPEC_DESKTOP_GUARD/$_dg_tool"
     chmod +x "$SPEC_DESKTOP_GUARD/$_dg_tool"
   done
   if [ -n "$_dg_audit" ]; then
-    for _dg_tool in rex pueue launchctl; do
+    for _dg_tool in rex launchctl; do
       _dg_real=$(command -v "$_dg_tool" 2>/dev/null) || continue
       case $_dg_real in /*) ;; *) continue ;; esac
       printf '%s\n' '#!/bin/sh' \
@@ -165,8 +200,9 @@ spec_helper_desktop_guard() {
   PATH="$SPEC_DESKTOP_GUARD:$PATH"
   HS="$SPEC_DESKTOP_GUARD/hs"
   WIDGETS_OSASCRIPT_BIN="$SPEC_DESKTOP_GUARD/osascript"
+  NOTIFY_TMUX_BIN="$SPEC_DESKTOP_GUARD/notify-tmux"
   SPEC_RUN_TOAST=0
-  export PATH HS WIDGETS_OSASCRIPT_BIN SPEC_RUN_TOAST SPEC_DESKTOP_GUARD
+  export PATH HS WIDGETS_OSASCRIPT_BIN NOTIFY_TMUX_BIN SPEC_RUN_TOAST SPEC_DESKTOP_GUARD
 }
 spec_desktop_calls() {
   [ -f "$SPEC_DESKTOP_GUARD/calls.log" ] || return 0
@@ -189,7 +225,7 @@ spec_sounds() {
 spec_desktop_unguard() {
   spec_real_desktop_off && { echo "spec_desktop_unguard: needs SPEC_REAL_DESKTOP=1" >&2; return 1; }
   PATH=$(printf '%s' "$PATH" | sed "s|$SPEC_DESKTOP_GUARD:||g")
-  unset HS WIDGETS_OSASCRIPT_BIN
+  unset HS WIDGETS_OSASCRIPT_BIN NOTIFY_TMUX_BIN
   export PATH
 }
 
@@ -295,9 +331,12 @@ spec_path_prepend() {
 #                                    export it, and put a fake `sleep` and a
 #                                    fake `date` first on PATH
 #   spec_clock_advance <seconds>     move it forward; fractions allowed (0.2)
+#   spec-clock-advance <seconds>     the same, as a COMMAND on PATH: for the
+#                                    body of a stub that has to "take time"
 #   spec_clock_now [ms]              print it: whole seconds, or milliseconds
-#   spec_clock_slept                 print every `sleep` asked of the fake,
-#                                    one request per line, in order
+#   spec_clock_slept                 print every sleep asked for, one request
+#                                    per line, in order: of the fake `sleep`
+#                                    (its argv) and of common::sleep (seconds)
 #
 # The fake `sleep N` returns at once, ADVANCES the clock by N and records the
 # request (N may carry the s/m/h/d suffix; several arguments add up). The fake
@@ -317,7 +356,8 @@ spec_path_prepend() {
 # append-only journal, one short line per event:
 #
 #   = 1000000        the clock was set to this many milliseconds
-#   + 200            it advanced by this many
+#   + 200            it advanced by this many (spec_clock_advance)
+#   + 200 0.2        a sleep advanced it: the rest of the line is the request
 #
 # and "now" is the last `=` plus every `+` after it. A line is written with one
 # O_APPEND write far below PIPE_BUF, which the kernel does not interleave: two
@@ -325,30 +365,45 @@ spec_path_prepend() {
 # to clean up after a killed process. Milliseconds are integers, so 25 sleeps
 # of 0.2 are exactly 5 s, not 5.000000000000001.
 #
-# WHAT IT DOES NOT REACH: code that reads $EPOCHSECONDS / $EPOCHREALTIME /
-# $SECONDS or waits with `read -t`, `zselect`, `wait`, or a tool's own
-# `--timeout`; a script that resets PATH; a file's real mtime (set it with
-# `touch -t`, relative to the virtual now). Those need the production seam
-# described in tests/README-scaffolding.md, which reads this same journal.
+# THE PRODUCTION SEAM. zsh code that sources common.zsh reads the time with
+# common::now and waits with common::sleep (so do poll::until, spin::nap and
+# job::_follow_nap). Both use THIS journal whenever $COMMON_CLOCK_FILE names
+# it, which spec_clock_set arranges: no PATH needed, no fork. The journal has
+# two readers, the awk below and the read loop in common.zsh;
+# tests/common_spec.sh feeds both the same journal and compares.
+#
+# WHAT IT DOES NOT REACH: code that still reads $EPOCHSECONDS /
+# $EPOCHREALTIME / $SECONDS directly or waits with `read -t`, a bare
+# `zselect`, `wait`, or a tool's own `--timeout`; a script that resets PATH
+# and does not source common.zsh; a file's real mtime (set it with `touch
+# -t`, relative to the virtual now).
 spec_clock_set() {
   if [ -z "${SPEC_CLOCK_FILE:-}" ]; then
     _ck_dir=$(mktemp -d "${SHELLSPEC_TMPBASE:?spec_clock_set: no SHELLSPEC_TMPBASE}/clock.XXXXXX") || return 1
     _ck_date=$(command -v date)
     SPEC_CLOCK_FILE="$_ck_dir/journal"
     SPEC_CLOCK_BIN="$_ck_dir/bin"
-    export SPEC_CLOCK_FILE SPEC_CLOCK_BIN
+    # The name production code knows the journal by (common.zsh: common::now,
+    # common::sleep). Always the same file as SPEC_CLOCK_FILE.
+    COMMON_CLOCK_FILE=$SPEC_CLOCK_FILE
+    export SPEC_CLOCK_FILE SPEC_CLOCK_BIN COMMON_CLOCK_FILE
     : >"$SPEC_CLOCK_FILE"
     spec_stub "$SPEC_CLOCK_BIN" sleep \
       'ms=$(awk '"'"'BEGIN { t = 0; for (i = 1; i < ARGC; i++) { a = ARGV[i]; u = 1
          if (a ~ /m$/) u = 60; else if (a ~ /h$/) u = 3600; else if (a ~ /d$/) u = 86400
          sub(/[smhd]$/, "", a); t += a * u }
          printf "%.0f\n", t * 1000 }'"'"' "$@")' \
-      'echo "+ $ms" >>"$SPEC_CLOCK_FILE"'
+      'echo "+ $ms $*" >>"$SPEC_CLOCK_FILE"'
     spec_stub "$SPEC_CLOCK_BIN" date \
       'for a in "$@"; do case $a in -r | -d | -j | -f | --date*) exec '"'$_ck_date'"' "$@" ;; esac; done' \
       'now=$(awk '"'"'$1 == "=" { t = $2 } $1 == "+" { t += $2 } END { printf "%.0f\n", int(t / 1000) }'"'"' "$SPEC_CLOCK_FILE")' \
       'if '"'$_ck_date'"' -r 0 +%s >/dev/null 2>&1; then exec '"'$_ck_date'"' -r "$now" "$@"; fi' \
       'exec '"'$_ck_date'"' -d "@$now" "$@"'
+    # For a /bin/sh stub that has to "take time": `spec-clock-advance 2`.
+    printf '%s\n' '#!/bin/sh' \
+      'ms=$(awk -v s="$1" '"'"'BEGIN { printf "%.0f\n", s * 1000 }'"'"')' \
+      'echo "+ $ms" >>"$SPEC_CLOCK_FILE"' >"$SPEC_CLOCK_BIN/spec-clock-advance"
+    chmod +x "$SPEC_CLOCK_BIN/spec-clock-advance"
     spec_path_prepend "$SPEC_CLOCK_BIN"
   fi
   echo "= $(_spec_clock_ms "${1:-2000000000}")" >>"$SPEC_CLOCK_FILE"
@@ -362,9 +417,63 @@ spec_clock_now() {
     "${SPEC_CLOCK_FILE:?spec_clock_now: call spec_clock_set first}"
 }
 spec_clock_slept() {
-  spec_stub_calls "${SPEC_CLOCK_BIN:?spec_clock_slept: call spec_clock_set first}" sleep
+  sed -n 's/^+ [0-9][0-9]* //p' "${SPEC_CLOCK_FILE:?spec_clock_slept: call spec_clock_set first}"
 }
 _spec_clock_ms() { awk -v s="$1" 'BEGIN { printf "%.0f\n", s * 1000 }'; }
+
+# Code that runs BESIDE the test (a follower in the background, a detached
+# helper) advances the clock by itself, at full speed: its naps cost nothing.
+# Two ways to stay in step with it, neither of which waits for TIME:
+#
+#   spec_clock_await <seconds>       block until the clock stands that far past
+#                                    where it was last SET: "the code has now
+#                                    napped for half a second", then look
+#   spec_clock_guard <pid> [seconds] in the background: kill -9 <pid> if the
+#                                    clock ever gets that far (7200 if
+#                                    omitted) past where it was last set. The
+#                                    bound a polling loop needs, in the loop's
+#                                    own time: a follower that is never told
+#                                    to stop is killed after two of ITS hours
+#                                    (at 0.1 s a nap, a few real seconds of
+#                                    spinning, some 20,000 naps a second)
+#   spec_clock_guard_off             stand the guard down (always, once the
+#                                    process has been joined with `wait`)
+#
+# Both follow the journal as it grows (`tail -f`, which the kernel wakes: no
+# polling here either). To join the process itself use `wait <pid>`. What
+# they cannot do is hold the code still: between two of its naps nothing can
+# be slipped in from outside. An event that must land at one exact point
+# needs a fake the code calls at that point (a counter, a FIFO the fake
+# blocks on), not the clock.
+spec_clock_await() {
+  _ca_fifo=$(mktemp -u "${SHELLSPEC_TMPBASE:?}/await.XXXXXX") && mkfifo "$_ca_fifo" || return 1
+  tail -n +1 -f "${SPEC_CLOCK_FILE:?spec_clock_await: call spec_clock_set first}" >"$_ca_fifo" 2>/dev/null &
+  _ca_tail=$!
+  awk -v d="$(_spec_clock_ms "$1")" '$1 == "=" { base = $2; t = $2 } $1 == "+" { t += $2 }
+    t - base >= d { exit }' <"$_ca_fifo"
+  kill "$_ca_tail" 2>/dev/null
+  wait "$_ca_tail" 2>/dev/null
+  rm -f "$_ca_fifo"
+  return 0
+}
+spec_clock_guard() {
+  _cg_fifo=$(mktemp -u "${SHELLSPEC_TMPBASE:?}/guard.XXXXXX") && mkfifo "$_cg_fifo" || return 1
+  tail -n +1 -f "${SPEC_CLOCK_FILE:?spec_clock_guard: call spec_clock_set first}" >"$_cg_fifo" 2>/dev/null &
+  SPEC_CLOCK_GUARD=$!
+  # awk ends at the bound (then the kill) or at EOF, when the guard is stood
+  # down by killing its tail (then nothing).
+  ( awk -v d="$(_spec_clock_ms "${2:-7200}")" '$1 == "=" { base = $2; t = $2 } $1 == "+" { t += $2 }
+      t - base >= d { hit = 1; exit } END { exit !hit }' <"$_cg_fifo" && kill -9 "$1" 2>/dev/null
+    rm -f "$_cg_fifo" ) >/dev/null 2>&1 &
+  SPEC_CLOCK_GUARD_SUB=$!
+}
+spec_clock_guard_off() {
+  [ -n "${SPEC_CLOCK_GUARD:-}" ] || return 0
+  kill "$SPEC_CLOCK_GUARD" 2>/dev/null
+  wait "$SPEC_CLOCK_GUARD" "$SPEC_CLOCK_GUARD_SUB" 2>/dev/null
+  SPEC_CLOCK_GUARD=
+  return 0
+}
 
 # spec_fake_rex <dir> [arm...] [--offline arm...] — write <dir>/rex, a
 # spec_stub (so: argv logged flat to <dir>/rex.log, read it with

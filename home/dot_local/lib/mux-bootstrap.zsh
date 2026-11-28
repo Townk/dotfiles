@@ -635,10 +635,26 @@ mux::await_tty_size() {
       [[ -n "$prev" && "$size" == "$prev" ]] && break
       prev="$size"
     fi
-    sleep "$interval"
+    _mux_sleep "$interval"
   done
   [[ -n "$size" ]] || return 1
   print -r -- "$size"
+}
+
+# _mux_sleep <seconds> — wait. This file deliberately does not source
+# common.zsh (see the header), so it cannot assume common::sleep, the tree's
+# wait: it uses it when the caller has loaded it, and is otherwise its local
+# equivalent, honouring the same $COMMON_CLOCK_FILE (the journal a test
+# drives; common.zsh documents the format) before the external `sleep`.
+_mux_sleep() {
+  if (( ${+functions[common::sleep]} )); then
+    common::sleep "$1"
+  elif [[ -n "${COMMON_CLOCK_FILE:-}" && -f "$COMMON_CLOCK_FILE" && -r "$COMMON_CLOCK_FILE" ]]; then
+    local -i ms=$(( $1 * 1000 + 0.5 ))
+    print -r -- "+ $ms $1" >> "$COMMON_CLOCK_FILE"
+  else
+    sleep "$1"
+  fi
 }
 
 # _mux::tty_terminal_size — "<cols> <rows>" of the controlling tty, 80x24

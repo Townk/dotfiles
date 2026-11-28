@@ -155,6 +155,10 @@ Describe 'mux shim — Rex backend'
     start_server() {
       RX_STATE=$(mktemp -d)
       RX_SOCK="/tmp/mxrx-$$.sock"
+      # The real CLI, against the scratch server only: spec_helper pins
+      # MUX_REX_BIN to a rex that refuses, so no other spec reaches a live one.
+      MUX_REX_BIN=$(command -v rex)
+      export MUX_REX_BIN
       RX_SERVER="unix://$RX_SOCK"
       : > "$RX_STATE/init.lua"
       # Born "inside tmux", as a server started from a tmux pane is (see the

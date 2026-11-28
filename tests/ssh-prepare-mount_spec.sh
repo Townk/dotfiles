@@ -1,7 +1,8 @@
 # ssh-prepare-connection `mount` step (clipboard-mount spec §3.2): mounts the
 # peer at connect, gated on peer-hostname + the clipboard RemoteForward,
-# backgrounded so the connection never waits. The step disowns its work, so
-# examples poll for the stub's record file.
+# backgrounded so the connection never waits. The step disowns its work; the
+# examples run it with SSH_PREPARE_FOREGROUND=1, where it waits for every push
+# before it returns, so each assertion reads a finished state: no polling.
 Describe 'ssh-prepare-connection: mount step'
   SPC="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_ssh-prepare-connection"
 
@@ -21,8 +22,7 @@ Describe 'ssh-prepare-connection: mount step'
   }
 
   run_and_wait() {
-    zsh -f "$SPC" "$CONF"
-    i=0; while [ ! -e "$SHELLSPEC_TMPBASE/cm-calls" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
+    SSH_PREPARE_FOREGROUND=1 zsh -f "$SPC" "$CONF"
     return 0
   }
 
@@ -82,31 +82,33 @@ STUB
   }
   BeforeEach 'setup'
 
-  # step_mount disowns its pushes and each example waits only for the one file
-  # it asserts on, so the others are still writing when the example ends: into
-  # the next example's fixtures, and into the tmpbase while the after-all hook
-  # removes it ("rm: Directory not empty", reported as an error of the run).
-  # Every straggler has this file's tmpbase in its command line (the conf it
-  # was given, or a stub under bin/), so wait until none is left. A real,
-  # bounded wait like the polls below; it goes when the step can be told to
-  # run its pushes in the foreground (tests/README-scaffolding.md).
-  settle() {
-    i=0
-    while pgrep -f "$SHELLSPEC_TMPBASE/" >/dev/null 2>&1 && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
-    return 0
-  }
-  AfterEach 'settle'
-
-  wait_for_ssh_calls() {
-    zsh -f "$SPC" "$CONF"
-    i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-calls" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
-    return 0
-  }
+  wait_for_ssh_calls() { run_and_wait; }
 
   It 'ensures the peer mount, keyed by peer-hostname, ssh via the alias'
     write_conf thiago-mac-mini 1
     When call run_and_wait
     The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
+  End
+
+  # The mount stub blocks on a FIFO until the example opens it, and records
+  # that it ran before it exits. In foreground mode the step cannot have
+  # returned before that record: the order is fixed, whatever the machine's
+  # speed. (The default, disowned mode has no example: "it did not wait" can
+  # only be shown by a stub that never ends, which would hang a regression.)
+  It 'waits for its pushes before returning with SSH_PREPARE_FOREGROUND=1'
+    write_conf peer-host 1
+    ordered() {
+      mkfifo "$SHELLSPEC_TMPBASE/gate"
+      printf '#!/bin/sh\ncat "%s/gate" >/dev/null\necho pushed >>"%s/order"\n' \
+        "$SHELLSPEC_TMPBASE" "$SHELLSPEC_TMPBASE" >"$STUBS/clipboard-mount"
+      ( SSH_PREPARE_FOREGROUND=1 zsh -f "$SPC" "$CONF"; echo returned >>"$SHELLSPEC_TMPBASE/order" ) &
+      : >"$SHELLSPEC_TMPBASE/gate"   # blocks until the stub is reading
+      wait
+      tr '\n' ' ' <"$SHELLSPEC_TMPBASE/order"
+      rm -f "$SHELLSPEC_TMPBASE/gate" "$SHELLSPEC_TMPBASE/order"
+    }
+    When call ordered
+    The output should equal "pushed returned "
   End
 
   It 'skips silently when the fragment has no peer-hostname'
@@ -136,7 +138,6 @@ STUB
     fetched="$XDG_STATE_HOME/clipboard/tunnel-tokens/thiago-mac-mini"
     run_and_wait_token() {
       run_and_wait
-      i=0; while [ ! -e "$fetched" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
       cat "$fetched" 2>/dev/null
       printf '|%s' "$(stat -f %Lp "$fetched" 2>/dev/null || stat -c %a "$fetched" 2>/dev/null)"
     }
@@ -151,7 +152,6 @@ STUB
     write_conf thiago-mac-mini 1
     wait_cn() {
       run_and_wait
-      i=0; while ! grep -q computer-name "$CONF" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
       grep '^# computer-name:' "$CONF" || echo MISSING
     }
     When call wait_cn
@@ -162,8 +162,7 @@ STUB
     write_conf thiago-mac-mini 1
     twice() {
       run_and_wait
-      i=0; while ! grep -q computer-name "$CONF" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
-      zsh -f "$SPC" "$CONF"; sleep 0.5
+      run_and_wait
       grep -c '^# computer-name:' "$CONF"
     }
     When call twice
@@ -182,7 +181,6 @@ STUB
     printf '%s' "$(printf 'c%.0s' $(seq 64))" > "$XDG_STATE_HOME/clipboard/mount-serve-token"
     wait_mount_token() {
       run_and_wait
-      i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
       cat "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin" 2>/dev/null
     }
     When call wait_mount_token
@@ -233,14 +231,7 @@ STUB
   # identity, and the sit-at machine (running this script, right now) is the
   # one that knows it -- so it pushes a fail-soft, backgrounded self-name
   # file to the target before the mount ensure call.
-  # Wait on the CAPTURE FILE itself, not the shared ssh-calls log: with
-  # several concurrent backgrounded pushes, the fastest arm creates
-  # ssh-calls long before this push's stdin has been captured.
-  wait_for_identity() {
-    zsh -f "$SPC" "$CONF"
-    i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-stdin" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
-    return 0
-  }
+  wait_for_identity() { run_and_wait; }
 
   It 'pushes a stable self-name identity to the peer, keyed by peer-hostname, via ssh to the alias target'
     write_conf thiago-mac-mini 1
@@ -254,11 +245,7 @@ STUB
   # mux, and the sit-at machine -- running this script, right now -- is the
   # one that knows what it runs in. TERM_PROGRAM survives mux layers where
   # TERM does not.
-  wait_for_peerterm() {
-    zsh -f "$SPC" "$CONF"
-    i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
-    return 0
-  }
+  wait_for_peerterm() { run_and_wait; }
 
   It 'pushes the physical terminal for the fullscreen toggle when detectable'
     write_conf thiago-mac-mini 1
@@ -270,11 +257,7 @@ STUB
   # An undetectable terminal REMOVES the remote state instead of leaving a
   # stale name from a previous connect to misdirect the toggle; absent state
   # falls back to the old detection chain on the remote.
-  wait_for_peerterm_rm() {
-    zsh -f "$SPC" "$CONF"
-    i=0; while ! grep -q "rm -f" "$SHELLSPEC_TMPBASE/ssh-calls" 2>/dev/null && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
-    return 0
-  }
+  wait_for_peerterm_rm() { run_and_wait; }
 
   It 'removes the pushed terminal state when the local terminal is undetectable'
     write_conf thiago-mac-mini 1
@@ -288,14 +271,7 @@ STUB
   # needs this machine's token. The push is keyed by owner, and its MODE is the
   # point -- `umask` before the write and `chmod` after, so the secret never
   # exists readable to anyone else, unlike the self-name push above.
-  wait_for_token_push() {
-    zsh -f "$SPC" "$CONF"
-    i=0
-    while [ ! -e "$SHELLSPEC_TMPBASE/ssh-token-stdin" ] && [ $i -lt 30 ]; do
-      sleep 0.1; i=$((i+1))
-    done
-    return 0
-  }
+  wait_for_token_push() { run_and_wait; }
 
   It 'pushes the credential of this machine, keyed by owner, with the mode set before and after the write'
     write_conf thiago-mac-mini 1
