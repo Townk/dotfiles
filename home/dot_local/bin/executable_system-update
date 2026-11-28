@@ -336,27 +336,24 @@ refresh_mise_env() {
 # -check`: in 0.0.3 that probe never exits (it launches pinentry-mac and blocks on
 # the Assuan protocol), which is what froze this script mid-run. Only when the
 # symlink points at the wrong backend do we invoke `-fix`, bounded by a timeout
-# with stdin closed so a misbehaving pinentry can't wedge the update.
+# with stdin closed so a misbehaving pinentry can't wedge the update. Both steps
+# live in ~/.local/libexec/pinentry-backend-repair.
 reassert_pinentry_mac_backend() {
   command -v pinentry-touchid >/dev/null 2>&1 || return 0
-  local mac link to
-  mac="$(command -v pinentry-mac 2>/dev/null || true)"
-  [[ -n "$mac" ]] || return 0
-  link="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "pinentry" { print $3 }' || true)"
-  [[ -n "$link" ]] || link="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/pinentry/bin/pinentry"
-  [[ "$(realpath "$link" 2>/dev/null || true)" == "$(realpath "$mac" 2>/dev/null || true)" ]] && return 0
-  to="$(command -v gtimeout || command -v timeout || true)"
-  if [[ -n "$to" ]]; then
-    "$to" 20 pinentry-touchid -fix >/dev/null 2>&1 </dev/null || log_warn "pinentry-touchid -fix failed"
-  else
-    pinentry-touchid -fix >/dev/null 2>&1 </dev/null || log_warn "pinentry-touchid -fix failed"
+  # The check and the bounded `-fix` are shared with run_after_26.
+  local helper="$HOME/.local/libexec/pinentry-backend-repair" rc=0
+  if [[ ! -x "$helper" ]]; then
+    log_warn "pinentry backend not checked: $helper is missing"
+    return 0
   fi
+  # 1 is "wrong backend"; 0 (already pinentry-mac) and 2 (nothing to check) end here.
+  "$helper" check || rc=$?
+  ((rc == 1)) || return 0
+  "$helper" fix || log_warn "pinentry-touchid -fix failed"
   # Verify the repair actually took: `-fix` can exit 0 without re-pointing the
   # symlink, and fire-and-forget surfaced that only as a future curses prompt
   # (or a blocked signed commit). Same re-check run_after_26 already does.
-  link="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "pinentry" { print $3 }' || true)"
-  [[ -n "$link" ]] || link="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/pinentry/bin/pinentry"
-  if [[ "$(realpath "$link" 2>/dev/null || true)" == "$(realpath "$mac" 2>/dev/null || true)" ]]; then
+  if "$helper" check; then
     log_info "pinentry backend repaired -> pinentry-mac"
   else
     log_warn "pinentry backend still not pinentry-mac after -fix; run 'pinentry-touchid -fix' manually"

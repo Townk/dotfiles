@@ -69,11 +69,9 @@ share::ledger_get() {
 
 # Atomic rewrite: a torn ledger would lose every receipt, not just one.
 share::ledger_remove() {
-  local file tmp; file="$(share::_ledger_file)"
+  local file; file="$(share::_ledger_file)"
   [[ -f "$file" ]] || return 0
-  tmp="$file.tmp.$$"
-  jq -c --arg id "$1" 'select(.id != $id)' "$file" >"$tmp" \
-    && mv -f -- "$tmp" "$file"
+  common::atomic_write --mode 600 "$file" jq -c --arg id "$1" 'select(.id != $id)' "$file"
 }
 
 share::ledger_overdue() {

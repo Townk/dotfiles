@@ -1272,7 +1272,8 @@ bkp::restic() {
   local -a guard=()
   if [[ "${BKP_RESTIC_TIMEOUT:-0}" == <1-> ]]; then
     local tbin
-    tbin=$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null)
+    # timeout before gtimeout here: the order this guard has always had.
+    tbin=$(common::timeout_bin timeout gtimeout)
     [[ -n "$tbin" ]] && guard=("$tbin" -k "${BKP_RESTIC_KILL_AFTER:-30}" "$BKP_RESTIC_TIMEOUT")
   fi
   RESTIC_REPOSITORY="$repo" RESTIC_PASSWORD_COMMAND="$pwcmd" "${guard[@]}" restic "$@"
@@ -2177,6 +2178,53 @@ bkp::restore::undo() {
 bkp::tick() {
   bkp::capture::run "$@" || return $?
   bkp::reconcile::run "$@"
+}
+
+# bkp::worker::args <mode-flag> [args...]
+# The command line the two scheduled workers share (system-backup-capture,
+# system-backup-reconcile): --manifest, --config, help, and the ONE switch
+# that is the worker's own (--reconcile, --prune). Sets
+#   reply=(<manifest> <config> <0|1: mode flag given>)
+# and returns for the worker to pick its function. Help and a bad argument
+# end the script here, through the worker's own `usage`; so does a machine
+# with no config yet, successfully.
+bkp::worker::args() {
+  local mode_flag="$1"
+  shift
+  local manifest="$BKP_MANIFEST" config="$BKP_CONFIG" mode=0
+  while (( $# )); do
+    case "$1" in
+      --manifest)
+        [[ $# -ge 2 ]] || die "--manifest requires a value"
+        manifest="$2"
+        shift 2
+        ;;
+      --config)
+        [[ $# -ge 2 ]] || die "--config requires a value"
+        config="$2"
+        shift 2
+        ;;
+      "$mode_flag")
+        mode=1
+        shift
+        ;;
+      -h | --help | help)
+        usage
+        exit 0
+        ;;
+      *)
+        usage >&2
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+  # Unconfigured machine (no config.toml yet): clean no-op, so the committed
+  # launchd agents are harmless before onboarding (images-automount precedent).
+  [[ -f "$config" ]] || {
+    log_info "bkp: not configured (no $config) — skipping"
+    exit 0
+  }
+  reply=("$manifest" "$config" "$mode")
 }
 
 # bkp::reconcile::prune [<config>]

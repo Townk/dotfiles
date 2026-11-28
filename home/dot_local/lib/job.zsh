@@ -382,6 +382,20 @@ job::_task_log() {
   print -r -- "$logdir/$task_id.log"
 }
 
+# job::_load <lib> — source a sibling library on first need (mux.zsh,
+# mux-bootstrap.zsh, theme-common.zsh: none is wanted by a plain job::start).
+# Non-zero when the file is missing or will not load, and the caller decides
+# what that costs it. The load is tried in a subshell first because a library
+# may hard-exit at SOURCE time — pick-common, pulled in by mux.zsh, does when
+# fzf is missing — and that must decline one feature, not end the caller's
+# shell.
+job::_load() {
+  local lib="${${(%):-%x}:A:h}/$1"
+  [ -r "$lib" ] || return 1
+  ( source "$lib" ) >/dev/null 2>&1 || return 1
+  source "$lib" 2>/dev/null
+}
+
 # job::_open_log_tab <title> <logfile> — open a mux tab tailing a job's
 # pueue log and BLOCK until that tab process exits — by ANY means (a clean
 # `tail -f` end, which never happens on its own; the user closing the tab;
@@ -426,14 +440,7 @@ job::_open_log_tab() {
       sh -c 'exec 3>"$2"; exec tail -f "$1"' _ "$logfile" "$sentinel" \
       || { rm -f -- "$sentinel"; return 1; }
   else
-    local muxlib="${${(%):-%x}:A:h}/mux.zsh"
-    # Same subshell probe as job::_watch_confirm_cancel: pick-common
-    # (pulled in by mux.zsh) hard-exits at SOURCE time when fzf is missing.
-    if ! { [ -r "$muxlib" ] && ( source "$muxlib" ) >/dev/null 2>&1; }; then
-      rm -f -- "$sentinel"
-      return 1
-    fi
-    source "$muxlib" 2>/dev/null || { rm -f -- "$sentinel"; return 1; }
+    job::_load mux.zsh || { rm -f -- "$sentinel"; return 1; }
     mux::new_tab --name "$title" -- \
       sh -c 'exec 3>"$2"; exec tail -f "$1"' _ "$logfile" "$sentinel" \
       || { rm -f -- "$sentinel"; return 1; }
@@ -476,13 +483,8 @@ job::_open_log_tab() {
 # treating it as "not cancelled" is the honest read, not an optimistic one).
 job::_watch_confirm_cancel() {
   local id="$1" title="$2"
-  local muxlib="${${(%):-%x}:A:h}/mux.zsh"
-  [ -r "$muxlib" ] || return 1
-  # pick-common (pulled in by mux.zsh) hard-exits at SOURCE time when fzf is
-  # missing — probe the load in a subshell so a widget-stack that cannot
-  # load declines the confirm instead of killing the caller's whole shell.
-  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
-  source "$muxlib" 2>/dev/null || return 1
+  # A widget-stack that cannot load declines the confirm (see job::_load).
+  job::_load mux.zsh || return 1
   mux::confirm "Cancel ${title}?" --title "Task runner" --danger \
     --affirmative "Cancel task" --negative "Keep running" --inset 1 >/dev/null || return 1
   if ! job::cancel "$id" >/dev/null 2>&1; then
@@ -502,13 +504,7 @@ job::_watch_confirm_cancel() {
 # its own built-in defaults), never a hard failure of the dashboard launch.
 job::_theme_args() {
   AI_THEME_ARGS=()
-  local themelib="${${(%):-%x}:A:h}/theme-common.zsh"
-  [ -r "$themelib" ] || return 0
-  # Same subshell probe as job::_watch_confirm_cancel/_open_log_tab: a
-  # source-time hard-exit anywhere in the chain must not take the caller
-  # down with it.
-  ( source "$themelib" ) >/dev/null 2>&1 || return 0
-  source "$themelib" 2>/dev/null || return 0
+  job::_load theme-common.zsh || return 0
   theme::args
 }
 
@@ -632,10 +628,7 @@ job::_use_pane_host() {
     popup) return 1 ;;
   esac
   [ -n "${TMUX:-}" ] || return 1
-  local muxlib="${${(%):-%x}:A:h}/mux-bootstrap.zsh"
-  [ -r "$muxlib" ] || return 1
-  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
-  source "$muxlib" 2>/dev/null || return 1
+  job::_load mux-bootstrap.zsh || return 1
   mux::has_float_pane
 }
 
@@ -651,10 +644,7 @@ job::_float_pane() {
     "$JOB_MUX_FLOAT_PANE_BIN" "$@"
     return $?
   fi
-  local muxlib="${${(%):-%x}:A:h}/mux-bootstrap.zsh"
-  [ -r "$muxlib" ] || return 1
-  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
-  source "$muxlib" 2>/dev/null || return 1
+  job::_load mux-bootstrap.zsh || return 1
   mux::float_pane "$@"
 }
 
@@ -672,10 +662,7 @@ job::_focus_pane_if_alive() {
     "$JOB_MUX_FOCUS_PANE_BIN" "$pane"
     return $?
   fi
-  local muxlib="${${(%):-%x}:A:h}/mux-bootstrap.zsh"
-  [ -r "$muxlib" ] || return 1
-  ( source "$muxlib" ) >/dev/null 2>&1 || return 1
-  source "$muxlib" 2>/dev/null || return 1
+  job::_load mux-bootstrap.zsh || return 1
   local bin win
   bin=$(mux::bin tmux) || return 1
   "$bin" list-panes -a -F '#{pane_id}' 2>/dev/null | grep -qFx -- "$pane" || return 1

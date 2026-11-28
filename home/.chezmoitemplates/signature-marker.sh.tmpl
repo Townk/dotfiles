@@ -1,0 +1,24 @@
+{{- /* signature-marker.sh.tmpl — the "did the static inputs change since the
+       last apply?" tail of the two symbols detection hooks (60-symbols-db,
+       70-symbols-nerd-font). It records the fingerprint and writes the
+       pending marker only when an EARLIER fingerprint exists and differs, so
+       a first deployment, or an edit to the hook alone, is not taken for an
+       input change.
+       The including hook sets $MARKER, $STATE and $STATIC_SIG first; the
+       fingerprints themselves stay in the hook, where chezmoi hashes them.
+       Usage: {{ includeTemplate "signature-marker.sh.tmpl" (dict "reason" "…" "changed" "…" "unchanged" "…") }}
+         reason     what the marker file says
+         changed    the line printed when the marker is written
+         unchanged  the line printed otherwise */ -}}
+mkdir -p "$(dirname "$MARKER")"
+previous=""
+[ -f "$STATE" ] && previous="$(cat "$STATE" 2>/dev/null || true)"
+printf '%s\n' "$STATIC_SIG" > "$STATE"
+
+if [ -n "$previous" ] && [ "$previous" != "$STATIC_SIG" ]; then
+  printf '%s\n' "{{ .reason }}" > "$MARKER"
+  echo "{{ .changed }}"
+else
+  echo "{{ .unchanged }}"
+fi
+{{- /* the including line ends this one */ -}}

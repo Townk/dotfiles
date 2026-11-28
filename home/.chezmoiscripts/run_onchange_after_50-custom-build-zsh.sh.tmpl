@@ -51,13 +51,6 @@ set -eu
 exit 0
 {{- end }}
 
-BUILD="{{ .chezmoi.workingTree }}/custom-builds/zsh/build-zsh.sh"
-
-if [ ! -f "$BUILD" ]; then
-  echo "[zsh-build] builder missing at $BUILD — skipping." >&2
-  exit 0
-fi
-
-exec bash "$BUILD"
+{{ includeTemplate "build-runner.sh.tmpl" (dict "tag" "zsh-build" "build" (joinPath .chezmoi.workingTree "custom-builds/zsh/build-zsh.sh")) }}
 
 # vim:ft=sh

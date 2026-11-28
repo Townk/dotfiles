@@ -100,16 +100,6 @@ if [ ! -x "$SCRIPT" ]; then
   exit 0
 fi
 
-mkdir -p "$(dirname "$MARKER")"
-previous=""
-[ -f "$STATE" ] && previous="$(cat "$STATE" 2>/dev/null || true)"
-printf '%s\n' "$STATIC_SIG" > "$STATE"
-
-if [ -n "$previous" ] && [ "$previous" != "$STATIC_SIG" ]; then
-  printf '%s\n' "static font inputs changed" > "$MARKER"
-  echo "[symbols-nerd-font] static font input change detected; build pending (marker written)."
-else
-  echo "[symbols-nerd-font] static font fingerprint initialized/unchanged."
-fi
+{{ includeTemplate "signature-marker.sh.tmpl" (dict "reason" "static font inputs changed" "changed" "[symbols-nerd-font] static font input change detected; build pending (marker written)." "unchanged" "[symbols-nerd-font] static font fingerprint initialized/unchanged.") }}
 
 # vim:ft=sh

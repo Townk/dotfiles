@@ -54,16 +54,6 @@ if [ ! -f "$DB_SCRIPT" ]; then
   exit 0
 fi
 
-mkdir -p "$(dirname "$MARKER")"
-previous=""
-[ -f "$STATE" ] && previous="$(cat "$STATE" 2>/dev/null || true)"
-printf '%s\n' "$STATIC_SIG" > "$STATE"
-
-if [ -n "$previous" ] && [ "$previous" != "$STATIC_SIG" ]; then
-  printf '%s\n' "static DB inputs changed" > "$MARKER"
-  echo "[symbols-db] static input change detected; DB re-probe pending (marker written)."
-else
-  echo "[symbols-db] static fingerprint initialized/unchanged."
-fi
+{{ includeTemplate "signature-marker.sh.tmpl" (dict "reason" "static DB inputs changed" "changed" "[symbols-db] static input change detected; DB re-probe pending (marker written)." "unchanged" "[symbols-db] static fingerprint initialized/unchanged.") }}
 
 # vim:ft=sh

@@ -55,13 +55,6 @@ set -eu
 exit 0
 {{- end }}
 
-BUILD="{{ .chezmoi.workingTree }}/custom-builds/colorscripts/build-colorscripts.sh"
-
-if [ ! -f "$BUILD" ]; then
-  echo "[colorscripts-build] builder missing at $BUILD — skipping." >&2
-  exit 0
-fi
-
-exec bash "$BUILD"
+{{ includeTemplate "build-runner.sh.tmpl" (dict "tag" "colorscripts-build" "build" (joinPath .chezmoi.workingTree "custom-builds/colorscripts/build-colorscripts.sh")) }}
 
 # vim:ft=sh

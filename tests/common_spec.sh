@@ -95,6 +95,123 @@ Describe 'common.zsh'
     End
   End
 
+  Describe 'common::timeout_bin (which timeout(1) is there)'
+    # coreutils is gtimeout under Homebrew and timeout on Linux, and recent
+    # macOS has a timeout of its own, so the order is part of the contract.
+    setup_tb() {
+      TB=$(mktemp -d)
+      printf '#!/bin/sh\n' >"$TB/gtimeout"
+      printf '#!/bin/sh\n' >"$TB/timeout"
+      chmod +x "$TB/gtimeout" "$TB/timeout"
+    }
+    cleanup_tb() { rm -rf "$TB"; }
+    BeforeEach 'setup_tb'
+    AfterEach 'cleanup_tb'
+    tb() { PATH="$TB" common::timeout_bin "$@"; }
+
+    It 'prefers gtimeout by default'
+      When call tb
+      The output should equal "$TB/gtimeout"
+    End
+    It 'falls back to timeout'
+      rm "$TB/gtimeout"
+      When call tb
+      The output should equal "$TB/timeout"
+    End
+    It 'takes the order from the caller'
+      When call tb timeout gtimeout
+      The output should equal "$TB/timeout"
+    End
+    It 'fails, printing nothing, when there is none'
+      rm "$TB/gtimeout" "$TB/timeout"
+      When call tb
+      The status should be failure
+      The output should equal ""
+    End
+  End
+
+  Describe 'common::atomic_write (replace a file in one step)'
+    setup_aw() {
+      AW=$(mktemp -d)
+      print -r -- "old" >"$AW/f"
+    }
+    cleanup_aw() { rm -rf "$AW"; }
+    BeforeEach 'setup_aw'
+    AfterEach 'cleanup_aw'
+    # What is in the directory afterwards: a temp file left behind shows here.
+    aw_names() { print -r -- "$AW"/*(DN:t); }
+    aw_mode() { zmodload -F zsh/stat b:zstat && zstat -o +mode -- "$1" | tail -c 4; }
+
+    It 'writes stdin to the target'
+      run() { print -r -- "new" | common::atomic_write "$AW/f" && cat "$AW/f" && aw_names; }
+      When call run
+      The output should equal "new
+f"
+    End
+
+    It 'creates a target that did not exist'
+      run() { print -r -- "new" | common::atomic_write "$AW/g" && cat "$AW/g" && aw_names; }
+      When call run
+      The output should equal "new
+f g"
+    End
+
+    It 'writes the output of a command'
+      run() { common::atomic_write "$AW/f" printf '%s\n' a b && cat "$AW/f" && aw_names; }
+      When call run
+      The output should equal "a
+b
+f"
+    End
+
+    It 'leaves the target and no temp file when the command fails, with its status'
+      producer() { print -r -- "half"; return 7; }
+      run() { common::atomic_write "$AW/f" producer; print -r -- "rc=$? $(<"$AW/f") [$(aw_names)]"; }
+      When call run
+      The output should equal "rc=7 old [f]"
+    End
+
+    # mv onto a directory moves the file into it and succeeds.
+    It 'refuses a target that is a directory'
+      mkdir "$AW/d"
+      run() { print -r -- "new" | common::atomic_write "$AW/d"; print -r -- "rc=$? [$(aw_names)] [$(print -r -- "$AW"/d/*(DN:t))]"; }
+      When call run
+      The output should equal "rc=1 [d f] []"
+    End
+
+    It 'fails without touching anything when the directory is missing'
+      run() { print -r -- "new" | common::atomic_write "$AW/absent/f" 2>/dev/null; print -r -- "rc=$? [$(aw_names)]"; }
+      When call run
+      The output should equal "rc=1 [f]"
+    End
+
+    It 'gives the file the mode a plain redirect would'
+      run() { (umask 027; print -r -- "new" | common::atomic_write "$AW/f"); aw_mode "$AW/f"; }
+      When call run
+      The output should equal "640"
+    End
+
+    It 'does not keep the old file mode'
+      chmod 600 "$AW/f"
+      run() { (umask 022; print -r -- "new" | common::atomic_write "$AW/f"); aw_mode "$AW/f"; }
+      When call run
+      The output should equal "644"
+    End
+
+    It 'sets the mode asked for'
+      run() { (umask 022; print -r -- "new" | common::atomic_write --mode 600 "$AW/f"); aw_mode "$AW/f"; cat "$AW/f"; }
+      When call run
+      The output should equal "600
+new"
+    End
+
+    It 'works under set -eu, as the workers run'
+      run() { zsh -f -c 'set -eu; source "$1"; common::atomic_write "$2" false; print reached' _ "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh" "$AW/f"; print -r -- "rc=$? $(<"$AW/f")"; }
+      When call run
+      The output should equal "rc=1 old"
+    End
+  End
+
   Describe 'for_each'
     ok_one() { return 0; }
     act() { [ "$1" = bad ] && return 1; return 0; }

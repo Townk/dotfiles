@@ -31,43 +31,14 @@ EOF
 }
 
 main() {
-  local manifest="$BKP_MANIFEST" config="$BKP_CONFIG" prune=0
-  while (( $# )); do
-    case "$1" in
-      --manifest)
-        [[ $# -ge 2 ]] || die "--manifest requires a value"
-        manifest="$2"
-        shift 2
-        ;;
-      --config)
-        [[ $# -ge 2 ]] || die "--config requires a value"
-        config="$2"
-        shift 2
-        ;;
-      --prune)
-        prune=1
-        shift
-        ;;
-      -h | --help | help)
-        usage
-        exit 0
-        ;;
-      *)
-        usage >&2
-        die "unknown argument: $1"
-        ;;
-    esac
-  done
-  # Unconfigured machine (no config.toml yet): clean no-op, so the committed
-  # launchd agents are harmless before onboarding (images-automount precedent).
-  [[ -f "$config" ]] || {
-    log_info "bkp: not configured (no $config) — skipping"
-    exit 0
-  }
-  if (( prune )); then
-    bkp::reconcile::prune "$config"
+  # Shared with the other scheduled worker: --manifest, --config, help, and
+  # the no-op on a machine with no config yet.
+  local -a reply
+  bkp::worker::args --prune "$@"
+  if (( reply[3] )); then
+    bkp::reconcile::prune "$reply[2]"
   else
-    bkp::reconcile::run "$manifest" "$config"
+    bkp::reconcile::run "$reply[1]" "$reply[2]"
   fi
 }
 

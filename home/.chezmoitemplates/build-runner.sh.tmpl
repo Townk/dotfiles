@@ -1,0 +1,17 @@
+{{- /* build-runner.sh.tmpl — the tail of the custom-build hooks that hand
+       over to a builder under custom-builds/ (50-custom-build-zsh,
+       55-custom-build-colorscripts): a missing builder is a skipped step,
+       never a failed apply; otherwise the builder replaces the hook, so its
+       exit status is the hook's.
+       The header hashes that make chezmoi re-run a hook stay in the hook.
+       The 56-build-* hooks have a different failure policy and do not use this.
+       Usage: {{ includeTemplate "build-runner.sh.tmpl" (dict "tag" "zsh-build" "build" (joinPath .chezmoi.workingTree "custom-builds/…")) }} */ -}}
+BUILD="{{ .build }}"
+
+if [ ! -f "$BUILD" ]; then
+  echo "[{{ .tag }}] builder missing at $BUILD — skipping." >&2
+  exit 0
+fi
+
+exec bash "$BUILD"
+{{- /* the including line ends this one */ -}}

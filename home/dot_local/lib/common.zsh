@@ -112,6 +112,20 @@ require_cmd() {
   ((${#missing[@]} == 0)) || die "missing required tool(s): ${missing[*]}"
 }
 
+# common::timeout_bin [NAME...] — print the first timeout(1) found, as
+# `command -v` reports it; non-zero, printing nothing, when there is none.
+# coreutils is `gtimeout` from Homebrew and `timeout` on Linux, and recent
+# macOS ships a `timeout` of its own, so the order is the caller's to choose:
+# the default prefers gtimeout, and a caller that wants another order names it.
+common::timeout_bin() {
+  local name
+  (($#)) || set -- gtimeout timeout
+  for name in "$@"; do
+    command -v "$name" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 # troupe::bin — print the troupe binary's path; non-zero when there is none.
 # PATH first, then the two Go install dirs: a pane the mux server spawned
 # carries the SERVER's PATH, without the interactive profile's go-bin, so a
@@ -192,6 +206,46 @@ common::tmpfile() {
     _common_tmpdir_sweep
   fi
   mktemp "$dir/XXXXXX"
+}
+
+# common::atomic_write [--mode MODE] <target> [command [args...]]
+# Replace <target> in one step: readers see the old file or the new one, never
+# a part of either. The content is the command's stdout, or this function's
+# stdin when no command is given; the command form is the one to use when the
+# producer can fail, because only then is its failure known here — a pipeline
+# into this function has already lost it.
+#
+# The temp file is made beside the target (a rename is atomic only within one
+# filesystem) under a name of its own, so two writers never share one. Nothing
+# is moved unless everything before the move succeeded; on any failure the
+# target is untouched, the temp file is gone, and the status is the failing
+# step's — the command's own when it was the command.
+#
+# The new file's mode is MODE when given, else what a plain `>target` would
+# have made under the caller's umask: the same as the `>tmp && mv` this
+# replaces. It is NOT the old file's mode; a file that must stay private
+# needs --mode 600 on every rewrite.
+common::atomic_write() {
+  local mode=""
+  if [[ "${1:-}" == --mode ]]; then
+    mode="${2:?common::atomic_write: --mode needs a value}"
+    shift 2
+  fi
+  local target="${1:?common::atomic_write: target path required}" tmp rc=0
+  shift
+  # mv would put the temp file INSIDE a directory and call that success.
+  [[ ! -d "$target" ]] || return 1
+  tmp=$(mktemp "$target.tmp.XXXXXX") || return 1
+  if (($#)); then
+    "$@" >"$tmp" || rc=$?
+  else
+    cat >"$tmp" || rc=$?
+  fi
+  # mktemp made it 0600; give it its final mode before it becomes the target.
+  ((rc)) || chmod "${mode:-$(printf '%o' $((8#666 & ~8#$(umask))))}" "$tmp" || rc=$?
+  ((rc)) || mv -f -- "$tmp" "$target" || rc=$?
+  ((rc)) && rm -f -- "$tmp"
+  return $rc
 }
 
 # Arm at source time, not inside a function: in zsh a `trap … EXIT` set within a
@@ -936,10 +990,9 @@ notify() {
   # taps (live 2026-08-17: the GUI picker's DOWN key stalled 2-3s under
   # hundreds of cascade warnings). notify is the most frequent CLI caller
   # in the system, so it must never open a mirrored request.
-  if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout 5 "$hs" -q -t 4 -c "$cmd"
-  elif command -v timeout >/dev/null 2>&1; then
-    timeout 5 "$hs" -q -t 4 -c "$cmd"
+  local tbin
+  if tbin=$(common::timeout_bin); then
+    "$tbin" 5 "$hs" -q -t 4 -c "$cmd"
   else
     "$hs" -q -t 4 -c "$cmd"
   fi

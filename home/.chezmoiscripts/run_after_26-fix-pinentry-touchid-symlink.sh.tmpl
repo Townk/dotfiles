@@ -23,7 +23,8 @@
   report "already correct". Running it wedged `system-update`, which invokes this
   script via `chezmoi apply`, right after the source sync. Inspect the managed
   symlink directly instead, and only shell out to `-fix` (bounded by a timeout,
-  stdin closed) when it actually points at the wrong backend.
+  stdin closed) when it actually points at the wrong backend. Both steps are
+  ~/.local/libexec/pinentry-backend-repair, which system-update calls too.
 
   Second repair: pinentry-mac must never write to the keychain itself.
   pinentry-touchid owns the item (service `GnuPG`, account = keygrip). When that
@@ -52,30 +53,26 @@ if [ "$(defaults read org.gpgtools.common DisableKeychain 2>/dev/null || true)" 
   echo "pinentry-touchid: disabled pinentry-mac's own keychain saving" >&2
 fi
 
-# The backend symlink pinentry-touchid resolves via gpgconf; fall back to the
-# well-known Homebrew keg path if gpgconf can't report it.
-link="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "pinentry" { print $3 }' || true)"
-[ -n "$link" ] || link="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/pinentry/bin/pinentry"
-
-# True when the managed symlink already resolves to the same file as pinentry-mac.
-backend_ok() {
-  [ -e "$link" ] && [ -e "$mac" ] &&
-    [ "$(realpath "$link" 2>/dev/null || true)" = "$(realpath "$mac" 2>/dev/null || true)" ]
-}
-
-if backend_ok; then
+# Check and repair live in one helper, shared with system-update. This is a
+# run_after hook, so ~/.local is already in place; if the helper is missing
+# anyway, say so and leave the link alone: a second copy of the check here
+# is what the helper replaced, and an unbounded `-fix` could wedge the apply.
+helper="$HOME/.local/libexec/pinentry-backend-repair"
+if [ ! -x "$helper" ]; then
+  echo "pinentry-touchid: $helper is missing; backend not checked" >&2
   exit 0
 fi
 
-echo "pinentry-touchid: backend pinentry is not pinentry-mac; repairing symlink" >&2
-to="$(command -v gtimeout || command -v timeout || true)"
-if [ -n "$to" ]; then
-  "$to" 20 pinentry-touchid -fix >/dev/null 2>&1 </dev/null || true
-else
-  pinentry-touchid -fix >/dev/null 2>&1 </dev/null || true
-fi
+# 1 is "wrong backend"; 0 (already pinentry-mac) and 2 (nothing to check) end here.
+rc=0
+"$helper" check || rc=$?
+[ "$rc" -eq 1 ] || exit 0
 
-if backend_ok; then
+echo "pinentry-touchid: backend pinentry is not pinentry-mac; repairing symlink" >&2
+"$helper" fix || true
+
+# `-fix` can exit 0 without re-pointing the link, so look again.
+if "$helper" check; then
   echo "pinentry-touchid: backend repaired -> pinentry-mac" >&2
 else
   echo "pinentry-touchid: could not repair backend; run 'pinentry-touchid -fix' manually" >&2

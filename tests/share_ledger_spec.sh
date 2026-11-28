@@ -54,6 +54,19 @@ Describe 'share:: receipt ledger'
     The output should include '"id": "id2"'
   End
 
+  # The ledger holds share keys: created 0600 and "never widened". The
+  # rewrite on removal used to leave it at the umask's default (0644).
+  It 'keeps the ledger private after a removal'
+    kept() {
+      share::ledger_add id1 croc public 'a' r1 'u1' 9999999999
+      share::ledger_add id2 croc public 'b' r2 'u2' 9999999999
+      share::ledger_remove id1
+      stat -f '%Lp' "$SB/ledger.jsonl" 2>/dev/null || stat -c '%a' "$SB/ledger.jsonl"
+    }
+    When call kept
+    The output should equal '600'
+  End
+
   It 'fails to get a removed entry'
     share::ledger_add id1 croc public 'a' r1 'u1' 9999999999
     share::ledger_remove id1

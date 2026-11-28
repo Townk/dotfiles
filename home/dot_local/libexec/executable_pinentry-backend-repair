@@ -1,0 +1,63 @@
+#!/bin/sh
+# pinentry-backend-repair — is the pinentry that pinentry-touchid delegates to
+# pinentry-mac, and if not, put it back.
+#
+# pinentry-touchid does not draw the prompt: it hands over to the pinentry that
+# `gpgconf` reports, which is GnuPG's compiled-in default — the symlink
+# $HOMEBREW_PREFIX/opt/pinentry/bin/pinentry, owned by the Homebrew `pinentry`
+# formula. Every `brew upgrade pinentry` points it back at pinentry-curses, and
+# gpg then answers "signing failed: Operation cancelled". Two callers put it
+# right, each with its own wording and its own moment:
+#   run_after_26-fix-pinentry-touchid-symlink   every `chezmoi apply`
+#   system-update (reassert_pinentry_mac_backend)   after `brew upgrade`
+# This file is the one copy of what they share; it prints nothing.
+#
+# Usage:
+#   pinentry-backend-repair check   0  the backend is pinentry-mac
+#                                   1  it is something else
+#                                   2  nothing to check: pinentry-touchid or
+#                                      pinentry-mac is not installed
+#   pinentry-backend-repair fix     run `pinentry-touchid -fix`; its exit status
+#                                   (124 when it had to be stopped). Exit 0 does
+#                                   NOT mean repaired: `check` again.
+#
+# POSIX sh and no libraries: the apply hook that calls it is POSIX sh, and it
+# sits in the chain every GPG prompt depends on.
+set -u
+
+# The link pinentry-touchid resolves through gpgconf, or the well-known keg
+# path when gpgconf cannot say.
+backend_link() {
+  link="$(gpgconf --list-components 2>/dev/null | awk -F: '$1 == "pinentry" { print $3 }' || true)"
+  [ -n "$link" ] || link="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/opt/pinentry/bin/pinentry"
+  printf '%s\n' "$link"
+}
+
+case "${1:-}" in
+  check)
+    command -v pinentry-touchid >/dev/null 2>&1 || exit 2
+    mac="$(command -v pinentry-mac 2>/dev/null || true)"
+    [ -n "$mac" ] || exit 2
+    link="$(backend_link)"
+    # The link itself is inspected, never `pinentry-touchid -check`: in 0.0.3
+    # that starts pinentry-mac and waits on the Assuan protocol forever.
+    [ -e "$link" ] && [ -e "$mac" ] &&
+      [ "$(realpath "$link" 2>/dev/null || true)" = "$(realpath "$mac" 2>/dev/null || true)" ] ||
+      exit 1
+    exit 0
+    ;;
+  fix)
+    # 20 s and a closed stdin: a pinentry that misbehaves must not hold up the
+    # apply, or the update, that asked.
+    to="$(command -v gtimeout || command -v timeout || true)"
+    if [ -n "$to" ]; then
+      "$to" 20 pinentry-touchid -fix >/dev/null 2>&1 </dev/null
+    else
+      pinentry-touchid -fix >/dev/null 2>&1 </dev/null
+    fi
+    ;;
+  *)
+    echo "usage: pinentry-backend-repair check|fix" >&2
+    exit 64
+    ;;
+esac

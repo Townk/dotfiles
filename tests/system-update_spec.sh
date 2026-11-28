@@ -95,7 +95,7 @@ End
 # reassert_pinentry_mac_backend must VERIFY the repair: `pinentry-touchid
 # -fix` can exit 0 without actually re-pointing the symlink, and the old
 # fire-and-forget shape surfaced that only as a future curses prompt (or a
-# blocked commit). Mirrors run_after_26's backend_ok re-check.
+# blocked commit). Mirrors run_after_26's re-check (both use pinentry-backend-repair).
 # A plain `sudo -v` ignores SUDO_ASKPASS — measured, with a terminal and
 # without — so the opening password of a run reaches the float only if sudo is
 # given an explicit -A. Which makes "is there a helper?" the whole decision, and
@@ -146,6 +146,11 @@ Describe 'system-update: pinentry reassert verifies the repair'
     PSTAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pinentry.XXXXXX")"
     mkdir -p "$PSTAGE/home/.local" "$PSTAGE/bin" "$PSTAGE/ctl"
     ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$PSTAGE/home/.local/lib"
+    # The check and the bounded -fix are the shared libexec helper.
+    mkdir -p "$PSTAGE/home/.local/libexec"
+    cp "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pinentry-backend-repair" \
+      "$PSTAGE/home/.local/libexec/pinentry-backend-repair"
+    chmod +x "$PSTAGE/home/.local/libexec/pinentry-backend-repair"
 
     # The "backend" symlink starts pointed at a fake curses binary.
     export P_MAC="$PSTAGE/bin/pinentry-mac"
@@ -198,6 +203,24 @@ SH
     When call run_reassert
     The status should be success
     The stderr should include 'still not pinentry-mac'
+  End
+
+  It 'says nothing when the backend is already pinentry-mac'
+    ln -sf "$P_MAC" "$P_LINK"
+    When call run_reassert
+    The status should be success
+    The stdout should equal ''
+    The stderr should equal ''
+  End
+
+  It 'warns, and touches nothing, when the helper is not installed'
+    rm -f "$PSTAGE/home/.local/libexec/pinentry-backend-repair"
+    touch "$P_CTL/repair"
+    When call run_reassert
+    The status should be success
+    The stderr should include 'pinentry-backend-repair is missing'
+    The path "$P_LINK" should be symlink
+    The value "$(readlink "$P_LINK")" should end with '/pinentry-curses'
   End
 End
 
