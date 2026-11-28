@@ -78,6 +78,9 @@ spec_helper_own_tmpbase() {
   # pick-clipboard reads the alias map while it loads (host::sql_case), so no
   # spec may see the human's real one. Per-file tmpbase; specs that need a map
   # export their own. HOST_SELF_ALIAS_FILE is NOT pinned (it follows HOME).
+  # No spec reaches the network through a chezmoi template: see
+  # home/.chezmoiexternal.toml.tmpl.
+  export CHEZMOI_OFFLINE=1
   HOST_ALIASES_FILE="$SPEC_HELPER_TMPBASE/no-host-aliases"
   export HOST_ALIASES_FILE
   # Every `notify` appends to the notification history, and `--ack` to the
@@ -268,10 +271,14 @@ spec_desktop_unguard() {
 # in place, or a hard link to one that already ran, pays nothing.
 #
 # So inside an example, a `#!` script that is made executable is moved onto a
-# pooled inode: its bytes are copied over slot <n> under the spec file's
-# tmpbase and the script's name becomes a hard link to that slot. The slots
-# are the same files from one example to the next, so only the first few
-# stubs of a spec FILE pay. After the example the names are removed again
+# pooled inode: its bytes are copied over slot <n> of a pool and the script's
+# name becomes a hard link to that slot. Each spec file has a pool of its own
+# that OUTLIVES the run ($TMPDIR/spec-exec-pool.<uid>/<spec file>;
+# SPEC_EXEC_POOL_DIR names another), so a slot is vetted once, ever: no
+# example pays, not even the first of a file. (One pool for all spec files
+# was tried: slots then pass between files that run at the same time, and a
+# straggler of one file can find another file's script under its feet.)
+# After the example the names are removed again
 # (spec_exec_pool_drain), which leaves each slot with one name and free to be
 # rewritten without touching anybody's stub.
 #
@@ -282,8 +289,12 @@ spec_desktop_unguard() {
 # through here: `command chmod` and /bin/chmod do not. SPEC_EXEC_POOL=0 turns
 # it off.
 #
-# A slot is claimed with an exclusive create, not a counter: stubs are also
-# written from subshells and background jobs, which share no variable.
+# A slot is claimed with an exclusive create (<n>.claim, holding the spec
+# file's pid and the stub's path), not a counter: stubs are written from
+# subshells and background jobs, which share no variable, and by the same
+# spec file in a second run going on at the same time. A claim whose owner is
+# gone (a run that was killed) is void. What
+# this file claimed is listed in its own tmpbase, for the drain.
 spec_exec_pool_on() { _SPEC_IN_EXAMPLE=1; }
 
 chmod() {
@@ -299,7 +310,8 @@ _spec_exec_pool() {
   # then answers for /usr/bin/stat in every example that checks a mode.
   zmodload zsh/system 2>/dev/null && zmodload -F zsh/stat b:zstat 2>/dev/null || return 0
   zmodload -F zsh/files b:zf_ln b:zf_rm b:zf_chmod b:zf_mkdir 2>/dev/null || return 0
-  local pool=$SPEC_HELPER_TMPBASE/.exec-pool f head slot in out claim
+  local pool=${SPEC_EXEC_POOL_DIR:-${TMPDIR:-/tmp}/spec-exec-pool.$UID/${${SHELLSPEC_SPECFILE:-${SPEC_HELPER_TMPBASE:t}}:t}}
+  local f head slot in out claim owner
   local -i n
   local -a st
   [[ -d $pool ]] || zf_mkdir -p $pool 2>/dev/null || return 0
@@ -312,10 +324,18 @@ _spec_exec_pool() {
     if [[ $head != '#!' ]]; then exec {in}<&-; continue; fi
     slot=
     for (( n = 1; n <= 4096; n++ )); do
-      if sysopen -w -o creat,excl -u claim -- $pool/$n.claim 2>/dev/null; then
-        print -rn -u $claim -- $f; exec {claim}>&-
-        slot=$pool/$n; break
+      if ! sysopen -w -o creat,excl -u claim -- $pool/$n.claim 2>/dev/null; then
+        # Taken. By a spec file that is gone (a run that was killed)? Then
+        # its claim is void: remove it and try once more.
+        # (The claim can vanish between the failed create and this read:
+        # its owner drained. Quietly; the next slot will do.)
+        owner=; { owner=${"$(<$pool/$n.claim)"%%$'\t'*} } 2>/dev/null
+        [[ $owner == <-> ]] && ! kill -0 $owner 2>/dev/null || continue
+        zf_rm -f $pool/$n.claim
+        sysopen -w -o creat,excl -u claim -- $pool/$n.claim 2>/dev/null || continue
       fi
+      print -rn -u $claim -- "$$"$'\t'"$f"; exec {claim}>&-
+      slot=$pool/$n; break
     done
     if [[ -z $slot ]] || ! sysopen -w -o creat,trunc -u out -- $slot 2>/dev/null; then
       exec {in}<&-; [[ -n $slot ]] && zf_rm -f $slot.claim; continue
@@ -323,23 +343,28 @@ _spec_exec_pool() {
     print -rn -u $out -- $head
     while sysread -i $in -o $out 2>/dev/null; do :; done
     exec {in}<&- {out}>&-
-    zf_chmod 755 $slot && zf_ln -f $slot $f || zf_rm -f $slot.claim
+    if zf_chmod 755 $slot && zf_ln -f $slot $f 2>/dev/null; then
+      print -r -- "$slot"$'\t'"$f" >>$SPEC_HELPER_TMPBASE/.exec-claims
+    else
+      zf_rm -f $slot.claim      # another volume, most likely: the file stays as written
+    fi
   done
 }
 
-# After every example: remove the names the pool gave out (only while they
-# still are that slot: an example may have replaced its stub), so the slots
-# are free again.
+# After every example: remove the names the pool gave out to THIS spec file
+# (only while they still are that slot: an example may have replaced its
+# stub), and give the slots back.
 spec_exec_pool_drain() {
-  [ -d "${SPEC_HELPER_TMPBASE:-/nonexistent}/.exec-pool" ] || return 0
+  [ -s "${SPEC_HELPER_TMPBASE:-/nonexistent}/.exec-claims" ] || return 0
   emulate -L zsh
   zmodload -F zsh/files b:zf_rm 2>/dev/null || return 0
-  local c f
-  for c in $SPEC_HELPER_TMPBASE/.exec-pool/*.claim(N); do
-    f=$(<$c)
-    [[ -n $f && $f -ef ${c%.claim} ]] && zf_rm -f -- $f
-    zf_rm -f -- $c
+  local line slot f
+  for line in "${(@f)$(<$SPEC_HELPER_TMPBASE/.exec-claims)}"; do
+    slot=${line%%$'\t'*} f=${line#*$'\t'}
+    [[ -n $f && $f -ef $slot ]] && zf_rm -f -- $f
+    zf_rm -f -- $slot.claim
   done
+  : >$SPEC_HELPER_TMPBASE/.exec-claims
   return 0
 }
 

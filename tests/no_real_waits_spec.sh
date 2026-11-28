@@ -24,6 +24,8 @@ Describe 'no real waits in the tests'
   }
 
   It 'finds no test file with more real waits than its baseline, and no stale baseline line'
+    Skip if 'complete-only: measured at 0.94 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     When call drift
     The output should equal ""
   End

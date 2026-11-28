@@ -115,6 +115,8 @@ SH
     }
 
     It 'supplies the password for a relay this machine owns'
+      Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       rx_setup
       share::_croc_receive 'aaaa-bbbb' 'lappy.example-tailnet.ts.net:9009' "$SB/out"
       When call grep '^pass:' "$SB/rx.log"

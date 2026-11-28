@@ -69,6 +69,8 @@ Describe 'rip audiobooks'
   # The recorded row is the REAL size and the REAL hash of the stored file,
   # computed on the server (which holds the only copy) — not a placeholder.
   It 'repair-companions: the recorded row carries the real size and hash'
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     rc_mkbook
     rc_plain_sidecar
     fake_server_ssh
@@ -111,6 +113,8 @@ Describe 'rip audiobooks'
   # sidecars, list the files — and the write script (its `mv --` is the only
   # thing that replaces a sidecar) is never handed to the server at all.
   It 'repair-companions: a dry run opens no write connection'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     rc_mkbook
     rc_plain_sidecar
     fake_server_ssh
@@ -122,6 +126,8 @@ Describe 'rip audiobooks'
   End
 
   It 'repair-companions: --apply writes through a server with NO jq, in ONE ssh for the whole batch'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     rc_mkbook
     rc_plain_sidecar
     mkdir -p "$RIP_SANDBOX/server/audiobooks/C/D"
@@ -280,6 +286,8 @@ Describe 'rip audiobooks'
   rc_a2_companions() { jq -r '.companions // "ABSENT"' "$RIP_SANDBOX/server/audiobooks/A2/B2/.fleet-book.json"; }
 
   It 'repair-companions: a directory find could not read never reads as a complete sweep'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     rc_mkbook
     rc_plain_sidecar
     mkdir -p "$RIP_SANDBOX/server/audiobooks/C/D" "$RIP_SANDBOX/server/audiobooks/A2/B2"

@@ -18,6 +18,10 @@
 # budgets; every number is a variable:
 #   SPEC_SUITE=fast      SPEC_SUITE_BUDGET=60   s of wall time for the run
 #                        SPEC_EXAMPLE_BUDGET=0.1 s for any one example
+#                        SPEC_EXAMPLE_FAIL       s past which an example
+#                          blows the budget (default: the same). Between the
+#                          two an example is listed and fails nothing: times
+#                          near the mark jitter between identical runs.
 #   SPEC_SUITE=complete  SPEC_SUITE_BUDGET=180  (no per-example budget)
 #   unset / other        no budget unless the two variables are given
 # After shellspec's report and the summary line, an overrun is reported on
@@ -70,9 +74,10 @@ budget_settings() {
     complete) suite_budget=${SPEC_SUITE_BUDGET-180} example_budget=${SPEC_EXAMPLE_BUDGET-} ;;
     *)        suite_budget=${SPEC_SUITE_BUDGET-}    example_budget=${SPEC_EXAMPLE_BUDGET-} ;;
   esac
+  example_fail=${SPEC_EXAMPLE_FAIL:-$example_budget}
   case $budget_mode in
     warn|fail) ;;
-    off) suite_budget= example_budget= ;;
+    off) suite_budget= example_budget= example_fail= ;;
     *) print -u2 "run-shellspec: SPEC_BUDGET must be warn, fail or off (got '$budget_mode')"; return 2 ;;
   esac
 }
@@ -83,7 +88,7 @@ budget_settings() {
 # Also leaves the table, sorted, in $SPEC_PROFILE_KEEP.
 budget_report() {
   emulate -L zsh
-  local elapsed_ms=$1 profile=$2 sorted slow slow_count slow_total max=${SPEC_BUDGET_LIST:-30}
+  local elapsed_ms=$1 profile=$2 sorted slow slow_count slow_total fatal limit= max=${SPEC_BUDGET_LIST:-30}
   local -a blown
   over=
   if [[ -n $suite_budget ]] && (( elapsed_ms > suite_budget * 1000 )); then
@@ -98,13 +103,19 @@ budget_report() {
         sort -t $'\t' -k2,2 -rn ${profile:h}/files.tsv >${SPEC_PROFILE_KEEP:r}.files.tsv 2>/dev/null
     fi
     if [[ -n $example_budget ]]; then
-      slow=$(print -r -- "$sorted" | awk -F '\t' -v b="$example_budget" -v max="$max" '
-        $3 + 0 > b + 0 { n++; total += $3; if (n <= max) printf "  %7.3f s  %s:%s  %s\n", $3, $1, $2, $4 }
-        END { if (n) printf "%d %.2f\n", n, total }')
+      slow=$(print -r -- "$sorted" | awk -F '\t' -v b="$example_budget" -v f="${example_fail:-$example_budget}" -v max="$max" '
+        $3 + 0 > b + 0 { n++; total += $3; if ($3 + 0 > f + 0) k++; if (n <= max) printf "  %7.3f s  %s:%s  %s\n", $3, $1, $2, $4 }
+        END { if (n) printf "%d %d %.2f\n", n, k, total }')
       if [[ -n $slow ]]; then
-        slow_count=${${slow##*$'\n'}% *} slow_total=${slow##* }
-        blown+=("$slow_count slow examples")
-        print -u2 "run-shellspec: $slow_count examples over the ${suite:+$suite }budget of $example_budget s each ($slow_total s in total), slowest first:"
+        slow_count=${${slow##*$'\n'}%% *} slow_total=${slow##* }
+        fatal=${${${slow##*$'\n'}#* }% *}
+        if [[ ${example_fail:-$example_budget} == $example_budget ]]; then
+          blown+=("$slow_count slow examples")
+        else
+          limit=", $fatal over the limit of $example_fail s"
+          (( fatal )) && blown+=("$fatal examples over $example_fail s")
+        fi
+        print -u2 "run-shellspec: $slow_count examples over the ${suite:+$suite }budget of $example_budget s each ($slow_total s in total)$limit, slowest first:"
         (( ${#${(f)slow}} > 1 )) && print -u2 -r -- "${slow%$'\n'*}"
         (( slow_count > max )) && print -u2 "  ... and $(( slow_count - max )) more${SPEC_PROFILE_KEEP:+ (all of them: tests/spec-profile.sh over $SPEC_PROFILE_KEEP)}"
       fi

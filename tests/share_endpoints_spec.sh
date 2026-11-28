@@ -333,6 +333,8 @@ SH
     tool_calls() { sort "$SHARE_TOOL_LOG" | uniq -c | tr -s ' \n' ' '; }
 
     It 'parses the manifest once for any number of lookups after a load'
+      Skip if 'complete-only: measured at 0.28 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       many() {
         count_tools
         share::manifest_load || return 1

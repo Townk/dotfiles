@@ -60,6 +60,8 @@ TOML
   BeforeEach 'setup'
 
   It 'routes a personal send to the croc backend'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     SHARE_PROFILE=personal
     When call share::send "$SB/Report.pdf"
     The output should include 'drop.example.com/s/abc123'
@@ -149,6 +151,8 @@ SH
   End
 
   It 'revokes a croc receipt through the croc backend'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     SHARE_PROFILE=personal
     share::ledger_add rid croc drop 'R' abc123 'https://x' 0
     share_write "$SB/bin/croc" <<'SH'

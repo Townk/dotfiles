@@ -159,6 +159,8 @@ Describe 'mux-fullscreen-probe'
     }
 
     It 'asks the machine the window is actually on: ONE window.fullscreen.state, public endpoint, one connection'
+      Skip if 'complete-only: measured at 0.22 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       recob_script "ok state=$(fp_hex true)"
       asked() {
         remote >/dev/null

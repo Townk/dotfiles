@@ -489,6 +489,8 @@ SH
   }
 
   It 'still exits zero on a successful send when the completion toast fails to deliver'
+    Skip if 'complete-only: measured at 0.23 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     send_setup
     When call share::send "$SB/Report.pdf"
     The status should be success
@@ -497,6 +499,8 @@ SH
   End
 
   It 'still writes the ledger row when the completion toast fails to deliver'
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     send_setup
     send_and_count_ledger() {
       share::send "$SB/Report.pdf" >/dev/null

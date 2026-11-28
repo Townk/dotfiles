@@ -231,6 +231,8 @@ TOML
 
   Describe 'revoke'
     It 'removes exactly the copied paths and nothing else'
+      Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       printf 'keep' >"$SB/remote/sibling.txt"
       share::send --to devbox "$SB/local/Report.pdf" "$SB/local/Notes.txt" >/dev/null 2>&1
       d="$(stamp_dir)"
@@ -247,6 +249,8 @@ TOML
     End
 
     It 'removes the per-share directory once it is empty, and forgets the receipt'
+      Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       share::send --to devbox "$SB/local/Report.pdf" >/dev/null 2>&1
       d="$(stamp_dir)"
       id="$(jq -r '.id' "$SB/state/ledger.jsonl")"
@@ -258,6 +262,8 @@ TOML
     End
 
     It 'uses the target recorded in the receipt, not the current manifest'
+      Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       share::send --to devbox "$SB/local/Report.pdf" >/dev/null 2>&1
       id="$(jq -r '.id' "$SB/state/ledger.jsonl")"
       sed 's/me@devshell.example.com/other@elsewhere.example.com/' "$SHARE_ENDPOINTS_FILE" >"$SB/e.toml"
@@ -576,6 +582,8 @@ SH
 
   Describe 'status and list'
     It 'shows an ssh endpoint, probing the port ssh -G resolves'
+      Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       share_write "$SB/bin/nc" <<'SH'
 #!/bin/sh
 case "$*" in *"devshell.example.com 2222"*) exit 0 ;; esac

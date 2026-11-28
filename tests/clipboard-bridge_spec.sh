@@ -158,6 +158,8 @@ Describe 'recobd: clip.set provenance'
   }
 
   It 'acknowledges a well-formed clip.set with a response frame'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     ack() { set_frame "$(cb_hex TESTHOST)" hello; cb_kind; }
     When call ack
     The output should equal 'R'
@@ -694,6 +696,8 @@ Describe 'system-clip paste --files --from-peer'
   AfterEach 'teardown'
 
   It 'reaches the public endpoint with no SSH environment at all'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     # The scripted files.list reply exists only on the recorder's PUBLIC
     # listener, so bytes landing at all proves the endpoint choice. The
     # manifest names THIS machine's own host, which routes the engine down

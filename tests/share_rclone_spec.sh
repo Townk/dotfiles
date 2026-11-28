@@ -59,6 +59,8 @@ TOML
   End
 
   It 'sends: copies, links, records a receipt and prints one line'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do

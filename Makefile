@@ -35,8 +35,13 @@
 # --jobs too.) JOBS=1 runs one file at a time.
 JOBS        ?= $(shell sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 export JOBS
-SPEC_BUDGET ?= warn
+SPEC_BUDGET ?= fail
 export SPEC_BUDGET
+# A fast example is MARKED at 0.1 s (the report lists those over it) and the
+# run FAILS only past this: between two identical runs about one example in
+# forty changes sides of 0.1 s, so a hard gate there would flake.
+SPEC_EXAMPLE_FAIL ?= 0.25
+export SPEC_EXAMPLE_FAIL
 SPECS       := $(wildcard tests/*_spec.sh)
 
 # shellspec 0.28.1 exits 0 on an aborted run, even one with failures; the

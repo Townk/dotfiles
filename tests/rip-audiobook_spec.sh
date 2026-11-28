@@ -1322,6 +1322,8 @@ EOF
   # --- session worker -------------------------------------------------------
 
   It 'worker: acquires only what the server lacks, then pushes'
+    Skip if 'complete-only: measured at 0.26 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Have"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Have/Have.m4b"
     printf '%s\n' '{"provider":"libation","items":[{"id":"HAVE","path":"A/Have","title":"Have"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","authors":["Brandon Sanderson"],"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
@@ -1346,6 +1348,8 @@ EOF
   # file), so this is an end-to-end proof the worker's third argument
   # actually reaches cmd_acquire and wins.
   It "worker: forwards the folder provider's plan path — an inline edit survives acquire"
+    Skip if 'complete-only: measured at 0.22 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/incoming/RawFolder"
     printf 'audio\n' > "$RIP_SANDBOX/incoming/RawFolder/RawFolder.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder/RawFolder.m4b\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\",\"authors\":[\"Edited Author\"]}]}" > "$RIP_SANDBOX/plan.json"
@@ -1362,6 +1366,8 @@ EOF
   # see rip-push_spec.sh for the sibling guard pinning that push stays
   # idempotent.
   It 'session: a book already on the server logs a failure, is counted, and the batch continues'
+    Skip if 'complete-only: measured at 0.22 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Have"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Have/Have.m4b"
     printf '%s\n' '{"provider":"libation","items":[{"id":"HAVE","path":"A/Have","title":"Have"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
@@ -1391,6 +1397,8 @@ EOF
   # The marker must NOT appear when there is nothing to report, or the caller
   # would raise an alarm on every ordinary successful run.
   It 'session: no skip marker is emitted when nothing was skipped'
+    Skip if 'complete-only: measured at 0.25 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
@@ -1408,6 +1416,8 @@ EOF
   # it" would send the operator hunting through 247 books, so the refusal
   # must NAME the stored book it collided with.
   It 'session: a local book whose bytes are already stored is refused BY NAME and the batch continues'
+    Skip if 'complete-only: measured at 0.27 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
     mkdir -p "$RIP_SANDBOX/incoming/DupBook"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/DupBook/dup.m4b"
@@ -1457,6 +1467,8 @@ EOF
   # records `local.stored.sha256` instead.
 
   It 'session: a folder-provider acquire mints a fleet.uid and records the real hash of the primary file'
+    Skip if 'complete-only: measured at 0.29 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     want_sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/Orig/orig.m4b" | cut -d' ' -f1)
@@ -1469,6 +1481,8 @@ EOF
   End
 
   It 'session: identity assigned at import closes the loop — a folder-provider re-import of the same bytes is refused'
+    Skip if 'complete-only: measured at 0.28 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
@@ -1499,6 +1513,8 @@ EOF
   # the object and everything worked. These two examples send the array —
   # the real shape — and nothing else.
   It 'session: a folder plan carrying the panel empty-table "ids": [] still mints a full identity'
+    Skip if 'complete-only: measured at 0.25 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     want_sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/Orig/orig.m4b" | cut -d' ' -f1)
@@ -1521,6 +1537,8 @@ EOF
   # This is the "closes the loop" example above with the panel's real ids
   # shape on the FIRST plan, and nothing else changed.
   It 'session: byte-dedupe still fires against a book first imported with "ids": []'
+    Skip if 'complete-only: measured at 0.27 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
@@ -1585,6 +1603,8 @@ EOF
   # staged filename, so a re-copy would be visible in the result: only the
   # already-staged bytes can reach the server.
   It 'session: re-running a session over an already-staged book succeeds and pushes it'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/Kept"
     printf 'staged by the previous run\n' > "$RIP_STAGING_ROOT/audiobooks/A/Kept/Kept.m4b"
     mkdir -p "$RIP_SANDBOX/incoming/Kept"
@@ -1612,6 +1632,8 @@ EOF
   # not a refusal, the same "never block on unknown" rule
   # rip::_remote_has_file's rc-2 callers already follow.
   It 'session: cantina unreachable for the byte-dedupe check warns and still acquires — never a silent, permanently-disabled check'
+    Skip if 'complete-only: measured at 0.25 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     rm -rf "$RIP_SANDBOX/server/audiobooks"
     mkdir -p "$RIP_SANDBOX/incoming/Fresh"
     printf 'fresh bytes\n' > "$RIP_SANDBOX/incoming/Fresh/fresh.m4b"
@@ -1630,6 +1652,8 @@ EOF
   # rip::staging_for audiobooks), so the push saw an empty staging dir and
   # the session vanished silently. Both must derive from the same seam.
   It 'worker: honors RIP_AB_STAGING — acquires into and pushes from the overridden tree'
+    Skip if 'complete-only: measured at 0.22 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     local custom="$RIP_SANDBOX/custom-staging"
     export RIP_AB_STAGING="$custom"
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
@@ -1644,6 +1668,8 @@ EOF
   End
 
   It 'worker: the sidecar carries the plan identity, not the path fallback'
+    Skip if 'complete-only: measured at 0.23 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"narrators":["MacLeod Andrews"],"duration_s":45720,"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"],.source.provider,.work]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
     The status should equal 0

@@ -159,6 +159,8 @@ Describe 'rip.zsh push'
   End
 
   It 'no-arg CLI enqueues both populated types'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/movies/A (2001)" "$RIP_STAGING_ROOT/music/B/Alb"
     touch "$RIP_STAGING_ROOT/movies/A (2001)/A (2001).mkv" \
           "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
@@ -189,6 +191,8 @@ Describe 'rip.zsh push'
   End
 
   It 'pushes audiobooks to the server and clears the verified staging file'
+    Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
     touch "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
     When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
@@ -209,6 +213,8 @@ Describe 'rip.zsh push'
   # a half-copied book under a stray dot-directory looks instantly
   # "settled".
   It 'push: a leftover acquire temp under the watched tree is never shipped'
+    Skip if 'complete-only: measured at 0.22 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/.rip-folder.1"
     printf 'partial\n' > "$RIP_STAGING_ROOT/audiobooks/A/.rip-folder.1/x.m4b"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
@@ -228,6 +234,8 @@ Describe 'rip.zsh push'
   # the server is REQUIRED behaviour, not a bug. This pins that the refusal
   # never migrates to push time.
   It 'push: a book whose path already exists on the server is still pushed (the retry path)'
+    Skip if 'complete-only: measured at 0.22 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B" "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'partial\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
     printf 'complete\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
@@ -244,6 +252,8 @@ Describe 'rip.zsh push'
   # rename happens, and rsync --files-from silently skips every one of them.
 
   It 'push: a staged author is renamed to the server spelling BEFORE the file list is built'
+    Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
@@ -256,6 +266,8 @@ Describe 'rip.zsh push'
   End
 
   It 'push: canonicalization merges into an existing staged directory without clobbering'
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien/The Two Towers"
     printf 'keep\n' > "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien/The Two Towers/The Two Towers.m4b"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
@@ -274,6 +286,8 @@ Describe 'rip.zsh push'
   # pins the "no match" no-op path, distinct from the genuine
   # unreachable-server example below.
   It 'push: server reachable but holds no matching author — staged author untouched'
+    Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
@@ -288,6 +302,8 @@ Describe 'rip.zsh push'
   # so it returns non-zero and rip::_canonical_author falls back to
   # "input unchanged" exactly as it does for a real unreachable ssh host.
   It 'push: a genuinely unreachable server leaves staged authors untouched and still pushes'
+    Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/unreachable"
@@ -382,6 +398,8 @@ EOF
   # provenance. The ordering example above already drove this exact path and
   # asserted NOTHING about the sidecar — which is why it shipped.
   It 'push: a canonicalizing rename keeps the indexed identity — ids and published survive'
+    Skip if 'complete-only: measured at 0.22 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
@@ -410,6 +428,8 @@ EOF
   # rows are keyed on the provider's author spelling and can never match a
   # canonicalized path. Covered by the in-memory rename map.
   It 'push: a canonicalizing rename keeps the PROVIDER-fallback identity too (no index at all)'
+    Skip if 'complete-only: measured at 0.23 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
@@ -462,6 +482,8 @@ EOF
   # server-author fetch runs says which side of the lock the rename is on.
   # Before the fix the fake ssh below recorded "unheld"; after it, "held".
   It 'push: the staged-author rename runs INSIDE the push lock, not before it'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
@@ -496,6 +518,8 @@ EOF
   End
 
   It 'push: music is never canonicalized'
+    Skip if 'complete-only: measured at 0.22 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/music/A.B. Artist/Album"
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/A.B. Artist/Album/01 T.flac"
     mkdir -p "$RIP_SANDBOX/server/music/A. B. Artist/Other"
@@ -517,6 +541,8 @@ EOF
   # music because push_worker's transfer is ONE shared rsync call for every
   # type, and the music path reaches it with the least staging machinery.
   It 'push: a group-less staged directory still lands readable by the media group'
+    Skip if 'complete-only: measured at 0.23 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
     chmod 0700 "$RIP_STAGING_ROOT/music/B/Alb"
@@ -804,6 +830,8 @@ EOF
   }
 
   It 'enrichment embeds picture + lyrics and ships cover.jpg'
+    Skip if 'complete-only: measured at 0.31 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
@@ -816,6 +844,8 @@ EOF
   End
 
   It 'enrichment failures never fail the push'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     printf '#!/bin/sh\nexit 7\n' > "$RIP_SANDBOX/curl"; chmod +x "$RIP_SANDBOX/curl"
     When run rip_zsh "source $RIPLIB && rip::push_worker music"
@@ -867,6 +897,8 @@ EOF
   # carries embedded art at all. (The live album itself was already
   # corrected server-side by the controller; this is the systemic fix.)
   It 'cover: an embedded PICTURE block on the album — first track wins over any external fetch'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     cat > "$RIP_SANDBOX/metaflac" <<'EOF'
 #!/bin/sh
@@ -907,6 +939,8 @@ EOF
   # nothing (a right-titled wrong-edition cover beats none).
 
   It 'cover: the MusicBrainz query includes date:<year> when the rip carries a DATE tag'
+    Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     cat > "$RIP_SANDBOX/metaflac" <<'EOF'
 #!/bin/sh
@@ -932,6 +966,8 @@ EOF
   End
 
   It 'cover: a date-filtered MusicBrainz miss falls back to the unfiltered query and still lands a cover'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     cat > "$RIP_SANDBOX/metaflac" <<'EOF'
 #!/bin/sh
@@ -994,6 +1030,8 @@ EOF
   # Only files the age gate actually admitted into <listfile> may be probed
   # or embedded.
   It 'enrichment touches only the listed flac, never an unlisted fresh sibling in the same album dir'
+    Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export RIP_PUSH_MIN_AGE_S=90   # re-export the real default; need age gating active
     enrich_setup
     # unlisted: written just now, well inside the 90s gate — simulates a
@@ -1073,6 +1111,8 @@ EOF
   deezer_search_count() { grep -c "search/artist" "$RIP_SANDBOX/curl.log" 2>/dev/null; }
 
   It 'artist image: server already has it — no fetch attempted, no local file created'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     mkdir -p "$RIP_SANDBOX/server/music/Art"
     printf 'REMOTE-ALREADY-THERE' > "$RIP_SANDBOX/server/music/Art/artist.jpg"
@@ -1085,6 +1125,8 @@ EOF
   End
 
   It 'artist image: fetched from Deezer, appended to the list, and shipped'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     fake_copy_rsync
     cat > "$RIP_SANDBOX/curl" <<'EOF'
@@ -1124,6 +1166,8 @@ EOF
   End
 
   It "artist image: rejects Deezer's placeholder picture and falls back to Wikimedia via MusicBrainz/Wikidata"
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     fake_copy_rsync
     cat > "$RIP_SANDBOX/curl" <<'EOF'
@@ -1169,6 +1213,8 @@ EOF
   # denylist (RIP_DEEZER_PLACEHOLDER_FILE_MD5S seam) and rejected the same
   # way: fall through to the Wikidata chain.
   It "artist image: rejects Deezer placeholder BYTES under a clean URL (digest denylist)"
+    Skip if 'complete-only: measured at 0.26 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     fake_copy_rsync
     cat > "$RIP_SANDBOX/curl" <<'EOF'
@@ -1223,6 +1269,8 @@ EOF
   # present NFC cover.jpg as "confirmed absent" and refetch over curated
   # art. _remote_has_file must NFC-normalize the relpath it asks about.
   It 'remote-existence check NFC-normalizes its relpath (NFD local vs NFC server)'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     # ssh mode ON PURPOSE: local-dir mode cannot catch this — macOS APFS
     # path lookup is normalization-insensitive, so an NFD path finds an
@@ -1288,6 +1336,8 @@ EOF
   # ends, and ITS end releases the first rsync instead, so the order log
   # reads start start and the example fails rather than hangs.
   It 'concurrent same-type pushes serialize instead of racing (rc-24 vanish)'
+    Skip if 'complete-only: measured at 0.28 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export RIP_PUSH_MIN_AGE_S=0
     export RIP_FAKE_INSIDE="$RIP_SANDBOX/inside"
     export RIP_FAKE_RSYNC_ORDER="$RIP_SANDBOX/order.log"
@@ -1387,6 +1437,8 @@ EOF
   End
 
   It 'artist image: total miss across every source — logs and never blocks the push'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
@@ -1397,6 +1449,8 @@ EOF
   End
 
   It 'artist image: dedupes the fetch across multiple albums by the same artist in one run'
+    Skip if 'complete-only: measured at 0.29 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/music/Art/Alb1" "$RIP_STAGING_ROOT/music/Art/Alb2"
     touch "$RIP_STAGING_ROOT/music/Art/Alb1/01 Song.flac" "$RIP_STAGING_ROOT/music/Art/Alb2/01 Other.flac"
     printf '#!/bin/sh\nexit 0\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
@@ -1448,6 +1502,8 @@ EOF
   End
 
   It 'artist image: pre-existing local file is idempotent (no fetch) and still ships'
+    Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     mkdir -p "$RIP_STAGING_ROOT/music/Art"
     printf 'LOCAL-ALREADY-HERE' > "$RIP_STAGING_ROOT/music/Art/artist.jpg"
@@ -1459,6 +1515,8 @@ EOF
   End
 
   It 'artist image: ssh remote check reports it already exists — skip fetch (host:path remote base)'
+    Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     export RIP_REMOTE_BASE="fakehost:/srv/media"
     export RIP_FAKE_SSH_LOG="$RIP_SANDBOX/ssh.log"
@@ -1482,6 +1540,8 @@ EOF
   End
 
   It 'artist image: ssh remote check confirms absent — fetch proceeds normally (host:path remote base)'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     export RIP_REMOTE_BASE="fakehost:/srv/media"
     printf '#!/bin/sh\nexit 1\n' > "$RIP_SANDBOX/ssh"; chmod +x "$RIP_SANDBOX/ssh"
@@ -1565,6 +1625,8 @@ EOF
   }
 
   It 'artist image: ssh remote check safely quotes an artist directory name containing an apostrophe'
+    Skip if 'complete-only: measured at 0.36 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     mkdir -p "$RIP_STAGING_ROOT/music/N' Roses/Alb"
     touch "$RIP_STAGING_ROOT/music/N' Roses/Alb/01 Song.flac"
@@ -1585,6 +1647,8 @@ EOF
   End
 
   It 'artist image: ssh remote check is immune to shell metacharacter injection via a crafted artist directory name'
+    Skip if 'complete-only: measured at 0.36 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     evil="x'; touch '$RIP_SANDBOX/PWNED' #"
     mkdir -p "$RIP_STAGING_ROOT/music/$evil/Alb"
@@ -1613,6 +1677,8 @@ EOF
   # RIP_MB_RETRY_PAUSE_S in setup() so this stays fast).
 
   It 'cover: MusicBrainz release search retries once after a transient rate-limit failure, then lands the cover'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     cat > "$RIP_SANDBOX/curl" <<'EOF'
 #!/bin/sh
@@ -1650,6 +1716,8 @@ EOF
   End
 
   It 'artist image: MusicBrainz artist search retries once after a transient rate-limit failure, then still lands the image'
+    Skip if 'complete-only: measured at 0.28 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     fake_copy_rsync
     cat > "$RIP_SANDBOX/curl" <<'EOF'
@@ -1704,6 +1772,8 @@ EOF
   # push_worker's find-based one) specifically so the art-less-first
   # ordering is deterministic, not filesystem-traversal-order-dependent.
   It 'cover embedded-first loops ALL listed flacs — an art-less track enumerated first must not bury a later art-bearing track under an external fetch'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     mkdir -p "$RIP_STAGING_ROOT/music/Art/Alb"
     touch "$RIP_STAGING_ROOT/music/Art/Alb/01 NoArt.flac" "$RIP_STAGING_ROOT/music/Art/Alb/02 HasArt.flac"
@@ -1758,6 +1828,8 @@ EOF
   # empty parse); this example is the other half: a clean 200 with an
   # empty body must NOT trigger a second call.
   It 'rip::_mb_call does not retry a clean, successful, empty MusicBrainz response (a real miss, not a rate-limit symptom)'
+    Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     cat > "$RIP_SANDBOX/curl" <<'EOF'
 #!/bin/sh
@@ -1797,6 +1869,8 @@ EOF
   # skipped this run — no export, no fetch, no per-track embeds — logged
   # once.
   It 'cover: server already has cover.jpg — entire cover step skipped this run (no export, no fetch, no embeds), logged once'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     enrich_setup
     mkdir -p "$RIP_SANDBOX/server/music/Art/Alb"
     printf 'CURATED-SERVER-COVER' > "$RIP_SANDBOX/server/music/Art/Alb/cover.jpg"
@@ -2003,6 +2077,8 @@ EOF
   # call is tried before falling back to the path-derived minimal identity.
 
   It 'sidecar: a watcher-triggered push (no RIP_AB_META_INDEX set) reads the stable default index path'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart" "$RIP_STAGING_ROOT/.work"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
     printf '%s\n' '{"path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}' \
@@ -2015,6 +2091,8 @@ EOF
   End
 
   It 'sidecar: no index at all, but a working provider fallback yields a rich sidecar'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
     mkdir -p "$RIP_LIBEXEC_DIR"
     cat > "$RIP_LIBEXEC_DIR/rip-provider-libation" <<'EOF'
@@ -2032,6 +2110,8 @@ EOF
   End
 
   It 'sidecar: no index and a FAILING provider still succeeds with the minimal identity'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
     mkdir -p "$RIP_LIBEXEC_DIR"
     printf '#!/bin/sh\nexit 9\n' > "$RIP_LIBEXEC_DIR/rip-provider-libation"
@@ -2044,6 +2124,8 @@ EOF
   End
 
   It 'sidecar: the provider fallback is invoked at most once for a multi-book push'
+    Skip if 'complete-only: measured at 0.28 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
     export RIP_FAKE_PROVIDER_LOG="$RIP_SANDBOX/provider-calls.log"
     mkdir -p "$RIP_LIBEXEC_DIR"
@@ -2113,6 +2195,8 @@ EOF
   # write the identity sidecar" warning instead — proven here by shadowing
   # `uuidgen` to simulate it being entirely absent from PATH.
   It 'enrichment: a missing uuidgen for a folder-provider book is reported to the operator, not silently swallowed'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export RIP_AB_META_INDEX="$RIP_SANDBOX/index.jsonl"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder","ids":{"local.sha256":"deadbeef"}}' > "$RIP_AB_META_INDEX"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
@@ -2126,6 +2210,8 @@ EOF
   End
 
   It 'enrichment with no hops changes exactly one thing: the sidecar appears'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     printf 'art\n'   > "$RIP_STAGING_ROOT/audiobooks/A/B/B.jpg"
@@ -2138,6 +2224,8 @@ EOF
   End
 
   It 'enrichment: a hop that adds a registered file gets it pushed and cleaned'
+    Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run rip_zsh "source $RIPLIB
@@ -2151,6 +2239,8 @@ EOF
   End
 
   It 'enrichment: a failing hop is logged and never fails the push'
+    Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run rip_zsh "source $RIPLIB
@@ -2164,6 +2254,8 @@ EOF
   End
 
   It 'enrichment: an UNregistered file is neither pushed nor deleted'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run rip_zsh "source $RIPLIB
@@ -2177,6 +2269,8 @@ EOF
   End
 
   It 'enrichment: music pushes are untouched by the audiobook stage'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/music/Artist/Album"
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/Artist/Album/01 T.flac"
     When run rip_zsh "source $RIPLIB && rip::push_worker music"
@@ -2188,6 +2282,8 @@ EOF
   # --- enrichment: post-verify remote hops ----------------------------------
 
   It 'remote hops run after a clean verify, with the pushed relpaths'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run rip_zsh "source $RIPLIB
@@ -2225,6 +2321,8 @@ EOF
   # undefined-looking hop must be provable by more than name-matching.
   # Writing the file is only possible if the hop function actually ran.
   It 'a failing remote hop never fails the job — the files are already safe'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     When run rip_zsh "source $RIPLIB

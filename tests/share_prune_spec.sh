@@ -69,6 +69,8 @@ SH
   # fresh rows survive — proven by the surviving ids and by what reached the
   # fakes.
   It 'apply purges overdue rclone rows and forgets overdue croc rows in a mixed ledger'
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     share::ledger_add crocrow croc public 'a' crocref 'crocurl' 1
     share::ledger_add liverow croc-live public 'l' '' 'aaaa-bbbb' 0
     share::ledger_add freshrow rclone onedrive 'b' onedrive:Shared/drop/fresh 'https://fresh' 9999999999

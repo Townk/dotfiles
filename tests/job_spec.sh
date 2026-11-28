@@ -363,6 +363,8 @@ FAKE
     }
 
     It 'keeps every credential out of the environment pueue would persist'
+      Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       leaked() {
         scrub_env_dump || return $?
         grep -x -E 'OP_SERVICE_ACCOUNT_TOKEN|BACKUP_REPO_PASSPHRASE|FLEET_AWS_SECRET_ACCESS_KEY|CONTEXT7_API_KEY|SHARE_LAB_PASS|EUFY_RTSP_PASSWORD|GITHUB_PAT' \
@@ -743,6 +745,8 @@ EOF
     End
 
     It 'cancel action: confirmed with another job live — kills once and relaunches (two invocations)'
+      Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       cancel_other_live() {
         id=$(job_call job::start --title "C" -- work 9) || return 1
         id2=$(job_call job::start --title "Other" -- work 9) || return 2
@@ -785,6 +789,8 @@ EOF
     # must genuinely unblock from THAT (fd-close-on-death), not from
     # `tail -f` reaching some EOF of its own, which never happens.
     It 'logs action: opens the resolved pueue log in a mux tab, relaunches once it closes (two invocations)'
+      Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       logs_action() {
         id=$(job_call job::start --title "L" -- work 9) || return 1
         mkdir -p "$JOB_PUEUE_LOG_DIR"
@@ -1017,6 +1023,8 @@ EOF
 
   Describe 'job::_watch_pane — the pane-host driver body'
     It 'streams cancel (declined) then logs then EOF: one launch, confirm once, tab opened once, no respawn, cleanup'
+      Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       choreography() {
         id=$(job_call job::start --title "C" -- work 9) || return 1
         lid=$(job_call job::start --title "L" -- work 9) || return 2
@@ -1084,6 +1092,8 @@ EOF
     # examples), and a background peek during that window reads the state
     # file before the eventual EOF cleanup removes it.
     It 'a stale pane id on record is cleaned up, a fresh pane launches, and the new id is recorded while it runs'
+      Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       stale_pane() {
         mkdir -p "$JOB_STATE_ROOT"
         printf '%s' '%99' > "$JOB_STATE_ROOT/.dashboard-pane"

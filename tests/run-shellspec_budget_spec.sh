@@ -33,7 +33,7 @@ tests/b_spec.sh${TAB}7${TAB}1.250${TAB}b runs restic"
   verdict() {
     local took=$1 fail=0; shift
     (
-      unset SPEC_SUITE SPEC_BUDGET SPEC_SUITE_BUDGET SPEC_EXAMPLE_BUDGET SPEC_BUDGET_LIST SPEC_PROFILE_KEEP
+      unset SPEC_SUITE SPEC_BUDGET SPEC_SUITE_BUDGET SPEC_EXAMPLE_BUDGET SPEC_BUDGET_LIST SPEC_PROFILE_KEEP SPEC_EXAMPLE_FAIL
       (( $# )) && export "$@"
       budget_settings || exit 2
       budget_report $(( took * 1000 )) "$SANDBOX/${PROFILE-examples.tsv}" || fail=1
@@ -117,6 +117,25 @@ tests/b_spec.sh${TAB}7${TAB}1.250${TAB}b runs restic"
       The output should equal 'fail=1 over=OVER BUDGET (1 slow examples)'
       The error should include '1 examples over the fast budget of 1 s each (1.25 s in total)'
       The error should not include 'a starts a server'
+    End
+
+    # The mark and the limit can differ: timings near the mark jitter between
+    # two identical runs, so the run is failed further out. Between the two an
+    # example is listed, to be looked at, and fails nothing.
+    It 'lists the examples over the mark but fails only for those over SPEC_EXAMPLE_FAIL'
+      When call verdict 20 SPEC_SUITE=fast SPEC_BUDGET=fail SPEC_EXAMPLE_FAIL=1
+      The output should equal 'fail=1 over=OVER BUDGET (1 examples over 1 s)'
+      The line 1 of error should equal 'run-shellspec: 2 examples over the fast budget of 0.1 s each (1.70 s in total), 1 over the limit of 1 s, slowest first:'
+      The line 2 of error should equal '    1.250 s  tests/b_spec.sh:7  b runs restic'
+      The line 3 of error should equal '    0.450 s  tests/a_spec.sh:40  a starts a server'
+      The line 4 of error should equal 'run-shellspec: OVER BUDGET (1 examples over 1 s); failing the run (SPEC_BUDGET=fail)'
+    End
+
+    It 'passes a run whose slow examples are all inside the limit, still listing them'
+      When call verdict 20 SPEC_SUITE=fast SPEC_BUDGET=fail SPEC_EXAMPLE_FAIL=2
+      The output should equal 'fail=0 over='
+      The line 1 of error should equal 'run-shellspec: 2 examples over the fast budget of 0.1 s each (1.70 s in total), 0 over the limit of 2 s, slowest first:'
+      The lines of error should equal 3
     End
 
     It 'has none in the complete suite'

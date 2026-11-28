@@ -660,6 +660,8 @@ block:b9"
     End
 
     It 'returns at once while the tab waits for its delay'
+      Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       # A $(…) capture waits for every holder of its pipe: a background step
       # that kept stdout would hold this until the step is over. The step is
       # held at its first question to the server (the gate), which comes
@@ -686,6 +688,8 @@ block:b9"
     End
 
     It 'never passes a call without --autostart=false'
+      Skip if 'complete-only: measured at 0.27 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       calls() {
         id=$(joined run_job job::start --title "plan check" -- true) || return 1
         wait_log " follow $id" || return 2
@@ -706,6 +710,8 @@ block:b9"
     # The background step reconciles first, and reconcile itself opens the
     # scheduled job's tab: the step must not open a second one.
     It 'opens one tab for the scheduled job when it reconciles first'
+      Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       once() {
         jobs_session
         id=$(joined run_job job::start --title "plan check" -- true) || return 1
@@ -719,6 +725,8 @@ block:b9"
     End
 
     It 'reopens another job that lost its tab when a job starts'
+      Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       repaired() {
         meta j2 "Two"
         jobs_session
@@ -738,6 +746,8 @@ block:b9"
     # steps are joined, so a tab opened late would be in the log. The delay
     # is on the virtual clock.
     It 'opens no tab for a job that finished within the delay'
+      Skip if 'complete-only: measured at 0.19 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       finished() {
         spec_clock_set 1000
         export JOB_FOLLOW_DELAY=0.5
@@ -754,6 +764,8 @@ block:b9"
     End
 
     It 'opens no tab for a --notify none job'
+      Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       silent() {
         a=$(joined run_job job::start --notify none --title "quiet" -- true) || return 1
         b=$(joined run_job job::start --title "control" -- true) || return 1
@@ -765,6 +777,8 @@ block:b9"
     End
 
     It 'opens no tab for a --modal job'
+      Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       modal() {
         a=$(joined run_job job::start --modal --title "watched" -- true 2>/dev/null) \
           || return 1
@@ -799,6 +813,8 @@ block:b9"
     }
 
     It 'follows a --modal job inline in a Rex pane, with no watch or tab'
+      Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       inline() {
         export JOB_SANDBOX REX_BLOCK=block:x
         unset TMUX

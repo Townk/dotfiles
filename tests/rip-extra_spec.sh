@@ -181,6 +181,8 @@ EOF
   # `script -q /dev/null`) so HB line-buffers — the same treatment
   # makemkvcon already gets in the disc worker.
   It 'encode runs under the pty wrap (HandBrake line-buffers only on a tty)'
+    Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export JOB_ID="job-extra-pty"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     export RIP_FAKE_PTY_LOG="$RIP_SANDBOX/pty.log"; : > "$RIP_FAKE_PTY_LOG"
     cat > "$RIP_SANDBOX/ptywrap" <<'EOF'

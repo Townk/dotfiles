@@ -413,6 +413,8 @@ kept"
     # from the same instance, then rc 4 once it is gone. The wait before
     # asking lets it go.
     It 'waits before asking, so a stopping server is gone by then'
+      Skip if 'complete-only: measured at 0.25 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       # The server answers rc 3 and is gone one second (of the virtual
       # clock) after the hangup: the default wait is that second, so the
@@ -630,6 +632,8 @@ kill -HUP $FOLLOWER"
     release() { echo go > "$JOB_FAKE_EV/inspect-go"; }
 
     It 'reports progress, then done, then exits'
+      Skip if 'complete-only: measured at 0.26 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         local follower out working done_at
@@ -657,6 +661,8 @@ follower-gone"
     End
 
     It 'exits quietly when the state dir disappears'
+      Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         at_poll 3 'rm -rf "$JOB_STATE_ROOT/j1"'
@@ -671,6 +677,8 @@ follower-gone"
     End
 
     It 'does not re-send an unchanged report'
+      Skip if 'complete-only: measured at 0.26 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         # Five polls with nothing new to say, then the job is killed.
@@ -712,6 +720,8 @@ child-gone"
     End
 
     It 'cancels the job when its tab is closed'
+      Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         export JOB_FAKE_REX_RC=3 JOB_FAKE_FOLLOW_PIDFILE="$JOB_SANDBOX/follow.pid"
@@ -731,6 +741,8 @@ follower-gone"
     End
 
     It 'keeps the job when the server restarts'
+      Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         export JOB_FAKE_REX_RC=4
@@ -749,6 +761,8 @@ follower-gone"
     End
 
     It 'keeps the job when the tab is gone from a server that restarted'
+      Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         export JOB_FAKE_REX_RC=3 JOB_FAKE_REX_INSTANCE_FILE="$JOB_SANDBOX/instance"
@@ -776,6 +790,8 @@ follower-gone"
     # would never come to a nap, and then ends the example (gone-early)
     # rather than hanging it.
     It 'stays on failure until the tab is closed, then marks it dismissed'
+      Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"; result Failed 2
       check() {
         local stepper rc
@@ -812,6 +828,8 @@ dismissed
     # second later: the decision must outlive the follower and its group.
     # The follower runs in a process group of its own here, as in a tab.
     It 'cancels the job even when the tab is killed during the hangup wait'
+      Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         export JOB_FAKE_REX_RC=3 JOB_FOLLOW_HUP_WAIT=1
@@ -838,6 +856,8 @@ dismissed
     End
 
     It 'exits at once on hangup while the decision is still running'
+      Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       # The decision is held where it asks the server. The follower is
       # joined while it is held there: it did not wait for it ("prompt": no
@@ -899,6 +919,8 @@ dismissed
 
     # The whoami can take its whole 3 s timeout.
     It 'sends the first report before asking the server who it is'
+      Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         export JOB_FAKE_REX_OUT="$JOB_SANDBOX/out"
@@ -917,6 +939,8 @@ rc=0"
     # `read` drops a leading space: an empty block would make the pid read
     # as the block, and the follower look dead.
     It 'records - as its block when it is not in a Rex pane'
+      Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         local block pid
@@ -1035,6 +1059,8 @@ blk-0 $$"
     # first is a child of this shell, joined when it is killed: a process
     # that is gone, not a zombie that would still look alive.
     It 'takes over from a follower that exits within the wait'
+      Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       meta "Remux"
       check() {
         local holder
@@ -1156,6 +1182,8 @@ job j1: hangup of blk-1: closed by reconcile: nothing"
     # background child is one. The stand-in CLI records its own ps state,
     # where a lowercase s marks a session leader.
     It 'runs in a session of its own even when started as a group leader'
+      Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       check() {
         # The stand-in says when it has written its state; the shell that
         # detached it stays (with its tty) until then.

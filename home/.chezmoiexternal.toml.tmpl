@@ -23,7 +23,15 @@
   so a Mac without one never sees it. Files fetched this way carry no
   quarantine flag, so Gatekeeper does not ask for a Developer ID.
 */ -}}
-{{- if eq .chezmoi.os "darwin" }}
+{{- /*
+  CHEZMOI_OFFLINE=1 leaves the externals that need the GitHub API out of this
+  render. It is how the test suite stays off the network: every `chezmoi
+  ignored`/`managed`/`apply` reads this file, the unauthenticated API allows
+  60 calls an hour, and a day of test runs spent them (the specs then failed
+  on the call below, not on anything they test). It is also a way to apply
+  with no network; the overlay is then simply not refreshed.
+*/ -}}
+{{- if and (eq .chezmoi.os "darwin") (not (env "CHEZMOI_OFFLINE")) }}
 {{-   $tag := (gitHubLatestRelease "Townk/qmk-config").GetTagName }}
 {{-   $overlay := printf "https://github.com/Townk/qmk-config/releases/download/%s/svaloverlay-macos.tar.gz" $tag }}
 [".local/bin/svaloverlay"]

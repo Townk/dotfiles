@@ -353,6 +353,8 @@ STUB
   End
 
   It 'fails and sweeps when the dir exists but nothing is mounted'
+    Skip if 'complete-only: measured at 0.58 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$MNT_ROOT/peer-mini"
     # the async sweep must reap the orphan dir; run_joined returns when it has ended
     When call run_joined zsh -f "$CM" check peer-mini

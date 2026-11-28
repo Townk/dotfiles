@@ -53,6 +53,8 @@ Describe 'run-shellspec.sh'
   inner() { (cd "$PROJ" && env -i PATH="$PATH" HOME="$HOME" "$@"); }
 
   It 'pins the upstream bug: plain shellspec exits 0 on an aborted run with a failure'
+    Skip if 'complete-only: measured at 0.39 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     # If this starts failing, shellspec fixed its exit status; the wrapper
     # can go.
     When run inner shellspec spec/corrupt_spec.sh spec/fail_spec.sh
@@ -62,6 +64,8 @@ Describe 'run-shellspec.sh'
   End
 
   It 'fails an aborted run that plain shellspec would pass'
+    Skip if 'complete-only: measured at 0.40 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     When run inner "$RUNNER" spec/corrupt_spec.sh spec/fail_spec.sh
     The status should eq 102
     The output should include '1 failure'
@@ -70,6 +74,8 @@ Describe 'run-shellspec.sh'
   End
 
   It 'fails an aborted run even when every example passed'
+    Skip if 'complete-only: measured at 0.37 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     When run inner "$RUNNER" spec/corrupt_spec.sh spec/pass_spec.sh
     The status should eq 102
     The output should include '0 failures'
@@ -77,6 +83,8 @@ Describe 'run-shellspec.sh'
   End
 
   It 'keeps the failure status of a clean run'
+    Skip if 'complete-only: measured at 0.39 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     When run inner "$RUNNER" spec/fail_spec.sh
     The status should eq 101
     The output should include '1 failure'
@@ -84,6 +92,8 @@ Describe 'run-shellspec.sh'
   End
 
   It 'passes a clean green run'
+    Skip if 'complete-only: measured at 0.38 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     When run inner "$RUNNER" spec/pass_spec.sh
     The status should be success
     The output should include '0 failures'
@@ -91,6 +101,8 @@ Describe 'run-shellspec.sh'
   End
 
   It 'counts skips in the summary line'
+    Skip if 'complete-only: measured at 0.39 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     When run inner "$RUNNER" spec/skip_spec.sh spec/pass_spec.sh
     The status should be success
     The output should include '1 skip'
@@ -98,6 +110,8 @@ Describe 'run-shellspec.sh'
   End
 
   It 'writes the summary line to stderr only'
+    Skip if 'complete-only: measured at 0.38 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     When run inner "$RUNNER" spec/pass_spec.sh
     The status should be success
     The output should not include 'run-shellspec:'

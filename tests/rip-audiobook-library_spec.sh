@@ -143,6 +143,8 @@ Describe 'rip audiobooks'
   }
 
   It 'work uid: an edition whose base book already anchors a work REUSES that uid'
+    Skip if 'complete-only: measured at 0.29 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     wu_base "9f1c2a4e-2222-4b22-8aa0-abc123456789"
     wu_plan "Full Cast"
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
@@ -151,6 +153,8 @@ Describe 'rip audiobooks'
   End
 
   It 'work uid: a base book with no uid is MINTED one, written back additively, and shared'
+    Skip if 'complete-only: measured at 0.34 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     wu_base ""
     wu_plan "Full Cast"
     before=$(wu_base_nonwork)
@@ -165,6 +169,8 @@ Describe 'rip audiobooks'
   End
 
   It 'work uid: no base book stored mints a fresh uid and writes to no other path'
+    Skip if 'complete-only: measured at 0.30 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     # A bystander book, so "nothing else was written" is measured against a
     # non-empty tree.
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Z/Other"
@@ -179,6 +185,8 @@ Describe 'rip audiobooks'
   End
 
   It 'work uid: an existing non-null work.uid is NEVER overwritten'
+    Skip if 'complete-only: measured at 0.33 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     # Deliberately irregular formatting and a pre-existing edition label — a
     # write that merely re-serialized to the same parsed value would still
     # fail this, because the check is on the raw bytes.
@@ -202,6 +210,8 @@ Describe 'rip audiobooks'
   # sidecar and a rewrite. Nothing may be written; the edition gets its own
   # fresh uid and the operator is told the two will not group.
   It 'work uid: a work.uid of the wrong type is neither reused nor overwritten'
+    Skip if 'complete-only: measured at 0.30 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'base bytes\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
     printf '%s' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{},"work":{"uid":12345},"source":{"provider":"libation"}}' \
@@ -223,6 +233,8 @@ Describe 'rip audiobooks'
   # nothing and the two editions silently never group. The array means "no
   # work recorded", which is exactly the mint-and-write-back case.
   It 'work uid: a stored "work": [] is treated as no work at all and is filled'
+    Skip if 'complete-only: measured at 0.30 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'base bytes\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
     printf '%s' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{},"work":[],"source":{"provider":"libation"}}' \
@@ -241,6 +253,8 @@ Describe 'rip audiobooks'
   # is total by construction rather than total for the values that happen to
   # occur.
   It 'work uid: a work.uid of false is non-null, and is not overwritten either'
+    Skip if 'complete-only: measured at 0.33 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'base bytes\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
     printf '%s' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{},"work":{"uid":false},"source":{"provider":"libation"}}' \
@@ -272,6 +286,8 @@ Describe 'rip audiobooks'
     jq -r '.work.edition' "$RIP_SANDBOX/server/audiobooks/A/B (Unabridged)/.fleet-book.json" 2>/dev/null
   }
   It 'work uid: two editions of one UNSTORED work in a single batch share one uid'
+    Skip if 'complete-only: measured at 0.36 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     mkdir -p "$RIP_SANDBOX/incoming/Full" "$RIP_SANDBOX/incoming/Abr"
     printf 'full cast bytes\n' > "$RIP_SANDBOX/incoming/Full/full.m4b"
     printf 'abridged bytes\n' > "$RIP_SANDBOX/incoming/Abr/abr.m4b"
@@ -391,6 +407,8 @@ EOF
   }
 
   It 'work uid: a base book and its edition in ONE batch share a uid (base first)'
+    Skip if 'complete-only: measured at 0.40 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     wu_pair_plan base
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
@@ -400,6 +418,8 @@ EOF
   End
 
   It 'work uid: a base book and its edition in ONE batch share a uid (edition first)'
+    Skip if 'complete-only: measured at 0.35 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     wu_pair_plan edition
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
@@ -474,6 +494,8 @@ EOF
   }
 
   It 'work uid: a base book RE-KEYED by its provider is still anchored (base first)'
+    Skip if 'complete-only: measured at 0.32 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     wu_rekey_plan base
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
@@ -490,6 +512,8 @@ EOF
   # been acquired, so the planned key is still live. Pinned so the added
   # alternative cannot break it.
   It 'work uid: a base book RE-KEYED by its provider is still anchored (edition first)'
+    Skip if 'complete-only: measured at 0.34 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     wu_rekey_plan edition
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
@@ -506,6 +530,8 @@ EOF
   # sidecar stays byte-identical — the anchoring patch is an in-plan,
   # meta-index-only operation.
   It 'work uid: the in-plan anchor never rewrites a stored base book'
+    Skip if 'complete-only: measured at 0.29 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     wu_base "9f1c2a4e-3333-4b22-8aa0-abc123456789"
     before=$(wu_base_sha)
     wu_plan "Full Cast"
@@ -520,6 +546,8 @@ EOF
   # edition. Nothing may be resolved, nothing read, nothing written — the
   # sidecar is byte-identical to what today's worker produces, `work: null`.
   It 'work uid: an item with no edition is left exactly as it is — no parenthesis parsing'
+    Skip if 'complete-only: measured at 0.27 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     wu_base "9f1c2a4e-2222-4b22-8aa0-abc123456789"
     wu_plan omit
     before=$(wu_base_sha)
@@ -530,6 +558,8 @@ EOF
   End
 
   It 'worker: one failing acquire does not abort the batch'
+    Skip if 'complete-only: measured at 0.25 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     printf '%s\n' '{"provider":"libation","items":[{"id":"BAD","path":"A/Bad","title":"Bad"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
     cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
 #!/bin/sh
@@ -556,6 +586,8 @@ EOF
   End
 
   It 'worker: re-keys the identity when the folder that landed differs'
+    Skip if 'complete-only: measured at 0.26 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart: The Reckoners, Book 1","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
     The status should equal 0
@@ -592,6 +624,8 @@ EOF
   # in, correct plan identity out) even though it cannot pin the specific
   # line.
   It 'worker: the reconcile re-key is NFC-normalized, so an NFD landed name still resolves'
+    Skip if 'complete-only: measured at 0.23 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     nfc=$(printf 'Ant\xc3\xb4nio')
     nfd=$(printf 'Anto\xcc\x82nio')
     printf '%s\n' "{\"provider\":\"libation\",\"items\":[{\"id\":\"B00ECDZ08I\",\"path\":\"Brandon Sanderson/${nfc}: The Reckoners, Book 1\",\"title\":\"${nfc}\",\"subtitle\":\"The Reckoners, Book 1\",\"ids\":{\"audible.asin\":\"B00ECDZ08I\"},\"provider\":\"libation\",\"format\":\"m4b\"}]}" > "$RIP_SANDBOX/plan.json"
@@ -616,6 +650,8 @@ EOF
   End
 
   It 'worker: the queued plan copy is removed once read'
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     cp "$RIP_SANDBOX/plan.json" "$RIP_STAGING_ROOT/.work/ab-plans/x.json" 2>/dev/null || mkdir -p "$RIP_STAGING_ROOT/.work/ab-plans"
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_STAGING_ROOT/.work/ab-plans/x.json"
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_STAGING_ROOT/.work/ab-plans/x.json"
@@ -659,6 +695,8 @@ EOF
   }
 
   It 'worker: an acquire that exits 0 but produces no files is reported as a failure, and the batch continues'
+    Skip if 'complete-only: measured at 0.23 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     locked_libation LOCKED
     printf '%s\n' '{"provider":"libation","items":[{"id":"LOCKED","path":"Pierce Brown/Red Rising","title":"Red Rising"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
     When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
@@ -721,6 +759,8 @@ EOF
   # acquire re-keyed onto, and verified against, a sibling's files. Only a
   # directory that was not there before this item's acquire can be it.
   It 'worker: a failed acquire is not credited with a sibling book by the same author'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
@@ -753,6 +793,8 @@ EOF
   # item onto the sibling would hand the sibling the wrong identity on the
   # next push.
   It 'worker: a sibling-success/sibling-failure batch leaves the sidecar and the meta index correct'
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
@@ -811,6 +853,8 @@ EOF
   # left the empty dir sorting first under (om), so a genuinely successful
   # acquire was reported as having produced nothing. Files decide, not mtime.
   It 'worker: a sanitized sibling holding the files beats an empty composed dir created after it'
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"

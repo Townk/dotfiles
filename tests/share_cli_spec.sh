@@ -125,6 +125,8 @@ SH
   # pueue whose `status` fails — the actual probe share::jobs_available now
   # performs — and asserts the send still completes, in the foreground.
   It 'falls back to a foreground send when pueue is installed but the daemon is down'
+    Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     share_write "$SB/bin/pueue" <<'SH'
 #!/bin/sh
 case "$1" in
@@ -211,6 +213,8 @@ SH
   # part a broken degradation-check could get backwards — does NOT also run a
   # foreground send (the croc fake would print the blurb if it had).
   It 'sends in the background when the job runner is available'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     share_write "$SB/bin/pueue" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_PUEUE_CALLS"
@@ -339,6 +343,8 @@ SH
   }
 
   It 'renders a QR code for a live send when qrencode is present'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     stub_qrencode QR_CODE_OUTPUT
     When run zsh -f "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
     The status should be success
@@ -352,6 +358,8 @@ SH
   End
 
   It 'falls back to a one-line stderr notice when qrencode is missing, leaving the send unchanged'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export SHARE_QRENCODE_BIN="$SB/bin/does-not-exist-qrencode"
     When run zsh -f "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
     The status should be success
@@ -377,6 +385,8 @@ SH
   # call site) — this is the only example in this block proving --qr reaches
   # that path rather than just share::send's own foreground branch.
   It 'renders a QR code for the default (backgrounded, live) send'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     stub_qrencode BACKGROUND_QR
     When run zsh -f "$SHARE_BIN" send --qr --to lan "$SB/Report.pdf"
     The status should be success

@@ -142,6 +142,8 @@ set"
     End
 
     It 'runs a loop of 25 sleeps of 0.2 s at once, and the clock is exactly 5 s later'
+      Skip if 'complete-only: measured at 0.30 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       run() {
         local i; for i in {1..25}; do sleep 0.2; done
         spec_clock_now ms
@@ -153,6 +155,8 @@ set"
     End
 
     It 'flips a deadline exactly when the clock passes it'
+      Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       expired() { (( $(date +%s) >= 1030 )) && print expired || print pending; }
       run() { expired; spec_clock_advance 29.999; expired; spec_clock_advance 0.001; expired; }
       When call run
@@ -162,6 +166,8 @@ expired"
     End
 
     It 'ends a poll loop at its deadline, in as many polls as the arithmetic says'
+      Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       # Code under test in miniature: poll every 0.5 s until 3 s have passed.
       poll() { local -i n=0 until=$(( $(date +%s) + 3 )); while (( $(date +%s) < until )); do (( n += 1 )); sleep 0.5; done; print -r -- "polls=$n"; }
       When call poll
@@ -169,6 +175,8 @@ expired"
     End
 
     It 'is the same clock in a child process, in sh and in zsh'
+      Skip if 'complete-only: measured at 0.32 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       run() {
         sh -c 'sleep 2; date +%s'
         zsh -fc 'sleep 1m; print -r -- "$(date +%s)"'
@@ -183,6 +191,8 @@ expired"
     End
 
     It 'is one clock for the fake sleep, common::sleep and a stub that takes time'
+      Skip if 'complete-only: measured at 0.28 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       # COMMON_CLOCK_FILE is the name production code (common.zsh) knows the
       # journal by: always the same file.
       run() {
@@ -201,6 +211,8 @@ expired"
     End
 
     It 'lets a test wait for what the code beside it believes has passed, not for time'
+      Skip if 'complete-only: measured at 0.82 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       # A loop in the background naps on the virtual clock at full speed. The
       # test joins it at 0.5 s of ITS time; the guard ends it at 1000 s of it
       # (ten thousand naps: half a second, yet far past the look).
@@ -234,6 +246,8 @@ guard=off left=0"
     End
 
     It 'loses no update when processes advance it at the same time'
+      Skip if 'complete-only: measured at 0.36 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       run() {
         local p
         for p in 1 2 3 4; do ( local i; for i in {1..25}; do sleep 0.1; done ) & done
@@ -800,6 +814,8 @@ guarded"
     toast() { spec_notifications | sed -E 's/in [0-9]+m [0-9]+s/in TIME/'; }
 
     It 'is one notification with the suite, the counts and the duration'
+      Skip if 'complete-only: measured at 0.39 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       run() { wrapped SPEC_RUN_TOAST=1 SPEC_SUITE=fast; toast; }
       When call run
       The output should equal 'rc=0
@@ -807,6 +823,8 @@ hs -q -t 4 -c notify("glyph:nf-md-check_circle", "Tests (fast): 1 examples, 0 fa
     End
 
     It 'is off with SPEC_RUN_TOAST=0, which every spec inherits'
+      Skip if 'complete-only: measured at 0.37 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       run() { wrapped SPEC_RUN_TOAST=0; toast; print -r -- "inherited=$SPEC_RUN_TOAST"; }
       When call run
       The output should equal "rc=0
@@ -814,6 +832,8 @@ inherited=0"
     End
 
     It 'is off by default when nobody is at a terminal'
+      Skip if 'complete-only: measured at 0.38 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       run() { wrapped; toast; }
       When call run
       The output should equal "rc=0"
@@ -826,6 +846,8 @@ inherited=0"
   # hook prints to stderr is reported as an error of the run.
   Describe 'spec_helper_drop_tmpbase'
     It 'removes a directory something is still writing into, in silence'
+      Skip if 'complete-only: measured at 0.38 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       run() {
         spec_sandbox || return 1
         local dir=$SANDBOX
@@ -855,7 +877,9 @@ removed"
     stub() { printf '#!/bin/sh\necho %s\n' "$2" >"$1"; chmod +x "$1"; }
     links() { zmodload -F zsh/stat b:zstat; zstat +nlink -- "$1"; }
     inode() { zmodload -F zsh/stat b:zstat; zstat +inode -- "$1"; }
+    # A pool of this group's own, so slot numbers are its to predict.
     pool="$SHELLSPEC_TMPBASE/.exec-pool"
+    SPEC_EXEC_POOL_DIR=$pool
 
     It 'runs a stub written in an example from a pooled inode, unchanged'
       run() {
@@ -883,6 +907,8 @@ echo one"
     End
 
     It 'gives every stub of an example its own slot, also from subshells and background jobs'
+      Skip if 'complete-only: measured at 0.42 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       run() {
         local i
         stub "$SHELLSPEC_TMPBASE/ep-a" a
@@ -893,6 +919,22 @@ echo one"
       }
       When call run
       The output should equal "a b c d e f slots=6"
+    End
+
+    It 'takes over a slot whose claim belongs to a spec file that is gone'
+      run() {
+        ( : ) & local dead=$!; wait $dead
+        mkdir -p "$pool"; rm -f "$pool"/*.claim(N)
+        printf '%s\t%s' "$dead" /gone/stub >"$pool/1.claim"
+        printf '%s\t%s' "$$" /live/stub >"$pool/2.claim"
+        stub "$SHELLSPEC_TMPBASE/ep-steal" stolen
+        [[ "$SHELLSPEC_TMPBASE/ep-steal" -ef "$pool/1" ]] && print "took slot 1"
+        print -r -- "slot 2 still claimed by: $(cut -f2 "$pool/2.claim")"
+        rm -f "$pool/2.claim"
+      }
+      When call run
+      The output should equal "took slot 1
+slot 2 still claimed by: /live/stub"
     End
 
     It 'keeps a stub the example replaced with something else'

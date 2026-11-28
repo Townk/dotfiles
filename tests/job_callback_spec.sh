@@ -167,6 +167,8 @@ EOF
   End
 
   It 'still notifies itself for a follower that is not in a Rex tab'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     inline_follower() {
       id=$(seed) || return 1
       followed "$id" -
@@ -186,6 +188,8 @@ EOF
   End
 
   It 'prunes finished job dirs beyond JOB_KEEP, never active ones'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     prune() {
       # No pause between the seeds: a job id is the start time in
       # microseconds, so three seeds in a row are already in order by name.
@@ -210,6 +214,8 @@ EOF
   # ghost capsule on every re-arm. The callback now sweeps result-less dirs
   # whose meta.json is a day stale; fresh active dirs stay.
   It 'sweeps day-stale result-less dirs, keeps fresh active ones'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     sweep() {
       ghost=$(seed) || return 1
       fresh=$(seed) || return 1
@@ -231,6 +237,8 @@ EOF
     fake_rex() { export JOB_FAKE_REX_LOG="$CB_SANDBOX/rex.log" JOB_REX_BIN="$CB_FX/rex"; }
 
     It 'closes a Jobs tab no follower names'
+      Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       reconciled() {
         id=$(seed) || return 1
         fake_rex
@@ -260,6 +268,8 @@ Success 0"
     seed_notify() { job_call job::start --notify "$1" --title "Quiet X" -- true; }  # <mode>
 
     It 'failures: Success and Killed stay silent, the failure toast fires'
+      Skip if 'complete-only: measured at 0.32 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       quiet_flow() {
         seed_notify failures >/dev/null || return 1
         zsh -f "$CALLBACK" 7 "Success" 0 || return 2
@@ -308,6 +318,8 @@ Success 0"
     End
 
     It 'Success and Killed stay non-acknowledgable'
+      Skip if 'complete-only: measured at 0.24 s in the fast suite' spec_complete_only
+      spec_complete_only && return 0
       clean_results() {
         seed >/dev/null || return 1
         zsh -f "$CALLBACK" 7 "Success" 0 || return 2

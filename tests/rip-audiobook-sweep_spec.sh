@@ -61,6 +61,8 @@ EOF
   }
 
   It 'backfill: --apply writes through a server with NO jq, in ONE ssh for the whole batch'
+    Skip if 'complete-only: measured at 0.29 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_provider_two
     mkbook "A" "B" X1 "" B
     mkbook "C" "D" X2 "" D
@@ -94,6 +96,8 @@ EOF
   rich_has_path() { jq -r 'has("_path")' "$(rich_file)"; }
 
   It 'backfill: the written sidecar gains ONLY published — no _path, nothing else altered'
+    Skip if 'complete-only: measured at 0.30 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     export RIP_LIBEXEC_DIR="$RIP_SANDBOX/libexec"
     mkdir -p "$RIP_LIBEXEC_DIR" "$RIP_SANDBOX/server/audiobooks/$RICH_AUTHOR/$RICH_TITLE"
     printf '%s' "$RICH_JSON" > "$(rich_file)"
@@ -414,6 +418,8 @@ EOF
   # the pre-fix code the first ssh drains the here-string and exactly ONE
   # variant is processed — silently, rc 0, no warning.
   It 'sweep (ssh): every variant in a group is swept, not just the first'
+    Skip if 'complete-only: measured at 0.30 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     fake_ssh_server
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
@@ -522,6 +528,8 @@ EOF
   # The record is therefore removed once no books remain, and the leftover
   # directory is named rather than misdescribed.
   It 'sweep (ssh): a stray .DS_Store is reported accurately, not as "still holds books"'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     fake_ssh_server
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
@@ -583,6 +591,8 @@ EOF
   End
 
   It 'sweep (ssh): a --delete-author that fails is reported, never claimed as removed'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_ssh_server
     rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
@@ -613,6 +623,8 @@ EOF
   # entirely, so a record that failed to delete is just as unreachable. A
   # silent rc 0 there would be the same false success.
   It 'sweep (ssh): a fully-swept variant whose record will not delete still reports it'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_ssh_server
     rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
@@ -767,6 +779,8 @@ EOF
   End
 
   It 'sweep: a lone non-canonical spelling is reported, and the dry run writes nothing'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
     ca_book 'J.K. Rowling/Goblet of Fire' 'J.K. Rowling'
@@ -788,6 +802,8 @@ EOF
   End
 
   It 'sweep (ssh): --apply renames a lone non-canonical author, directory and sidecar together'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
@@ -821,6 +837,8 @@ EOF
   End
 
   It 'sweep (ssh): a second --apply has nothing left to do and changes nothing'
+    Skip if 'complete-only: measured at 0.23 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
@@ -842,6 +860,8 @@ EOF
   # exactly the case the old "most books" rule alone would have decided the
   # other way.
   It 'sweep (ssh): the canonical form wins over the more populous raw spelling and merges into it'
+    Skip if 'complete-only: measured at 0.21 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
@@ -865,6 +885,8 @@ EOF
   # variant's corrected sidecar to the destination path would land it on top
   # of a DIFFERENT book's identity file.
   It 'sweep (ssh): a title already present under the canonical spelling is never clobbered'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
@@ -949,6 +971,8 @@ EOF
   # directory itself, because its `..` entry is rewritten, so it failed at
   # `mv` instead and proved nothing about the count.)
   It 'sweep (ssh): a sidecar that could not be written is never counted as re-spelled'
+    Skip if 'complete-only: measured at 0.20 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
@@ -1016,6 +1040,8 @@ EOF
   # other's wording.
 
   It 'sweep (ssh): a rename into a spelling Audiobookshelf has never seen is NOT a failure'
+    Skip if 'complete-only: measured at 0.17 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_server_ssh
     ca_abs_bin '  --find-item) echo item-x ;;\n  --author-id) case "$2" in "J. K. Rowling") exit 1 ;; *) echo auth-x ;; esac ;;'
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
@@ -1039,6 +1065,8 @@ EOF
   End
 
   It 'sweep (ssh): a repoint that was attempted and refused is still a failure'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_server_ssh
     ca_abs_bin '  --find-item) echo item-x ;;\n  --author-id) echo auth-x ;;\n  --repoint-item) exit 1 ;;'
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
@@ -1074,6 +1102,8 @@ EOF
   # reproduced, and a regression of the collision behaviour that predates this
   # whole feature.
   It 'sweep (ssh): a book Audiobookshelf has not scanned yet keeps the variant author record, without failing'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_server_ssh
     ca_abs_bin '  --find-item) exit 1 ;;\n  --author-id) echo auth-x ;;'
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
@@ -1108,6 +1138,8 @@ EOF
   # wrote nothing the dry run did not name" cannot be checked against the
   # apply run alone.
   It 'sweep (ssh): --apply never rewrites a sidecar the dry run did not name'
+    Skip if 'complete-only: measured at 0.16 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_abs_ops_bin_any
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J. K. Rowling'
@@ -1429,6 +1461,8 @@ EOF
   rpo_untouched_fields() { jq -c '[.title,.source.provider,.published,.work]' "$(sidecar_at "$RPO")"; }
 
   It 'repair: a manual book with no provider row is assigned fleet.uid + a server-computed local.stored.sha256'
+    Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     # Case C. Both keys deliberately: a minted uid alone repeats the exposure
     # that started this work (lose the sidecar, lose the id forever), and a
     # hash alone dies at the next re-encode. The uid is the join key; the hash
@@ -1460,6 +1494,8 @@ EOF
   # repaired book with nothing on screen to say so. The control book beside
   # it is what stops this reading as "the index came back empty".
   It 'stored-sha index: a Case C repair contributes nothing — its hash is of the stored bytes, not of an imported source'
+    Skip if 'complete-only: measured at 0.15 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_provider_rows "$ROW_WIND"
     mkbook_empty "$RPO" manual
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Z Control/Book"
@@ -1480,6 +1516,8 @@ EOF
   End
 
   It 'repair: re-running --apply on a repaired Case C book mints no second uid'
+    Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     fake_provider_rows "$ROW_WIND"
     mkbook_empty "$RPO" manual
     fake_server_ssh

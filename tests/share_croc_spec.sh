@@ -445,6 +445,8 @@ SH
   # so it must not consume the fast-failure budget. Without this the fix would
   # trade a 24-hour storm for giving up on the case the retry exists for.
   It 'does not count a failure that ran for a while against the budget'
+    Skip if 'complete-only: measured at 0.18 s in the fast suite' spec_complete_only
+    spec_complete_only && return 0
     share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
