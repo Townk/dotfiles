@@ -1,9 +1,13 @@
 Describe 'rip-provider-folder'
+  Include tests/rip_helper.sh
+  # The fake ffmpeg/ffprobe pair is written once per file (rip_static_build);
+  # the sandbox and its directories are made without a process.
+  BeforeAll 'rip_static_build'
   setup() {
-    export RIP_SANDBOX=$(mktemp -d)
+    rip_sandbox
     export FOLDER_BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_rip-provider-folder"
     export ROOT="$RIP_SANDBOX/incoming"
-    mkdir -p "$ROOT"
+    rip_mkdir "$ROOT"
     # Canonicalize: on macOS $TMPDIR sits under /var, itself a symlink to
     # /private/var. fd --absolute-path resolves that symlink when it walks
     # the tree, and so does the provider's own `root="${root:A}"` (needed so
@@ -21,16 +25,15 @@ Describe 'rip-provider-folder'
     # rip.zsh's only: this provider binary calls ffmpeg/ffprobe by name for
     # its own cover extraction, and mkartbook's real media still exercises
     # the real tools there.
-    . "$SHELLSPEC_PROJECT_ROOT/tests/rip_helper.sh"
     rip_fake_ffmpeg_pair "$RIP_SANDBOX/tools"
   }
-  cleanup() { rm -rf "$RIP_SANDBOX"; }
+  cleanup() { rip_static_check; rip_rmtree "$RIP_SANDBOX"; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
   # A book whose directory structure carries the identity: <Author>/<Title>/x.m4b
   mkdirbook() {
-    mkdir -p "$ROOT/$1/$2"
+    rip_mkdir "$ROOT/$1/$2"
     printf 'fake audio\n' > "$ROOT/$1/$2/$2.m4b"
   }
 
@@ -40,7 +43,7 @@ Describe 'rip-provider-folder'
   # a stub: these examples exercise the actual ffprobe/ffmpeg path, which a
   # faked binary would not.
   mkartbook() {
-    mkdir -p "$ROOT/$1/$2"
+    rip_mkdir "$ROOT/$1/$2"
     ffmpeg -v error -y -f lavfi -i anullsrc=r=44100:cl=mono -t 1 \
       -f lavfi -i "color=c=${3:-red}:s=64x64" -frames:v 1 \
       -map 0:a -map 1:v -c:a aac -c:v mjpeg -disposition:v attached_pic \
@@ -116,27 +119,29 @@ Describe 'rip-provider-folder'
   }
 
   It 'capabilities: announces itself as an acquiring provider'
-    When run zsh "$FOLDER_BIN" capabilities
+    When run zsh -f "$FOLDER_BIN" capabilities
     The status should equal 0
     The output should include '"name":"folder"'
     The output should include '"can_acquire":true'
   End
 
   It 'list: an empty root yields no rows and succeeds'
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should equal ""
   End
 
   It 'list: refuses a root that does not exist rather than reporting an empty library'
-    When run zsh "$FOLDER_BIN" list "$ROOT/nope"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT/nope"
     The status should equal 2
     The stderr should include "no such directory"
   End
 
   It 'list: derives author and title from the directory structure'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"authors":["Ann Leckie"]'
     The output should include '"title":"Ancillary Justice"'
@@ -151,11 +156,13 @@ Describe 'rip-provider-folder'
   # books were silently unreachable. m4b is a single-file whole-book format,
   # so several of them side by side is a shelf, not a book in parts.
   It 'list: each m4b in a shelf directory is its own book'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdir -p "$ROOT/Collection"
     printf 'a\n' > "$ROOT/Collection/Book1.m4b"
     printf 'b\n' > "$ROOT/Collection/Book2.m4b"
     printf 'c\n' > "$ROOT/Collection/Book3.m4b"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function linecount should equal "3"
   End
@@ -163,10 +170,12 @@ Describe 'rip-provider-folder'
   # The corollary: on a shelf, the DIRECTORY name is the shelf's, not any
   # book's, so path-derivation must not hand all of them the same author.
   It 'list: a shelf directory does not lend its name to the books on it'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdir -p "$ROOT/Some Author/Some Shelf"
     printf 'a\n' > "$ROOT/Some Author/Some Shelf/First.m4b"
     printf 'b\n' > "$ROOT/Some Author/Some Shelf/Second.m4b"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"title":"First"'
     The output should include '"title":"Second"'
@@ -177,16 +186,20 @@ Describe 'rip-provider-folder'
   # ...but a directory holding exactly ONE book still IS that book's folder:
   # its name is the title and its siblings are its companions.
   It 'list: a lone m4b still takes its author and title from its directory'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Sword"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"path":"Ann Leckie/Ancillary Sword"'
     The output should include '"derived_from":"path"'
   End
 
   It 'list: finds books at any depth, with no recursion limit'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "deep/deeper/Ann Leckie" "Ancillary Sword"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"title":"Ancillary Sword"'
   End
@@ -195,36 +208,44 @@ Describe 'rip-provider-folder'
     mkdir -p "$ROOT/Someone/Book"
     printf 'x\n' > "$ROOT/Someone/Book/book.mp3"
     printf 'x\n' > "$ROOT/Someone/Book/notes.txt"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should equal ""
   End
 
   It 'list: a title with quotes and a dollar sign survives as JSON'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook 'Guns N Roses' 'It''s $HOME: "quoted"'
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function jq_title should equal 'It''s $HOME: "quoted"'
   End
 
   It 'list: records a sibling cover when one is present, null when not'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
     printf 'jpg\n' > "$ROOT/Ann Leckie/Ancillary Justice/cover.jpg"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function jq_cover_is_sibling should equal "true"
   End
 
   It 'list: the id is the m4b file itself, so acquire can find it again'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function jq_id should equal "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
   End
 
   It 'list: never claims Audible concepts for a local file'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"plus":false'
     The output should include '"absent":false'
@@ -232,38 +253,48 @@ Describe 'rip-provider-folder'
   End
 
   It 'list: reports its own provider identity, never "unknown"'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function jq_provider should equal "folder"
   End
 
   It 'list: a local file carries no external identity — ids is empty'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function jq_ids should equal "{}"
   End
 
   It 'list: a sibling pdf is a real local signal — has_pdf true'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
     printf 'pdf\n' > "$ROOT/Ann Leckie/Ancillary Justice/companion.pdf"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"has_pdf":true'
   End
 
   It 'list: no sibling pdf — has_pdf false, never guessed'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"has_pdf":false'
   End
 
   It 'list: a one-level-deep book with no tags falls through to filename, not path'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdir -p "$ROOT/SingleBook"
     printf 'fake audio\n' > "$ROOT/SingleBook/x.m4b"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function jq_title should equal "SingleBook"
     The result of function jq_authors should equal "[]"
@@ -272,18 +303,22 @@ Describe 'rip-provider-folder'
   End
 
   It 'list: m4b files loose directly in the root do not invent an author from the parent'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     printf 'fake audio\n' > "$ROOT/loose.m4b"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function jq_authors should equal "[]"
     The result of function jq_derived_from should equal "filename"
   End
 
   It 'list: derived_from is always tags, path or filename — never empty'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
     mkdir -p "$ROOT/SingleBook"
     printf 'fake audio\n' > "$ROOT/SingleBook/x.m4b"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should not include '"derived_from":""'
     The output should include '"derived_from":"path"'
@@ -291,9 +326,11 @@ Describe 'rip-provider-folder'
   End
 
   It 'list: multiple books emit clean JSON lines only — no stray shell output between rows'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
     mkdirbook "Brandon Sanderson" "Steelheart"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function linecount should equal "2"
     The output should not include "one="
@@ -305,7 +342,7 @@ Describe 'rip-provider-folder'
   # <Author>/<Title> destination pass it explicitly too.
   It 'acquire: copies the book into <dest>/<Author>/<Title>/ and leaves the source alone'
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The path "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
@@ -316,7 +353,7 @@ Describe 'rip-provider-folder'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     printf 'pdf\n' > "$ROOT/Ann Leckie/Ancillary Justice/bonus.pdf"
     printf 'jpg\n' > "$ROOT/Ann Leckie/Ancillary Justice/cover.jpg"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/bonus.pdf" should be exist
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/cover.jpg" should be exist
@@ -333,6 +370,8 @@ Describe 'rip-provider-folder'
   # a book directory reached THROUGH a symlink, a symlinked .m4b sitting
   # beside real files, and a book directory whose only audio is a symlink.
   It 'list: symlinked audio and symlinked book directories are visible to browse'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdir -p "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice" \
              "$RIP_SANDBOX/real-store/loose"
     printf 'real audio\n' > "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
@@ -346,7 +385,7 @@ Describe 'rip-provider-folder'
     # 3. a plain, entirely real book — the control: it was always visible,
     #    and must not stop being so.
     mkdirbook "Ann Leckie" "Translation State"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"path":"Ann Leckie/Ancillary Justice"'
     The output should include '"path":"Ann Leckie/Provenance"'
@@ -367,7 +406,7 @@ Describe 'rip-provider-folder'
     mkdir -p "$ROOT/Ann Leckie/Ancillary Justice"
     ln -s "$RIP_SANDBOX/real-store/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" \
           "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The contents of file "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "real audio"
@@ -376,7 +415,7 @@ Describe 'rip-provider-folder'
 
   It 'acquire: the caller-supplied relpath wins over any derivation'
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Edited Author/Edited Title"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Edited Author/Edited Title"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Edited Author/Edited Title/Ancillary Justice.m4b" should be exist
     The path "$RIP_SANDBOX/staging/Ann Leckie" should not be exist
@@ -386,7 +425,7 @@ Describe 'rip-provider-folder'
   It 'acquire: a book sitting directly under the root derives no bogus author'
     mkdir -p "$ROOT/LooseBook"
     printf 'a\n' > "$ROOT/LooseBook/LooseBook.m4b"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/LooseBook/LooseBook.m4b" "$RIP_SANDBOX/staging"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/LooseBook/LooseBook.m4b" "$RIP_SANDBOX/staging"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/LooseBook/LooseBook.m4b" should be exist
     The output should include 'progress -1 copying'
@@ -397,7 +436,7 @@ Describe 'rip-provider-folder'
   # shelf directory is six other people's books.
   It 'acquire: refuses a directory, which is no longer a book id'
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice" "$RIP_SANDBOX/staging"
     The status should equal 2
     The stderr should include "no such file"
     The path "$RIP_SANDBOX/staging/Ancillary Justice" should not be exist
@@ -406,13 +445,13 @@ Describe 'rip-provider-folder'
   It 'acquire: refuses a file that is not an m4b'
     mkdir -p "$ROOT/Someone/Book"
     printf 'x\n' > "$ROOT/Someone/Book/book.mp3"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Someone/Book/book.mp3" "$RIP_SANDBOX/staging"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Someone/Book/book.mp3" "$RIP_SANDBOX/staging"
     The status should equal 2
     The stderr should include "not an m4b"
   End
 
   It 'acquire: refuses an id that does not exist'
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/nope.m4b" "$RIP_SANDBOX/staging"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/nope.m4b" "$RIP_SANDBOX/staging"
     The status should equal 2
     The stderr should include "no such file"
   End
@@ -430,7 +469,7 @@ Describe 'rip-provider-folder'
     mkdirbook "Ann Leckie" "Ancillary Justice"
     printf 'bonus\n' > "$ROOT/Ann Leckie/Ancillary Justice/0-bonus.pdf"
     chmod 000 "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should not equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice" should not be exist
     The result of function bonus_pdf_anywhere should equal "0"
@@ -474,7 +513,7 @@ EOF
     chmod +x "$RIP_SANDBOX/shim/cp"
     export PATH="$RIP_SANDBOX/shim:$PATH"
     export RIP_CP_LOG="$RIP_SANDBOX/cp-calls.log"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The output should include "already staged"
     The result of function cp_calls should equal "0"
@@ -495,7 +534,7 @@ EOF
     export PATH="$RIP_SANDBOX/shim:$PATH"
     export RIP_SHIM_DEST="$RIP_SANDBOX/staging"
     export RIP_SHIM_LOG="$RIP_SANDBOX/cp-shim.log"
-    When run zsh "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
+    When run zsh -f "$FOLDER_BIN" acquire "$ROOT/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" "$RIP_SANDBOX/staging" "Ann Leckie/Ancillary Justice"
     The status should equal 0
     The path "$RIP_SANDBOX/staging/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The result of function bonus_seen_under_dest should equal "0"
@@ -508,25 +547,31 @@ EOF
   # file's embedded tags for author, title and duration, so refusing to trust
   # them for the cover was an inconsistency rather than a policy.
   It 'list: a cover embedded in the m4b is extracted when there is no sidecar image'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     Skip if 'ffmpeg is not installed' no_ffmpeg
     mkartbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function cover_in_cache should equal "1"
   End
 
   It 'list: a sidecar image still wins over the embedded art'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     Skip if 'ffmpeg is not installed' no_ffmpeg
     mkartbook "Ann Leckie" "Ancillary Justice"
     printf 'jpg\n' > "$ROOT/Ann Leckie/Ancillary Justice/cover.jpg"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function jq_cover_is_sibling should equal "true"
   End
 
   It 'list: a book with neither sidecar nor embedded art reports no cover, never a guess'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     mkdirbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The output should include '"cover":null'
   End
@@ -537,9 +582,11 @@ EOF
   # size a 300-book tree would carry ~100MB of base64 in one document. The
   # panel draws covers in a 48px box.
   It 'list: the extracted cover is downscaled, not the full-size embedded art'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     Skip if 'ffmpeg is not installed' no_ffmpeg
     mkartbook "Ann Leckie" "Ancillary Justice"
-    When run zsh "$FOLDER_BIN" list "$ROOT"
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
     The status should equal 0
     The result of function cover_width should equal "128"
   End
@@ -547,19 +594,23 @@ EOF
   # Extraction costs an ffmpeg exec per book, and browse lists a whole tree at
   # once, so a second browse of an unchanged tree must not pay it again.
   It 'list: an unchanged tree reuses the cached cover instead of re-extracting'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     Skip if 'ffmpeg is not installed' no_ffmpeg
     mkartbook "Ann Leckie" "Ancillary Justice"
-    zsh "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
+    zsh -f "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
     before=$(ls -lT "$RIP_COVER_CACHE" 2>/dev/null)
-    zsh "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
+    zsh -f "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
     When call test "$before" = "$(ls -lT "$RIP_COVER_CACHE" 2>/dev/null)"
     The status should equal 0
   End
 
   It 'list: extraction leaves no partial temp behind in the cache'
+    Skip if 'complete-only: the provider runs the real ffprobe/ffmpeg several times per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     Skip if 'ffmpeg is not installed' no_ffmpeg
     mkartbook "Ann Leckie" "Ancillary Justice"
-    zsh "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
+    zsh -f "$FOLDER_BIN" list "$ROOT" >/dev/null 2>&1
     When run ls -a "$RIP_COVER_CACHE"
     The status should equal 0
     The output should not include ".part"

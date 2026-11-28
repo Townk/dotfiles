@@ -55,6 +55,10 @@ run_and_report() {
 
 Describe 'mux/tmux.zsh — float launch guard (HI-7)'
   Include home/dot_local/lib/mux.zsh
+  # One warm slot for the tmux stub every example of the two tmux groups
+  # writes: see tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
 
   setup() {
     TEST_TMP=$(mktemp -d)
@@ -282,12 +286,13 @@ End
 Describe 'mux/rex.zsh — float launch guard'
   Include home/dot_local/lib/mux.zsh
 
-  setup() {
-    TEST_TMP=$(mktemp -d)
-    export TMPDIR="$TEST_TMP"
-    unset TMUX MUX_BACKEND
-    export REX_SESSION=session:s1 REX_BLOCK=block:origin
-    stub="$TEST_TMP/rex"
+  # The fake rex takes everything that varies from the environment (STUB_*),
+  # so it is written ONCE per file and run once here, and the virtual clock is
+  # made once too (tests/exec_warm_helper.sh): an example only gets a new
+  # directory and starts the clock again. The fake runs under `zsh -f`: it
+  # needs nothing of the user's ~/.zshenv, and must not depend on it.
+  build_stub() {
+    stub="$SHELLSPEC_TMPBASE/float-rex"
     # The layer lives for a COUNT of `block inspect` polls, not for a time
     # ($STUB_LIFE: a number, or `open` until it is closed), and what happens
     # to it mid-wait happens during an exact poll (at_poll). STUB_MODE:
@@ -306,7 +311,7 @@ Describe 'mux/rex.zsh — float launch guard'
     # is gone, so its reader sees end of file exactly then: after an answer
     # (complete, however late its last byte), or with none.
     cat >"$stub" <<'STUB'
-#!/usr/bin/env zsh
+#!/usr/bin/env -S zsh -f
 print -r -- "$*" >> "$STUB_ARGV_LOG"
 case " $* " in
   *" session.new_layer "*)
@@ -343,15 +348,28 @@ esac
 exit 1
 STUB
     chmod +x "$stub"
+    STUB_ARGV_LOG=/dev/null STUB_LIFE=/dev/null "$stub" block close
+    spec_clock_set && spec_clock_warm
+  }
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'build_stub'
+
+  setup() {
+    # :a squeezes the `//` of the tmpbase path, so the names the floats
+    # derive from $TMPDIR read as they would under mktemp.
+    spec_sandbox float; TEST_TMP=${SANDBOX:a}
+    export TMPDIR="$TEST_TMP"
+    unset TMUX MUX_BACKEND
+    export REX_SESSION=session:s1 REX_BLOCK=block:origin
     mkdir -p "$TEST_TMP/ev"
     export MUX_REX_BIN="$stub" STUB_ARGV_LOG="$TEST_TMP/argv.log" STUB_REQ="$TEST_TMP/req.json" \
       STUB_LIFE="$TEST_TMP/layer.life" STUB_EV="$TEST_TMP/ev" STUB_MODE=ok STUB_ANSWER=picked
     # The floats nap between polls (`sleep 0.2`), and nowhere else: on the
     # virtual clock, which says afterwards how long they believe they waited.
+    : >"$SPEC_CLOCK_FILE"
     spec_clock_set 1000
   }
   cleanup() {
-    rm -rf "$TEST_TMP"
     unset MUX_REX_BIN STUB_ARGV_LOG STUB_REQ STUB_LIFE STUB_EV STUB_MODE STUB_ANSWER STUB_LAYER_LIFE TMPDIR REX_SESSION REX_BLOCK STUB_INSPECT_RC _MUX_RX_AWAIT_MISSES
   }
   BeforeEach 'setup'
@@ -428,6 +446,7 @@ STUB
   End
 
   It 'closes its float when the caller is interrupted'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=slow
     interrupted() {
       term_at_first_poll
@@ -455,6 +474,7 @@ STUB
   End
 
   It '_mux_rx_pick_float returns 130 and leaks nothing when the layer is closed by hand'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=closed
     Data
       #|claude  Claude Code
@@ -499,6 +519,7 @@ Quit"
   End
 
   It '_mux_rx_float closes its float when the caller is interrupted'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=slow
     interrupted() {
       term_at_first_poll
@@ -521,6 +542,7 @@ Quit"
   hup_at_first_poll() { at_poll 1 'kill -HUP "$(cat "$STUB_EV/pid")"'; }
 
   It '_mux_rx_float closes its float and still dies when the caller is hung up'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=slow
     hung_up() {
       hup_at_first_poll
@@ -537,6 +559,7 @@ Quit"
   End
 
   It '_mux_rx_pick_float closes its float and still dies when the caller is hung up'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=slow
     hung_up() {
       hup_at_first_poll
@@ -553,6 +576,7 @@ Quit"
   End
 
   It '_mux_rx_float promises the widget its measured rows, a percent picker none'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     rows() {
       _mux_rx_float --type confirm --title Quit --pane-height 11 -- "Really?" >/dev/null
       layer_cmd | grep -c 'MUX_REX_MODAL_ROWS=[0-9][0-9]* [^ ]*rex-modal'
@@ -565,6 +589,7 @@ Quit"
   End
 
   It '_mux_rx_float returns 130 when the layer is closed by hand'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=closed
     When call run_and_report 8 _mux_rx_float --type confirm --title Quit -- "Really?"
     The output should equal ""
@@ -589,6 +614,7 @@ Quit"
   End
 
   It 'gives up after a run of failed checks instead of waiting forever'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=slow STUB_INSPECT_RC=1 _MUX_RX_AWAIT_MISSES=3
     failing() { run_and_report 6 _mux_rx_float --type confirm --title Quit -- "Really?"; print -r -- "rc=$? $(waited)"; }
     When call failing
@@ -597,6 +623,7 @@ Quit"
   End
 
   It 'does not give up on a float that is simply taking its time'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     slow() {
       # The layer stays alive (inspect exits 0) and answers during the 7th
       # poll, many more than the miss limit: successful checks must not count
@@ -628,6 +655,7 @@ Quit"
   End
 
   It 'never kills its reader: a layer closed by hand ends it with an end of file'
+    Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=closed STUB_LAYER_LIFE=0
     closed() {
       _mux_rx_float --type confirm --title Quit -- "Really?"
@@ -652,6 +680,7 @@ Quit"
     End
 
     It 'fails mux::confirm closed when the layer is closed by hand'
+      Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
       export STUB_MODE=closed
       When call run_and_report 8 mux::confirm --title Quit "Really?"
       The output should equal "no"

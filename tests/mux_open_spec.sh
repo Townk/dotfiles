@@ -19,6 +19,16 @@
 # wrong does not fail loudly: it silently runs the REAL `open` and launches a
 # browser.
 Describe 'mux-open'
+  # Before it hands a link to the system opener the script waits for the
+  # OPTION key to come up: with no Hammerspoon to ask, a plain `sleep 0.4`.
+  # It builds its own PATH, so the virtual clock's fake is linked into the one
+  # directory that PATH starts with (as the `open` stub is): the two examples
+  # that reach the opener then nap on the virtual clock, not for 0.4 real
+  # seconds each. The clock is made once for the file
+  # (tests/exec_warm_helper.sh) and started again by every example.
+  Include tests/exec_warm_helper.sh
+  clock_once() { spec_clock_set && spec_clock_warm && spec_exec_pool_warm 1; }
+  BeforeAll 'clock_once'
   setup() {
     MO_TMP=$(mktemp -d)
     MO_SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_mux-open"
@@ -28,6 +38,8 @@ Describe 'mux-open'
     # Stub the system opener so a non-file scheme cannot reach a real browser.
     { echo '#!/bin/sh'; echo 'echo "OPEN: $*" >>"'"$MO_TMP"'/opened"'; } >"$HOME/.local/bin/open"
     chmod +x "$HOME/.local/bin/open"
+    : >"$SPEC_CLOCK_FILE"; spec_clock_set
+    ln -s "$SPEC_CLOCK_BIN/sleep" "$HOME/.local/bin/sleep"
     # Stub shim: records what the dispatch asked for, and makes the pid-probing
     # path distinguishable from the environment path.
     cat >"$HOME/.local/lib/mux.zsh" <<EOS
@@ -54,26 +66,26 @@ EOS
     # this is the ONLY thing that will open an http link there — so a non-file
     # scheme must reach the system opener rather than being dropped.
     It 'hands http(s) to the system opener'
-      When run zsh "$MO_SCRIPT" 0 "https://example.com/x"
+      When run zsh -f "$MO_SCRIPT" 0 "https://example.com/x"
       The result of function opened should include "OPEN: -- https://example.com/x"
       The status should be success
     End
 
     It 'hands any other scheme to the system opener too'
-      When run zsh "$MO_SCRIPT" 0 "mailto:someone@example.com"
+      When run zsh -f "$MO_SCRIPT" 0 "mailto:someone@example.com"
       The result of function opened should include "OPEN: -- mailto:someone@example.com"
     End
 
     # Bare text under the pointer is not a link. Silently ignored, and in
     # particular NOT handed to `open`.
     It 'ignores something that is not a URI at all'
-      When run zsh "$MO_SCRIPT" 0 "just-some-text"
+      When run zsh -f "$MO_SCRIPT" 0 "just-some-text"
       The status should be success
       The result of function opened should not include "OPEN:"
     End
 
     It 'ignores a file:// link whose target does not exist'
-      When run zsh "$MO_SCRIPT" 0 "file://$MO_TMP/nope"
+      When run zsh -f "$MO_SCRIPT" 0 "file://$MO_TMP/nope"
       The status should be success
       The result of function opened should not include "OPEN:"
     End
@@ -81,7 +93,7 @@ EOS
 
   Describe 'argument contract'
     It 'reports usage when called with nothing'
-      When run zsh "$MO_SCRIPT"
+      When run zsh -f "$MO_SCRIPT"
       The status should equal 2
       The stderr should include "usage: mux-open"
       The stderr should include "MUX_BACKEND"
@@ -93,7 +105,7 @@ EOS
     It 'trusts MUX_BACKEND/MUX_SESSION and never probes the pid'
       export MUX_BACKEND=tmux MUX_SESSION=Main
       mkdir -p "$MO_TMP/adir"
-      When run zsh "$MO_SCRIPT" 0 "file://$MO_TMP/adir"
+      When run zsh -f "$MO_SCRIPT" 0 "file://$MO_TMP/adir"
       The result of function tabs should include "--session Main"
       The result of function tabs should include "yazi"
       # The probe is what would have answered "none" and aborted the open.
@@ -104,7 +116,7 @@ EOS
     # and a pid that resolves to no mux is a no-op rather than a wrong guess.
     It 'falls back to probing the pid when the environment says nothing'
       mkdir -p "$MO_TMP/adir"
-      When run zsh "$MO_SCRIPT" 4242 "file://$MO_TMP/adir"
+      When run zsh -f "$MO_SCRIPT" 4242 "file://$MO_TMP/adir"
       The result of function probed should include "probed:4242"
       The status should be success
       The result of function tabs should not include "NEW_TAB"
@@ -115,7 +127,7 @@ EOS
     It 'still probes when only one of the two is set'
       export MUX_SESSION=Main
       mkdir -p "$MO_TMP/adir"
-      When run zsh "$MO_SCRIPT" 77 "file://$MO_TMP/adir"
+      When run zsh -f "$MO_SCRIPT" 77 "file://$MO_TMP/adir"
       The result of function probed should include "probed:77"
     End
 
@@ -123,7 +135,7 @@ EOS
       export MUX_BACKEND=tmux MUX_SESSION=Main
       export PATH="$MO_TMP/tool-shims:$PATH"
       mkdir -p "$MO_TMP/adir"
-      When run zsh "$MO_SCRIPT" 0 "file://$MO_TMP/adir"
+      When run zsh -f "$MO_SCRIPT" 0 "file://$MO_TMP/adir"
       The result of function path_seen should include "$MO_TMP/tool-shims"
       The result of function path_first should equal "$HOME/.local/share/mise/shims"
       The status should be success
@@ -137,7 +149,7 @@ EOS
     It 'keeps a literal + in a path rather than turning it into a space'
       export MUX_BACKEND=tmux MUX_SESSION=Main
       mkdir -p "$MO_TMP/note+draft"
-      When run zsh "$MO_SCRIPT" 0 "file://$MO_TMP/note+draft"
+      When run zsh -f "$MO_SCRIPT" 0 "file://$MO_TMP/note+draft"
       The result of function tabs should include "$MO_TMP/note+draft"
       The status should be success
     End
@@ -147,7 +159,7 @@ EOS
     It 'still percent-decodes %2B to a literal +'
       export MUX_BACKEND=tmux MUX_SESSION=Main
       mkdir -p "$MO_TMP/a+b"
-      When run zsh "$MO_SCRIPT" 0 "file://$MO_TMP/a%2Bb"
+      When run zsh -f "$MO_SCRIPT" 0 "file://$MO_TMP/a%2Bb"
       The result of function tabs should include "$MO_TMP/a+b"
       The status should be success
     End

@@ -3,9 +3,14 @@ Describe 'backup-tm.zsh'
   TAB=$(printf '\t')
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
+  # Four stubs at once is the most an example here writes: see
+  # tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 4'
+
   Describe 'session state + stepping'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export TZ=UTC BKP_CONFIG="$FIX/c.toml" BKP_TM_SESSIONS="$FIX/sessions"
       export BKP_STATE_DIR="$FIX/state"
       printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
@@ -21,7 +26,7 @@ EOF
       PATH="$STUB:$PATH"
       mkdir -p "$FIX/anchor"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_TM_SESSIONS BKP_STATE_DIR BKP_MANIFEST; }
+    cleanup_fix() { unset BKP_CONFIG BKP_TM_SESSIONS BKP_STATE_DIR BKP_MANIFEST; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -138,6 +143,7 @@ EOF
     }
 
     It 'collapses rungs whose anchored subtree is unchanged (mount-signed)'
+      Skip if 'complete-only: a ladder fill that signs every rung through the restic recorder (~110 ms of production forks)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; scope_snaps
         bkp::restic() {
@@ -167,6 +173,7 @@ EOF
     End
 
     It 'drops rungs identical to the live tree (live is the diff base)'
+      Skip if 'complete-only: a ladder fill that signs every rung through the restic recorder (~110 ms of production forks)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; scope_snaps
         bkp::restic() {
@@ -197,6 +204,7 @@ EOF
     End
 
     It 'never empties the ladder when a dir is static and equals live'
+      Skip if 'complete-only: a ladder fill that signs every rung through the restic recorder (~110 ms of production forks)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; scope_snaps
         bkp::restic() {
@@ -260,6 +268,7 @@ EOF
     End
 
     It 'regenerates current.patch for the diff lens on step'
+      Skip if 'complete-only: scrub steps that synthesize, cache and supersede patches with background viewers (110-370 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         local s
@@ -279,6 +288,7 @@ EOF
     End
 
     It 'kills the viewer into the spinner on builds; cache hits reload in place'
+      Skip if 'complete-only: scrub steps that synthesize, cache and supersede patches with background viewers (110-370 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         local s up REPLY
@@ -316,6 +326,7 @@ EOF
     End
 
     It 'serves a revisited rung from the patch cache (one synthesis per rung)'
+      Skip if 'complete-only: scrub steps that synthesize, cache and supersede patches with background viewers (110-370 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         local s calls="$FIX/synth.calls"
@@ -361,6 +372,7 @@ EOF
     End
 
     It 'supersedes a running synthesis and reaps its pid file'
+      Skip if 'complete-only: scrub steps that synthesize, cache and supersede patches with background viewers (110-370 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         local s
@@ -386,6 +398,7 @@ EOF
     End
 
     It 'refreshes a FUSE-less diff session from a per-rung restore cache'
+      Skip if 'complete-only: scrub steps that synthesize, cache and supersede patches with background viewers (110-370 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"
         local calls="$FIX/restore.calls"
@@ -431,7 +444,7 @@ EOF
 
   Describe 'bkp::tm::timeline_render'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions"
       mkdir -p "$FIX/sessions/s.test"
       S="$FIX/sessions/s.test"
@@ -441,7 +454,7 @@ EOF
       printf 'aaaa000000000000000000000000000000000000000000000000000000000000\t1782813780\tyear\n' >> "$S/ladder"
       printf '1\n' > "$S/rung"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS; }
+    cleanup_fix() { unset BKP_TM_SESSIONS; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -462,7 +475,7 @@ EOF
         # tty styling makes the highlight/pad branch run; set -u is what
         # the real worker runs under — this combination once crashed with
         # ": parameter not set" (zsh (l::) pad on an empty param name).
-        zsh -c '
+        zsh -f -c '
           set -u -o pipefail
           source "'"$LIB"'/backup-tm.zsh"
           C_RES=$(printf "\e[0m")
@@ -494,7 +507,7 @@ EOF
 
   Describe 'bkp::tm::kill_lens'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export BKP_TM_SESSIONS="$FIX/sessions"
       mkdir -p "$FIX/sessions/s.test"
       S="$FIX/sessions/s.test"
@@ -530,7 +543,7 @@ wait
 read -r _ <"$1/release-wrapper"
 exit 7
 EOS
-        zsh "$S/wrapper.zsh" "$S" & local wpid=$!
+        zsh -f "$S/wrapper.zsh" "$S" & local wpid=$!
         local up afd rfd wfd word=""
         read -r up <"$S/up"
         [[ -s "$S/child.pid" && -s "$S/lens.pid" ]] || { echo "setup failed"; return 1 }
@@ -566,7 +579,7 @@ EOS
 
   Describe 'yazi overlay + lens command'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" YAZI_USER_CONFIG="$FIX/yazicfg"
       mkdir -p "$FIX/sessions/s.test" "$FIX/yazicfg/plugins"
       S="$FIX/sessions/s.test"
@@ -579,7 +592,7 @@ EOS
       STUB="$FIX/stub"; mkdir -p "$STUB"
       PATH="$STUB:$PATH"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS YAZI_USER_CONFIG; }
+    cleanup_fix() { unset BKP_TM_SESSIONS YAZI_USER_CONFIG; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -747,7 +760,7 @@ EOF
   Describe 'route verb'
     BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_system-backup-tm"
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" BKP_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
       export BKP_CONFIG="$FIX/c.toml" BKP_MANIFEST="$FIX/m.toml"
       printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
@@ -776,13 +789,14 @@ EOF
     AfterEach 'cleanup_fix'
 
     It 'steps the owning session older on shift+down'
-      When run zsh "$BIN" route shift+down 4242
+      Skip if 'complete-only: the route verb end to end: the tm binary steps a session and refreshes its lens (~230 ms)' spec_complete_only
+      When run zsh -f "$BIN" route shift+down 4242
       The status should be success
       The contents of file "$FIX/sessions/s.test/rung" should equal 2
     End
 
     It 'writes the key through when no session owns the pid (tmux)'
-      route_through() { TMUX=/tmp/sock,1,0 zsh "$BIN" route shift+down 9999; }
+      route_through() { TMUX=/tmp/sock,1,0 zsh -f "$BIN" route shift+down 9999; }
       When run route_through
       The status should be success
       The contents of file "$FIX/tx.calls" should include "send-keys -l"
@@ -793,7 +807,8 @@ EOF
     # #{pane_pid} is the pane's root shell, never the worker that wrote
     # lens.pid, so a pid-matched route would silently never fire.
     It 'steps the session named by --session'
-      When run zsh "$BIN" route --session "$FIX/sessions/s.test" shift+down
+      Skip if 'complete-only: the route verb end to end: the tm binary steps a session and refreshes its lens (~230 ms)' spec_complete_only
+      When run zsh -f "$BIN" route --session "$FIX/sessions/s.test" shift+down
       The status should be success
       The contents of file "$FIX/sessions/s.test/rung" should equal 2
     End
@@ -803,7 +818,7 @@ EOF
     # silently returning left J/K/A dead in a plain shell (Mode B, 07-26).
     It 'self-heals a stale stamp: unstamps the pane and sends the key on'
       route_dead() {
-        TMUX=/tmp/sock,1,0 zsh "$BIN" route \
+        TMUX=/tmp/sock,1,0 zsh -f "$BIN" route \
           --session "$FIX/sessions/s.gone" --pane %7 --send J shift+down
       }
       When run route_dead
@@ -815,7 +830,7 @@ EOF
     End
 
     It 'drops a stale-stamp key only when it has no pane to send it to'
-      route_dead_nopane() { TMUX=/tmp/sock,1,0 zsh "$BIN" route --session "$FIX/sessions/s.gone" shift+down; }
+      route_dead_nopane() { TMUX=/tmp/sock,1,0 zsh -f "$BIN" route --session "$FIX/sessions/s.gone" shift+down; }
       When run route_dead_nopane
       The status should be success
       The contents of file "$FIX/sessions/s.test/rung" should equal 1
@@ -831,7 +846,7 @@ EOF
     It 'self-heals a stale stamp on Rex: unstamps the block and writes the key'
       route_dead_rex() {
         rex_stub
-        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh "$BIN" route \
+        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh -f "$BIN" route \
           --session "$FIX/sessions/s.gone" --pane block:7 --send J shift+down
       }
       When run route_dead_rex
@@ -863,7 +878,7 @@ EOF
     It 'writes a stale Shift+Up on Rex as the bytes a terminal sends'
       route_dead_rex_up() {
         rex_stub
-        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh "$BIN" route \
+        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh -f "$BIN" route \
           --session "$FIX/sessions/s.gone" --pane block:7 --send S-Up shift+up
       }
       When run route_dead_rex_up
@@ -872,9 +887,10 @@ EOF
     End
 
     It 'steps a live session named from a Rex pane'
+      Skip if 'complete-only: the route verb end to end: the tm binary steps a session and refreshes its lens (~230 ms)' spec_complete_only
       route_live_rex() {
         rex_stub
-        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh "$BIN" route \
+        env -u TMUX MUX_REX_BIN="$FIX/rex" zsh -f "$BIN" route \
           --session "$FIX/sessions/s.test" --pane block:7 --send J shift+down
       }
       When run route_live_rex
@@ -886,7 +902,7 @@ EOF
   Describe 'apply flow'
     BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_system-backup-tm"
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export TZ=UTC BKP_TM_SESSIONS="$FIX/sessions" BKP_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
       export BKP_CONFIG="$FIX/c.toml" BKP_TM_ASSUME_YES=1
       printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
@@ -908,14 +924,15 @@ EOF
       chmod +x "$STUB/restic"
       PATH="$STUB:$PATH"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG BKP_TM_ASSUME_YES; }
+    cleanup_fix() { unset BKP_TM_SESSIONS BKP_LIB BKP_CONFIG BKP_TM_ASSUME_YES; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
     It 'maps mount-absolute selections to live paths and restores with --force'
+      Skip if 'complete-only: the apply verb end to end through the tm binary (~110 ms)' spec_complete_only
       run_it() {
         print old > "$FIX/anchor/f.txt"   # live file exists -> undo snapshot fires
-        zsh "$BIN" apply "$S" "$S/mnt/ids/cccc0000$FIX/anchor/f.txt" >/dev/null
+        zsh -f "$BIN" apply "$S" "$S/mnt/ids/cccc0000$FIX/anchor/f.txt" >/dev/null
         cat "$S/apply.list"
         grep -c 'backup --tag bkp-undo' "$FIX/restic.calls"
         grep -c -- '--include' "$FIX/restic.calls"
@@ -927,20 +944,21 @@ EOF
     End
 
     It 'does nothing without a selection in the explore lens'
-      When run zsh "$BIN" apply "$S"
+      When run zsh -f "$BIN" apply "$S"
       The status should be success
       The stderr should include "select in yazi"
       The file "$S/apply.list" should not be exist
     End
 
     It 'rejects a selection outside the current rung mount'
-      When run zsh "$BIN" apply "$S" "/etc/passwd"
+      When run zsh -f "$BIN" apply "$S" "/etc/passwd"
       The status should equal 1
       The stderr should include "not under the current rung"
       The file "$S/apply.list" should not be exist
     End
 
     It 'fzf multi-pick preserves spaces in paths and skips /dev/null'
+      Skip if 'complete-only: the apply verb end to end through the tm binary (~110 ms)' spec_complete_only
       run_it() {
         printf 'diff\n' > "$S/lens"
         # No mux in this fixture -> tm_apply takes the inline fzf
@@ -971,7 +989,7 @@ EOF
         printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/fzf.args"\nprintf "\\nenter\\n"\ncat\n' "$FIX" > "$STUB/fzf"
         chmod +x "$STUB/fzf"
         # MUX_LIB: the repo's libraries, not the deployed ones.
-        env -u TMUX -u REX_SESSION -u REX_BLOCK MUX_LIB="$BKP_LIB" zsh "$BIN" apply "$S" >/dev/null
+        env -u TMUX -u REX_SESSION -u REX_BLOCK MUX_LIB="$BKP_LIB" zsh -f "$BIN" apply "$S" >/dev/null
         cat "$S/apply.list"
         # the same picker the float shows: multi-select, titled, no bare prompt
         grep -c -e '^--multi$' -e 'Restore from snapshot' "$FIX/fzf.args"
@@ -988,7 +1006,7 @@ EOF
 
   Describe 'session launcher'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export TZ=UTC BKP_CONFIG="$FIX/c.toml" BKP_TM_SESSIONS="$FIX/sessions"
       export BKP_MANIFEST="$FIX/m.toml" BKP_HAS_FUSE=1
       printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
@@ -1013,7 +1031,7 @@ EOF
       mkdir -p "$FIX/anchor"
       export TMUX=/tmp/sock,1,0 MUX_TMUX_BIN="$STUB/tmux" MUX_LIB="$LIB"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_CONFIG BKP_TM_SESSIONS BKP_MANIFEST BKP_HAS_FUSE TMUX MUX_TMUX_BIN MUX_LIB BKP_TM_BIN; }
+    cleanup_fix() { unset BKP_CONFIG BKP_TM_SESSIONS BKP_MANIFEST BKP_HAS_FUSE TMUX MUX_TMUX_BIN MUX_LIB BKP_TM_BIN; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -1028,6 +1046,7 @@ EOF
     }
 
     It 'runs explore as ONE pane: the lens takes the invoking pane, no split'
+      Skip if 'complete-only: a whole session launch and teardown through a driver script (95-270 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
@@ -1046,6 +1065,7 @@ EOF
     # the invoking pane. The split is SIZED AT CREATION — tmux takes -l, so no
     # resize follows it.
     It 'splits the diff window on tmux with the lens sized at split time'
+      Skip if 'complete-only: a whole session launch and teardown through a driver script (95-270 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
         bkp::mount() { mkdir -p "$2/snapshots"; REPLY=$$; }
@@ -1062,6 +1082,7 @@ EOF
     End
 
     It 'fallback survives a failing lens under set -e and still tears down'
+      Skip if 'complete-only: a whole session launch and teardown through a driver script (95-270 ms)' spec_complete_only
       run_it() {
         printf '#!/bin/sh\nexit 3\n' > "$STUB/yazi"
         chmod +x "$STUB/yazi"
@@ -1082,7 +1103,7 @@ s=\$(bkp::tm::session_new explore "$FIX/anchor")
 bkp::tm::fallback "\$s"
 [[ -d "\$s" ]] && print leaked || print cleaned
 EOS
-        zsh "$FIX/driver.zsh" <<< q
+        zsh -f "$FIX/driver.zsh" <<< q
         cat "$FIX/calls"
       }
       When run run_it
@@ -1100,7 +1121,7 @@ EOS
   # materializing every snapshot tree and leaking the mount.
   Describe 'diff-split teardown (MED-17)'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export TZ=UTC BKP_CONFIG="$FIX/c.toml" BKP_TM_SESSIONS="$FIX/sessions"
       export BKP_MANIFEST="$FIX/m.toml" BKP_HAS_FUSE=1
       printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
@@ -1179,10 +1200,8 @@ line two."
   End
 
   Describe 'bkp::tm::anchor_captured: never-captured anchors are refused'
-    setup_fix() { FIX=$(mktemp -d); mkdir -p "$FIX/s/mnt/ids/aaaa$FIX/home/sub"; }
-    cleanup_fix() { rm -rf "$FIX"; }
+    setup_fix() { spec_sandbox fix; FIX=$SANDBOX; mkdir -p "$FIX/s/mnt/ids/aaaa$FIX/home/sub"; }
     BeforeEach 'setup_fix'
-    AfterEach 'cleanup_fix'
 
     It 'accepts an anchor present in at least one rung'
       run_it() {
@@ -1215,6 +1234,8 @@ line two."
   Describe 'tm-tab: sessions in a fresh mux tab'
     BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_tm-tab"
     setup_fix() {
+      # Not spec_sandbox: an example here compares against $PWD, and the
+      # tmpbase path has a `//` in it that the kernel's cwd does not.
       FIX=$(mktemp -d)
       mkdir -p "$FIX/stub"
       cat > "$FIX/stub/tmux" <<EOF
@@ -1236,7 +1257,7 @@ EOF
       run_it() {
         PATH="$FIX/stub:$PATH" TMUX=/tmp/sock,1,0 \
           MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-          MUX_TMUX_BIN="$FIX/stub/tmux" zsh "$BIN" "$FIX/some dir"
+          MUX_TMUX_BIN="$FIX/stub/tmux" zsh -f "$BIN" "$FIX/some dir"
         cat "$FIX/tmux.calls"
       }
       When run run_it
@@ -1250,7 +1271,7 @@ EOF
         cd "$FIX"
         PATH="$FIX/stub:$PATH" TMUX=/tmp/sock,1,0 \
           MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-          MUX_TMUX_BIN="$FIX/stub/tmux" zsh "$BIN" ""
+          MUX_TMUX_BIN="$FIX/stub/tmux" zsh -f "$BIN" ""
         grep new-window "$FIX/tmux.calls"
       }
       When run run_it
@@ -1263,7 +1284,7 @@ EOF
         cd "$FIX"
         PATH="$FIX/stub:$PATH" TMUX= \
           MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-          zsh "$BIN" --diff "$FIX"
+          zsh -f "$BIN" --diff "$FIX"
         cat "$FIX/sb.calls"
         [[ -f "$FIX/tmux.calls" ]] && print mux-was-called || print no-mux
       }

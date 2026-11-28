@@ -8,18 +8,45 @@ Describe 'rip audiobooks'
   ABS_BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-abs-authors"
   Include tests/rip_helper.sh
   Include tests/rip_audiobook_helper.sh
+  # rip.zsh is loaded once, here; `When run rip_zsh "…"` runs the string a
+  # `zsh -f -c` used to get, in a subshell (tests/rip_helper.sh).
+  rip_lib_load
+  BeforeAll 'rip_audiobook_static_build'
+  # The real m4b of the retag/enrich sections (see rt_fixture, below), built
+  # once per file.
+  rt_fixture_build() { # <scratch dir> <book dir>
+    printf '%s\n' ';FFMETADATA1' '[CHAPTER]' 'TIMEBASE=1/1000' 'START=0' 'END=1000' \
+      'title=Chapter One' > "$1/chap.txt"
+    ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a aac -b:a 8k "$1/a.m4a"
+    ffmpeg -v error -y -f lavfi -i 'color=c=red:s=16x16:d=1' -frames:v 1 "$1/cover.jpg"
+    ffmpeg -v error -y -i "$1/a.m4a" -i "$1/cover.jpg" -i "$1/chap.txt" \
+      -map 0:a -map 1:v -map_metadata 2 -map_chapters 2 \
+      -c:a copy -c:v mjpeg -disposition:v attached_pic \
+      -metadata album_artist='J.K. Rowling' -metadata artist='Jim Dale' \
+      -metadata composer='Comp Person' -metadata album='Wrong Album' \
+      -metadata title='Wrong Title' "$2/book.m4b"
+  }
+  rt_fixture_master() {
+    RT_MASTER="$SHELLSPEC_TMPBASE/rt-fixture"
+    mkdir -p "$RT_MASTER.new" || return 0
+    if rt_fixture_build "$RT_MASTER.new" "$RT_MASTER.new" >/dev/null 2>&1 && [ -s "$RT_MASTER.new/book.m4b" ]; then
+      mv "$RT_MASTER.new" "$RT_MASTER"
+    fi
+    return 0
+  }
+  BeforeAll 'rt_fixture_master'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
   It 'provider: capabilities describes itself'
-    When run zsh "$PROVIDER" capabilities
+    When run zsh -f "$PROVIDER" capabilities
     The status should equal 0
     The output should include '"name":"libation"'
     The output should include '"can_acquire":true'
   End
 
   It 'provider: list emits one JSON line per title in the common schema'
-    When run zsh "$PROVIDER" list
+    When run zsh -f "$PROVIDER" list
     The status should equal 0
     The line 1 should include '"id":"B00ECDZ08I"'
     The line 1 should include '"duration_s":45720'
@@ -30,13 +57,13 @@ Describe 'rip audiobooks'
   End
 
   It 'seam: libation list still works with no root, and ignores one if given'
-    When run zsh "$PROVIDER" list
+    When run zsh -f "$PROVIDER" list
     The status should equal 0
     The line 1 should include '"id"'
   End
 
   It 'seam: libation list ignores a root argument rather than failing'
-    When run zsh "$PROVIDER" list /tmp/somewhere
+    When run zsh -f "$PROVIDER" list /tmp/somewhere
     The status should equal 0
     The line 1 should include '"id"'
   End
@@ -50,7 +77,7 @@ Describe 'rip audiobooks'
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-probe"
-    When run zsh -c "source $RIPLIB && rip::ab_library probe /some/root"
+    When run rip_zsh "source $RIPLIB && rip::ab_library probe /some/root"
     The status should equal 0
     The output should equal "ROOT=[/some/root]"
   End
@@ -64,20 +91,20 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-probe"
-    When run zsh -c "source $RIPLIB && rip::ab_library probe"
+    When run rip_zsh "source $RIPLIB && rip::ab_library probe"
     The status should equal 0
     The output should equal "ARGC=1"
   End
 
   It 'provider: rows carry the published date, null when the export omits it'
-    When run zsh "$PROVIDER" list
+    When run zsh -f "$PROVIDER" list
     The status should equal 0
     The line 1 should include '"published":"2013-09-24T07:00:00"'
     The line 2 should include '"published":null'
   End
 
   It 'provider: path carries Title: Subtitle, the folder Libation actually writes'
-    When run zsh "$PROVIDER" list
+    When run zsh -f "$PROVIDER" list
     The status should equal 0
     The line 1 should include '"path":"Brandon Sanderson/Steelheart: The Reckoners, Book 1"'
     The line 1 should include '"title":"Steelheart"'
@@ -117,7 +144,8 @@ cp "$RIP_SANDBOX/plus-library.json" "$out"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
-    When run zsh "$PROVIDER" list
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
+    When run zsh -f "$PROVIDER" list
     The status should equal 0
     The line 1 should include '"plus":true'
     The line 1 should include '"absent":true'
@@ -129,7 +157,7 @@ EOF
   End
 
   It 'provider: rows the export says nothing about read as owned and present'
-    When run zsh "$PROVIDER" list
+    When run zsh -f "$PROVIDER" list
     The status should equal 0
     The line 1 should include '"plus":false'
     The line 1 should include '"absent":false'
@@ -137,14 +165,14 @@ EOF
 
   It 'provider: cover prefers the local cache, falls back to the CDN'
     touch "$RIP_LIBATION_IMAGES/51kzMpLGP7L_80x80.jpg"
-    When run zsh "$PROVIDER" list
+    When run zsh -f "$PROVIDER" list
     The status should equal 0
     The line 1 should include "file://$RIP_LIBATION_IMAGES/51kzMpLGP7L_80x80.jpg"
     The line 2 should include "https://m.media-amazon.com/images/I/81abcDEF.jpg"
   End
 
   It 'provider: never invokes set-status'
-    When run zsh "$PROVIDER" list
+    When run zsh -f "$PROVIDER" list
     The status should equal 0
     The contents of file "$RIP_SANDBOX/libation.log" should not include "set-status"
     The output should include '{"id":"B00ECDZ08I"'
@@ -152,13 +180,13 @@ EOF
 
   It 'provider: a missing LibationCli fails cleanly'
     export RIP_LIBATION_BIN="$RIP_SANDBOX/nope"
-    When run zsh "$PROVIDER" list
+    When run zsh -f "$PROVIDER" list
     The status should equal 3
     The stderr should include "LibationCli not found"
   End
 
   It 'provider: acquire writes into the given dir and reports progress'
-    When run zsh "$PROVIDER" acquire B00ECDZ08I "$RIP_STAGING_ROOT/audiobooks"
+    When run zsh -f "$PROVIDER" acquire B00ECDZ08I "$RIP_STAGING_ROOT/audiobooks"
     The status should equal 0
     The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     The output should include "progress 25"
@@ -169,7 +197,7 @@ EOF
 
   It 'provider: acquire propagates a download failure'
     export FAKE_LIBERATE_FAIL=1
-    When run zsh "$PROVIDER" acquire B00ECDZ08I "$RIP_STAGING_ROOT/audiobooks"
+    When run zsh -f "$PROVIDER" acquire B00ECDZ08I "$RIP_STAGING_ROOT/audiobooks"
     The status should equal 4
     The stderr should include "download failed"
   End
@@ -179,7 +207,7 @@ EOF
   # executable proof, not a bug fix). ------------------------------------
 
   It 'ab_provider_bin: rejects a name containing a slash'
-    When run zsh -c "source $RIPLIB && rip::ab_provider_bin 'a/b'"
+    When run rip_zsh "source $RIPLIB && rip::ab_provider_bin 'a/b'"
     The status should equal 2
     The stderr should include "bad provider name"
   End
@@ -197,13 +225,13 @@ EOF
   # in the fix report instead.
 
   It 'ab_provider_bin: rejects "."'
-    When run zsh -c "source $RIPLIB && rip::ab_provider_bin '.'"
+    When run rip_zsh "source $RIPLIB && rip::ab_provider_bin '.'"
     The status should equal 2
     The stderr should include "bad provider name"
   End
 
   It 'ab_provider_bin: rejects ".."'
-    When run zsh -c "source $RIPLIB && rip::ab_provider_bin '..'"
+    When run rip_zsh "source $RIPLIB && rip::ab_provider_bin '..'"
     The status should equal 2
     The stderr should include "bad provider name"
   End
@@ -213,13 +241,13 @@ EOF
     mkdir -p "$RIP_LIBEXEC_DIR"
     printf '#!/bin/sh\n' > "$RIP_LIBEXEC_DIR/rip-provider-libation"
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_provider_bin libation"
+    When run rip_zsh "source $RIPLIB && rip::ab_provider_bin libation"
     The status should equal 0
     The output should equal "$RIP_LIBEXEC_DIR/rip-provider-libation"
   End
 
   It 'CLI: --library passes the provider rows through'
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --library
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --library
     The status should equal 0
     The line 1 should include '"id":"B00ECDZ08I"'
   End
@@ -235,7 +263,7 @@ EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
     export RIP_REMOTE_BASE="media@cantina:/srv/media"
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-library
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-library
     The status should equal 0
     The output should equal "Brandon Sanderson/Steelheart"
     The result of function ssh_calls should equal "1"
@@ -243,7 +271,7 @@ EOF
 
   It 'CLI: --server-library works against a plain local remote base'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B" "$RIP_SANDBOX/server/audiobooks/A/C"
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-library
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-library
     The status should equal 0
     The output should include "A/B"
     The output should include "A/C"
@@ -271,13 +299,13 @@ exit 1
 FAKESSH
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::ab_have \"\$(printf 'Anto\xcc\x82nio/Livro')\"; echo rc=\$?"
+    When run rip_zsh "source $RIPLIB && rip::ab_have \"\$(printf 'Anto\xcc\x82nio/Livro')\"; echo rc=\$?"
     The status should equal 0
     The output should equal "rc=0"
   End
 
   It 'CLI: --have reports absent'
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --have "Nobody/Nothing"
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --have "Nobody/Nothing"
     The status should equal 1
   End
 
@@ -299,7 +327,7 @@ FAKESSH
   It 'have: a folder-provider book answers present even though its .m4b is not named after the title'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title"
     printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/RawFolder.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_have 'Edited Author/Edited Title'; echo rc=\$?"
+    When run rip_zsh "source $RIPLIB && rip::ab_have 'Edited Author/Edited Title'; echo rc=\$?"
     The output should equal "rc=0"
   End
 
@@ -317,7 +345,7 @@ FAKESSH
     # 4. an uppercase extension (the 2026-08-23 finding's shape)
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Upper"
     printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/Upper/Upper.M4B"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       for b in 'A/Libation' 'A/Manual' 'A/Mp3' 'A/Upper' 'A/Missing'; do
         rip::ab_have \"\$b\"; print -r -- \"\$b rc=\$?\"
       done"
@@ -333,7 +361,7 @@ FAKESSH
     printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::ab_have 'A/B'; echo rc=\$?"
+    When run rip_zsh "source $RIPLIB && rip::ab_have 'A/B'; echo rc=\$?"
     The output should equal "rc=2"
   End
 
@@ -347,7 +375,7 @@ FAKESSH
     mkdir -p "$RIP_SANDBOX/incoming/RawFolder"
     printf 'retagged audio\n' > "$RIP_SANDBOX/incoming/RawFolder/Edited Title.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder/Edited Title.m4b\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\"}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The stderr should include "already on cantina"
     The stderr should include "Edited Author/Edited Title"
     The stdout should include "nothing settled to push"
@@ -357,7 +385,7 @@ FAKESSH
   # --- author identity ------------------------------------------------------
 
   It 'author norm: punctuation and case collapse, distinct names stay distinct'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       print -r -- \$(rip::_author_norm 'J. R. R. Tolkien')
       print -r -- \$(rip::_author_norm 'J.R.R. Tolkien')
       print -r -- \$(rip::_author_norm 'John Ronald Reuel Tolkien')"
@@ -368,7 +396,7 @@ FAKESSH
   End
 
   It 'author display: initials get a space after the period'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       print -r -- \$(rip::_author_display 'J.K. Rowling')
       print -r -- \$(rip::_author_display 'J.R.R. Tolkien')
       print -r -- \$(rip::_author_display 'e.e. cummings')
@@ -384,31 +412,31 @@ FAKESSH
   # mangle both of these. "Dr" is two letters before the period (not a lone
   # initial); "St. Martin" already has its space and must not gain another.
   It 'author display: two letters before the period is not an initial'
-    When run zsh -c "source $RIPLIB && rip::_author_display 'Dr.Smith'"
+    When run rip_zsh "source $RIPLIB && rip::_author_display 'Dr.Smith'"
     The status should equal 0
     The output should equal "Dr.Smith"
   End
 
   It 'author display: a period already followed by a space is left alone'
-    When run zsh -c "source $RIPLIB && rip::_author_display 'St. Martin'"
+    When run rip_zsh "source $RIPLIB && rip::_author_display 'St. Martin'"
     The status should equal 0
     The output should equal "St. Martin"
   End
 
   It 'author display: a name with no periods is untouched'
-    When run zsh -c "source $RIPLIB && rip::_author_display 'Brandon Sanderson'"
+    When run rip_zsh "source $RIPLIB && rip::_author_display 'Brandon Sanderson'"
     The status should equal 0
     The output should equal "Brandon Sanderson"
   End
 
   It 'author display: empty input stays empty'
-    When run zsh -c "source $RIPLIB && rip::_author_display ''"
+    When run rip_zsh "source $RIPLIB && rip::_author_display ''"
     The status should equal 0
     The output should equal ""
   End
 
   It 'author display: idempotent — a second pass changes nothing'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       once=\$(rip::_author_display 'J.K. Rowling')
       twice=\$(rip::_author_display \"\$once\")
       print -r -- \"\$once\"
@@ -438,7 +466,7 @@ FAKESSH
   # names that are the obvious place for a zsh `[A-Za-z]` range and jq's
   # Oniguruma character class to part ways.
   It 'author display: the jq _canon the predicate uses is the same rule, row for row'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       names=('J.K. Rowling' 'J.R.R. Tolkien' 'e.e. cummings' 'A.A. Milne'
              'Dr.Smith' 'St. Martin' 'Brandon Sanderson' '' 'J. K. Rowling'
              'J.D. Jackson' 'Jim Dale' '.A' 'A.' 'A.B.C' 'AB.C' '1.A'
@@ -480,18 +508,22 @@ FAKESSH
   # shape the defect had: an album_artist in the un-spaced initials form, an
   # artist holding the NARRATOR, a composer, and an album/title that disagree
   # with the path the book is about to land under.
+  #
+  # The book is the same bytes for every example, and building it is three
+  # real ffmpeg runs (about 100 ms): it is built ONCE per file
+  # (rt_fixture_master, a BeforeAll) and an example gets copies, with the
+  # three intermediate files where the build used to leave them. Without a
+  # master (no ffmpeg at BeforeAll time) rt_fixture builds in place, as before.
+  # rt_fixture_build and rt_fixture_master are at the top of this file: a
+  # BeforeAll must be registered before the block's first example.
   rt_fixture() {
     mkdir -p "$1"
-    printf '%s\n' ';FFMETADATA1' '[CHAPTER]' 'TIMEBASE=1/1000' 'START=0' 'END=1000' \
-      'title=Chapter One' > "$RIP_SANDBOX/chap.txt"
-    ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a aac -b:a 8k "$RIP_SANDBOX/a.m4a"
-    ffmpeg -v error -y -f lavfi -i 'color=c=red:s=16x16:d=1' -frames:v 1 "$RIP_SANDBOX/cover.jpg"
-    ffmpeg -v error -y -i "$RIP_SANDBOX/a.m4a" -i "$RIP_SANDBOX/cover.jpg" -i "$RIP_SANDBOX/chap.txt" \
-      -map 0:a -map 1:v -map_metadata 2 -map_chapters 2 \
-      -c:a copy -c:v mjpeg -disposition:v attached_pic \
-      -metadata album_artist='J.K. Rowling' -metadata artist='Jim Dale' \
-      -metadata composer='Comp Person' -metadata album='Wrong Album' \
-      -metadata title='Wrong Title' "$1/book.m4b"
+    if [ -f "${RT_MASTER:-/nonexistent}/book.m4b" ]; then
+      cp "$RT_MASTER/chap.txt" "$RT_MASTER/a.m4a" "$RT_MASTER/cover.jpg" "$RIP_SANDBOX/" &&
+        cp "$RT_MASTER/book.m4b" "$1/book.m4b"
+    else
+      rt_fixture_build "$RIP_SANDBOX" "$1"
+    fi
   }
 
   # rt_fixture_tags <dir> <album_artist> <artist> <composer> <album/title> —
@@ -557,9 +589,11 @@ EOF
   # --canonicalize-authors repairs stored paths, after which the tags follow
   # and the sweep goes quiet.
   It 'retag: writes album_artist, album and title exactly as given, author verbatim'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_SANDBOX/b1"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::_retag_book '$RIP_SANDBOX/b1/book.m4b' 'J.K. Rowling' 'Deathly Hallows (Full Cast)' || exit 9
       rt_probe '$RIP_SANDBOX/b1/book.m4b' album_artist
@@ -577,13 +611,15 @@ EOF
   # rewrite the file. The ffmpeg seam here counts its own invocations, so
   # "did not rewrite" is observed rather than inferred.
   It 'retag: a second pass finds the tags already correct and does not rewrite the file'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_SANDBOX/b6"
     printf '%s\n' '#!/bin/sh' 'printf "run\n" >> "$RIP_SANDBOX/ffmpeg.count"' 'exec ffmpeg "$@"' \
       > "$RIP_SANDBOX/ffmpeg-counting"
     chmod +x "$RIP_SANDBOX/ffmpeg-counting"
     export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-counting"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::_retag_book '$RIP_SANDBOX/b6/book.m4b' 'J.K. Rowling' 'Deathly Hallows' || exit 9
       print -r -- \"after-first=\$(wc -l < '$RIP_SANDBOX/ffmpeg.count' | tr -d ' ')\"
@@ -609,9 +645,11 @@ EOF
   # is a no-op on them and the assertion is BY VALUE, byte for byte — which
   # is the only way to tell "left alone" from "quietly rewritten".
   It 'retag: artist and composer come through the remux with their values intact'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_SANDBOX/b2"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::_retag_book '$RIP_SANDBOX/b2/book.m4b' 'J.K. Rowling' 'Deathly Hallows' || exit 9
       rt_probe '$RIP_SANDBOX/b2/book.m4b' artist
@@ -637,9 +675,11 @@ EOF
   # genuinely called "J.D. Jackson" becomes "J. D. Jackson", which is a
   # correction and not a guess.
   It 'retag: an un-spaced artist and composer are canonicalised IN PLACE, never replaced'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture_tags "$RIP_SANDBOX/n1" 'J. K. Rowling' 'J.D. Jackson' 'A.B. Comp' 'Wrong Title'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::_retag_book '$RIP_SANDBOX/n1/book.m4b' 'J. K. Rowling' 'Deathly Hallows' || exit 9
       rt_probe '$RIP_SANDBOX/n1/book.m4b' artist
@@ -663,9 +703,11 @@ EOF
   # — would DELETE the tag on a book that had one and never create one on a
   # book that did not, and nothing else in this file would notice.
   It 'retag: an absent artist or composer is never created'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture_tags "$RIP_SANDBOX/n2" 'J. K. Rowling' - - 'Wrong Title'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_HAS
       rip::_retag_book '$RIP_SANDBOX/n2/book.m4b' 'J. K. Rowling' 'Deathly Hallows' || exit 9
       rt_has '$RIP_SANDBOX/n2/book.m4b' artist composer album_artist"
@@ -687,6 +729,8 @@ EOF
   # second=1 is what fails if rip::_author_display were not idempotent, or if
   # the writer and the checker disagreed about what canonical means.
   It 'retag: a book whose ONLY fault is an un-spaced artist is a candidate, and then converges'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture_tags "$RIP_SANDBOX/n3" 'J. K. Rowling' 'J.K. Rowling' - 'Deathly Hallows'
     printf '%s\n' '#!/bin/sh' 'printf "run\n" >> "$RIP_SANDBOX/ffmpeg.count"' 'exec ffmpeg "$@"' \
@@ -694,7 +738,7 @@ EOF
     chmod +x "$RIP_SANDBOX/ffmpeg-counting"
     : > "$RIP_SANDBOX/ffmpeg.count"
     export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-counting"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::_retag_book '$RIP_SANDBOX/n3/book.m4b' 'J. K. Rowling' 'Deathly Hallows' || exit 9
       print -r -- \"first=\$(wc -l < '$RIP_SANDBOX/ffmpeg.count' | tr -d ' ')\"
@@ -718,9 +762,11 @@ EOF
   # id") and fails the whole write, so the input's data streams are excluded
   # and the chapters are re-generated from -map_chapters.
   It 'retag: the audio, the chapters and the attached cover art survive'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_SANDBOX/b3"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       rip::_retag_book '$RIP_SANDBOX/b3/book.m4b' 'J.K. Rowling' 'Deathly Hallows' || exit 9
       ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 -- '$RIP_SANDBOX/b3/book.m4b'
       ffprobe -v error -show_chapters -of json -- '$RIP_SANDBOX/b3/book.m4b' | jq -r '.chapters | length, (.[0].tags.title // \"\")'
@@ -733,10 +779,12 @@ EOF
   End
 
   It 'retag: an ffmpeg that exits 0 having written nothing is REFUSED, not believed'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_SANDBOX/b4"
     rt_stub_silent
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::_retag_book '$RIP_SANDBOX/b4/book.m4b' 'J.K. Rowling' 'Deathly Hallows'
       print -r -- \"rc=\$?\"
@@ -752,10 +800,12 @@ EOF
   End
 
   It 'retag: an ffmpeg that exits 0 with the tags unchanged is REFUSED, and leaves no temp behind'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_SANDBOX/b5"
     rt_stub_copy
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::_retag_book '$RIP_SANDBOX/b5/book.m4b' 'J.K. Rowling' 'Deathly Hallows'
       print -r -- \"rc=\$?\"
@@ -772,7 +822,7 @@ EOF
 
   It 'retag: a file that is not there at all is a failure, never a quiet success'
     rt_real
-    When run zsh -c "source $RIPLIB && rip::_retag_book '$RIP_SANDBOX/nope.m4b' 'A' 'B'"
+    When run rip_zsh "source $RIPLIB && rip::_retag_book '$RIP_SANDBOX/nope.m4b' 'A' 'B'"
     The status should equal 1
     The stderr should include "nope.m4b"
   End
@@ -798,13 +848,15 @@ EOF
   }
 
   It 'retag: an opus book, whose tags live on the STREAM, is written, verified and converges'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_opus "$RIP_SANDBOX/op"
     printf '%s\n' '#!/bin/sh' 'printf "run\n" >> "$RIP_SANDBOX/ffmpeg.count"' 'exec ffmpeg "$@"' \
       > "$RIP_SANDBOX/ffmpeg-counting"
     chmod +x "$RIP_SANDBOX/ffmpeg-counting"
     export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-counting"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::_retag_book '$RIP_SANDBOX/op/book.opus' 'Ann Leckie' 'Ancillary Justice' || exit 9
       rt_probe '$RIP_SANDBOX/op/book.opus' album_artist
@@ -829,13 +881,15 @@ EOF
   # loud, beside .aax/.aaxc — a warning the operator can act on, not a refusal
   # the operator can only retry.
   It 'retag: containers that cannot carry album_artist are warned about and pushed, never wedged'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/Wav Book" "$RIP_STAGING_ROOT/audiobooks/A/Aac Book"
     ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a pcm_s16le \
       "$RIP_STAGING_ROOT/audiobooks/A/Wav Book/book.wav"
     ffmpeg -v error -y -f lavfi -t 1 -i 'anullsrc=r=8000:cl=mono' -c:a aac \
       "$RIP_STAGING_ROOT/audiobooks/A/Aac Book/book.aac"
-    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The stderr should include "book.wav"
     The stderr should include "book.aac"
@@ -854,9 +908,11 @@ EOF
   # Reckoners, Book 1"), and it is the directory that the library shows.
 
   It 'enrich: the pushed book carries the tags its path says, edition and all'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Goblet of Fire (Full Cast)"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::push_worker audiobooks >/dev/null || exit 9
       book='$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Goblet of Fire (Full Cast)/book.m4b'
@@ -876,10 +932,12 @@ EOF
   End
 
   It 'enrich: a book whose retag cannot be verified never reaches the rsync'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order of the Phoenix"
     rt_stub_silent
-    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 1
     The stderr should include "refusing to push"
     # not on the server…
@@ -895,6 +953,8 @@ EOF
   # dropping "J.K. Rowling/Order" from the push list must not take
   # "J.K. Rowling/Order of the Phoenix" with it.
   It 'enrich: one book being refused does not cost its sibling — not even the sibling whose name it prefixes'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order"
     rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Order of the Phoenix"
@@ -902,7 +962,7 @@ EOF
       > "$RIP_SANDBOX/ffmpeg-selective"
     chmod +x "$RIP_SANDBOX/ffmpeg-selective"
     export RIP_FFMPEG_BIN="$RIP_SANDBOX/ffmpeg-selective"
-    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 1
     The stderr should include 'refusing to push "J.K. Rowling/Order"'
     The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Order of the Phoenix/book.m4b" should be exist
@@ -924,9 +984,11 @@ EOF
   # fix, made permanent. Refuse rather than guess — the same branch the
   # empty-author case already takes.
   It 'enrich: a book whose audio sits a level deeper is refused, never tagged from the wrong segments'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_STAGING_ROOT/audiobooks/J.K. Rowling/Deathly Hallows/Disc 1"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::push_worker audiobooks >/dev/null
       print -r -- \"rc=\$?\"
@@ -986,7 +1048,7 @@ EOF
     rt_real
     nested_book
     printf '%s\n' 'A/T/zz-notes.pdf' 'A/T/Disc 1/book.m4b' > "$RIP_SANDBOX/lf"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $NESTED_PROBE"
     The line 1 should equal "rc=3"
     The line 2 should equal "listed=0"
@@ -998,7 +1060,7 @@ EOF
     rt_real
     nested_book
     printf '%s\n' 'A/T/Disc 1/book.m4b' 'A/T/zz-notes.pdf' > "$RIP_SANDBOX/lf"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $NESTED_PROBE"
     The line 1 should equal "rc=3"
     # THIS is the ordering that shipped an orphan: the drop happened, and then
@@ -1015,7 +1077,7 @@ EOF
   It 'enrich: a nested book leaves NOTHING on the server and everything in staging'
     rt_real
     nested_book
-    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 1
     The stderr should include "refusing to push"
     # not one file, not even an identity sidecar
@@ -1034,10 +1096,12 @@ EOF
   # run: the same non-convergence the verbatim-author ruling just removed,
   # coming back through another door.
   It 'enrich: an NFD staged author is tagged with the NFC bytes the server holds'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     nfd_author="$(printf 'Jose\xcc\x81 Saramago')"
     rt_fixture "$RIP_STAGING_ROOT/audiobooks/$nfd_author/Blindness"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       find '$RIP_STAGING_ROOT/audiobooks' -type f | sed 's|^$RIP_STAGING_ROOT/audiobooks/||' > '$RIP_SANDBOX/lf'
       rip::_enrich_audiobooks '$RIP_STAGING_ROOT/audiobooks' '$RIP_SANDBOX/lf' || exit 9
@@ -1061,7 +1125,7 @@ EOF
     rt_real
     rt_fixture "$RIP_STAGING_ROOT/audiobooks"
     rt_stub_silent
-    When run zsh -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 1
     The stderr should include "refusing to push"
     The path "$RIP_SANDBOX/server/audiobooks/book.m4b" should not be exist
@@ -1073,10 +1137,12 @@ EOF
   # runs on the STAGED COPY. The operator's own file is read and never
   # written — it is the only original there is.
   It 'session: the operator source file is never retagged, only the staged copy'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rt_real
     rt_fixture "$RIP_SANDBOX/incoming"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/book.m4b\",\"path\":\"J.K. Rowling/Chamber of Secrets\",\"title\":\"Chamber of Secrets\"}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       rip::ab_worker '$RIP_SANDBOX/plan.json' >/dev/null || exit 9
       rt_probe '$RIP_SANDBOX/incoming/book.m4b' album
@@ -1093,7 +1159,7 @@ EOF
 
   It 'canonical author: adopts the spelling the server already uses'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
-    When run zsh -c "source $RIPLIB && rip::_canonical_author 'J.R.R. Tolkien'"
+    When run rip_zsh "source $RIPLIB && rip::_canonical_author 'J.R.R. Tolkien'"
     The status should equal 0
     The output should equal "J. R. R. Tolkien"
   End
@@ -1112,7 +1178,7 @@ EOF
   # converges on the RIGHT spelling, first time.
   It 'canonical author: the caller keeps the canonical form of what the server holds raw'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J.K. Rowling/Deathly Hallows"
-    When run zsh -c "source $RIPLIB && rip::_canonical_author 'J. K. Rowling'"
+    When run rip_zsh "source $RIPLIB && rip::_canonical_author 'J. K. Rowling'"
     The status should equal 0
     The output should equal "J. K. Rowling"
   End
@@ -1122,21 +1188,21 @@ EOF
   # instead of oscillating. Only the canonical form outranks the server.
   It 'canonical author: a raw caller spelling still adopts the server, canonical or not'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows"
-    When run zsh -c "source $RIPLIB && rip::_canonical_author 'J.K. Rowling'"
+    When run rip_zsh "source $RIPLIB && rip::_canonical_author 'J.K. Rowling'"
     The status should equal 0
     The output should equal "J. K. Rowling"
   End
 
   It 'canonical author: an author the server does not know is returned unchanged'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
-    When run zsh -c "source $RIPLIB && rip::_canonical_author 'Martha Wells'"
+    When run rip_zsh "source $RIPLIB && rip::_canonical_author 'Martha Wells'"
     The status should equal 0
     The output should equal "Martha Wells"
   End
 
   It 'canonical author: a name that does not normalize equal is NOT adopted'
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit"
-    When run zsh -c "source $RIPLIB && rip::_canonical_author 'John Ronald Reuel Tolkien'"
+    When run rip_zsh "source $RIPLIB && rip::_canonical_author 'John Ronald Reuel Tolkien'"
     The status should equal 0
     The output should equal "John Ronald Reuel Tolkien"
   End
@@ -1149,7 +1215,7 @@ exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::_canonical_author 'J.R.R. Tolkien'; echo rc=\$?"
+    When run rip_zsh "source $RIPLIB && rip::_canonical_author 'J.R.R. Tolkien'; echo rc=\$?"
     The status should equal 0
     The output should include "J.R.R. Tolkien"
     The output should include "rc=0"
@@ -1166,7 +1232,7 @@ EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
     export RIP_REMOTE_BASE="media@cantina:/srv/media"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       rip::_canonical_author 'J.R.R. Tolkien' >/dev/null
       rip::_canonical_author 'Martha Wells' >/dev/null"
     The status should equal 0
@@ -1181,14 +1247,14 @@ EOF
   }
 
   It 'plan: rejects a plan selecting nothing'
-    When run zsh -c "source $RIPLIB && rip::ab_enqueue \$(printf '%s' '$RIP_SANDBOX/empty.json')"
+    When run rip_zsh "source $RIPLIB && rip::ab_enqueue \$(printf '%s' '$RIP_SANDBOX/empty.json')"
     The status should equal 2
     The stderr should include "no such session plan"
   End
 
   It 'plan: rejects an item whose path escapes the library'
     printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"../etc/Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include "may not be . or .."
   End
@@ -1201,7 +1267,7 @@ EOF
   # catches this (review finding, 2026-08-22).
   It 'plan: rejects a mid-string traversal payload the split alone would miss'
     printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/../../etc/passwd"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include "must be exactly <Author>/<Title>"
     The path "$JOB_FAKE_LOG" should not be exist
@@ -1209,14 +1275,14 @@ EOF
 
   It 'plan: rejects two items composing the same book path'
     printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B"},{"id":"Y","path":"A/B"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include "composes the same book twice"
   End
 
   It 'plan: enqueues ONE heavy job titled by the batch'
     printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B","title":"B"},{"id":"Y","path":"A/C","title":"C"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
     The status should equal 0
     The contents of file "$JOB_FAKE_LOG" should include "--group heavy"
     The result of function titles should include "rip audiobooks: 2 books"
@@ -1225,7 +1291,7 @@ EOF
 
   It 'plan: the queued copy survives under .work/ab-plans, not loose in .work'
     printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B","title":"B"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function queued_plans should equal "1"
   End
@@ -1235,7 +1301,7 @@ EOF
   # which never reaches plan content at all.
   It 'plan: rejects a plan whose items array is empty'
     printf '%s\n' '{"provider":"libation","items":[]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include "selects nothing"
   End
@@ -1247,7 +1313,7 @@ EOF
   # 2026-08-22).
   It 'plan: rejects an item with neither id nor path, and enqueues nothing'
     printf '%s\n' '{"provider":"libation","items":[{"id":"X","path":"A/B"},{}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_enqueue $RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include "plan item has no id"
     The path "$JOB_FAKE_LOG" should not be exist
@@ -1259,7 +1325,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Have"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Have/Have.m4b"
     printf '%s\n' '{"provider":"libation","items":[{"id":"HAVE","path":"A/Have","title":"Have"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","authors":["Brandon Sanderson"],"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/libation.log" should include "--id B00ECDZ08I"
     The contents of file "$RIP_SANDBOX/libation.log" should not include "--id HAVE"
@@ -1283,7 +1349,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/incoming/RawFolder"
     printf 'audio\n' > "$RIP_SANDBOX/incoming/RawFolder/RawFolder.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/RawFolder/RawFolder.m4b\",\"path\":\"Edited Author/Edited Title\",\"title\":\"Edited Title\",\"authors\":[\"Edited Author\"]}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Edited Author/Edited Title/RawFolder.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/RawFolder" should not be exist
@@ -1299,7 +1365,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Have"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Have/Have.m4b"
     printf '%s\n' '{"provider":"libation","items":[{"id":"HAVE","path":"A/Have","title":"Have"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should include "already on cantina"
     The stderr should include "A/Have"
@@ -1312,7 +1378,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Have"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Have/Have.m4b"
     printf '%s\n' '{"provider":"libation","items":[{"id":"HAVE","path":"A/Have","title":"Have"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should include "1 already on cantina"
     # ...and a MACHINE marker beside the prose. Mode B, 2026-08-25: a run that
@@ -1326,7 +1392,7 @@ EOF
   # would raise an alarm on every ordinary successful run.
   It 'session: no skip marker is emitted when nothing was skipped'
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The output should not include "skipped refused="
   End
@@ -1353,7 +1419,7 @@ EOF
     # a plan naming the duplicate first and a fresh book second — the batch
     # must not abort on the duplicate.
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook/dup.m4b\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"},{\"id\":\"$RIP_SANDBOX/incoming/Fresh/fresh.m4b\",\"path\":\"A/Fresh\",\"title\":\"Fresh\"}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should include "already stored as"
     The stderr should include "Ann Leckie/Ancillary Justice"
@@ -1370,7 +1436,7 @@ EOF
     printf '%s\n' "{\"schema\":1,\"kind\":\"audiobook\",\"title\":\"Ancillary Justice\",\"authors\":[\"Ann Leckie\"],\"ids\":{\"local.sha256\":\"$sha\"}}" \
       | jq . > "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice/.fleet-book.json"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/DupBook/dup.m4b\",\"path\":\"Ann Leckie/Dup\",\"title\":\"Dup\"}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The stderr should include "1 already stored"
     The output should include 'skipped refused=0 dup=1'
   End
@@ -1395,7 +1461,7 @@ EOF
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     want_sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/Orig/orig.m4b" | cut -d' ' -f1)
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null 2>&1 && jq -r '((.ids[\"fleet.uid\"]//\"\")|length>0)' $RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json && jq -r '.ids[\"local.sha256\"]' $RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null 2>&1 && jq -r '((.ids[\"fleet.uid\"]//\"\")|length>0)' $RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json && jq -r '.ids[\"local.sha256\"]' $RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json"
     The status should equal 0
     The lines of output should equal 2
     The line 1 of output should equal "true"
@@ -1406,12 +1472,12 @@ EOF
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\"}]}" > "$RIP_SANDBOX/plan.json"
-    zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json" >/dev/null 2>&1
+    ( rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json" ) >/dev/null 2>&1
 
     mkdir -p "$RIP_SANDBOX/incoming/Copy"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Copy/copy.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Copy/copy.m4b\",\"path\":\"A/Copy\",\"title\":\"Copy\"}]}" > "$RIP_SANDBOX/plan2.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan2.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan2.json"
     The status should equal 0
     The stderr should include "already stored as"
     The stderr should include "A/Orig"
@@ -1437,7 +1503,7 @@ EOF
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     want_sha=$(shasum -a 256 "$RIP_SANDBOX/incoming/Orig/orig.m4b" | cut -d' ' -f1)
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null 2>&1
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null 2>&1
       sidecar=$RIP_SANDBOX/server/audiobooks/A/Orig/.fleet-book.json
       jq -r '.ids | type' \$sidecar
       jq -r '((.ids[\"fleet.uid\"]//\"\")|length>0)' \$sidecar
@@ -1458,12 +1524,12 @@ EOF
     mkdir -p "$RIP_SANDBOX/incoming/Orig"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Orig/orig.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Orig/orig.m4b\",\"path\":\"A/Orig\",\"title\":\"Orig\",\"provider\":\"folder\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan.json"
-    zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json" >/dev/null 2>&1
+    ( rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json" ) >/dev/null 2>&1
 
     mkdir -p "$RIP_SANDBOX/incoming/Copy"
     printf 'the bytes\n' > "$RIP_SANDBOX/incoming/Copy/copy.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Copy/copy.m4b\",\"path\":\"A/Copy\",\"title\":\"Copy\",\"ids\":[]}]}" > "$RIP_SANDBOX/plan2.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan2.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan2.json"
     The status should equal 0
     The stderr should include "already stored as"
     The stderr should include "A/Orig"
@@ -1482,7 +1548,7 @@ EOF
   # function's own 2>/dev/null, and the row is DROPPED — so --repair-sidecars
   # cannot see the one book whose identity is actually corrupt.
   It 'sidecar index: a stored sidecar with "ids": [] is enumerated as empty, not dropped'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       printf '%s\n' '{\"schema\":1,\"ids\":[],\"_path\":\"A/Poison\"}' '{\"schema\":1,\"ids\":{\"audible.asin\":\"B01\"},\"_path\":\"Z/Good\"}' | rip::_sidecar_index"
     The status should equal 0
     The lines of output should equal 2
@@ -1501,7 +1567,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A Poison/Book" "$RIP_SANDBOX/server/audiobooks/Z Good/Book"
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"Poison","ids":[]}' > "$RIP_SANDBOX/server/audiobooks/A Poison/Book/.fleet-book.json"
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"Good","ids":{"local.sha256":"deadbeef"}}' > "$RIP_SANDBOX/server/audiobooks/Z Good/Book/.fleet-book.json"
-    When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
+    When run rip_zsh "source $RIPLIB && rip::_stored_sha_index"
     The status should equal 0
     The output should include "deadbeef"
     The output should include "Z Good/Book"
@@ -1524,7 +1590,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/incoming/Kept"
     printf 'a different, fresher copy\n' > "$RIP_SANDBOX/incoming/Kept/Kept.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Kept/Kept.m4b\",\"path\":\"A/Kept\",\"title\":\"Kept\"}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should not include "acquire failed"
     # the provider took the idempotent path rather than re-copying
@@ -1550,7 +1616,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/incoming/Fresh"
     printf 'fresh bytes\n' > "$RIP_SANDBOX/incoming/Fresh/fresh.m4b"
     printf '%s\n' "{\"provider\":\"folder\",\"items\":[{\"id\":\"$RIP_SANDBOX/incoming/Fresh/fresh.m4b\",\"path\":\"A/Fresh\",\"title\":\"Fresh\"}]}" > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The stderr should include "could not reach cantina"
     The path "$RIP_SANDBOX/server/audiobooks/A/Fresh/fresh.m4b" should be exist
     The output should include 'rip: audiobooks verified on cantina — cleaning staging'
@@ -1567,7 +1633,7 @@ EOF
     local custom="$RIP_SANDBOX/custom-staging"
     export RIP_AB_STAGING="$custom"
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     # nothing was ever acquired into (or left behind in) the default tree
@@ -1579,7 +1645,7 @@ EOF
 
   It 'worker: the sidecar carries the plan identity, not the path fallback'
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"narrators":["MacLeod Andrews"],"duration_s":45720,"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"],.source.provider,.work]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"],.source.provider,.work]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I","libation",null]'
   End

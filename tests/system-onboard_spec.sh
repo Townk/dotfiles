@@ -19,6 +19,12 @@
 Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
 
+  # For the whole file (the pool is per file): seven stubs at once is the most
+  # an example writes, in the decommission groups at the end (three in setup,
+  # chezmoi, and the apt world's three). See tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 7'
+
   setup() {
     # mktemp, not $RANDOM: each example's setup runs in its own subshell with
     # the same seed, so a $RANDOM-suffixed path repeats and leaks a previous
@@ -847,6 +853,7 @@ Describe 'system-onboard: gpg forward deferral (first onboarding)'
   End
 
   It 'finalize_gpg_forward resolves the line through the pre-connect hook and reports it'
+    Skip if 'complete-only: two loads of the whole script around a hook run (~100 ms)' spec_complete_only
     conf="$CONFDIR/box.conf"
     run_write_defer 1 "$conf" box box.example 0
     # Stub hook: record its argument and heal the line the way the real one does.
@@ -863,7 +870,9 @@ STUB
       ALIAS=box HOSTNAME=box.example PREPARE="gpg,theme" NO_CLIPBOARD=1 DRY_RUN=0
       HOME="$CONFDIR/home"; mkdir -p "$HOME/.ssh/config.d" "$HOME/.local/libexec"
       cp "$1" "$HOME/.ssh/config.d/box.conf"
-      cp "$CONFDIR/hook" "$HOME/.local/libexec/ssh-prepare-connection"
+      # A hard link, not a copy: a copy is a new inode, and macOS vets the
+      # first exec of every new script (~80 ms; see THE EXEC POOL).
+      ln "$CONFDIR/hook" "$HOME/.local/libexec/ssh-prepare-connection"
       finalize_gpg_forward
       grep -c "d.abc/S.gpg-agent" "$HOME/.ssh/config.d/box.conf"
     ' _ "$conf"
@@ -1001,19 +1010,21 @@ End
 Describe 'system-onboard: decommission'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-onboard"
 
-  setup() {
-    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/decom.XXXXXX")"
-    export SCRIPT_PATH="$SCRIPT" WORK \
-      LIB_PATH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh"
-    mkdir -p "$WORK/home/.ssh/config.d" "$WORK/repo/secrets/slot-aaaaaa" "$WORK/repo/secrets/slot-bbbbbb" \
-      "$WORK/repo/home/dot_config/zsh/private_secrets.d" "$WORK/repo/home/.chezmoidata"
-    printf 'Host box\n' >"$WORK/home/.ssh/config.d/box.conf"
-    printf 'slot-aaaaaa:\n  alias: box\n  profile: server\n  kind: headless\nslot-bbbbbb:\n  alias: other\n  profile: server\n  kind: headless\nslot-cccccc:\n  alias: mac\n  profile: personal\n  kind: human\n' >"$WORK/map.yaml"
-    mkdir -p "$WORK/repo/home/.chezmoiscripts"
-    printf '      apt-get install -y -qq zsh git curl\n' >"$WORK/repo/.setup.sh"
-    printf 'APT_PACKAGES=(\n  figlet # banner\n  bison  # yacc\n)\n' >"$WORK/repo/home/.chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl"
+  # The operator's world is the same for every example: an ssh fragment, the
+  # slot map and a repository with one commit. Building it takes a dozen
+  # writes and six git calls, so it is built ONCE per file with the real git
+  # and every example works on its own copy (nothing in it names its path).
+  build_template() {
+    TPL="$SHELLSPEC_TMPBASE/decom-template"
+    mkdir -p "$TPL/home/.ssh/config.d" "$TPL/repo/secrets/slot-aaaaaa" "$TPL/repo/secrets/slot-bbbbbb" \
+      "$TPL/repo/home/dot_config/zsh/private_secrets.d" "$TPL/repo/home/.chezmoidata" || return 1
+    printf 'Host box\n' >"$TPL/home/.ssh/config.d/box.conf"
+    printf 'slot-aaaaaa:\n  alias: box\n  profile: server\n  kind: headless\nslot-bbbbbb:\n  alias: other\n  profile: server\n  kind: headless\nslot-cccccc:\n  alias: mac\n  profile: personal\n  kind: human\n' >"$TPL/map.yaml"
+    mkdir -p "$TPL/repo/home/.chezmoiscripts"
+    printf '      apt-get install -y -qq zsh git curl\n' >"$TPL/repo/.setup.sh"
+    printf 'APT_PACKAGES=(\n  figlet # banner\n  bison  # yacc\n)\n' >"$TPL/repo/home/.chezmoiscripts/run_once_after_15-setup-dev-shell-tools.sh.tmpl"
     (
-      cd "$WORK/repo" && git init -q &&
+      cd "$TPL/repo" && git init -q &&
         printf 'blob\n' >secrets/slot-aaaaaa/NAME.sops.sh && printf 'blob\n' >secrets/slot-bbbbbb/NAME.sops.sh &&
         printf 'tmpl\n' >home/dot_config/zsh/private_secrets.d/private_slot-aaaaaa.sh.tmpl &&
         printf 'tmpl\n' >home/dot_config/zsh/private_secrets.d/private_slot-bbbbbb.sh.tmpl &&
@@ -1024,6 +1035,14 @@ Describe 'system-onboard: decommission'
         git add -A && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -m seed &&
         git config user.name t && git config user.email t@example.invalid && git config commit.gpgsign false
     ) >/dev/null 2>&1
+  }
+  BeforeAll 'build_template'
+
+  setup() {
+    WORK="$(mktemp -d "$SHELLSPEC_TMPBASE/decom.XXXXXX")"
+    export SCRIPT_PATH="$SCRIPT" WORK \
+      LIB_PATH="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/system-secrets-common.zsh"
+    cp -Rp "$TPL/home" "$TPL/repo" "$TPL/map.yaml" "$WORK/"
   }
   BeforeEach 'setup'
 
@@ -1064,6 +1083,7 @@ Describe 'system-onboard: decommission'
   tree_is_clean() { [ -z "$(git -C "$WORK/repo" status --porcelain)" ] && echo clean || echo dirty; }
 
   It 'headless: streams the teardown, clears the loose layer, retires the slot in one commit'
+    Skip if 'complete-only: a whole decommission against a real git repository: retire the slot, commit (170-230 ms)' spec_complete_only
     When call decom box --yes --no-push
     The status should be success
     The output should include "torn down box"
@@ -1081,6 +1101,7 @@ Describe 'system-onboard: decommission'
   End
 
   It 'headless --purge-tools passes the flag to the streamed script'
+    Skip if 'complete-only: a whole decommission against a real git repository: retire the slot, commit (170-230 ms)' spec_complete_only
     When call decom box --yes --no-push --purge-tools
     The status should be success
     The output should include "torn down box"
@@ -1088,6 +1109,7 @@ Describe 'system-onboard: decommission'
   End
 
   It 'headless --purge-apt passes the flag and names it in the confirmation'
+    Skip if 'complete-only: a whole decommission against a real git repository: retire the slot, commit (170-230 ms)' spec_complete_only
     When call decom box --purge-apt --no-push
     The status should be success
     The output should include "torn down box"
@@ -1096,6 +1118,7 @@ Describe 'system-onboard: decommission'
   End
 
   It 'asks for confirmation before touching a headless target unless --yes'
+    Skip if 'complete-only: a whole decommission against a real git repository: retire the slot, commit (170-230 ms)' spec_complete_only
     When call decom box --no-push
     The status should be success
     The output should include "decommissioned box"
@@ -1103,6 +1126,7 @@ Describe 'system-onboard: decommission'
   End
 
   It '--keep-target never reaches for ssh'
+    Skip if 'complete-only: a whole decommission against a real git repository: retire the slot, commit (170-230 ms)' spec_complete_only
     When call decom box --yes --no-push --keep-target
     The status should be success
     The output should include "leaving box untouched"
@@ -1111,6 +1135,7 @@ Describe 'system-onboard: decommission'
   End
 
   It 'a human machine is decommissioned on the operator side only'
+    Skip if 'complete-only: a whole decommission against a real git repository: retire the slot, commit (170-230 ms)' spec_complete_only
     When call decom mac --yes --no-push
     The status should be success
     The output should include "owns its own config"
@@ -1296,6 +1321,7 @@ STUB
   End
 
   It 'removes managed dirs whole, keeps shared containers and their unmanaged neighbors, drops our state'
+    Skip if 'complete-only: the whole remote teardown script under bash over a laid-out home (~100 ms)' spec_complete_only
     lay_managed_tree
     When call run_remote
     The status should be success
@@ -1314,6 +1340,7 @@ STUB
   End
 
   It '--purge-tools additionally removes the tool homes and ~/.local/bin'
+    Skip if 'complete-only: the whole remote teardown script under bash over a laid-out home (~100 ms)' spec_complete_only
     lay_managed_tree
     mkdir -p "$H/.local/share/mise" "$H/.local/share/cargo"
     When call run_remote 1
@@ -1344,6 +1371,7 @@ STUB
   End
 
   It '--purge-apt purges exactly what the bootstrap runs recorded, skipping what is gone and installs by others'
+    Skip if 'complete-only: the whole remote teardown script under bash with an apt world of stubs (140-190 ms)' spec_complete_only
     lay_apt_world
     When call run_remote_purge_apt
     The status should be success
@@ -1358,6 +1386,7 @@ STUB
   End
 
   It '--purge-apt refuses when apt would take a package the bootstrap did not install'
+    Skip if 'complete-only: the whole remote teardown script under bash with an apt world of stubs (140-190 ms)' spec_complete_only
     lay_apt_world
     printf 'chromium\n' >"$WORK/apt/collateral.txt"
     When call run_remote_purge_apt

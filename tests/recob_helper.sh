@@ -73,6 +73,56 @@ RECOB_SELF_NAME="${RECOB_SELF_NAME:-recob-spec-host}"
 # spec that also uses the trusted socket: forcing `public` makes the daemon
 # demand a credential the trusted client never sends.
 recob_start() {
+  recob_sandbox || return 1
+
+  if [ -n "${1:-}" ]; then
+    export RECOB_RECORD_ENDPOINT="$1"
+  else
+    unset RECOB_RECORD_ENDPOINT
+  fi
+
+  _recob_daemon="${RECOB_BIN:-$SHELLSPEC_PROJECT_ROOT/custom-builds/recob/target/release/recobd}"
+  [ -x "$_recob_daemon" ] || {
+    echo "recob_helper: $_recob_daemon is missing -- run make -C custom-builds/recob build" >&2
+    return 1
+  }
+
+  # Port 0 is not an option (the daemon binds a fixed port) and a port keyed to
+  # the pid collides with the previous example's daemon if it outlived its
+  # kill. Draw one at random and retry on a bind failure, so a collision costs a
+  # retry rather than an unexplained red.
+  _attempt=0
+  while [ "$_attempt" -lt 8 ]; do
+    _attempt=$((_attempt + 1))
+    _recob_pick_port_var
+    export CLIPBOARD_BRIDGE_PORT="$_recob_port"
+    # Only a retry has anything to remove: the directory is new.
+    [ "$_attempt" -eq 1 ] || rm -f "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" "$RECOB_DIR/daemon.log"
+    _recob_spawn "$RECOB_DIR/daemon.log" "$_recob_daemon" --record \
+      --port "$CLIPBOARD_BRIDGE_PORT" \
+      --socket "$CLIPBOARD_BRIDGE_LOCAL_SOCKET"
+    _recob_up=$?
+    RECOB_PID=$RECOB_SPAWN_PID
+    [ "$_recob_up" -ne 0 ] || return 0
+    kill "$RECOB_PID" 2>/dev/null
+    wait "$RECOB_PID" 2>/dev/null
+    RECOB_PID=""
+  done
+
+  echo "recob_helper: listener never came up:" >&2
+  cat "$RECOB_DIR/daemon.log" >&2
+  return 1
+}
+
+# recob_sandbox — everything recob_start arranges EXCEPT the daemon: the
+# per-example directory, the sandboxed store/state/config, the self-name, the
+# bridge seams and a peer port nothing listens on. For an example whose
+# subject never reaches the wire (a pure function of a client that only has to
+# LOAD in the sandbox): the client finds no socket and a refused port, as on a
+# machine whose daemon is down, and the example does not pay ~20 ms for a
+# daemon it never talks to. recob_stop after it is a no-op.
+recob_sandbox() {
+  RECOB_PID=""
   # A fresh directory per example, not one keyed on `$$`: `$$` is the same for
   # every example in a file, so a previous example's log and socket would bleed
   # into the next one and a stale recorded exchange would read as this one's.
@@ -98,52 +148,25 @@ recob_start() {
 
   # The zsh wrapper (clipbridge::) resolves the invoker through this seam, so
   # every example drives the suite's own build rather than the installed one.
-  export SYSTEM_BRIDGE_BIN="$(recob_bridge_bin)"
+  # (The same value recob_bridge_bin prints, without the fork: recob_start
+  # runs before every example of a dozen files, so each fork here is paid a
+  # few hundred times a run.)
+  SYSTEM_BRIDGE_BIN="${SYSTEM_BRIDGE_BIN:-$SHELLSPEC_PROJECT_ROOT/custom-builds/recob/target/release/system-bridge}"
+  export SYSTEM_BRIDGE_BIN
 
   # A uniquely-named PRIVATE pasteboard, so a daemon in a spec can never read
   # or write the real clipboard — this covers `clip.set`'s write path, not just
   # the `--capture` loop.
   export RECOB_CAPTURE_PASTEBOARD="org.chezmoi.recob.spec.${RECOB_DIR##*/}"
 
-  if [ -n "${1:-}" ]; then
-    export RECOB_RECORD_ENDPOINT="$1"
-  else
-    unset RECOB_RECORD_ENDPOINT
-  fi
-
-  [ -x "$(recob_bin)" ] || {
-    echo "recob_helper: $(recob_bin) is missing -- run make -C custom-builds/recob build" >&2
-    return 1
-  }
-
-  # Port 0 is not an option (the daemon binds a fixed port) and a port keyed to
-  # the pid collides with the previous example's daemon if it outlived its
-  # kill. Draw one at random and retry on a bind failure, so a collision costs a
-  # retry rather than an unexplained red.
   # 6c sandboxing: the visited-direction port defaults CLOSED (nothing binds
   # :1) so no test's copy can ever pointer-push to a REAL peer session that
   # happens to be live on the machine running the suite. Examples that test
   # the push point this at the recorder's own port explicitly.
   export CLIPBOARD_BRIDGE_VISITED_PORT=1
-  _attempt=0
-  while [ "$_attempt" -lt 8 ]; do
-    _attempt=$((_attempt + 1))
-    export CLIPBOARD_BRIDGE_PORT="$(_recob_pick_port)"
-    rm -f "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" "$RECOB_DIR/daemon.log"
-    _recob_spawn "$RECOB_DIR/daemon.log" "$(recob_bin)" --record \
-      --port "$CLIPBOARD_BRIDGE_PORT" \
-      --socket "$CLIPBOARD_BRIDGE_LOCAL_SOCKET"
-    _recob_up=$?
-    RECOB_PID=$RECOB_SPAWN_PID
-    [ "$_recob_up" -ne 0 ] || return 0
-    kill "$RECOB_PID" 2>/dev/null
-    wait "$RECOB_PID" 2>/dev/null
-    RECOB_PID=""
-  done
-
-  echo "recob_helper: listener never came up:" >&2
-  cat "$RECOB_DIR/daemon.log" >&2
-  return 1
+  # Until a daemon binds one (recob_start), the peer port is closed too.
+  export CLIPBOARD_BRIDGE_PORT=1
+  unset RECOB_RECORD_ENDPOINT
 }
 
 # _recob_spawn <log> <daemon> [arg…] — start a recobd in the background and
@@ -185,8 +208,10 @@ _recob_spawn() {
   RECOB_SPAWN_PID=$!
   _rs_state=
   read -r _rs_state <"$_rs_ev/state"
-  # Both ends are open by now (or closed for good): the names can go.
-  rm -rf "$_rs_ev"
+  # Both ends are open by now (or closed for good): the names can go. Under a
+  # spec's tmpbase they go with it, after the file; only a caller with no
+  # tmpbase has to remove them here.
+  [ -n "${SHELLSPEC_TMPBASE:-}" ] || rm -rf "$_rs_ev"
   [ "$_rs_state" = ready ]
 }
 
@@ -196,6 +221,23 @@ _recob_spawn() {
 _recob_pick_port() {
   _n=$(od -An -N2 -tu2 < /dev/urandom | tr -d ' ')
   printf '%s' "$(( 30000 + (_n % 16000) ))"
+}
+
+# The same draw, into $_recob_port, without a fork when the shell is zsh (the
+# suite's shell): two bytes read straight from /dev/urandom.
+_recob_pick_port_var() {
+  if [ -n "${ZSH_VERSION:-}" ] && _recob_pick_port_zsh; then return 0; fi
+  _recob_port=$(_recob_pick_port)
+}
+_recob_pick_port_zsh() {
+  emulate -L zsh
+  setopt no_multibyte
+  zmodload zsh/system 2>/dev/null || return 1
+  local bytes= hi lo
+  sysread -s 2 bytes </dev/urandom 2>/dev/null || return 1
+  (( ${#bytes} == 2 )) || return 1
+  hi=$bytes[1] lo=$bytes[2]
+  _recob_port=$(( 30000 + ((#hi * 256 + #lo) % 16000) ))
 }
 
 recob_stop() {

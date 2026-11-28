@@ -15,6 +15,23 @@ Describe 'backup.zsh'
   setup() { export TZ=UTC; }
   BeforeEach 'setup'
 
+  # The chezmoi most groups put on PATH: no managed files, always succeeds.
+  # Written once per file and run once here, so that no example pays for the
+  # first exec of a new script (macOS vets it: ~50 ms). A group's own $STUB
+  # directory comes before it on PATH: an example that needs another chezmoi
+  # writes its own there.
+  build_bk_bin() {
+    BK_BIN="$SHELLSPEC_TMPBASE/bk-bin"
+    mkdir -p "$BK_BIN" || return 1
+    printf '#!/bin/sh\nexit 0\n' > "$BK_BIN/chezmoi"
+    chmod +x "$BK_BIN/chezmoi" && "$BK_BIN/chezmoi"
+  }
+  BeforeAll 'build_bk_bin'
+  # Six stubs is the most one example here writes (three of its own and the
+  # virtual clock's three).
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 6'
+
   # "Now" for the examples that hand-write a stamp or a snapshot some time in
   # the past. They start the virtual clock there (production reads it through
   # common::now) and count back from it; no example reads the real clock.
@@ -261,6 +278,7 @@ Describe 'backup.zsh'
     End
 
     It 'is idempotent: thinning the keep-set again drops nothing'
+      Skip if 'complete-only: thins 800 snapshots twice in pure zsh (~175 ms)' spec_complete_only
       idem() {
         source "$LIB/backup.zsh"
         local age
@@ -297,10 +315,8 @@ Describe 'backup.zsh'
   End
 
   Describe 'bkp::manifest — parsing'
-    setup_fix() { FIX=$(mktemp -d); }
-    cleanup_fix() { rm -rf "$FIX"; }
+    setup_fix() { spec_sandbox fix; FIX=$SANDBOX; }
     BeforeEach 'setup_fix'
-    AfterEach 'cleanup_fix'
 
     It 'applies per-root git defaults to string roots and honors table overrides'
       roots() {
@@ -366,10 +382,8 @@ EOF
   End
 
   Describe 'bkp::manifest — policy mapping'
-    setup_fix() { FIX=$(mktemp -d); }
-    cleanup_fix() { rm -rf "$FIX"; }
+    setup_fix() { spec_sandbox fix; FIX=$SANDBOX; }
     BeforeEach 'setup_fix'
-    AfterEach 'cleanup_fix'
 
     It 'converts durations to seconds'
       dur() {
@@ -434,19 +448,16 @@ EOF
 
   Describe 'bkp::manifest — sweep'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       # chezmoi stub: no managed files, always succeeds — the chezmoi-filter
       # block overrides it per test.
       STUB="$FIX/stub"; mkdir -p "$STUB"
-      printf '#!/bin/sh\nexit 0\n' > "$STUB/chezmoi"
-      chmod +x "$STUB/chezmoi"
-      PATH="$STUB:$PATH"
+      PATH="$STUB:$BK_BIN:$PATH"
     }
-    cleanup_fix() { rm -rf "$FIX"; }
     BeforeEach 'setup_fix'
-    AfterEach 'cleanup_fix'
 
     It 'captures files, prunes deny paths and glob matches, keeps symlinks as entries'
+      Skip if 'complete-only: a real sweep of a fixture tree: yq, jq and a find per root (~120 ms)' spec_complete_only
       sweep() {
         source "$LIB/backup.zsh"
         mkdir -p "$FIX/root/sub" "$FIX/root/cache" "$FIX/root/Cache/deep"
@@ -527,7 +538,7 @@ EOF
 
   Describe 'bkp::manifest — chezmoi filter'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       STUB="$FIX/stub"; mkdir -p "$STUB"
       PATH="$STUB:$PATH"
       mkdir -p "$FIX/root/mdir"
@@ -537,9 +548,7 @@ EOF
       print m2 > "$FIX/root/mdir/b"
       printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
     }
-    cleanup_fix() { rm -rf "$FIX"; }
     BeforeEach 'setup_fix'
-    AfterEach 'cleanup_fix'
 
     stub_chezmoi() {  # stub_chezmoi <line>... — managed-list stub on PATH
       { printf '#!/bin/sh\n'; printf 'echo "%s"\n' "$@"; } > "$STUB/chezmoi"
@@ -599,35 +608,49 @@ EOF
   End
 
   Describe 'bkp::manifest — per-repo git filter'
+    Skip if 'complete-only: real git per sweep (ls-files, check-ignore) on top of yq and jq: 90-200 ms' spec_complete_only
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       STUB="$FIX/stub"; mkdir -p "$STUB"
-      printf '#!/bin/sh\nexit 0\n' > "$STUB/chezmoi"
-      chmod +x "$STUB/chezmoi"
-      PATH="$STUB:$PATH"
+      PATH="$STUB:$BK_BIN:$PATH"
       # Hermetic git: fixture-owned global config with a global excludesfile.
       export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$FIX/gitconfig"
       printf '*.global-ignored\n' > "$FIX/global-ignore"
       printf '[core]\n\texcludesFile = %s\n[user]\n\tname = t\n\temail = t@t\n' \
         "$FIX/global-ignore" > "$FIX/gitconfig"
 
-      mkdir -p "$FIX/root/repo" "$FIX/root/plain"
       REPO="$FIX/root/repo"    # no cd: keep shellspec's cwd untouched
-      git -C "$REPO" init -q
-      print tracked > "$REPO/tracked.txt"
-      print build > "$REPO/build.out"
-      print local > "$REPO/tmp.local"
-      print glob > "$REPO/x.global-ignored"
-      print untracked > "$REPO/untracked.txt"
-      printf 'build.out\n' > "$REPO/.gitignore"
-      printf 'tmp.local\n' >> "$REPO/.git/info/exclude"
-      git -C "$REPO" add tracked.txt .gitignore
-      git -C "$REPO" -c commit.gpgsign=false commit -qm init
-      # Non-repo sibling: gitignore-looking files are NOT filtered there.
-      print loose > "$FIX/root/plain/x.global-ignored"
+      cp -Rp "$GF_TPL/root" "$FIX/root" || return 1
       printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL; }
+    # The root every example sweeps: a repo with one commit (tracked, ignored,
+    # locally excluded, globally ignored and untracked files) beside a plain
+    # directory. Three git calls to build, so it is built ONCE per file with
+    # the real git and each example sweeps its own copy (nothing in a fresh
+    # repository names its own path).
+    build_gf_template() {
+      GF_TPL="$SHELLSPEC_TMPBASE/gitfilter-template"
+      mkdir -p "$GF_TPL/root/repo" "$GF_TPL/root/plain" || return 1
+      printf '[user]\n\tname = t\n\temail = t@t\n' > "$GF_TPL/gitconfig"
+      (
+        export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$GF_TPL/gitconfig"
+        REPO="$GF_TPL/root/repo"
+        git -C "$REPO" init -q &&
+          print tracked > "$REPO/tracked.txt" &&
+          print build > "$REPO/build.out" &&
+          print local > "$REPO/tmp.local" &&
+          print glob > "$REPO/x.global-ignored" &&
+          print untracked > "$REPO/untracked.txt" &&
+          printf 'build.out\n' > "$REPO/.gitignore" &&
+          printf 'tmp.local\n' >> "$REPO/.git/info/exclude" &&
+          git -C "$REPO" add tracked.txt .gitignore &&
+          git -C "$REPO" -c commit.gpgsign=false commit -qm init &&
+          # Non-repo sibling: gitignore-looking files are NOT filtered there.
+          print loose > "$GF_TPL/root/plain/x.global-ignored"
+      )
+    }
+    BeforeAll 'build_gf_template'
+    cleanup_fix() { unset GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -794,10 +817,8 @@ EOF
   End
 
   Describe 'bkp::config'
-    setup_fix() { FIX=$(mktemp -d); }
-    cleanup_fix() { rm -rf "$FIX"; }
+    setup_fix() { spec_sandbox fix; FIX=$SANDBOX; }
     BeforeEach 'setup_fix'
-    AfterEach 'cleanup_fix'
 
     It 'reads staging path (~ expanded) and password command'
       cfg() {
@@ -872,7 +893,7 @@ EOF
     }
     BeforeAll 'build_template'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$FIX/gitconfig"
       cp "$TPL/gitconfig" "$FIX/gitconfig"
       export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip"
@@ -881,7 +902,7 @@ EOF
         git -C "$REPO" remote set-url origin "$FIX/origin.git" &&
         git -C "$FIX/origin.git" remote set-url origin "$REPO"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL BKP_STATE_DIR BKP_WIP_DIR; }
+    cleanup_fix() { unset GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL BKP_STATE_DIR BKP_WIP_DIR; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -907,6 +928,7 @@ EOF
     End
 
     It 'bundles only unpushed history (fetchable, includes stash)'
+      Skip if 'complete-only: real git bundle, clone and fetch work (100-350 ms)' spec_complete_only
       bundle() {
         source "$LIB/backup.zsh"
         bkp::project::bundle "$REPO" "$FIX/b.bundle" || return 1
@@ -925,6 +947,7 @@ EOF
     End
 
     It 'writes no bundle when everything is pushed'
+      Skip if 'complete-only: real git bundle, clone and fetch work (100-350 ms)' spec_complete_only
       nobundle() {
         source "$LIB/backup.zsh"
         git -C "$REPO" stash drop -q
@@ -938,6 +961,7 @@ EOF
     End
 
     It 'meta.json records path, branch, head, remotes, status and stashes'
+      Skip if 'complete-only: real git bundle, clone and fetch work (100-350 ms)' spec_complete_only
       meta() {
         source "$LIB/backup.zsh"
         bkp::project::meta "$REPO" | jq -r '
@@ -965,6 +989,7 @@ EOF
     End
 
     It 'sidecar writes meta + bundle under BKP_WIP_DIR and never fails capture'
+      Skip if 'complete-only: real git bundle, clone and fetch work (100-350 ms)' spec_complete_only
       sidecar() {
         source "$LIB/backup.zsh"
         bkp::project::sidecar "$REPO" true 50m || return 1
@@ -979,6 +1004,7 @@ EOF
     End
 
     It 'sidecar honors bundle_unpushed=false (meta only)'
+      Skip if 'complete-only: real git bundle, clone and fetch work (100-350 ms)' spec_complete_only
       nosidecarbundle() {
         source "$LIB/backup.zsh"
         bkp::project::sidecar "$REPO" false 50m || return 1
@@ -993,6 +1019,7 @@ EOF
     End
 
     It 'restore-project round-trips: branch, head, unpushed commit, stash, clean tree'
+      Skip if 'complete-only: real git bundle, clone and fetch work (100-350 ms)' spec_complete_only
       roundtrip() {
         source "$LIB/backup.zsh"
         local head_before
@@ -1015,6 +1042,7 @@ EOF
     End
 
     It 'restore-project works with no remote (full bundle)'
+      Skip if 'complete-only: real git bundle, clone and fetch work (100-350 ms)' spec_complete_only
       noremote() {
         source "$LIB/backup.zsh"
         local R2="$FIX/solo"
@@ -1039,6 +1067,7 @@ EOF
     End
 
     It 'restore-project refuses when .git already exists'
+      Skip if 'complete-only: real git bundle, clone and fetch work (100-350 ms)' spec_complete_only
       hasgit() {
         source "$LIB/backup.zsh"
         bkp::project::sidecar "$REPO" true 50m || return 1
@@ -1051,8 +1080,8 @@ EOF
   End
 
   Describe 'bkp::lock'
-    setup_fix() { FIX=$(mktemp -d); export BKP_STATE_DIR="$FIX/state"; }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR; }
+    setup_fix() { spec_sandbox fix; FIX=$SANDBOX; export BKP_STATE_DIR="$FIX/state"; }
+    cleanup_fix() { unset BKP_STATE_DIR; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -1061,7 +1090,7 @@ EOF
         source "$LIB/backup.zsh"
         bkp::lock capture || return 1
         print first
-        zsh -c 'source "'"$LIB"'/backup.zsh"; bkp::lock capture' && print oops || print blocked
+        zsh -f -c 'source "'"$LIB"'/backup.zsh"; bkp::lock capture' && print oops || print blocked
       }
       When run locks
       The line 1 should equal "first"
@@ -1071,7 +1100,7 @@ EOF
     It 'the lock dies with its holder'
       afterlife() {
         source "$LIB/backup.zsh"
-        zsh -c 'source "'"$LIB"'/backup.zsh"; bkp::lock capture'   # exits, releasing
+        zsh -f -c 'source "'"$LIB"'/backup.zsh"; bkp::lock capture'   # exits, releasing
         bkp::lock capture && print free
       }
       When run afterlife
@@ -1081,18 +1110,16 @@ EOF
 
   Describe 'bkp::capture'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip"
       mkdir -p "$FIX/root"
       print data > "$FIX/root/f.txt"
       printf 'roots = ["%s/root"]\n' "$FIX" > "$FIX/m.toml"
       printf '[staging]\npath = "%s/repo"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
       STUB="$FIX/stub"; mkdir -p "$STUB"
-      printf '#!/bin/sh\nexit 0\n' > "$STUB/chezmoi"
-      chmod +x "$STUB/chezmoi"
-      PATH="$STUB:$PATH"
+      PATH="$STUB:$BK_BIN:$PATH"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_WIP_DIR; }
+    cleanup_fix() { unset BKP_STATE_DIR BKP_WIP_DIR; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -1112,6 +1139,7 @@ EOF
     }
 
     It 'runs the full tick: init -> backup -> forget (drop ids only)'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       tick() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1130,6 +1158,7 @@ EOF
     End
 
     It 'skips init when the repo exists'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       noinit() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1146,7 +1175,7 @@ EOF
         source "$LIB/backup.zsh"
         stub_restic
         bkp::lock capture || return 1
-        zsh -c '
+        zsh -f -c '
           source "'"$LIB"'/backup.zsh"
           bkp::restic() { print -r -- "$@" >> "'"$FIX"'/calls"; }
           bkp::capture::run "'"$FIX"'/m.toml" "'"$FIX"'/c.toml"
@@ -1170,6 +1199,7 @@ EOF
     End
 
     It 'sweeps once per tick (repo plan + file list share one pass)'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       onesweep() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1184,6 +1214,7 @@ EOF
     End
 
     It 'captures fresh sidecars even when BKP_WIP_DIR is outside every root'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       wipcapture() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1213,6 +1244,7 @@ EOF
     End
 
     It 'BKP_PROGRESS=1 drops --quiet and narrates the phases'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       narrated() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1231,6 +1263,7 @@ EOF
     End
 
     It 'stays --quiet for the scheduled (non-interactive) path'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       scheduled() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1243,6 +1276,7 @@ EOF
     End
 
     It 'restic rc 3 (partial read) warns but keeps the tick alive'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       partial() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1263,6 +1297,7 @@ EOF
     End
 
     It 'other restic backup failures still fail the tick'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       hardfail() {
         source "$LIB/backup.zsh"
         bkp::restic() {
@@ -1281,6 +1316,7 @@ EOF
     End
 
     It 'skips when the last capture is still inside the cadence'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       throttle() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1294,6 +1330,7 @@ EOF
     End
 
     It 'BKP_CAPTURE_FORCE bypasses the cadence throttle'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       forced() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1307,6 +1344,7 @@ EOF
     End
 
     It 'runs a normal scheduled tick even though the previous capture landed under a full interval ago'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       # The launchd agent fires one cadence apart; the previous capture took
       # ~30s, so its COMPLETION stamp is CADENCE-30 old — still under a full
       # interval. That tick is genuinely due and must proceed, or the effective
@@ -1340,6 +1378,7 @@ EOF
     End
 
     It 'BKP_CAPTURE_FORCE proceeds even for a capture that just ran'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       forced_recent() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1354,6 +1393,7 @@ EOF
     End
 
     It 'stamps catchup while overdue work runs, then clears it on success'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       catchup_ok() {
         source "$LIB/backup.zsh"
         spec_clock_set "$CLOCK_NOW"
@@ -1384,6 +1424,7 @@ EOF
     End
 
     It 'clears catchup when an overdue capture fails'
+      Skip if 'complete-only: a whole capture tick: yq and jq config parse, sweep, heartbeat stamps (~150 ms of production forks)' spec_complete_only
       catchup_fail() {
         source "$LIB/backup.zsh"
         spec_clock_set "$CLOCK_NOW"
@@ -1406,7 +1447,7 @@ EOF
 
     It 'worker --help prints usage without touching restic'
       whelp() {
-        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" --help
+        BKP_LIB="$LIB" zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" --help
       }
       When run whelp
       The status should be success
@@ -1416,10 +1457,8 @@ EOF
   End
 
   Describe 'bkp::config — targets'
-    setup_fix() { FIX=$(mktemp -d); }
-    cleanup_fix() { rm -rf "$FIX"; }
+    setup_fix() { spec_sandbox fix; FIX=$SANDBOX; }
     BeforeEach 'setup_fix'
-    AfterEach 'cleanup_fix'
 
     It 'emits name/path/role with mirror default and ~ expansion'
       tgts() {
@@ -1477,7 +1516,7 @@ EOF
   End
 
   Describe 'bkp::target::present'
-    setup_fix() { FIX=$(mktemp -d); }
+    setup_fix() { spec_sandbox fix; FIX=$SANDBOX; }
     cleanup_fix() { chmod -R u+w "$FIX" 2>/dev/null; rm -rf "$FIX"; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
@@ -1549,7 +1588,7 @@ EOF
 
   Describe 'bkp::reconcile — engine'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml"
       printf 'roots = []\n' > "$FIX/m.toml"
       printf '[staging]\npath = "%s/stg"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
@@ -1557,7 +1596,7 @@ EOF
       printf '%s' '[{"id":"s1","time":"2026-01-02T10:01:00Z"},{"id":"s2","time":"2026-01-02T10:14:00Z"}]' > "$FIX/stg.json"
       printf '%s' '[{"id":"s1c","original":"s1","time":"2026-01-02T10:01:00Z"},{"id":"t9","time":"2026-01-01T09:00:00Z"}]' > "$FIX/tgt.json"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG; }
+    cleanup_fix() { unset BKP_STATE_DIR BKP_CONFIG; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -1584,7 +1623,7 @@ EOF
       local line
       mkdir -p "$BKP_STATE_DIR"
       mkfifo "$FIX/held" "$FIX/release" && exec {RELEASE_FD}<>"$FIX/release" || return 1
-      zsh -c '
+      zsh -f -c '
         zmodload zsh/system
         : >> "$1/capture.lock"
         zsystem flock -t 0 "$1/capture.lock" || { print failed > "$2/held"; exit 1 }
@@ -1629,6 +1668,7 @@ EOF
     }
 
     It 'converges a fresh mirror target and applies retention'
+      Skip if 'complete-only: a whole reconcile pass against the restic recorder (100-250 ms)' spec_complete_only
       mirror() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1683,6 +1723,7 @@ EOF
     # naive union-convergence pulls it straight back (paired "retention dropped
     # N" + "pulled 1"). Pull only what the local ladder would keep.
     It 'does not pull back a snapshot the local ladder just thinned'
+      Skip if 'complete-only: a whole reconcile pass against the restic recorder (100-250 ms)' spec_complete_only
       no_pullback() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1716,6 +1757,7 @@ EOF
     # MED-18: the filter must not over-drop — a target-only snapshot the local
     # ladder WOULD keep still gets pulled (e.g. one another machine pushed).
     It 'still pulls a target-only snapshot the local ladder would keep'
+      Skip if 'complete-only: a whole reconcile pass against the restic recorder (100-250 ms)' spec_complete_only
       pulls_kept() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1732,6 +1774,7 @@ EOF
     End
 
     It 'run skips absent targets and reconciles present ones'
+      Skip if 'complete-only: a whole reconcile pass against the restic recorder (100-250 ms)' spec_complete_only
       pass() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1787,6 +1830,7 @@ EOF
     # staging; mirrors never did. `restic unlock` (no --remove-all) drops only
     # stale locks, so it is safe before every lock-taking op on a repo.
     It 'clears stale locks on a mirror before copying into / thinning it'
+      Skip if 'complete-only: a whole reconcile pass against the restic recorder (100-250 ms)' spec_complete_only
       heals_mirror() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -1967,7 +2011,7 @@ EOF
 
     It 'worker --help prints usage'
       rhelp() {
-        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-reconcile" --help
+        BKP_LIB="$LIB" zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-reconcile" --help
       }
       When run rhelp
       The status should be success
@@ -1976,6 +2020,7 @@ EOF
     End
 
     It 'bkp::tick captures then reconciles in one pass'
+      Skip if 'complete-only: a whole reconcile pass against the restic recorder (100-250 ms)' spec_complete_only
       tick2() {
         source "$LIB/backup.zsh"
         stub_restic
@@ -2006,9 +2051,9 @@ EOF
 
     It 'workers no-op cleanly on an unconfigured machine'
       unconf() {
-        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" \
+        BKP_LIB="$LIB" zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" \
           --config "$FIX/never-created.toml" --manifest "$FIX/m.toml" && print cap-ok
-        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-reconcile" \
+        BKP_LIB="$LIB" zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-reconcile" \
           --config "$FIX/never-created.toml" --manifest "$FIX/m.toml" && print rec-ok
       }
       When run unconf
@@ -2020,7 +2065,7 @@ EOF
 
     It 'capture worker --help documents --reconcile'
       chelp() {
-        BKP_LIB="$LIB" zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" --help
+        BKP_LIB="$LIB" zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-backup-capture" --help
       }
       When run chelp
       The status should be success
@@ -2030,7 +2075,7 @@ EOF
 
   Describe 'bkp::ux — read side'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml"
       printf 'roots = []\n' > "$FIX/m.toml"
       cat > "$FIX/c.toml" <<EOF
@@ -2046,7 +2091,7 @@ path = "$FIX/gone/tb"
 role = "master"
 EOF
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG; }
+    cleanup_fix() { unset BKP_STATE_DIR BKP_CONFIG; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -2162,7 +2207,7 @@ EOF
       # evaluates to 0 → exit status 1 → errexit killed status mid-function
       # when run under the dispatcher (which sets -eu -o pipefail).
       strict() {
-        zsh -c '
+        zsh -f -c '
           set -eu -o pipefail
           source "$1/backup.zsh"
           bkp::restic() { printf "%s" "[{\"id\":\"aaa\",\"time\":\"2026-01-02T10:00:00Z\"}]"; }
@@ -2194,12 +2239,12 @@ EOF
 
   Describe 'bkp::restore — undoable restores'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml"
       printf 'roots = []\n' > "$FIX/m.toml"
       printf '[staging]\npath = "%s/stg"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG; }
+    cleanup_fix() { unset BKP_STATE_DIR BKP_CONFIG; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -2400,12 +2445,12 @@ EOF
 
   Describe 'bkp::ux — browse/diff plumbing'
     setup_fix() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml"
       printf '[staging]\npath = "%s/stg"\npassword_command = "echo pw"\n' "$FIX" > "$FIX/c.toml"
       STUB="$FIX/stub"; mkdir -p "$STUB"
     }
-    cleanup_fix() { rm -rf "$FIX"; unset BKP_STATE_DIR BKP_CONFIG BKP_HAS_FUSE; }
+    cleanup_fix() { unset BKP_STATE_DIR BKP_CONFIG BKP_HAS_FUSE; }
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
@@ -2426,6 +2471,7 @@ EOF
     }
 
     It 'mount waits for the FUSE tree and reports the pid'
+      Skip if 'complete-only: bkp::mount and bkp::umount with a held background server (120-450 ms)' spec_complete_only
       mounts() {
         source "$LIB/backup.zsh"
         bkp::restic() {
@@ -2462,6 +2508,7 @@ EOF
     End
 
     It 'mount wrapper survives the pane-close HUP (FUSE server outlives the pty)'
+      Skip if 'complete-only: bkp::mount and bkp::umount with a held background server (120-450 ms)' spec_complete_only
       hupmount() {
         source "$LIB/backup.zsh"
         bkp::restic() {
@@ -2489,6 +2536,7 @@ EOF
     End
 
     It 'umount clears a dead-server wedge via the mount table, not the tree'
+      Skip if 'complete-only: bkp::mount and bkp::umount with a held background server (120-450 ms)' spec_complete_only
       wedge() {
         source "$LIB/backup.zsh"
         # Simulate the wedge: the mount-TABLE entry persists (flag file)
@@ -2617,6 +2665,8 @@ EOF
     TMFN="$SHELLSPEC_PROJECT_ROOT/home/dot_config/zsh/functions.d/tm.sh"
 
     setup_fix() {
+      # Not spec_sandbox: `tm` reports $PWD, and the tmpbase path has a `//`
+      # in it that the kernel's cwd does not.
       FIX=$(mktemp -d)
       export BKP_STATE_DIR="$FIX/state" BKP_CONFIG="$FIX/c.toml" BKP_LIB="$LIB"
       cat > "$FIX/c.toml" <<EOF
@@ -2633,7 +2683,7 @@ EOF
     AfterEach 'cleanup_fix'
 
     It 'top-level help lists every subcommand'
-      When run zsh "$DISPATCH" --help
+      When run zsh -f "$DISPATCH" --help
       The status should be success
       The output should include "status"
       The output should include "restore-project"
@@ -2642,21 +2692,21 @@ EOF
     End
 
     It 'dies on an unknown subcommand'
-      When run zsh "$DISPATCH" frobnicate
+      When run zsh -f "$DISPATCH" frobnicate
       The status should equal 1
       The stderr should include "unknown subcommand"
       The output should include "Usage"
     End
 
     It 'restore --help documents --snapshot and --force'
-      When run zsh "$DISPATCH" restore --help
+      When run zsh -f "$DISPATCH" restore --help
       The status should be success
       The output should include "--snapshot"
       The output should include "--force"
     End
 
     It 'targets renders the presence table without touching restic'
-      When run zsh "$DISPATCH" targets
+      When run zsh -f "$DISPATCH" targets
       The status should be success
       The output should include "○"
       The output should include "ghost"
@@ -2664,7 +2714,7 @@ EOF
 
     It 'is loud when unconfigured (a human asked)'
       loud() {
-        BKP_CONFIG="$FIX/nope.toml" zsh "$DISPATCH" status
+        BKP_CONFIG="$FIX/nope.toml" zsh -f "$DISPATCH" status
       }
       When run loud
       The status should equal 1
@@ -2672,7 +2722,7 @@ EOF
     End
 
     It 'restore demands a snapshot id and paths'
-      When run zsh "$DISPATCH" restore /some/path
+      When run zsh -f "$DISPATCH" restore /some/path
       The status should equal 1
       The stderr should include "--snapshot"
     End
@@ -2700,6 +2750,7 @@ EOF
     End
 
     It 'browse launches a one-pane explore scrub session under FUSE'
+      Skip if 'complete-only: the dispatcher end to end into a scrub session (230-600 ms)' spec_complete_only
       run_it() {
         STUB="$FIX/stub"; mkdir -p "$STUB"
         printf '#!/bin/sh\necho "tmux $*" >> "%s/tx.calls"\ncase "$1" in split-window) echo "%%9" ;; display) echo 2 ;; esac\n' "$FIX" > "$STUB/tmux"
@@ -2722,7 +2773,7 @@ JSON
           PATH="$STUB:$PATH" BKP_HAS_FUSE=1 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
             BKP_TM_BIN="$STUB/system-backup-tm" TMUX=/tmp/sock,1,0 MUX_TMUX_BIN="$STUB/tmux" \
             MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-            zsh "$DISPATCH" browse "$FIX/anchor"
+            zsh -f "$DISPATCH" browse "$FIX/anchor"
         } always {
           [ ! -s "$FIX/restic.pid" ] || kill "$(<"$FIX/restic.pid")" 2>/dev/null
         }
@@ -2739,6 +2790,7 @@ JSON
     End
 
     It 'browse launches a split scrub session for a diff dir anchor without FUSE'
+      Skip if 'complete-only: the dispatcher end to end into a scrub session (230-600 ms)' spec_complete_only
       run_it() {
         STUB="$FIX/stub"; mkdir -p "$STUB"
         printf '#!/bin/sh\necho "tmux $*" >> "%s/tx.calls"\ncase "$1" in split-window) echo "%%9" ;; display) echo 2 ;; esac\n' "$FIX" > "$STUB/tmux"
@@ -2755,7 +2807,7 @@ JSON
         PATH="$STUB:$PATH" BKP_HAS_FUSE=0 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
           BKP_TM_BIN="$STUB/system-backup-tm" TMUX=/tmp/sock,1,0 MUX_TMUX_BIN="$STUB/tmux" \
           MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-          zsh "$DISPATCH" browse --diff "$FIX/anchor"
+          zsh -f "$DISPATCH" browse --diff "$FIX/anchor"
         cat "$FIX/tx.calls" "$FIX/tm.calls"
       }
       When run run_it
@@ -2916,14 +2968,11 @@ EOF
   # BKP_RESTIC_TIMEOUT; when unset the seam is a transparent passthrough.
   Describe 'bkp::restic — timeout guard'
     setup_guard() {
-      FIX=$(mktemp -d)
+      spec_sandbox fix; FIX=$SANDBOX
       STUB="$FIX/stub"; mkdir -p "$STUB"
       PATH="$STUB:$PATH"
-      spec_clock_set "$CLOCK_NOW"
     }
-    cleanup_guard() { rm -rf "$FIX"; }
     BeforeEach 'setup_guard'
-    AfterEach 'cleanup_guard'
 
     # A restic that ignores SIGTERM and never exits — the real wedge we saw.
     # It blocks on a FIFO nobody writes, so only a SIGKILL ends it; run with
@@ -2957,6 +3006,10 @@ EOF
     guard_waited() { echo "$(($(spec_clock_now) - CLOCK_NOW))s"; }
 
     It 'SIGKILLs a wedged restic past BKP_RESTIC_TIMEOUT (137, not a hang)'
+      Skip if 'complete-only: a wedged restic killed through a stand-in timeout: clock stubs, a FIFO and three signals (~190 ms)' spec_complete_only
+      # The one example here that reads the clock (the stand-in timeout
+      # advances it, guard_waited reads it): the other two never look.
+      spec_clock_set "$CLOCK_NOW"
       run_guarded() {
         stub_wedged_restic
         source "$LIB/backup.zsh"

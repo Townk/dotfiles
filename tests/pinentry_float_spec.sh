@@ -14,6 +14,10 @@
 # everyone rather than merely failing to help an agent.
 Describe 'mux/pinentry.zsh — float targeting'
   Include home/dot_local/lib/mux/pinentry.zsh
+  # Two warm slots: the most stubs an example of this file writes (rex and
+  # ps, further down). See tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
 
   setup() {
     PL_TMP=$(mktemp -d)
@@ -148,13 +152,13 @@ Describe 'pinentry-mux-popup — argument contract'
   # The size is required now, and silently defaulting it would put a float of
   # the wrong size on screen with no way to resize it.
   It 'refuses --open without a size'
-    When run zsh "$POPUP" --open /dev/ttys001
+    When run zsh -f "$POPUP" --open /dev/ttys001
     The status should equal 2
     The stderr should include "--open <caller_tty> <w> <h>"
   End
 
   It 'refuses an unknown mode'
-    When run zsh "$POPUP" --frobnicate
+    When run zsh -f "$POPUP" --frobnicate
     The status should equal 2
     The stderr should include "usage:"
   End
@@ -233,6 +237,7 @@ EOS
 
   Describe 'listing the panes'
     It 'prints every terminal pane that has a tty, in the tmux line layout'
+      Skip if 'complete-only: the pane listing asks the fake rex and the fake ps about every block, with jq in between (~120-160 ms of production forks)' spec_complete_only
       When call mux::pinentry_rex_panes
       The output should equal "/dev/ttys001|block:sh|zsh|zsh|1|1|0|Main
 /dev/ttys002|block:ag|claude|claude|2|1|1|Main
@@ -240,12 +245,14 @@ EOS
     End
 
     It 'names an agent running under a wrapper, but not a stopped one'
+      Skip if 'complete-only: the pane listing asks the fake rex and the fake ps about every block, with jq in between (~120-160 ms of production forks)' spec_complete_only
       # ttys003: claude is stopped (T), cursor-agent is running.
       When call mux::pinentry_rex_panes
       The line 3 of output should include "|cursor-agent|"
     End
 
     It 'never starts a server'
+      Skip if 'complete-only: the pane listing asks the fake rex and the fake ps about every block, with jq in between (~120-160 ms of production forks)' spec_complete_only
       check() { mux::pinentry_rex_panes >/dev/null; grep -c -v -- '--autostart=false' "$PR_TMP/rex.log" || true; }
       When call check
       The output should equal "0"
@@ -296,12 +303,14 @@ Jobs | x"
     layer_cmd() { jq -r '.layout.block.options.command | join(" ")' "$PR_TMP/req.json" | sed -e "s|$PR_TMP/[^ ]*|FIFO|"; }
 
     It 'opens a layer over the asking pane and prints its tty and holder'
+      Skip if 'complete-only: the float waits for its holder in real 0.1 s naps (the holder answers from the background, so the free-running virtual clock would race it): 300-370 ms' spec_complete_only
       When call mux::pinentry_spawn /dev/ttys002 44 12 claude
       The output should equal "/dev/ttys099 4242"
       The status should be success
     End
 
     It 'runs the holder in that layer, in the asking pane'"'"'s session, sized in cells'
+      Skip if 'complete-only: the float waits for its holder in real 0.1 s naps (the holder answers from the background, so the free-running virtual clock would race it): 300-370 ms' spec_complete_only
       shape() {
         mux::pinentry_spawn /dev/ttys002 60 20 claude >/dev/null
         layer_cmd | grep -c 'libexec/pinentry-mux-popup --hold FIFO$'
@@ -318,6 +327,7 @@ Jobs | x"
     End
 
     It 'fails for a tty no pane has, opening nothing'
+      Skip if 'complete-only: a refused float still lists every pane first (~130 ms of production forks)' spec_complete_only
       nothing() { mux::pinentry_spawn /dev/ttys777 44 12; print -r -- "rc=$?"; [[ -e "$PR_TMP/req.json" ]] && print opened || print "not opened"; }
       When call nothing
       The output should equal "rc=1
@@ -325,6 +335,7 @@ not opened"
     End
 
     It 'refuses a float the window cannot spare the margin for'
+      Skip if 'complete-only: a refused float still lists every pane first (~130 ms of production forks)' spec_complete_only
       nothing() { mux::pinentry_spawn /dev/ttys002 118 12; print -r -- "rc=$?"; [[ -e "$PR_TMP/req.json" ]] && print opened || print "not opened"; }
       When call nothing
       The output should equal "rc=1
@@ -332,6 +343,7 @@ not opened"
     End
 
     It 'fails when the layer cannot be created, leaving nothing behind'
+      Skip if 'complete-only: the float waits for its holder in real 0.1 s naps (the holder answers from the background, so the free-running virtual clock would race it): 300-370 ms' spec_complete_only
       export STUB_LAYER=fail
       failed() { mux::pinentry_spawn /dev/ttys002 44 12; print -r -- "rc=$?"; ls "$PR_TMP" | grep -c 'fifo' || true; }
       When call failed
@@ -340,6 +352,7 @@ not opened"
     End
 
     It 'closes a layer whose holder never reports, and fails'
+      Skip if 'complete-only: the float waits for its holder in real 0.1 s naps (the holder answers from the background, so the free-running virtual clock would race it): 300-370 ms' spec_complete_only
       export STUB_LAYER=silent
       silent() {
         # The holder never writes; the layer is closed by hand a moment later:

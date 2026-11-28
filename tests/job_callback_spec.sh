@@ -3,54 +3,76 @@
 # prunes old finished jobs. The hs CLI is a recording stub: which Lua call
 # crossed is the observable. Hermetic: no SSH routing, sandboxed state.
 Describe 'job-callback'
+  Include tests/job_helper.sh
+  Include home/dot_local/lib/job.zsh
   CALLBACK="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job-callback"
-  JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
-  setup() {
-    unset SSH_CONNECTION SSH_CLIENT SSH_TTY NOTIFY_VIA_BRIDGE
-    CB_SANDBOX=$(mktemp -d)
-    export JOB_STATE_ROOT="$CB_SANDBOX/state"
-    export XDG_CACHE_HOME="$CB_SANDBOX/cache"
-    mkdir -p "$CB_SANDBOX/bin"
-    cat > "$CB_SANDBOX/bin/hs" <<EOF
+  # The fakes, written once for the file into a directory the examples share
+  # (job_helper.sh: job_fixture_script). Each records where an exported
+  # variable of the example says: its own sandbox.
+  fixtures() {
+    CB_FX="$SHELLSPEC_TMPBASE/cb-fx"
+    job_fixture_script "$CB_FX/hs" <<'EOF'
 #!/bin/sh
-printf '%s\n' "\$*" >> "$CB_SANDBOX/hs.log"
+printf '%s\n' "$*" >> "$CB_HS_LOG"
 EOF
-    chmod +x "$CB_SANDBOX/bin/hs"
-    export HS="$CB_SANDBOX/bin/hs"
-    export JOB_FAKE_LOG="$CB_SANDBOX/pueue.log"
-    cat > "$CB_SANDBOX/pueue" <<'EOF'
+    job_fixture_script "$CB_FX/pueue" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 case "$1" in add) echo "7" ;; esac
 EOF
-    chmod +x "$CB_SANDBOX/pueue"
-    export JOB_PUEUE_BIN="$CB_SANDBOX/pueue"
     # Fake tmux (JOB_TMUX_BIN): the callback's @jobs statusbar sync must
     # never reach the live server from the suite.
-    cat > "$CB_SANDBOX/tmux" <<'EOF'
+    job_fixture_script "$CB_FX/tmux" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$CB_SANDBOX_TMUX_LOG"
 exit 0
 EOF
-    chmod +x "$CB_SANDBOX/tmux"
-    export CB_SANDBOX_TMUX_LOG="$CB_SANDBOX/tmux.log"
-    export JOB_TMUX_BIN="$CB_SANDBOX/tmux"
-    export NOTIFY_TMUX_BIN="$CB_SANDBOX/tmux"
-    # History + the unacked ledger land in the sandbox too.
-    export NOTIFY_HISTORY_FILE="$CB_SANDBOX/history.jsonl"
-    export NOTIFY_UNACKED_FILE="$CB_SANDBOX/unacked"
+    # For 'the Rex reconcile' (fake_rex points JOB_REX_BIN at it).
+    job_fixture_script "$CB_FX/rex" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
+[ -n "${JOB_FAKE_REX_RC:-}" ] && exit "$JOB_FAKE_REX_RC"
+case "$*" in
+  *' block ls '*) echo '{"blocks":[{"block_id":"block:b9","label":"shell"}]}' ;;
+  *' ls --json'*) echo '{"sessions":[{"session_id":"session:jobs","label":"Jobs"}]}' ;;
+esac
+exit 0
+EOF
   }
-  cleanup() { rm -rf "$CB_SANDBOX"; unset JOB_TMUX_BIN NOTIFY_TMUX_BIN NOTIFY_HISTORY_FILE NOTIFY_UNACKED_FILE CB_SANDBOX_TMUX_LOG; }
+  BeforeAll 'fixtures'
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY NOTIFY_VIA_BRIDGE
+    job_sandbox cb; CB_SANDBOX=$SANDBOX
+    # History + the unacked ledger land in the sandbox too.
+    # The Rex tab step job::start leaves in the background naps
+    # JOB_FOLLOW_DELAY (2 s) before it finds no Rex and ends. It holds the
+    # file's report pipe meanwhile, so the file ended 2 s after its last
+    # example. No delay: it is gone at once.
+    export JOB_FOLLOW_DELAY=0
+    export JOB_STATE_ROOT="$CB_SANDBOX/state" XDG_CACHE_HOME="$CB_SANDBOX/cache" \
+      HS="$CB_FX/hs" CB_HS_LOG="$CB_SANDBOX/hs.log" \
+      JOB_PUEUE_BIN="$CB_FX/pueue" JOB_FAKE_LOG="$CB_SANDBOX/pueue.log" \
+      JOB_TMUX_BIN="$CB_FX/tmux" NOTIFY_TMUX_BIN="$CB_FX/tmux" \
+      CB_SANDBOX_TMUX_LOG="$CB_SANDBOX/tmux.log" \
+      NOTIFY_HISTORY_FILE="$CB_SANDBOX/history.jsonl" NOTIFY_UNACKED_FILE="$CB_SANDBOX/unacked"
+  }
+  # After each example the sandbox goes, as it always did: with zf_rm, rm as
+  # a zsh builtin (job_sandbox loads it). Silent: a hook may not write to
+  # stderr, and a straggler can still be creating files in there.
+  cleanup() { zf_rm -rf -- "$CB_SANDBOX" 2>/dev/null || :; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
+  # job_call: a function of the library this file Included, in a subshell
+  # with the options `zsh -f` starts with. Seeding a job is setup here, not
+  # the subject (that is the callback, always a process of its own): no zsh
+  # to start and no library to load for it.
+  job_call() { ( emulate -R zsh; "$@" ); }
+
   # Seed one job dir the way job::start would (pueue_id 7).
-  seed() {
-    zsh -f -c 'source "$1" >/dev/null 2>&1 || exit 99; shift
-               job::start --title "Build X" --icon "glyph:nf-md-wrench" -- true' \
-      -- "$JOBLIB"
-  }
+  seed() { job_call job::start --title "Build X" --icon "glyph:nf-md-wrench" -- true; }
 
   It 'toasts success with a sound and writes the result file'
     success() {
@@ -206,21 +228,7 @@ EOF
   # Jobs session holding one such block; JOB_FAKE_REX_RC makes every call
   # fail instead.
   Describe 'the Rex reconcile'
-    fake_rex() {
-      export JOB_FAKE_REX_LOG="$CB_SANDBOX/rex.log"
-      cat > "$CB_SANDBOX/rex" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
-[ -n "${JOB_FAKE_REX_RC:-}" ] && exit "$JOB_FAKE_REX_RC"
-case "$*" in
-  *' block ls '*) echo '{"blocks":[{"block_id":"block:b9","label":"shell"}]}' ;;
-  *' ls --json'*) echo '{"sessions":[{"session_id":"session:jobs","label":"Jobs"}]}' ;;
-esac
-exit 0
-EOF
-      chmod +x "$CB_SANDBOX/rex"
-      export JOB_REX_BIN="$CB_SANDBOX/rex"
-    }
+    fake_rex() { export JOB_FAKE_REX_LOG="$CB_SANDBOX/rex.log" JOB_REX_BIN="$CB_FX/rex"; }
 
     It 'closes a Jobs tab no follower names'
       reconciled() {
@@ -249,11 +257,7 @@ Success 0"
 
   # phase 4: the --notify meta gates the callback's toasts.
   Describe 'the --notify gate'
-    seed_notify() {  # <mode>
-      zsh -f -c 'source "$1" >/dev/null 2>&1 || exit 99; shift
-                 job::start --notify "$1" --title "Quiet X" -- true' \
-        -- "$JOBLIB" "$1"
-    }
+    seed_notify() { job_call job::start --notify "$1" --title "Quiet X" -- true; }  # <mode>
 
     It 'failures: Success and Killed stay silent, the failure toast fires'
       quiet_flow() {
@@ -275,10 +279,10 @@ Success 0"
     It 'none: even the failure stays silent; result + resync still happen'
       silent_fail() {
         seed_notify none >/dev/null || return 1
-        id=$(ls -t "$JOB_STATE_ROOT" | head -1)
+        id=("$JOB_STATE_ROOT"/*(Nom[1]:t))
         zsh -f "$CALLBACK" 7 "Failed" 2 || return 2
         printf '%s|%s|%s' \
-          "$([ -e "$CB_SANDBOX/hs.log" ] && wc -l < "$CB_SANDBOX/hs.log" | tr -d ' ' || echo 0)" \
+          "$([ -e "$CB_SANDBOX/hs.log" ] && job_lines "$CB_SANDBOX/hs.log" || echo 0)" \
           "$([ -e "$JOB_STATE_ROOT/$id/result" ] && echo result || echo none)" \
           "$(grep -cF 'refresh-client -S' "$CB_SANDBOX/tmux.log")"
       }
@@ -296,7 +300,7 @@ Success 0"
         seed >/dev/null || return 1
         zsh -f "$CALLBACK" 7 "Failed" 2 || return 2
         printf '%s|%s' \
-          "$(wc -l < "$NOTIFY_UNACKED_FILE" | tr -d ' ')" \
+          "$(job_lines "$NOTIFY_UNACKED_FILE")" \
           "$(tail -n 1 "$NOTIFY_HISTORY_FILE" | jq -r '.ack')"
       }
       When call failed_ack

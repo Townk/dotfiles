@@ -54,9 +54,11 @@
 seed_reset() {
   SEED_DB="$XDG_DATA_HOME/pick-clipboard/history.db"
   export SEED_DB
-  mkdir -p "$XDG_DATA_HOME/pick-clipboard"
-  rm -f "$SEED_DB" "$SEED_DB-wal" "$SEED_DB-shm"
-  sqlite3 "$SEED_DB" "
+  # The schema costs one sqlite3 run per FILE: every example copies the
+  # template (a third of the price of running the schema again).
+  _seed_tpl="$SHELLSPEC_TMPBASE/seed-schema.db"
+  if [ ! -f "$_seed_tpl" ]; then
+    sqlite3 "$_seed_tpl.new" "
 CREATE TABLE IF NOT EXISTS clips (
     id INTEGER PRIMARY KEY AUTOINCREMENT, text_preview TEXT, text_plain TEXT,
     len INTEGER, first_ts REAL, last_ts REAL, source_app TEXT,
@@ -70,23 +72,38 @@ CREATE TABLE IF NOT EXISTS file_authorities (
 CREATE TABLE IF NOT EXISTS file_grants (
     token TEXT NOT NULL, item_index INTEGER NOT NULL, path BLOB NOT NULL,
     created_ts REAL NOT NULL, last_used_ts REAL NOT NULL,
-    hard_expires_ts REAL NOT NULL, PRIMARY KEY (token, item_index));"
+    hard_expires_ts REAL NOT NULL, PRIMARY KEY (token, item_index));" &&
+      mv "$_seed_tpl.new" "$_seed_tpl" || return 1
+  fi
+  mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+  rm -f "$SEED_DB" "$SEED_DB-wal" "$SEED_DB-shm"
+  cp "$_seed_tpl" "$SEED_DB"
 }
 
-seed_hex() { printf '%s' "$1" | xxd -p | tr -d '\n'; }
+# Lowercase hex of the bytes of $1, as `xxd -p` prints them, in the shell: the
+# seeders call this once per path, and a pipeline through xxd and tr is three
+# forks each time.
+seed_hex() {
+  emulate -L zsh
+  setopt no_multibyte
+  local s=$1 c out=
+  local -i i
+  for (( i = 1; i <= ${#s}; i++ )); do
+    c=$s[i]
+    out+=${(l:2::0:)$(( [##16] #c ))}
+  done
+  print -rn -- ${(L)out}
+}
 
 # The NUL-joined `x-file-manifest` blob, byte-exact: a path may legally carry
 # any byte but NUL and /, so it goes through hex rather than through a shell
 # scalar.
 seed_paths_hex() {
-  {
-    _seed_first=1
-    for _seed_path in "$@"; do
-      [ "$_seed_first" -eq 1 ] || printf '\000'
-      printf '%s' "$_seed_path"
-      _seed_first=0
-    done
-  } | xxd -p | tr -d '\n'
+  _seed_joined=
+  for _seed_path in "$@"; do
+    _seed_joined="${_seed_joined:+${_seed_joined}00}$(seed_hex "$_seed_path")"
+  done
+  printf '%s' "$_seed_joined"
 }
 
 # seed_clip <kind> <host> <ts> <auth|pointer> <path>... — the newest row, which
@@ -97,20 +114,24 @@ seed_paths_hex() {
 seed_clip() {
   _seed_kind=$1 _seed_host=$2 _seed_ts=$3 _seed_auth=$4
   shift 4
-  sqlite3 "$SEED_DB" "
+  # One sqlite3 run for the row, its manifest and its authorities.
+  _seed_sql="
 DELETE FROM clips; DELETE FROM clip_types; DELETE FROM file_authorities;
 DELETE FROM file_grants;
 INSERT INTO clips (text_preview,len,first_ts,last_ts,type_kind,pinned,type_hash,source_host)
   VALUES ('seeded',6,$_seed_ts,$_seed_ts,'$_seed_kind',0,'seedhash','$_seed_host');
 INSERT INTO clip_types (clip_id,uti,blob)
   VALUES (last_insert_rowid(),'x-file-manifest',X'$(seed_paths_hex "$@")');"
-  [ "$_seed_auth" = auth ] || return 0
-  _seed_index=0
-  for _seed_path in "$@"; do
-    _seed_index=$((_seed_index + 1))
-    sqlite3 "$SEED_DB" "INSERT INTO file_authorities (clip_id,item_index,path)
+  if [ "$_seed_auth" = auth ]; then
+    _seed_index=0
+    for _seed_path in "$@"; do
+      _seed_index=$((_seed_index + 1))
+      _seed_sql="$_seed_sql
+INSERT INTO file_authorities (clip_id,item_index,path)
       VALUES ((SELECT MAX(id) FROM clips),$_seed_index,X'$(seed_hex "$_seed_path")');"
-  done
+    done
+  fi
+  sqlite3 "$SEED_DB" "$_seed_sql"
 }
 
 # A text row, for the "this is not a files clip" refusals.
@@ -136,6 +157,10 @@ SEED_FAKE_TOKEN=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 
 Describe 'paste --manifest'
   Include tests/recob_helper.sh
+  # Two stubs at once (a mount helper and a `du`, further down) is the most
+  # an example of this file writes: see tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
 
   setup() {
     # The suite runs on a machine that may itself be reached over SSH; a shell
@@ -562,6 +587,7 @@ EOF
   End
 
   It 'materializes a Yazi-style --porcelain remote paste through a healthy peer mount'
+    Skip if 'complete-only: a whole porcelain paste through the mount, two items replaced and verified (~95 ms)' spec_complete_only
     mkdir -p "$MOUNT/remote/dir with space"
     printf 'mounted file\n' > "$MOUNT/remote/file with space.txt"
     printf 'mounted nested\n' > "$MOUNT/remote/dir with space/nested.txt"
@@ -687,6 +713,7 @@ EOF
   End
 
   It 'fails closed when a mounted source cannot be read'
+    Skip if 'complete-only: the real client against an unreadable source (~220 ms before it gives up)' spec_complete_only
     mkdir -p "$MOUNT/remote"
     printf 'unreadable\n' > "$MOUNT/remote/unreadable.txt"
     chmod 000 "$MOUNT/remote/unreadable.txt"
@@ -779,6 +806,7 @@ End
 # real copy across containers, so the recovery run moves real bytes through
 # tier 1 instead of cloning them.
 Describe 'paste --files interrupt safety'
+  Skip if 'complete-only: creates and attaches a real APFS volume (hdiutil) and copies 64 MB across it: 2-12 s' spec_complete_only
   Include tests/recob_helper.sh
 
   # macOS 27 prints a deprecation WARNING on stderr for hdiutil's create and

@@ -40,6 +40,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'clean: unchanged destination reports clean and exits 0'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     printf 'name = thiago\n' > "$TEST_TMP/src/dot_foo.tmpl"
     chezmoi apply
     When run script "$SCRIPT" "$HOME/.foo"
@@ -49,6 +50,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'applied: a change to a literal line is patched into the template'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     # The literal line sits clear (>3 lines) of the `{{ .role }}` directive, so
     # the -U3 context is all literal text that matches the source verbatim and
     # the hunk patches cleanly. (An edit within three lines of a directive whose
@@ -66,6 +68,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'applied: an inserted line lands on the correct source line despite a template guard shifting line numbers'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     # `{{ if true -}}` trims its trailing newline, so the rendered body sits one
     # line ABOVE the same content in the source. An insertion-only hunk carries
     # no context under diff -U0, so patch applies it at the rendered line number
@@ -85,6 +88,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'merged: a change to a templated line restores the template and invokes merge'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     printf 'name = thiago\nrole = {{ .role }}\n' > "$TEST_TMP/src/dot_foo.tmpl"
     chezmoi apply
     sed -i.bak 's/^role = engineer$/role = manager/' "$HOME/.foo"; rm "$HOME/.foo.bak"
@@ -100,6 +104,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'applied: a non-template file is re-added via chezmoi re-add'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     printf 'literal one\nliteral two\n' > "$TEST_TMP/src/dot_bar"
     chezmoi apply
     printf 'literal one\nliteral CHANGED\n' > "$HOME/.bar"
@@ -111,6 +116,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'multi: clean + applied across two files exits 0 with both statuses'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     printf 'unchanged\n' > "$TEST_TMP/src/dot_a.tmpl"
     printf 'before\n'    > "$TEST_TMP/src/dot_b.tmpl"
     chezmoi apply
@@ -124,6 +130,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'clean: an unchanged non-template destination reports clean'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     printf 'literal one\nliteral two\n' > "$TEST_TMP/src/dot_baz"
     chezmoi apply
     When run script "$SCRIPT" "$HOME/.baz"
@@ -133,6 +140,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'multi: an unmanaged file causes non-zero exit but other files still process'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     printf 'x\n' > "$TEST_TMP/src/dot_a.tmpl"
     chezmoi apply
     When run script "$SCRIPT" "$HOME/does-not-exist" "$HOME/.a"
@@ -143,6 +151,7 @@ Describe 'chezmoi-reverse'
   End
 
   It 'needs-merge: --no-merge skips the merge tool and reports needs-merge'
+    Skip if 'complete-only: real chezmoi and git runs against a scratch source and destination (90-300 ms)' spec_complete_only
     printf 'name = thiago\nrole = {{ .role }}\n' > "$TEST_TMP/src/dot_foo.tmpl"
     chezmoi apply
     sed -i.bak 's/^role = engineer$/role = manager/' "$HOME/.foo"; rm "$HOME/.foo.bak"

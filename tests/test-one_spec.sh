@@ -35,6 +35,7 @@ Describe 'make test-one'
   inner() { env -i PATH="$PATH" HOME="$HOME" "$@"; }
 
   It 'runs shellspec, through the wrapper, on exactly the named spec'
+    Skip if 'complete-only: runs make and a nested shellspec (~510 ms)' spec_complete_only
     When run inner make --no-print-directory test-one SPEC="$PROJ/pass_spec.sh"
     The status should be success
     The output should include 'tests/run-shellspec.sh'
@@ -43,6 +44,7 @@ Describe 'make test-one'
   End
 
   It 'passes SPEC to the wrapper and nothing else'
+    Skip if 'complete-only: runs make and the wrapper around a stand-in shellspec (150-190 ms)' spec_complete_only
     When run inner make --no-print-directory test-one SPEC="$PROJ/pass_spec.sh" \
       SHELLSPEC="$PROJ/stub-shellspec"
     The status should be success

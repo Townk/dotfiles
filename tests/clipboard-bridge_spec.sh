@@ -36,7 +36,20 @@
 # same reason §11.1's recorder chose it: NUL and binary payloads survive it
 # exactly, and `printf %b` is the portable way back that tests/recob_helper.sh
 # already relies on.
-cb_hex() { printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'; }
+# Lowercase hex of the bytes of $1, as `od -An -v -tx1 | tr -d ' \n'` prints
+# them, in the shell: a frame is built from a dozen of these, and the pipeline
+# was three forks each time.
+cb_hex() {
+  emulate -L zsh
+  setopt no_multibyte
+  local s=$1 c out=
+  local -i i
+  for (( i = 1; i <= ${#s}; i++ )); do
+    c=$s[i]
+    out+=${(l:2::0:)$(( [##16] #c ))}
+  done
+  print -rn -- ${(L)out}
+}
 cb_unhex() { printf '%b' "$(printf '%s' "$1" | sed 's/../\\x&/g')"; }
 cb_unhex_stdin() { cb_unhex "$(cat)"; }
 
@@ -125,6 +138,10 @@ cb_is_macos() { [ "$(uname -s)" = Darwin ]; }
 # that a peer's host field is untrusted and must pass the wire identity shape.
 Describe 'recobd: clip.set provenance'
   Include tests/recob_helper.sh
+  # For the whole file: two warm slots for the stubs the osd.notify group
+  # writes. See tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
 
   setup() {
     recob_start
@@ -182,6 +199,7 @@ Describe 'recobd: clip.set provenance'
   # observe: no row was written, and the pasteboard the operation would have
   # written still holds what it held before.
   It 'refuses a host with an embedded newline and performs nothing (SEC-2)'
+    Skip if 'complete-only: a real recobd, a hand-framed request through nc and a store read back (~140 ms)' spec_complete_only
     forged() {
       set_frame "$(cb_hex before)" before
       sqlite3 "$DB" 'DELETE FROM clips;'
@@ -215,6 +233,7 @@ End
 # per-example private pasteboard), so these examples seed the clipboard the
 # daemon reads with a real `clip.set` and still never touch the human's own.
 Describe 'recobd: clip.get timestamp'
+  Skip if 'complete-only: a real recobd per example, a seeded store and hand-framed requests through nc (95-105 ms)' spec_complete_only
   Include tests/recob_helper.sh
 
   setup() {
@@ -376,6 +395,7 @@ EOF
   }
 
   It 'accepts a well-formed frame'
+    Skip if 'complete-only: a real recobd per example, a hand-framed request through nc and the hs stand-in (~95 ms)' spec_complete_only
     accepted() { notify mac-mini plain 'build finished'; cb_kind; }
     When call accepted
     The output should equal 'R'
@@ -385,12 +405,14 @@ EOF
   # host the user ssh'es into, so an unlabelled toast is indistinguishable
   # from one this machine raised itself.
   It 'labels a toast that came from another host'
+    Skip if 'complete-only: a real recobd per example, a hand-framed request through nc and the hs stand-in (~95 ms)' spec_complete_only
     labelled() { notify mac-mini plain 'build finished'; cat "$SEEN/text"; }
     When call labelled
     The output should equal 'mac-mini: build finished'
   End
 
   It 'leaves a toast from this same host unlabelled'
+    Skip if 'complete-only: a real recobd per example, a hand-framed request through nc and the hs stand-in (~95 ms)' spec_complete_only
     unlabelled() { notify thismac plain 'build finished'; cat "$SEEN/text"; }
     When call unlabelled
     The output should equal 'build finished'
@@ -477,6 +499,7 @@ End
 # sqlite store seeded with a controlled timestamp the same way the "recobd:
 # clip.get timestamp" Describe above seeds its rows.
 Describe 'system-clip paste: 6b newer-wins'
+  Skip if 'complete-only: a real recobd per example and the real paste client against a scripted peer (90-105 ms)' spec_complete_only
   Include tests/recob_helper.sh
 
   setup() {

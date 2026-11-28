@@ -3,12 +3,16 @@
 # sandbox; job state dirs are written directly; pueue and rex are recording
 # fakes (JOB_PUEUE_BIN, JOB_REX_BIN).
 Describe 'job/follow.zsh'
+  Include tests/job_helper.sh
+  Include home/dot_local/lib/job.zsh
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
-  setup() {
-    JOB_SANDBOX=$(mktemp -d)
-    export JOB_STATE_ROOT="$JOB_SANDBOX/state"
-    export JOB_FAKE_LOG="$JOB_SANDBOX/pueue.log"
+  # The fakes, written once for the file into a directory the examples share
+  # (job_helper.sh: job_fixture_script). They keep nothing beside themselves:
+  # logs, counters and FIFOs are named by variables the example exports and
+  # live in its own sandbox.
+  fixtures() {
+    JOB_FX="$SHELLSPEC_TMPBASE/job-fx"
     # `follow` prints one log line and exits — or, with
     # JOB_FAKE_FOLLOW_PIDFILE set, records its pid and stays alive the way
     # a real `pueue follow` on a running task does.
@@ -33,9 +37,7 @@ Describe 'job/follow.zsh'
     #                  decision has got as far as asking the server: `held`)
     #   inspect-go     and then blocks reading this one, which holds the
     #                  decision there until the example lets it go (`release`)
-    export JOB_FAKE_EV="$JOB_SANDBOX/ev"
-    mkdir -p "$JOB_FAKE_EV"
-    cat > "$JOB_SANDBOX/pueue" <<'EOS'
+    job_fixture_script "$JOB_FX/pueue" <<'EOS'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 case "$1" in
@@ -46,7 +48,9 @@ case "$1" in
     [ -z "${JOB_FAKE_FOLLOW_PIDFILE:-}" ] || exec tail -f /dev/null
     ;;
   status)
-    n=$(( $(cat "$JOB_FAKE_EV/polls" 2>/dev/null || echo 0) + 1 ))
+    n=0
+    [ ! -f "$JOB_FAKE_EV/polls" ] || read -r n < "$JOB_FAKE_EV/polls"
+    n=$((n + 1))
     echo "$n" > "$JOB_FAKE_EV/polls"
     [ ! -f "$JOB_FAKE_EV/at-poll-$n" ] || . "$JOB_FAKE_EV/at-poll-$n"
     if [ -p "$JOB_FAKE_EV/status-gate" ]; then
@@ -58,8 +62,6 @@ case "$1" in
 esac
 exit 0
 EOS
-    chmod +x "$JOB_SANDBOX/pueue"
-    export JOB_PUEUE_BIN="$JOB_SANDBOX/pueue"
     # rex: records argv. `whoami --json` answers the server instance id —
     # from JOB_FAKE_REX_INSTANCE_FILE when it exists (so a test can restart
     # the "server" under a running follower), else JOB_FAKE_REX_INSTANCE —
@@ -72,10 +74,7 @@ EOS
     # call also writes the JOB_CLI it sees to JOB_FAKE_REX_CLI_SEEN. With
     # JOB_FAKE_REX_OUT naming the follower's output file, the first whoami
     # notes in <that file>.at-whoami whether a report was in it by then.
-    export JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log"
-    export JOB_FAKE_REX_INSTANCE=srv-1
-    export JOB_FAKE_REX_CLI_SEEN="$JOB_SANDBOX/cli.seen"
-    cat > "$JOB_SANDBOX/rex" <<'EOS'
+    job_fixture_script "$JOB_FX/rex" <<'EOS'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
 printf '%s\n' "${JOB_CLI-unset}" > "$JOB_FAKE_REX_CLI_SEEN"
@@ -91,7 +90,7 @@ case "$*" in
     [ "${JOB_FAKE_REX_WHOAMI_RC:-0}" = 0 ] || exit "$JOB_FAKE_REX_WHOAMI_RC"
     inst="$JOB_FAKE_REX_INSTANCE"
     [ -n "${JOB_FAKE_REX_INSTANCE_FILE:-}" ] && [ -f "$JOB_FAKE_REX_INSTANCE_FILE" ] \
-      && inst=$(cat "$JOB_FAKE_REX_INSTANCE_FILE")
+      && read -r inst < "$JOB_FAKE_REX_INSTANCE_FILE"
     printf '{"instance_id":"%s","session":"Jobs"}\n' "$inst"
     exit 0
     ;;
@@ -104,35 +103,44 @@ case "$*" in
     fi ;;
 esac
 [ -n "${JOB_FAKE_REX_RC_FILE:-}" ] && [ -f "$JOB_FAKE_REX_RC_FILE" ] \
-  && exit "$(cat "$JOB_FAKE_REX_RC_FILE")"
+  && read -r rc < "$JOB_FAKE_REX_RC_FILE" && exit "$rc"
 [ -n "${JOB_FAKE_REX_GONE_AT:-}" ] && [ "$(date +%s)" -ge "$JOB_FAKE_REX_GONE_AT" ] && exit 4
 exit "${JOB_FAKE_REX_RC:-0}"
 EOS
-    chmod +x "$JOB_SANDBOX/rex"
-    export JOB_REX_BIN="$JOB_SANDBOX/rex"
-    export JOB_FAKE_OPEN_LOG="$JOB_SANDBOX/opened"
-    # job::_rex_log writes under $XDG_CACHE_HOME/jobs, never the real cache.
-    export XDG_CACHE_HOME="$JOB_SANDBOX/cache"
-    # The hangup decision waits a second before asking the server; only the
-    # examples that prove the wait keep it.
-    export JOB_FOLLOW_HUP_WAIT=0
     # The CLI a follower starts its detached hangup decision through: the
     # front-end under `zsh -f`, so this repo's ~/.zshenv cannot re-export
     # XDG vars over the sandbox.
     # A hangup decision runs detached from everything the example could
     # `wait` for: once it has ended, the stand-in says so on the `decided`
     # FIFO, if the example made one.
-    printf '%s\n' '#!/bin/sh' \
-      "zsh -f \"$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job\" \"\$@\"" \
-      'rc=$?' \
-      'if [ "$1" = hup-decide ] && [ -p "$JOB_FAKE_EV/decided" ]; then echo decided > "$JOB_FAKE_EV/decided"; fi' \
-      'exit $rc' > "$JOB_SANDBOX/job"
-    chmod +x "$JOB_SANDBOX/job"
-    export JOB_CLI="$JOB_SANDBOX/job"
-    : > "$JOB_FAKE_LOG"
-    mkdir -p "$JOB_STATE_ROOT/j1"
+    job_fixture_script "$JOB_FX/job" <<EOS
+#!/bin/sh
+zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_job" "\$@"
+rc=\$?
+if [ "\$1" = hup-decide ] && [ -p "\$JOB_FAKE_EV/decided" ]; then echo decided > "\$JOB_FAKE_EV/decided"; fi
+exit \$rc
+EOS
   }
-  cleanup() { rm -rf "$JOB_SANDBOX"; }
+  BeforeAll 'fixtures'
+
+  setup() {
+    job_sandbox job; JOB_SANDBOX=$SANDBOX
+    # job::_rex_log writes under $XDG_CACHE_HOME/jobs, never the real cache.
+    # The hangup decision waits a second before asking the server; only the
+    # examples that prove the wait keep it (JOB_FOLLOW_HUP_WAIT).
+    export JOB_STATE_ROOT="$JOB_SANDBOX/state" JOB_FAKE_LOG="$JOB_SANDBOX/pueue.log" \
+      JOB_FAKE_EV="$JOB_SANDBOX/ev" JOB_PUEUE_BIN="$JOB_FX/pueue" \
+      JOB_REX_BIN="$JOB_FX/rex" JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log" \
+      JOB_FAKE_REX_INSTANCE=srv-1 JOB_FAKE_REX_CLI_SEEN="$JOB_SANDBOX/cli.seen" \
+      JOB_FAKE_OPEN_LOG="$JOB_SANDBOX/opened" XDG_CACHE_HOME="$JOB_SANDBOX/cache" \
+      JOB_FOLLOW_HUP_WAIT=0 JOB_CLI="$JOB_FX/job"
+    zf_mkdir -p "$JOB_FAKE_EV" "$JOB_STATE_ROOT/j1"
+    : > "$JOB_FAKE_LOG"
+  }
+  # After each example the sandbox goes, as it always did: with zf_rm, rm as
+  # a zsh builtin (job_sandbox loads it). Silent: a hook may not write to
+  # stderr, and a straggler can still be creating files in there.
+  cleanup() { zf_rm -rf -- "$JOB_SANDBOX" 2>/dev/null || :; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -143,7 +151,13 @@ EOS
   }
   b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
   meta() { printf '{"title":"%s","notify":"%s","pueue_id":7}\n' "$1" "${2:-all}" > "$JOB_STATE_ROOT/j1/meta.json"; }
-  report() { run_job job::_follow_report j1 "$1"; }
+  # job_call: the function from the library this file Included, in a
+  # subshell with the options `zsh -f` starts with: no zsh to start and no
+  # library to load. For the functions that only compute and print (the
+  # report, its framing, the end-of-job decision); everything that follows,
+  # traps, detaches or is signalled stays a process (run_job, the CLI).
+  job_call() { ( emulate -R zsh; "$@" ); }
+  report() { job_call job::_follow_report j1 "$1"; }
 
   Describe 'job::_follow_report'
     It 'reports a queued job'
@@ -231,9 +245,10 @@ EOS
         local body tool
         mkdir "$JOB_SANDBOX/bin"
         for tool in zsh jq base64 tr cat; do
-          ln -s "$(command -v "$tool")" "$JOB_SANDBOX/bin/$tool" || return 1
+          ln -s "${commands[$tool]}" "$JOB_SANDBOX/bin/$tool" || return 1
         done
-        body=$(PATH="$JOB_SANDBOX/bin" report running) || return 1
+        # A zsh of its own (run_job): the point is what it finds on PATH.
+        body=$(PATH="$JOB_SANDBOX/bin" run_job job::_follow_report j1 running) || return 1
         printf '%s' "${body##*msg=}" | base64 -D
       }
       When call check
@@ -277,7 +292,7 @@ EOS
 
   Describe 'job::_follow_emit'
     It 'wraps the body in one OSC 7501 sequence'
-      emit() { run_job job::_follow_emit "state=working:app=job" | od -An -c | tr -d ' \n'; }
+      emit() { job_call job::_follow_emit "state=working:app=job" | od -An -c | tr -d ' \n'; }
       When call emit
       The output should equal '033]7501;state=working:app=job033\'
     End
@@ -295,31 +310,31 @@ EOS
   Describe 'job::_follow_end'
     It 'exits an inline follower'
       meta "Remux"; result Success 0
-      When call run_job job::_follow_end j1 1
+      When call job_call job::_follow_end j1 1
       The output should equal exit
     End
 
     It 'exits when the job was killed'
       meta "Remux"; result Killed 137
-      When call run_job job::_follow_end j1 0
+      When call job_call job::_follow_end j1 0
       The output should equal exit
     End
 
     It 'exits on success when notify is failures'
       meta "Remux" failures; result Success 0
-      When call run_job job::_follow_end j1 0
+      When call job_call job::_follow_end j1 0
       The output should equal exit
     End
 
     It 'waits for a key on success'
       meta "Remux"; result Success 0
-      When call run_job job::_follow_end j1 0
+      When call job_call job::_follow_end j1 0
       The output should equal key
     End
 
     It 'stays open on failure'
       meta "Remux"; result Failed 2
-      When call run_job job::_follow_end j1 0
+      When call job_call job::_follow_end j1 0
       The output should equal stay
     End
   End

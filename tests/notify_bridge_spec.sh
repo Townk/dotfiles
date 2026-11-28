@@ -34,6 +34,9 @@
 # recorder heard from inside ONE function, and assert on that function's
 # output, so the exit status and the wire facts fail together in one message.
 Describe 'notify: destination routing'
+  # Warm slots for the stubs the examples write: see tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   Include tests/recob_helper.sh
 
   COMMON="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh"
@@ -120,6 +123,7 @@ EOF
     End
 
     It 'carries origin, style, icon, sound and text as named fields'
+      Skip if 'complete-only: a real recobd and a whole notify over the bridge route (~100 ms)' spec_complete_only
       recob_script 'ok'
       payload() {
         act --icon "glyph:nf-md-bell" --sound Frog "build done" >/dev/null ||

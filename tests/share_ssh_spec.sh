@@ -10,36 +10,18 @@
 
 Describe 'share:: ssh backend'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
-  setup() {
-    SB="$SHELLSPEC_TMPBASE/share-ssh"
-    rm -rf "$SB"; mkdir -p "$SB/bin" "$SB/remote" "$SB/local"
-    SHARE_CONFIG_DIR="$SB"
-    SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
-    SHARE_STATE_DIR="$SB/state"
-    SHARE_PROFILE=work
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
-[devbox]
-description = "dev-shell over ssh"
-backend = "ssh"
-target = "me@devshell.example.com"
-dir = "~/incoming"
-profiles = ["work"]
-
-[onedrive]
-backend = "rclone"
-remote = "onedrive:Shared/drop"
-web = true
-profiles = ["work"]
-default_for = ["work"]
-TOML
-    printf 'report-bytes' >"$SB/local/Report.pdf"
-    printf 'notes-bytes' >"$SB/local/Notes.txt"
-
+  # The three fakes, written once for the file (share_helper.sh:
+  # share_fixture_script) into a directory behind the example's own $SB/bin
+  # on PATH. What they log, and the "remote" they act in, are named by
+  # variables the example exports: all of it is in its sandbox.
+  fixtures() {
+    FX="$SHELLSPEC_TMPBASE/share-ssh-fx"
     # The fake ssh: log argv (one CALL block per invocation), answer -G
     # offline like the real one, fail on request, otherwise run the remote
     # command the way sshd does — through a shell, in the remote $HOME.
-    cat >"$SB/bin/ssh" <<'SH'
+    share_fixture_script "$FX/bin/ssh" <<'SH'
 #!/bin/sh
 { printf 'CALL\n'; for a in "$@"; do printf '%s\n' "$a"; done; } >>"$FAKE_SSH_LOG"
 n=$(grep -c '^CALL$' "$FAKE_SSH_LOG")
@@ -62,26 +44,52 @@ fi
 cd "$FAKE_REMOTE" || exit 255
 HOME="$FAKE_REMOTE" exec sh -c "$*"
 SH
-    cat >"$SB/bin/scp" <<'SH'
+    share_fixture_script "$FX/bin/scp" <<'SH'
 #!/bin/sh
 printf 'scp %s\n' "$*" >>"$FAKE_SSH_LOG"
 exit 1
 SH
-    cat >"$SB/bin/pbcopy" <<'SH'
+    share_fixture_script "$FX/bin/pbcopy" <<'SH'
 #!/bin/sh
 cat >"$FAKE_CLIP"
 SH
-    chmod +x "$SB/bin/ssh" "$SB/bin/scp" "$SB/bin/pbcopy"
+  }
+  BeforeAll 'fixtures'
+
+  setup() {
+    SB="$SHELLSPEC_TMPBASE/share-ssh"
+    share_fresh "$SB" bin remote local
+    SHARE_CONFIG_DIR="$SB"
+    SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
+    SHARE_STATE_DIR="$SB/state"
+    SHARE_PROFILE=work
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
+[devbox]
+description = "dev-shell over ssh"
+backend = "ssh"
+target = "me@devshell.example.com"
+dir = "~/incoming"
+profiles = ["work"]
+
+[onedrive]
+backend = "rclone"
+remote = "onedrive:Shared/drop"
+web = true
+profiles = ["work"]
+default_for = ["work"]
+TOML
+    printf 'report-bytes' >"$SB/local/Report.pdf"
+    printf 'notes-bytes' >"$SB/local/Notes.txt"
     FAKE_SSH_LOG="$SB/ssh.log"; FAKE_REMOTE="$SB/remote"; FAKE_CLIP="$SB/clip"
     FAKE_SSH_FAIL_CALL=""
     export FAKE_SSH_LOG FAKE_REMOTE FAKE_CLIP FAKE_SSH_FAIL_CALL
     : >"$FAKE_SSH_LOG"
-    PATH="$SB/bin:$PATH"
+    PATH="$SB/bin:$FX/bin:$PATH"
     JOB_STATE_ROOT="$SB/jobs"; export JOB_STATE_ROOT
   }
   BeforeEach 'setup'
 
-  add_endpoint() { cat >>"$SHARE_ENDPOINTS_FILE"; }
+  add_endpoint() { share_append "$SHARE_ENDPOINTS_FILE"; }
   ssh_calls() { grep -c '^CALL$' "$FAKE_SSH_LOG"; }
   stamp_dir() { print -r -- "$SB/remote/incoming"/*(/N[1]); }
   receipt() { jq -c '.' "$SB/state/ledger.jsonl"; }
@@ -540,7 +548,7 @@ profiles = ["personal"]
 default_for = ["personal"]
 TOML
       SHARE_PROFILE=personal
-      cat >"$SB/bin/pueue" <<'SH'
+      share_write "$SB/bin/pueue" <<'SH'
 #!/bin/sh
 printf 'pueue %s\n' "$*" >>"$FAKE_SSH_LOG"
 SH
@@ -553,7 +561,7 @@ SH
     End
 
     It 'refuses a backgrounded --qr before enqueuing anything'
-      cat >"$SB/bin/pueue" <<'SH'
+      share_write "$SB/bin/pueue" <<'SH'
 #!/bin/sh
 printf 'pueue %s\n' "$*" >>"$FAKE_SSH_LOG"
 SH
@@ -568,7 +576,7 @@ SH
 
   Describe 'status and list'
     It 'shows an ssh endpoint, probing the port ssh -G resolves'
-      cat >"$SB/bin/nc" <<'SH'
+      share_write "$SB/bin/nc" <<'SH'
 #!/bin/sh
 case "$*" in *"devshell.example.com 2222"*) exit 0 ;; esac
 exit 1
@@ -584,7 +592,7 @@ SH
     End
 
     It 'reports an unreachable ssh endpoint'
-      cat >"$SB/bin/nc" <<'SH'
+      share_write "$SB/bin/nc" <<'SH'
 #!/bin/sh
 exit 1
 SH

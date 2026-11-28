@@ -23,27 +23,74 @@ Describe 'pick-clipboard: copy feedback'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
-  setup() {
-    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-    BINDIR="$SHELLSPEC_TMPBASE/bin"; mkdir -p "$BINDIR"
-    export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
-    export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
-    # Real daemon, pinned identity: mac-mini via the sandboxed self-name file
-    # recob_start writes (it outranks scutil in clip::self_host, so the old
-    # scutil fake is gone). The picker and the daemon share ONE store under
-    # recob_start's XDG_DATA_HOME.
-    RECOB_SELF_NAME=mac-mini
-    recob_start
-    # Sitting at this machine: no reverse forward, hence no live peer row and
-    # a Ctrl-Y that lands locally. bridge_up is the probe ALONE now (6b final
-    # review, C2), so the SSH vars unset above no longer say that by
-    # themselves -- the recorder's own TCP listener would answer the probe.
-    recob_close_peer_port
-    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
-    export PICK_CLIPBOARD_DB="$DB"
-    mkdir -p "$XDG_DATA_HOME/pick-clipboard"
-    rm -f "$DB"
-    sqlite3 "$DB" '
+  # The four fakes are the same for every example and write to fixed logs, so
+  # they are written ONCE per file (and run once here: the first exec of a new
+  # script is the expensive one, tests/exec_warm_helper.sh). Each example gets
+  # them as hard links in $BINDIR, so one that removes a fake removes only its
+  # own name; a fake an example needs different is written under another name.
+  build_fakes() {
+    BINDIR="$SHELLSPEC_TMPBASE/bin"
+    FAKES="$SHELLSPEC_TMPBASE/bin-fakes"
+    mkdir -p "$BINDIR" "$FAKES" || return 1
+    NOTIFYLOG="$SHELLSPEC_TMPBASE/notifylog"
+    HSLOG="$SHELLSPEC_TMPBASE/hslog"
+    RSYNCLOG="$SHELLSPEC_TMPBASE/rsynclog"
+    # Fake pbcopy: clip::copy_by_id's last-resort fallback. With the daemon
+    # answering it is never reached, but a spec must NEVER be one failure
+    # path away from writing the human's real pasteboard.
+    cat > "$FAKES/pbcopy" <<'EOF'
+#!/bin/sh
+cat > /dev/null
+EOF
+    chmod +x "$FAKES/pbcopy"
+    # Fake notify front-end: logs its argv, one line per call.
+    cat > "$FAKES/notify" <<EOF
+#!/bin/sh
+echo "\$*" >> "$NOTIFYLOG"
+EOF
+    chmod +x "$FAKES/notify"
+    # Fake hs CLI: accepts only the production `-q -c` shape with stdin
+    # redirected from /dev/null, so every payload assertion regression-tests
+    # both isolation requirements. Hammerspoon 1.1.1's console mirror can
+    # recursively flood warnings from an unrelated print during a request,
+    # blocking its event taps; -q bypasses that mirror. The real CLI also
+    # reads stdin, which otherwise steals records from rsync's progress pipe.
+    # printf '%s\n', not echo: /bin/sh's echo builtin is XSI-compliant on this box (verified:
+    # `sh -c 'x="a\\\\b"; echo "$x"'` prints a single backslash) and would
+    # silently collapse the label-escaping test's literal backslash pairs
+    # before they ever reach the log -- printf never reinterprets its
+    # argument, so the log holds the exact -c payload byte-for-byte, same as
+    # what real Hammerspoon's `hs -q -c` would receive.
+    cat > "$FAKES/hs" <<EOF
+#!/bin/sh
+[ -c /dev/fd/0 ] && [ "\$1" = "-q" ] && [ "\$2" = "-c" ] && printf '%s\n' "\$3" >> "$HSLOG"
+EOF
+    chmod +x "$FAKES/hs"
+    # Fake rsync: logs argv, emits three CR-separated progress2-style
+    # updates on stdout (like the real --info=progress2), then fabricates
+    # the pulled file -- same dst/base extraction as
+    # tests/pick-clipboard-files_spec.sh's fake.
+    cat > "$FAKES/rsync" <<EOF
+#!/bin/sh
+echo "\$*" >> "$RSYNCLOG"
+printf '     1,000  10%%    1.00MB/s    0:00:09\\r'
+printf '     5,000  50%%    1.00MB/s    0:00:05\\r'
+printf '    10,000 100%%    1.00MB/s    0:00:00\\r'
+argc=\$#
+eval "src=\\\${\$((argc - 1))}"
+eval "dst=\\\${\$argc}"
+name="\${src##*:}"
+base="\${name##*/}"
+mkdir -p "\$dst"
+printf 'pulled:%s' "\$base" > "\$dst/\$base"
+EOF
+    chmod +x "$FAKES/rsync"
+    "$FAKES/pbcopy" </dev/null
+    "$FAKES/notify" warm
+    "$FAKES/hs" </dev/null
+    "$FAKES/rsync" warm "$SHELLSPEC_TMPBASE/rsync-warm" >/dev/null
+    # One schema run per file; each example copies the store.
+    sqlite3 "$SHELLSPEC_TMPBASE/schema.db" '
       CREATE TABLE clips (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         text_preview TEXT,
@@ -72,65 +119,43 @@ Describe 'pick-clipboard: copy feedback'
         PRIMARY KEY (clip_id, item_index)
       );
     '
+  }
+  BeforeAll 'build_fakes'
+  # Two more stubs at once is the most an example adds (an rsync of its own).
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
 
-    # Fake pbcopy: clip::copy_by_id's last-resort fallback. With the daemon
-    # answering it is never reached, but a spec must NEVER be one failure
-    # path away from writing the human's real pasteboard.
-    cat > "$BINDIR/pbcopy" <<'EOF'
-#!/bin/sh
-cat > /dev/null
-EOF
-    chmod +x "$BINDIR/pbcopy"
-
-    NOTIFYLOG="$SHELLSPEC_TMPBASE/notifylog"; : > "$NOTIFYLOG"
-    # Fake notify front-end: logs its argv, one line per call.
-    cat > "$BINDIR/notify" <<EOF
-#!/bin/sh
-echo "\$*" >> "$NOTIFYLOG"
-EOF
-    chmod +x "$BINDIR/notify"
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY
+    export HOME="$SHELLSPEC_TMPBASE/home" TMPDIR="$SHELLSPEC_TMPBASE/tmp"
+    # Real daemon, pinned identity: mac-mini via the sandboxed self-name file
+    # recob_start writes (it outranks scutil in clip::self_host, so the old
+    # scutil fake is gone). The picker and the daemon share ONE store under
+    # recob_start's XDG_DATA_HOME.
+    #
+    # Only the groups that reach the wire start it (FEEDBACK_DAEMON=1 at their
+    # top). The others exercise functions of the picker that never leave the
+    # process: they get the same sandbox with no daemon in it (recob_sandbox),
+    # which is the picker on a machine whose bridge is down.
+    RECOB_SELF_NAME=mac-mini
+    if [ -n "${FEEDBACK_DAEMON:-}" ]; then recob_start; else recob_sandbox; fi
+    # Sitting at this machine: no reverse forward, hence no live peer row and
+    # a Ctrl-Y that lands locally. bridge_up is the probe ALONE now (6b final
+    # review, C2), so the SSH vars unset above no longer say that by
+    # themselves -- the recorder's own TCP listener would answer the probe.
+    recob_close_peer_port
+    DB="$XDG_DATA_HOME/pick-clipboard/history.db"
+    export PICK_CLIPBOARD_DB="$DB"
+    # Phase 4: the sidecar sink's job-state sandbox.
+    export JOBROOT="$SHELLSPEC_TMPBASE/jobs"
+    # One rm, one mkdir, one ln, one cp: a fork each is ~2 ms, 34 times over.
+    rm -rf "$HOME" "$TMPDIR" "$JOBROOT/j1"
+    mkdir -p "$HOME" "$TMPDIR" "$JOBROOT" "$XDG_DATA_HOME/pick-clipboard"
+    ln -f "$FAKES/pbcopy" "$FAKES/notify" "$FAKES/hs" "$FAKES/rsync" "$BINDIR/"
+    cp "$SHELLSPEC_TMPBASE/schema.db" "$DB"
+    : > "$NOTIFYLOG"; : > "$HSLOG"; : > "$RSYNCLOG"
     export PICK_CLIPBOARD_NOTIFY="$BINDIR/notify"
-
-    HSLOG="$SHELLSPEC_TMPBASE/hslog"; : > "$HSLOG"
-    # Fake hs CLI: accepts only the production `-q -c` shape with stdin
-    # redirected from /dev/null, so every payload assertion regression-tests
-    # both isolation requirements. Hammerspoon 1.1.1's console mirror can
-    # recursively flood warnings from an unrelated print during a request,
-    # blocking its event taps; -q bypasses that mirror. The real CLI also
-    # reads stdin, which otherwise steals records from rsync's progress pipe.
-    # printf '%s\n', not echo: /bin/sh's echo builtin is XSI-compliant on this box (verified:
-    # `sh -c 'x="a\\\\b"; echo "$x"'` prints a single backslash) and would
-    # silently collapse the label-escaping test's literal backslash pairs
-    # before they ever reach the log -- printf never reinterprets its
-    # argument, so the log holds the exact -c payload byte-for-byte, same as
-    # what real Hammerspoon's `hs -q -c` would receive.
-    cat > "$BINDIR/hs" <<EOF
-#!/bin/sh
-[ -c /dev/fd/0 ] && [ "\$1" = "-q" ] && [ "\$2" = "-c" ] && printf '%s\n' "\$3" >> "$HSLOG"
-EOF
-    chmod +x "$BINDIR/hs"
     export PICK_CLIPBOARD_HS="$BINDIR/hs"
-
-    RSYNCLOG="$SHELLSPEC_TMPBASE/rsynclog"; : > "$RSYNCLOG"
-    # Fake rsync: logs argv, emits three CR-separated progress2-style
-    # updates on stdout (like the real --info=progress2), then fabricates
-    # the pulled file -- same dst/base extraction as
-    # tests/pick-clipboard-files_spec.sh's fake.
-    cat > "$BINDIR/rsync" <<EOF
-#!/bin/sh
-echo "\$*" >> "$RSYNCLOG"
-printf '     1,000  10%%    1.00MB/s    0:00:09\\r'
-printf '     5,000  50%%    1.00MB/s    0:00:05\\r'
-printf '    10,000 100%%    1.00MB/s    0:00:00\\r'
-argc=\$#
-eval "src=\\\${\$((argc - 1))}"
-eval "dst=\\\${\$argc}"
-name="\${src##*:}"
-base="\${name##*/}"
-mkdir -p "\$dst"
-printf 'pulled:%s' "\$base" > "\$dst/\$base"
-EOF
-    chmod +x "$BINDIR/rsync"
     export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync"
 
     export PATH="$BINDIR:$PATH"
@@ -139,10 +164,6 @@ EOF
     export PICK_CLIPBOARD_CORE_LIB="$LIB_DIR/clipboard-store-core.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
     export SCRIPT_PATH="$SCRIPT"
-    # Phase 4: the sidecar sink's job-state sandbox.
-    export JOBROOT="$SHELLSPEC_TMPBASE/jobs"
-    mkdir -p "$JOBROOT"
-    rm -rf "$JOBROOT/j1"
   }
   BeforeEach 'setup'
   AfterEach 'recob_stop'
@@ -222,6 +243,8 @@ EOF
   End
 
   Describe 'clip::copy_by_id toast wiring (§6)'
+    Skip if 'complete-only: the picker copies through a real recobd (170-300 ms)' spec_complete_only
+    FEEDBACK_DAEMON=1
     It 'remote text row: bridge copy succeeds and toasts Copied from <host>'
       id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, text_plain, source_host, last_ts) VALUES ('text','hello','work-laptop',100); SELECT last_insert_rowid();")
       When call run_fn clip::copy_by_id "$id"
@@ -387,6 +410,8 @@ EOF
   End
 
   Describe '--restore-id headless pull with progress plumbing (§4.2)'
+    Skip if 'complete-only: a whole headless restore through a real recobd (~380 ms)' spec_complete_only
+    FEEDBACK_DAEMON=1
     It 'pull succeeds; sub-grace transfer emits no HUD calls; toast still fires'
       id=$(seed_remote_manifest_row)
       When call run_restore_id "$id"
@@ -399,6 +424,8 @@ EOF
   End
 
   Describe 'cancellation + resumable staging lifecycle (§4.4)'
+    Skip if 'complete-only: whole headless restores through a real recobd, one of them signalled mid-pull (170-370 ms)' spec_complete_only
+    FEEDBACK_DAEMON=1
     It 'rsync failure removes the partial cache dir'
       id=$(seed_remote_manifest_row)
       cat > "$BINDIR/rsync-fail" <<EOF

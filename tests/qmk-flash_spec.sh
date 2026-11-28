@@ -15,34 +15,15 @@
 Describe 'qmk-flash'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_qmk-flash"
 
-  setup() {
-    # A config sandbox: this developer machine has a REAL ~/.config/qmk-flash/
-    # config.toml pointing at its build host, and it must not leak in and decide
-    # what "the default host" means here.
-    export XDG_CONFIG_HOME="$SHELLSPEC_TMPBASE/qf-config"
-    CONFIG="$XDG_CONFIG_HOME/qmk-flash/config.toml"
+  # The stand-ins are the same for every example and record into one fixed
+  # log, so they are written ONCE per file, and each is run once here: the
+  # first exec of a new script is the expensive one (macOS vets it, ~50 ms;
+  # THE EXEC POOL in spec_helper.sh). The virtual clock's own three stubs are
+  # made here too; every example then only rewinds the clock.
+  build_stubs() {
     STUBS="$SHELLSPEC_TMPBASE/qf-bin"
     CALLS="$SHELLSPEC_TMPBASE/qf-calls"
-    FW="$SHELLSPEC_TMPBASE/qf-fw"
-    export PATH="$STUBS:$PATH"
-    mkdir -p "$XDG_CONFIG_HOME/qmk-flash" "$STUBS" "$FW"
-    # (N) nullglob: an empty fixture dir is the normal case for the first
-    # example, and a bare *.uf2 would be a nomatch ERROR under zsh, not an empty
-    # list — the same trap the script's own remote listing avoids.
-    rm -f -- "$CONFIG" "$CALLS" "$FW"/*.uf2(N) "$FW"/*.svup(N) "$FW"/*.py(N)
-    unset FAKE_VERSION_LEFT FAKE_VERSION_RIGHT FAKE_INFO FAKE_INFO_AFTER \
-      FAKE_INFO_RC FAKE_PAIR_RC FAKE_PAIR_SIGNAL FAKE_GH_RC FAKE_GH_NO_SVUP \
-      FAKE_VERIFY_FAIL
-
-    # notify must not paint on a real screen, and must not dial the clipboard
-    # bridge because the suite happens to be running over ssh.
-    export HS=/usr/bin/true
-    unset SSH_CONNECTION SSH_CLIENT SSH_TTY NOTIFY_VIA_BRIDGE
-
-    # The waits for a bootloader drive and for the read-back are poll::until
-    # loops: on the virtual clock they run out without waiting.
-    spec_clock_set
-
+    mkdir -p "$STUBS" || return 1
     # Every external the script shells out to, recording into one log so an
     # example can assert what did NOT run as easily as what did. ssh exits 3,
     # the "no such directory" code, so the remote path fails at a known step
@@ -146,6 +127,40 @@ exit 0
 STUB
     chmod +x "$STUBS/ssh" "$STUBS/rsync" "$STUBS/picotool" "$STUBS/diskutil" \
       "$STUBS/hs" "$STUBS/uv" "$STUBS/gh"
+    "$STUBS/ssh"; "$STUBS/rsync"; "$STUBS/picotool"; "$STUBS/diskutil"; "$STUBS/hs"
+    "$STUBS/uv" warm; "$STUBS/gh" release view >/dev/null
+    spec_clock_set && spec_clock_warm
+  }
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'build_stubs'
+
+  setup() {
+    # A config sandbox: this developer machine has a REAL ~/.config/qmk-flash/
+    # config.toml pointing at its build host, and it must not leak in and decide
+    # what "the default host" means here.
+    export XDG_CONFIG_HOME="$SHELLSPEC_TMPBASE/qf-config"
+    CONFIG="$XDG_CONFIG_HOME/qmk-flash/config.toml"
+    FW="$SHELLSPEC_TMPBASE/qf-fw"
+    export PATH="$STUBS:$PATH"
+    mkdir -p "$XDG_CONFIG_HOME/qmk-flash" "$FW"
+    # (N) nullglob: an empty fixture dir is the normal case for the first
+    # example, and a bare *.uf2 would be a nomatch ERROR under zsh, not an empty
+    # list — the same trap the script's own remote listing avoids.
+    rm -f -- "$CONFIG" "$CALLS" "$FW"/*.uf2(N) "$FW"/*.svup(N) "$FW"/*.py(N)
+    unset FAKE_VERSION_LEFT FAKE_VERSION_RIGHT FAKE_INFO FAKE_INFO_AFTER \
+      FAKE_INFO_RC FAKE_PAIR_RC FAKE_PAIR_SIGNAL FAKE_GH_RC FAKE_GH_NO_SVUP \
+      FAKE_VERIFY_FAIL
+
+    # notify must not paint on a real screen, and must not dial the clipboard
+    # bridge because the suite happens to be running over ssh.
+    export HS=/usr/bin/true
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY NOTIFY_VIA_BRIDGE
+
+    # The waits for a bootloader drive and for the read-back are poll::until
+    # loops: on the virtual clock they run out without waiting. The clock was
+    # made in build_stubs; an example starts it again from an empty journal.
+    : > "$SPEC_CLOCK_FILE"
+    spec_clock_set
   }
   BeforeEach 'setup'
 
@@ -344,6 +359,7 @@ STUB
     BeforeEach 'updater_setup'
 
     It 'pairs both halves over the updater'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       When call calls both --host localhost --dir "$FW"
@@ -353,6 +369,7 @@ STUB
     End
 
     It 'defaults to both halves'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       When call calls --host localhost --dir "$FW"
@@ -375,6 +392,7 @@ STUB
     End
 
     It 'verifies both update files offline before touching the board'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       When call calls --host localhost --dir "$FW"
@@ -398,6 +416,7 @@ STUB
     End
 
     It 'reads the build back before resuming the overlay'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       # The read-back opens the same raw-HID interface as the probe, so it
@@ -413,6 +432,7 @@ STUB
     End
 
     It 'falls back to BOOTSEL when the probe fails'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       uf2 left
@@ -429,6 +449,7 @@ STUB
     End
 
     It 'pauses the overlay for the probe and resumes it before BOOTSEL'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       uf2 left
@@ -467,6 +488,7 @@ STUB
     End
 
     It 'reports a failed pair loudly'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       export FAKE_PAIR_RC=1
@@ -481,6 +503,7 @@ STUB
     End
 
     It 'resumes the overlay when pair fails'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       export FAKE_PAIR_RC=1
@@ -495,6 +518,7 @@ STUB
     End
 
     It 'resumes the overlay and explains when interrupted during pair'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       export FAKE_PAIR_SIGNAL=1
@@ -510,6 +534,7 @@ STUB
     End
 
     It 'flashes when hs is unavailable'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       export HS=/nonexistent
@@ -520,6 +545,7 @@ STUB
     End
 
     It 'fails when the version does not read back'
+      Skip if 'complete-only: a whole update through the script: a dozen and more stand-in runs of uv, hs and picotool (90-130 ms)' spec_complete_only
       svup left
       svup right
       export FAKE_INFO_AFTER='{"protocol": 4, "version": "zzz"}'
@@ -536,6 +562,7 @@ STUB
     BeforeEach 'updater_setup'
 
     It 'downloads the latest release and pairs it'
+      Skip if 'complete-only: a whole release install through the script: gh, then the update, all stand-ins (130-150 ms)' spec_complete_only
       When call calls --release
       The status should be success
       # No tag: the latest release's tag is looked up, then downloaded by name.
@@ -548,6 +575,7 @@ STUB
     End
 
     It 'downloads the tag it is given'
+      Skip if 'complete-only: a whole release install through the script: gh, then the update, all stand-ins (130-150 ms)' spec_complete_only
       When call calls --release v1.0.35
       The status should be success
       The output should include "CALL: gh release download v1.0.35 -R Townk/qmk-config"
@@ -556,6 +584,7 @@ STUB
     End
 
     It 'does not mistake a half name for a tag'
+      Skip if 'complete-only: a whole release install through the script: gh, then the update, all stand-ins (130-150 ms)' spec_complete_only
       When call calls --release both
       The status should be success
       The output should include "CALL: gh release download v1.0.35 -R Townk/qmk-config"
@@ -570,6 +599,7 @@ STUB
     End
 
     It 'takes --release=TAG too'
+      Skip if 'complete-only: a whole release install through the script: gh, then the update, all stand-ins (130-150 ms)' spec_complete_only
       When call calls --release=v1.0.35
       The status should be success
       The output should include "CALL: gh release download v1.0.35 -R Townk/qmk-config"
@@ -601,6 +631,7 @@ STUB
     End
 
     It 'falls back to the downloaded .uf2 files over BOOTSEL'
+      Skip if 'complete-only: a whole release install through the script: gh, then the update, all stand-ins (130-150 ms)' spec_complete_only
       export FAKE_INFO_RC=1
       When call calls --release --timeout 1
       The status should be failure

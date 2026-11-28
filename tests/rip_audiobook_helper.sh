@@ -10,7 +10,7 @@ setup() {
   # "jq" in the name on purpose: assertions that the server is never asked to run
   # jq must look past the sandbox path (see ssh_cmds). With a random name this
   # mistake failed about 1 run in 400; with this one it fails every run.
-  export RIP_SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/rip-jq.XXXXXX")
+  rip_sandbox rip-jq
   export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
   export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
   export JOB_STATE_ROOT="$RIP_SANDBOX/state"
@@ -34,21 +34,27 @@ setup() {
   # ffmpeg/ffprobe pair. The retag section builds real media and points the
   # seams back at the real tools.
   rip_fake_ffmpeg_pair "$RIP_SANDBOX/tools"
-  mkdir -p "$RIP_STAGING_ROOT/audiobooks" "$RIP_SANDBOX/server/audiobooks" "$RIP_BIN_DIR"
+  rip_mkdir "$RIP_STAGING_ROOT/audiobooks" "$RIP_SANDBOX/server/audiobooks" "$RIP_BIN_DIR"
   rip_stub_remote_hops "$RIP_BIN_DIR"
-  cat > "$RIP_SANDBOX/pueue" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
-case "$1" in add) echo "7" ;; esac
-exit 0
-EOF
-  chmod +x "$RIP_SANDBOX/pueue"
-  export JOB_PUEUE_BIN="$RIP_SANDBOX/pueue"
-
-  # Fake LibationCli: `export -j -p <file>` writes a two-record library,
-  # one Liberated and one not. Any other verb records its argv so an
-  # example can assert what was (and was NOT) invoked.
-  cat > "$RIP_SANDBOX/LibationCli" <<'EOF'
+  # The recording fake pueue and the fake LibationCli are the same scripts for
+  # every example (they read $JOB_FAKE_LOG and $RIP_SANDBOX from the
+  # environment): rip_audiobook_static_build wrote them once. An example that
+  # needs its own LibationCli writes "$RIP_SANDBOX/LibationCli" and exports
+  # RIP_LIBATION_BIN to it (THE RULE, tests/rip_helper.sh).
+  export JOB_PUEUE_BIN="$RIP_STATIC/pueue"
+  export RIP_LIBATION_BIN="$RIP_STATIC/LibationCli"
+  export RIP_LIBATION_IMAGES="$RIP_SANDBOX/Images"
+  rip_mkdir "$RIP_LIBATION_IMAGES"
+}
+# Once per spec file (BeforeAll): the shared stubs of rip_helper.sh, and:
+#
+# Fake LibationCli: `export -j -p <file>` writes a two-record library,
+# one Liberated and one not. Any other verb records its argv so an
+# example can assert what was (and was NOT) invoked.
+rip_audiobook_static_build() {
+  rip_static_build || return 1
+  [ -z "${_RIP_STATIC_BYTES[LibationCli]:-}" ] || return 0
+  rip_static_put LibationCli <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$RIP_SANDBOX/libation.log"
 if [ "$1" = "export" ]; then
@@ -91,12 +97,12 @@ exit 0
 fi
 exit 0
 EOF
-  chmod +x "$RIP_SANDBOX/LibationCli"
-  export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
-  export RIP_LIBATION_IMAGES="$RIP_SANDBOX/Images"
-  mkdir -p "$RIP_LIBATION_IMAGES"
+  rip_static_warm LibationCli
 }
-cleanup() { rm -rf "$RIP_SANDBOX"; }
+cleanup() {
+  rip_static_check RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
+  rip_rmtree "$RIP_SANDBOX"
+}
 
 # ssh_calls() — how many times the fake ssh ran. --server-library must
 # make exactly ONE ssh call regardless of library size (the panel's
@@ -153,7 +159,7 @@ titles() { cat "$JOB_STATE_ROOT"/*/meta.json 2>/dev/null; }
 # reads what is STORED, not what a provider offers, so these stage
 # sidecars directly in the sandbox "server" tree.
 mkbook() { # <author> <dir-title> <asin> <published> <bare-title>
-  mkdir -p "$RIP_SANDBOX/server/audiobooks/$1/$2"
+  rip_mkdir "$RIP_SANDBOX/server/audiobooks/$1/$2"
   jq -nc --arg t "$3" --arg p "$4" --arg ti "$5" --arg a "$1" \
     '{schema:1,kind:"audiobook",title:$ti,authors:[$a],ids:{"audible.asin":$t},published:(if $p=="" then null else $p end)}' \
     > "$RIP_SANDBOX/server/audiobooks/$1/$2/.fleet-book.json"
@@ -183,10 +189,13 @@ mkbook() { # <author> <dir-title> <asin> <published> <bare-title>
 # the sweep a remote operation with no round trip). jq is STILL absent and
 # must stay absent: that is the whole point of the handpicked list.
 fake_server_ssh() {
-  mkdir -p "$RIP_SANDBOX/remotebin"
+  rip_mkdir "$RIP_SANDBOX/remotebin"
+  # What `p=$(command -v "$c")` and `ln -sf "$p" …` did, 20 times over, with
+  # no process: a shell builtin (printf, test) answers with its bare NAME, as
+  # `command -v` does, anything else with its path.
   for c in sh find sed tr mv rm mkdir rmdir head cat ls printf test base64 stat sha256sum shasum ffmpeg ffprobe; do
-    p=$(command -v "$c" 2>/dev/null || true)
-    if [ -n "$p" ]; then ln -sf "$p" "$RIP_SANDBOX/remotebin/$c"; fi
+    if (( ${+builtins[$c]} )); then p=$c; else p=${commands[$c]-}; fi
+    if [ -n "$p" ]; then zf_ln -sf "$p" "$RIP_SANDBOX/remotebin/$c"; fi
   done
   # The server's login shell runs the command string with a genuinely
   # POSIX /bin/sh (dash on Debian) — macOS's own /bin/sh is bash 3.2,
@@ -195,7 +204,7 @@ fake_server_ssh() {
   # path. Fail loudly rather than silently falling back to /bin/sh,
   # which would just re-blind this guard.
   local dash_bin
-  dash_bin=$(command -v dash 2>/dev/null || true)
+  dash_bin=${commands[dash]-}
   if [ -z "$dash_bin" ]; then
     print -u2 -- "fake_server_ssh: no dash on PATH — refusing to fall back to /bin/sh (would blind the POSIX-quoting regression guard)"
     return 1
@@ -231,7 +240,7 @@ EOF
 fake_server_ssh_reads_stdin() {
   fake_server_ssh || return 1
   local dash_bin
-  dash_bin=$(command -v dash 2>/dev/null || true)
+  dash_bin=${commands[dash]-}
   cat > "$RIP_SANDBOX/ssh" <<EOF
 #!/bin/sh
 echo 1 >> "$RIP_SANDBOX/ssh.count"
@@ -262,7 +271,7 @@ stray_tmp_files() {
 
 # mkbook_bare <Author/Title> — a stored book with audio and NO sidecar.
 mkbook_bare() {
-  mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+  rip_mkdir "$RIP_SANDBOX/server/audiobooks/$1"
   printf 'audio-bytes-%s\n' "$1" > "$RIP_SANDBOX/server/audiobooks/$1/${1##*/}.m4b"
 }
 
@@ -271,7 +280,7 @@ mkbook_bare() {
 # the canonicalization bug left behind (fixed 2f649ae6) and the shape all
 # three of Case B, Case C and the unidentifiable refusal start from.
 mkbook_empty() {
-  mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+  rip_mkdir "$RIP_SANDBOX/server/audiobooks/$1"
   printf 'audio-bytes-%s\n' "$1" > "$RIP_SANDBOX/server/audiobooks/$1/${1##*/}.m4b"
   jq -n --arg t "${1##*/}" --arg a "${1%%/*}" --arg p "$2" \
     '{schema:1,kind:"audiobook",title:$t,subtitle:null,authors:[$a],narrators:[],
@@ -289,7 +298,7 @@ mkbook_empty() {
 # DROPS it, so to the classifier it is indistinguishable from a book with no
 # sidecar at all, which is Case A: the one branch that writes.
 mkbook_malformed() {
-  mkdir -p "$RIP_SANDBOX/server/audiobooks/$1"
+  rip_mkdir "$RIP_SANDBOX/server/audiobooks/$1"
   printf 'audio-bytes-%s\n' "$1" > "$RIP_SANDBOX/server/audiobooks/$1/${1##*/}.m4b"
   printf '%s\n' '{"schema":1,"kind":"audiobook","work":{"id":"OL99W"},"ids":{"audible.asin":"B0HAND0001"},' \
     > "$RIP_SANDBOX/server/audiobooks/$1/.fleet-book.json"

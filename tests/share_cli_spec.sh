@@ -4,30 +4,27 @@
 # background flag.
 
 Describe 'share CLI'
-  setup() {
-    SB="$SHELLSPEC_TMPBASE/share-cli"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
-    export SHARE_CONFIG_DIR="$SB"
-    export SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
-    export SHARE_STATE_DIR="$SB/state"
-    export SHARE_PROFILE=personal
-    export SHARE_LIB_DIR="$PWD/home/dot_local/lib"
-    printf '[drop]\nstore = "https://d.example.com"\nweb = true\nprofiles = ["personal"]\ndefault_for = ["personal"]\n[lan]\nrelay = ""\nlocal_only = true\nweb = false\nprofiles = ["personal"]\n' \
-      >"$SHARE_ENDPOINTS_FILE"
-    printf 'x' >"$SB/Report.pdf"
-    cat >"$SB/bin/croc" <<'SH'
+  Include tests/share_helper.sh
+
+  # The four fakes every example starts with, written once for the file
+  # (share_helper.sh: share_fixture_script) into a directory that sits on PATH
+  # BEHIND the example's own $SB/bin: an example that needs another pueue or
+  # tmux writes it there. They record where the example's exported variables
+  # say, in its sandbox.
+  #
+  # HOUSE RULE, and it applies to every example here rather than the two
+  # that used to opt in: a test must never touch a live service. Sending is
+  # backgrounded BY DEFAULT since the live-first amendment, so an example
+  # without these stubs enqueues real work against the running pueued (it
+  # did: 14 tasks), repaints the attached tmux status bar, and overwrites the
+  # user's clipboard via share::clip.
+  fixtures() {
+    FX="$SHELLSPEC_TMPBASE/share-cli-fx"
+    share_fixture_script "$FX/bin/croc" <<'SH'
 #!/bin/sh
 printf 'https://d.example.com/s/abc#v1.KEY\ncroc-store-v1.b64.abc.KEY\n'
 SH
-    chmod +x "$SB/bin/croc"
-
-    # HOUSE RULE, and it now applies to every example here rather than the two
-    # that used to opt in: a test must never touch a live service. Sending is
-    # backgrounded BY DEFAULT since the live-first amendment, so an example
-    # without these stubs enqueues real work against the running pueued (it
-    # did: 14 tasks), repaints the attached tmux status bar, and overwrites the
-    # user's clipboard via share::clip.
-    cat >"$SB/bin/pueue" <<'SH'
+    share_fixture_script "$FX/bin/pueue" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"${SHARE_PUEUE_CALLS:-/dev/null}"
 case "$1" in
@@ -35,57 +32,70 @@ case "$1" in
   *)   : ;;
 esac
 SH
-    cat >"$SB/bin/tmux" <<'SH'
+    share_fixture_script "$FX/bin/tmux" <<'SH'
 #!/bin/sh
 exit 0
 SH
-    cat >"$SB/bin/pbcopy" <<'SH'
+    share_fixture_script "$FX/bin/pbcopy" <<'SH'
 #!/bin/sh
 cat >"${SHARE_FAKE_CLIP:-/dev/null}"
 SH
-    chmod +x "$SB/bin/pueue" "$SB/bin/tmux" "$SB/bin/pbcopy"
-    export JOB_PUEUE_BIN="$SB/bin/pueue"
-    export JOB_TMUX_BIN="$SB/bin/tmux"
-    export JOB_STATE_ROOT="$SB/jobs"
-    export SHARE_PUEUE_CALLS="$SB/pueue-calls"
-    export SHARE_FAKE_CLIP="$SB/clip.txt"
-    export SHARE_LIVE_DIR="$SB/live"
+  }
+  BeforeAll 'fixtures'
 
-    export PATH="$SB/bin:$PATH"
+  setup() {
+    SB="$SHELLSPEC_TMPBASE/share-cli"
+    share_fresh "$SB" bin
+    export SHARE_CONFIG_DIR="$SB" SHARE_ENDPOINTS_FILE="$SB/endpoints.toml" \
+      SHARE_STATE_DIR="$SB/state" SHARE_PROFILE=personal \
+      SHARE_LIB_DIR="$PWD/home/dot_local/lib"
+    printf '[drop]\nstore = "https://d.example.com"\nweb = true\nprofiles = ["personal"]\ndefault_for = ["personal"]\n[lan]\nrelay = ""\nlocal_only = true\nweb = false\nprofiles = ["personal"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    printf 'x' >"$SB/Report.pdf"
+    # The Rex tab step job::start leaves in the background naps
+    # JOB_FOLLOW_DELAY (2 s) before it finds no Rex and ends. It holds the
+    # file's report pipe meanwhile, so the file ended 2 s after its last
+    # example. No delay: it is gone at once.
+    export JOB_FOLLOW_DELAY=0
+    export JOB_PUEUE_BIN="$FX/bin/pueue" JOB_TMUX_BIN="$FX/bin/tmux" \
+      JOB_STATE_ROOT="$SB/jobs" SHARE_PUEUE_CALLS="$SB/pueue-calls" \
+      SHARE_FAKE_CLIP="$SB/clip.txt" SHARE_LIVE_DIR="$SB/live"
+
+    export PATH="$SB/bin:$FX/bin:$PATH"
     SHARE_BIN="$PWD/home/dot_local/bin/executable_share"
   }
   BeforeEach 'setup'
 
   It 'prints help and exits zero'
-    When run script "$SHARE_BIN" --help
+    When run zsh -f "$SHARE_BIN" --help
     The status should be success
     The output should include 'share'
     The output should include 'revoke'
   End
 
   It 'lists endpoints'
-    When run script "$SHARE_BIN" endpoints
+    When run zsh -f "$SHARE_BIN" endpoints
     The status should be success
     The output should include 'drop'
     The output should include 'public'
   End
 
   It 'treats a bare path as a send'
-    When run script "$SHARE_BIN" --store --foreground "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The stderr should include 'sending to d.example.com'
   End
 
   It 'accepts an explicit send subcommand'
-    When run script "$SHARE_BIN" send --store --foreground "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The stderr should include 'sending to'
   End
 
   It 'prints an empty ledger as an empty array'
-    When run script "$SHARE_BIN" list
+    When run zsh -f "$SHARE_BIN" list
     The status should be success
     The output should include '[]'
   End
@@ -95,7 +105,7 @@ SH
   # hardcoded fallback and no failure seam — see the note in share_job_spec.sh.
   It 'falls back to a foreground send when the job runner is unavailable'
     stub_unavailable() {
-      SHARE_LIB_DIR="$PWD/home/dot_local/lib" zsh -c '
+      SHARE_LIB_DIR="$PWD/home/dot_local/lib" zsh -f -c '
         source "$SHARE_LIB_DIR/share.zsh"
         share::jobs_available() { return 1 }
         share::send() { print -r -- "FOREGROUND-SEND"; }
@@ -115,7 +125,7 @@ SH
   # pueue whose `status` fails — the actual probe share::jobs_available now
   # performs — and asserts the send still completes, in the foreground.
   It 'falls back to a foreground send when pueue is installed but the daemon is down'
-    cat >"$SB/bin/pueue" <<'SH'
+    share_write "$SB/bin/pueue" <<'SH'
 #!/bin/sh
 case "$1" in
   status) exit 1 ;;
@@ -124,20 +134,20 @@ esac
 SH
     chmod +x "$SB/bin/pueue"
     export JOB_PUEUE_BIN="$SB/bin/pueue"
-    When run script "$SHARE_BIN" --background --store "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" --background --store "$SB/Report.pdf"
     The status should be success
     The stderr should include 'job runner is unavailable'
     The output should include 'd.example.com/s/abc'
   End
 
   It 'fails on an unknown subcommand'
-    When run script "$SHARE_BIN" frobnicate
+    When run zsh -f "$SHARE_BIN" frobnicate
     The status should be failure
     The stderr should include 'unknown'
   End
 
   It 'requires an id for revoke'
-    When run script "$SHARE_BIN" revoke
+    When run zsh -f "$SHARE_BIN" revoke
     The status should be failure
     The stderr should include 'an id is required'
   End
@@ -145,13 +155,13 @@ SH
   # --- beyond the brief -------------------------------------------------
 
   It 'shows usage and exits zero with no arguments at all'
-    When run script "$SHARE_BIN"
+    When run zsh -f "$SHARE_BIN"
     The status should be success
     The output should include 'Usage'
   End
 
   It 'shows the same help for -h as for --help'
-    When run script "$SHARE_BIN" -h
+    When run zsh -f "$SHARE_BIN" -h
     The status should be success
     The output should include 'revoke'
   End
@@ -161,14 +171,14 @@ SH
   # bare --help must be recognized at that layer rather than reaching
   # share::send / share::get, which reject it as an unknown option.
   It 'shows usage and exits zero for send --help'
-    When run script "$SHARE_BIN" send --help
+    When run zsh -f "$SHARE_BIN" send --help
     The status should be success
     The output should include 'Usage'
     The output should include 'revoke'
   End
 
   It 'shows usage and exits zero for get --help'
-    When run script "$SHARE_BIN" get --help
+    When run zsh -f "$SHARE_BIN" get --help
     The status should be success
     The output should include 'Usage'
     The output should include 'revoke'
@@ -182,7 +192,7 @@ SH
   # subcommand's name requires the explicit `send` subcommand.
   It 'prefers the list subcommand over a same-named file in the directory'
     printf 'not-a-real-ledger' >"$SB/list"
-    When run script "$SHARE_BIN" list
+    When run zsh -f "$SHARE_BIN" list
     The status should be success
     The output should include '[]'
     The output should not include 'not-a-real-ledger'
@@ -190,7 +200,7 @@ SH
 
   It 'still sends a file named list when the send subcommand is explicit'
     printf 'x' >"$SB/list"
-    cwd_send_list() { cd "$SB" && "$SHARE_BIN" send --store --foreground list; }
+    cwd_send_list() { cd "$SB" && zsh -f "$SHARE_BIN" send --store --foreground list; }
     When call cwd_send_list
     The status should be success
     The output should include 'd.example.com/s/abc'
@@ -201,7 +211,7 @@ SH
   # part a broken degradation-check could get backwards — does NOT also run a
   # foreground send (the croc fake would print the blurb if it had).
   It 'sends in the background when the job runner is available'
-    cat >"$SB/bin/pueue" <<'SH'
+    share_write "$SB/bin/pueue" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_PUEUE_CALLS"
 case "$1" in
@@ -216,7 +226,7 @@ SH
     # tests/job_callback_spec.sh and tests/share_job_spec.sh: a test must
     # never touch the live server. Left unset here, this would repaint this
     # dev shell's real, attached tmux status bar.
-    cat >"$SB/bin/tmux" <<'SH'
+    share_write "$SB/bin/tmux" <<'SH'
 #!/bin/sh
 exit 0
 SH
@@ -225,7 +235,7 @@ SH
     export JOB_TMUX_BIN="$SB/bin/tmux"
     export JOB_STATE_ROOT="$SB/jobs"
     export SHARE_PUEUE_CALLS="$SB/pueue-calls"
-    When run script "$SHARE_BIN" --background --store "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" --background --store "$SB/Report.pdf"
     The status should be success
     The output should include 'queued as job'
     The output should not include 'd.example.com/s/abc'
@@ -242,7 +252,7 @@ SH
   # Tested through the CLI subprocess, which inherits this spec's exported
   # fakes and therefore cannot reach the live daemon.
   It 'enqueues nothing at all when told to run in the foreground'
-    "$SHARE_BIN" send --foreground --store "$SB/Report.pdf" >/dev/null 2>&1 || :
+    zsh -f "$SHARE_BIN" send --foreground --store "$SB/Report.pdf" >/dev/null 2>&1 || :
     When call test -s "$SB/pueue-calls"
     The status should be failure
   End
@@ -257,7 +267,7 @@ SH
   # into the pane instead of the line.
 
   It 'prints the bare pasteable line for a face, with no decoration'
-    When run script "$SHARE_BIN" send --for-face --to lan "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --for-face --to lan "$SB/Report.pdf"
     The status should be success
     The output should include 'receive with: croc'
     The output should not include 'queued as job'
@@ -267,7 +277,7 @@ SH
   # The contrast: a human still gets the friendly form, and the job id it names
   # is an ID rather than a line of prose.
   It 'still reports a job id to a human'
-    When run script "$SHARE_BIN" --background --store "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" --background --store "$SB/Report.pdf"
     The status should be success
     The output should include 'queued as job'
     The output should not include 'receive with'
@@ -276,25 +286,25 @@ SH
   # --- F4 fix: --force needs BOTH the flag AND an interactive confirmation --
   # naming the host. Implemented at THIS layer (dispatch_send), not inside
   # share::resolve, because a --background send has no tty inside the job —
-  # the gate has to run before enqueue. `script` (used by every `When run
-  # script` example here) never leaves a real controlling terminal on
-  # stderr, so these exercise the "no tty" refusal for free — no separate
-  # stub needed to prove it.
+  # the gate has to run before enqueue. `When run` (every example here runs
+  # the CLI through it, under `zsh -f`: no ~/.zshenv) never leaves a real
+  # controlling terminal on stderr, so these exercise the "no tty" refusal
+  # for free — no separate stub needed to prove it.
   It 'refuses --force on a disallowed endpoint when there is no interactive terminal to confirm on'
-    cat >>"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_append "$SHARE_ENDPOINTS_FILE" <<'TOML'
 
 [corp]
 store = "https://corp.example.com"
 profiles = ["work"]
 TOML
-    When run script "$SHARE_BIN" --to corp --force --store --foreground "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" --to corp --force --store --foreground "$SB/Report.pdf"
     The status should be failure
     The stderr should include 'interactive terminal'
     The output should not include 'corp.example.com'
   End
 
   It 'sends immediately with --force on an already-allowed endpoint — no confirmation needed'
-    When run script "$SHARE_BIN" --to drop --force --store --foreground "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" --to drop --force --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The stderr should include 'sending to d.example.com'
@@ -318,7 +328,7 @@ TOML
   # also hide the fake croc/pueue/tmux/pbcopy and let the send fall through to
   # whatever real binaries the host happens to have.
   stub_qrencode() {
-    cat >"$SB/bin/qrencode" <<SH
+    share_write "$SB/bin/qrencode" <<SH
 #!/bin/sh
 printf '%s\n' "\$*" >"$SB/qrencode-argv"
 cat >"$SB/qrencode-stdin"
@@ -330,7 +340,7 @@ SH
 
   It 'renders a QR code for a live send when qrencode is present'
     stub_qrencode QR_CODE_OUTPUT
-    When run script "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
     The status should be success
     The output should include 'receive with: croc'
     The output should include 'QR_CODE_OUTPUT'
@@ -343,7 +353,7 @@ SH
 
   It 'falls back to a one-line stderr notice when qrencode is missing, leaving the send unchanged'
     export SHARE_QRENCODE_BIN="$SB/bin/does-not-exist-qrencode"
-    When run script "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --qr --foreground --to lan "$SB/Report.pdf"
     The status should be success
     The output should include 'receive with: croc'
     The stderr should include 'sending to'
@@ -352,7 +362,7 @@ SH
 
   It 'renders a QR code for a stored send when qrencode is present'
     stub_qrencode STORED_QR
-    When run script "$SHARE_BIN" send --qr --store --foreground "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --qr --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The output should include 'STORED_QR'
@@ -368,7 +378,7 @@ SH
   # that path rather than just share::send's own foreground branch.
   It 'renders a QR code for the default (backgrounded, live) send'
     stub_qrencode BACKGROUND_QR
-    When run script "$SHARE_BIN" send --qr --to lan "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --qr --to lan "$SB/Report.pdf"
     The status should be success
     The stderr should include 'receive with: croc'
     The stderr should include 'BACKGROUND_QR'
@@ -381,7 +391,7 @@ SH
 
   It 'skips the QR under --for-face on a foreground live send'
     stub_qrencode SHOULD_NOT_APPEAR
-    When run script "$SHARE_BIN" send --qr --for-face --foreground --to lan "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --qr --for-face --foreground --to lan "$SB/Report.pdf"
     The status should be success
     The output should include 'croc'
     The output should not include 'SHOULD_NOT_APPEAR'
@@ -391,7 +401,7 @@ SH
 
   It 'skips the QR under --for-face on a foreground stored send'
     stub_qrencode SHOULD_NOT_APPEAR
-    When run script "$SHARE_BIN" send --qr --for-face --store --foreground "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --qr --for-face --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The output should not include 'SHOULD_NOT_APPEAR'
@@ -401,7 +411,7 @@ SH
 
   It 'never invokes qrencode when --qr is omitted'
     stub_qrencode SHOULD_NOT_APPEAR
-    When run script "$SHARE_BIN" send --store --foreground "$SB/Report.pdf"
+    When run zsh -f "$SHARE_BIN" send --store --foreground "$SB/Report.pdf"
     The status should be success
     The output should include 'd.example.com/s/abc'
     The output should not include 'SHOULD_NOT_APPEAR'

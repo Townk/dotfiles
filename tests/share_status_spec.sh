@@ -11,15 +11,38 @@
 
 Describe 'share:: status'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
+
+  # The two probes, written once for the file (share_helper.sh:
+  # share_fixture_script). What they answer is in the SB_* variables the
+  # example exports; they keep no state.
+  fixtures() {
+    FX="$SHELLSPEC_TMPBASE/share-status-fx"
+    # Stub nc: open only for the hosts named in SB_NC_OPEN.
+    share_fixture_script "$FX/bin/nc" <<'SH'
+#!/bin/sh
+host=""; for a in "$@"; do case "$a" in -*|[0-9]*) ;; *) host="$a" ;; esac; done
+case " ${SB_NC_OPEN:-} " in *" $host "*) exit 0 ;; esac
+exit 1
+SH
+    # Stub curl: prints the code in SB_HTTP_CODE for any URL in SB_HTTP_OK.
+    share_fixture_script "$FX/bin/curl" <<'SH'
+#!/bin/sh
+url=""; for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
+case " ${SB_HTTP_OK:-} " in *" $url "*) printf '%s' "${SB_HTTP_CODE:-200}"; exit 0 ;; esac
+printf '000'; exit 0
+SH
+  }
+  BeforeAll 'fixtures'
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-status"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
+    share_fresh "$SB" bin
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
     SHARE_STATE_DIR="$SB/state"
     SHARE_PROFILE=work
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [myrelay]
 relay    = "lappy.example-tailnet.ts.net:9409"
 web      = false
@@ -60,23 +83,8 @@ web      = true
 profiles = ["work"]
 TOML
 
-    # Stub nc: open only for the hosts named in SB_NC_OPEN.
-    cat >"$SB/bin/nc" <<'SH'
-#!/bin/sh
-host=""; for a in "$@"; do case "$a" in -*|[0-9]*) ;; *) host="$a" ;; esac; done
-case " ${SB_NC_OPEN:-} " in *" $host "*) exit 0 ;; esac
-exit 1
-SH
-    # Stub curl: prints the code in SB_HTTP_CODE for any URL in SB_HTTP_OK.
-    cat >"$SB/bin/curl" <<'SH'
-#!/bin/sh
-url=""; for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
-case " ${SB_HTTP_OK:-} " in *" $url "*) printf '%s' "${SB_HTTP_CODE:-200}"; exit 0 ;; esac
-printf '000'; exit 0
-SH
-    chmod +x "$SB/bin/nc" "$SB/bin/curl"
-    SHARE_NC_BIN="$SB/bin/nc";     export SHARE_NC_BIN
-    SHARE_CURL_BIN="$SB/bin/curl"; export SHARE_CURL_BIN
+    SHARE_NC_BIN="$FX/bin/nc";     export SHARE_NC_BIN
+    SHARE_CURL_BIN="$FX/bin/curl"; export SHARE_CURL_BIN
     # EXPORTED, all three: the stubs are separate processes. SB_HTTP_CODE set
     # as a plain shell variable was invisible to them, so the 503 example
     # silently asserted against a 200.
@@ -180,67 +188,91 @@ SH
   End
 
   # --- the table -------------------------------------------------------------
-
-  It 'lists only the endpoints this profile may use'
-    When call share::status
-    The output should include 'myrelay'
-    The output should include 'store1'
-    The output should not include 'elsewhere'
-  End
-
-  It 'marks the default endpoint'
-    When call share::status
-    The output should include 'myrelay*'
-  End
-
-  # Regression: the endpoint list was built by stripping " (default)" off
-  # share::endpoints_for_profile's DISPLAY output with ${name%% (default)},
-  # which silently does nothing — zsh reads `(default)` as a glob GROUP, so the
-  # literal parentheses never match. Rows then carried "myrelay (default)" as a
-  # name and every field lookup logged "unknown endpoint".
-  It 'never carries a display decoration into an endpoint name'
-    When call share::status
-    The output should not include '(default)'
-    The stderr should not include 'unknown endpoint'
-  End
-
-  # A hardcoded 11-character name column shunted a longer name out of
-  # alignment, so widths are computed from the data now.
   #
-  # This asserts the real invariant: the STATE text begins at the SAME column on
-  # every row. An earlier version of this example only checked that the header's
-  # STATE offset held non-blank content on each row — which a shunted row
-  # satisfies by accident, with destination text sitting there. It passed
-  # against a deliberately broken width, i.e. it tested nothing. Counting
-  # DISTINCT state offsets is what actually catches it: one means aligned.
-  #
-  # In zsh, not awk: macOS awk indexes by BYTES, and one destination cell is an
-  # em dash (3 bytes, 1 column), so awk read a correct table as broken. zsh
-  # string subscripts are character-based, the unit a terminal aligns in.
-  It 'aligns the state column no matter how long the endpoint names are'
-    printf '\n[an-endpoint-with-a-very-long-name]\nstore = "https://long.example.com"\nweb = true\nprofiles = ["work"]\n' \
-      >>"$SHARE_ENDPOINTS_FILE"
-    distinct_state_offsets() {
-      local out; out="$(share::status 2>/dev/null)"
-      local -a toks=('NOT LISTENING' 'NOT REACHABLE' 'MISCONFIGURED' 'listening' 'ok (' 'n/a')
-      local -A offs=()
-      local line tok
-      for line in "${(f)out}"; do
-        [[ "$line" == ENDPOINT* ]] && continue
-        [[ -z "${line// /}" ]] && continue
-        [[ "$line" == *'share jobs'* || "$line" == '* default'* ]] && continue
-        for tok in "${toks[@]}"; do
-          # "$tok" quoted INSIDE the pattern so `ok (` is matched literally
-          # rather than as a glob group.
-          if [[ "$line" == *"$tok"* ]]; then
-            offs[$(( ${#line%%"$tok"*} + 1 ))]=1
-            break
-          fi
-        done
-      done
-      print -r -- "${#offs}"
+  # ONE run of share::status for the four examples below. Over this manifest
+  # it is some 170 processes (each share::field is a yq and three jq, each
+  # row a handful of fields): about a second, four times over when every
+  # example made its own. They all ask about the same table, so it is printed
+  # once (BeforeAll: outside any example) and each example reads that run
+  # back: stdout, stderr and status, as `When call share::status` gave them.
+  # The manifest is setup's plus the long-named endpoint the alignment
+  # example needs; the other three do not mind it.
+  Describe 'the table'
+    table_once() {
+      setup
+      printf '\n[an-endpoint-with-a-very-long-name]\nstore = "https://long.example.com"\nweb = true\nprofiles = ["work"]\n' \
+        >>"$SHARE_ENDPOINTS_FILE"
+      TABLE="$SHELLSPEC_TMPBASE/share-status-table"
+      share_fresh "$TABLE"
+      TABLE_RC=0
+      share::status >"$TABLE/out" 2>"$TABLE/err" || TABLE_RC=$?
     }
-    When call distinct_state_offsets
-    The output should equal '1'
+    BeforeAll 'table_once'
+    table() {
+      print -rn -- "$(<"$TABLE/out")"
+      print -rn -u2 -- "$(<"$TABLE/err")"
+      return "$TABLE_RC"
+    }
+
+    It 'lists only the endpoints this profile may use'
+      When call table
+      The output should include 'myrelay'
+      The output should include 'store1'
+      The output should not include 'elsewhere'
+    End
+
+    It 'marks the default endpoint'
+      When call table
+      The output should include 'myrelay*'
+    End
+
+    # Regression: the endpoint list was built by stripping " (default)" off
+    # share::endpoints_for_profile's DISPLAY output with ${name%% (default)},
+    # which silently does nothing — zsh reads `(default)` as a glob GROUP, so the
+    # literal parentheses never match. Rows then carried "myrelay (default)" as a
+    # name and every field lookup logged "unknown endpoint".
+    It 'never carries a display decoration into an endpoint name'
+      When call table
+      The output should not include '(default)'
+      The stderr should not include 'unknown endpoint'
+    End
+
+    # A hardcoded 11-character name column shunted a longer name out of
+    # alignment, so widths are computed from the data now.
+    #
+    # This asserts the real invariant: the STATE text begins at the SAME column on
+    # every row. An earlier version of this example only checked that the header's
+    # STATE offset held non-blank content on each row — which a shunted row
+    # satisfies by accident, with destination text sitting there. It passed
+    # against a deliberately broken width, i.e. it tested nothing. Counting
+    # DISTINCT state offsets is what actually catches it: one means aligned.
+    #
+    # In zsh, not awk: macOS awk indexes by BYTES, and one destination cell is an
+    # em dash (3 bytes, 1 column), so awk read a correct table as broken. zsh
+    # string subscripts are character-based, the unit a terminal aligns in.
+    It 'aligns the state column no matter how long the endpoint names are'
+      distinct_state_offsets() {
+        local out; out="$(table 2>/dev/null)"
+        local -a toks=('NOT LISTENING' 'NOT REACHABLE' 'MISCONFIGURED' 'listening' 'ok (' 'n/a')
+        local -A offs=()
+        local line tok
+        for line in "${(f)out}"; do
+          [[ "$line" == ENDPOINT* ]] && continue
+          [[ -z "${line// /}" ]] && continue
+          [[ "$line" == *'share jobs'* || "$line" == '* default'* ]] && continue
+          for tok in "${toks[@]}"; do
+            # "$tok" quoted INSIDE the pattern so `ok (` is matched literally
+            # rather than as a glob group.
+            if [[ "$line" == *"$tok"* ]]; then
+              offs[$(( ${#line%%"$tok"*} + 1 ))]=1
+              break
+            fi
+          done
+        done
+        print -r -- "${#offs}"
+      }
+      When call distinct_state_offsets
+      The output should equal '1'
+    End
   End
 End

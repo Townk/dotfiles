@@ -93,12 +93,14 @@ Describe 'cagent::cache_is_fresh cache binding (bug #4a)'
   check_fresh() ( cd "$SB" && cagent::cache_is_fresh "$CACHE" "$1" )
 
   It 'accepts an unchanged tree (cache fresh)'
+    Skip if 'complete-only: a real git repository per example and three git fingerprints through the shared lib (~100-120 ms)' spec_complete_only
     build_cache 0
     When call check_fresh 0
     The status should be success
   End
 
   It 'rejects the cache after a planned file is mutated'
+    Skip if 'complete-only: a real git repository per example and three git fingerprints through the shared lib (~100-120 ms)' spec_complete_only
     build_cache 0
     printf 'three\n' >> "$SB/file.txt"
     When call check_fresh 0
@@ -106,6 +108,7 @@ Describe 'cagent::cache_is_fresh cache binding (bug #4a)'
   End
 
   It 'rejects the cache when the scope flag changes'
+    Skip if 'complete-only: a real git repository per example and three git fingerprints through the shared lib (~100-120 ms)' spec_complete_only
     build_cache 0
     When call check_fresh 1
     The status should be failure
@@ -123,6 +126,7 @@ End
 #     reuse it only when the tree + scope are unchanged.
 # ─────────────────────────────────────────────────────────────────────────
 Describe 'ai-commit cache binding end-to-end (bug #4a)'
+  Skip if 'complete-only: whole ai-commit worker runs against a real git repository, twice per example (300-370 ms)' spec_complete_only
   BINDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin"
   LIBDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 

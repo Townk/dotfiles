@@ -8,10 +8,11 @@
 
 Describe 'share:: receipt ledger'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-ledger"
-    rm -rf "$SB"; mkdir -p "$SB"
+    share_fresh "$SB"
     SHARE_STATE_DIR="$SB"
     SHARE_PROFILE=personal
   }
@@ -120,8 +121,8 @@ Describe 'share:: receipt ledger'
   # show up in the JSON it wrote, never in what it was called with.
   It 'never puts the url or ref on the jq invocation that writes the ledger row'
     mkdir -p "$SB/bin"
-    real_jq="$(command -v jq)"
-    cat >"$SB/bin/jq" <<SH
+    real_jq="${commands[jq]}"
+    share_write "$SB/bin/jq" <<SH
 #!/bin/sh
 printf '%s\n' "\$*" >>"\$SHARE_JQ_ARGV_LOG"
 exec "$real_jq" "\$@"

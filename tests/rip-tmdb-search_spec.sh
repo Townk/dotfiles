@@ -22,7 +22,7 @@ EOF
   AfterEach 'cleanup'
 
   It 'emits one JSON line per result with Title (Year)'
-    When run zsh "$BIN" heat
+    When run zsh -f "$BIN" heat
     The status should equal 0
     The line 1 of output should include '"title":"Heat (1995)"'
     The line 1 of output should include 'image.tmdb.org/t/p/w92/a.jpg'
@@ -34,7 +34,7 @@ EOF
   # spans, so the bare name has to travel alongside the composed title
   # rather than being re-derived by stripping " (YYYY)" client-side.
   It 'carries the bare name and the one-line overview'
-    When run zsh "$BIN" heat
+    When run zsh -f "$BIN" heat
     The status should equal 0
     The line 1 of output should include '"name":"Heat"'
     The line 1 of output should include '"overview":"Obsessive master thief."'
@@ -54,7 +54,7 @@ EOF
   End
 
   It 'exits 2 without a query'
-    When run zsh "$BIN"
+    When run zsh -f "$BIN"
     The status should equal 2
     The stderr should include "usage"
   End

@@ -15,28 +15,28 @@ Describe 'preview: geometry + CLI'
   BeforeEach 'setup'
 
   It 'uses FZF vars, minus the scrollbar column'
-    When run zsh -c "FZF_PREVIEW_COLUMNS=100 FZF_PREVIEW_LINES=50 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
+    When run zsh -f -c "FZF_PREVIEW_COLUMNS=100 FZF_PREVIEW_LINES=50 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
     The output should equal "99 50"
   End
 
   It 'falls back to piper w/h env, no scrollbar adjustment'
-    When run zsh -c "w=90 h=30 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
+    When run zsh -f -c "w=90 h=30 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
     The output should equal "90 30"
   End
 
   It 'prefers explicit -W/-H flags over FZF vars'
-    When run zsh -c "FZF_PREVIEW_COLUMNS=100 FZF_PREVIEW_LINES=50 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; OPT_W=70 OPT_H=20; geometry; print \$w \$h"
+    When run zsh -f -c "FZF_PREVIEW_COLUMNS=100 FZF_PREVIEW_LINES=50 PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; OPT_W=70 OPT_H=20; geometry; print \$w \$h"
     The output should equal "70 20"
   End
 
   It 'defaults to 80x40'
-    When run zsh -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
+    When run zsh -f -c "PREVIEW_NO_RUN=1 PREVIEW_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'; source '$SCRIPT'; geometry; print \$w \$h"
     The output should equal "80 40"
   End
 
   It 'parses -W/-H flags before the target path'
     # A directory listing (eza) proves main ran with the flag-parsed path.
-    When run zsh "$SCRIPT" -W 60 -H 20 "$SHELLSPEC_PROJECT_ROOT/tests"
+    When run zsh -f "$SCRIPT" -W 60 -H 20 "$SHELLSPEC_PROJECT_ROOT/tests"
     The status should be success
     The output should include "preview_spec.sh"
   End
@@ -48,7 +48,7 @@ Describe 'preview: geometry + CLI'
   End
 
   It 'does not loop on a trailing valueless flag'
-    When run zsh "$SCRIPT" -W
+    When run zsh -f "$SCRIPT" -W
     The status should be success
     # The banner is figlet art, so no literal text to match — the flag
     # consuming cleanly and the banner rendering at all is the assertion.
@@ -157,12 +157,13 @@ Describe 'preview: raster failure contracts (LOW-6)'
 End
 
 Describe 'preview: fonts'
+  Skip if 'complete-only: rasterizes a real system font into a glyph sheet (~1.1 s each)' spec_complete_only
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
 
   setup() {
     export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/fcache"
     rm -rf "$XDG_CACHE_HOME"
-    FONT=$(zsh -c 'print -l /System/Library/Fonts/Supplemental/*.ttf(N) ~/Library/Fonts/*.ttf(N) 2>/dev/null | head -1')
+    FONT=$(zsh -f -c 'print -l /System/Library/Fonts/Supplemental/*.ttf(N) ~/Library/Fonts/*.ttf(N) 2>/dev/null | head -1')
   }
   BeforeEach 'setup'
 
@@ -182,6 +183,7 @@ Describe 'preview: fonts'
 End
 
 Describe 'preview: video'
+  Skip if 'complete-only: real ffmpeg frame extraction and mediainfo (150-230 ms)' spec_complete_only
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
 
   setup() {
@@ -218,21 +220,25 @@ Describe 'preview: audio'
     export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/acache"
     rm -rf "$XDG_CACHE_HOME"
     export BAT_CACHE_PATH="$HOME/.cache/bat"
+  }
+  # The two clips are the same for every example: built once, before the
+  # group (magick and two ffmpeg runs), not inside the first example.
+  fixtures() {
     ART="$SHELLSPEC_TMPBASE/art.mp3"
     NOART="$SHELLSPEC_TMPBASE/noart.mp3"
-    if [ ! -f "$ART" ]; then
-      magick -size 64x64 xc:navy "$SHELLSPEC_TMPBASE/cover.png"
-      ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 \
-        -i "$SHELLSPEC_TMPBASE/cover.png" -map 0:a -map 1:v \
-        -c:a libmp3lame -c:v png -disposition:v:0 attached_pic \
-        -id3v2_version 3 "$ART"
-      ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 \
-        -c:a libmp3lame "$NOART"
-    fi
+    magick -size 64x64 xc:navy "$SHELLSPEC_TMPBASE/cover.png"
+    ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 \
+      -i "$SHELLSPEC_TMPBASE/cover.png" -map 0:a -map 1:v \
+      -c:a libmp3lame -c:v png -disposition:v:0 attached_pic \
+      -id3v2_version 3 "$ART"
+    ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 \
+      -c:a libmp3lame "$NOART"
   }
+  BeforeAll 'fixtures'
   BeforeEach 'setup'
 
   It 'extracts embedded cover art into the cache'
+    Skip if 'complete-only: real ffmpeg cover-art extraction (~100 ms)' spec_complete_only
     When run zsh -f -c "zsh -f '$SCRIPT' -W 80 -H 24 '$ART' >/dev/null
       files=(\$XDG_CACHE_HOME/preview/*.png(N)); print \${#files}"
     The output should equal "1"
@@ -252,6 +258,7 @@ Describe 'preview: audio'
 End
 
 Describe 'preview: pdf paging'
+  Skip if 'complete-only: real PDF page rasterization, three renders (~450 ms)' spec_complete_only
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
 
   setup() {
@@ -272,6 +279,7 @@ Describe 'preview: pdf paging'
 End
 
 Describe 'preview: adobe'
+  Skip if 'complete-only: real magick PSD render (~95 ms)' spec_complete_only
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview"
 
   setup() {
@@ -295,14 +303,20 @@ Describe 'preview: archives'
 
   setup() {
     export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/arcache"
-    D="$SHELLSPEC_TMPBASE/ar"; mkdir -p "$D"
-    [ -f "$D/f.txt" ] || print "zstd archive member" >"$D/f.txt"
-    [ -f "$D/a.tar.zst" ] || (cd "$D" && ouch compress -q -y f.txt a.tar.zst)
-    [ -f "$D/f.txt.gz" ] || gzip -kf "$D/f.txt"
+    D="$SHELLSPEC_TMPBASE/ar"
   }
+  # Built once, before the group: an ouch and a gzip run.
+  fixtures() {
+    D="$SHELLSPEC_TMPBASE/ar"; mkdir -p "$D"
+    print "zstd archive member" >"$D/f.txt"
+    (cd "$D" && ouch compress -q -y f.txt a.tar.zst)
+    gzip -kf "$D/f.txt"
+  }
+  BeforeAll 'fixtures'
   BeforeEach 'setup'
 
   It 'lists tar.zst contents instead of hex-dumping'
+    Skip if 'complete-only: the whole preview over a real ouch listing (~100 ms)' spec_complete_only
     When run zsh -f "$SCRIPT" -W 80 -H 24 "$D/a.tar.zst"
     The status should be success
     The output should include "f.txt"
@@ -323,14 +337,18 @@ Describe 'preview: --pixels machine interface'
     export XDG_CACHE_HOME="$SHELLSPEC_TMPBASE/xcache"
     rm -rf "$XDG_CACHE_HOME"
     export BAT_CACHE_PATH="$HOME/.cache/bat"
+  }
+  # Built once, before the group: a magick and an ffmpeg run.
+  fixtures() {
     PNG="$SHELLSPEC_TMPBASE/dot.png"
-    [ -f "$PNG" ] || magick -size 8x8 xc:lime "$PNG"
+    magick -size 8x8 xc:lime "$PNG"
     VID2="$SHELLSPEC_TMPBASE/clip2.mp4"
-    [ -f "$VID2" ] || ffmpeg -v error -f lavfi -i testsrc=duration=1:size=128x96:rate=10 \
+    ffmpeg -v error -f lavfi -i testsrc=duration=1:size=128x96:rate=10 \
       -pix_fmt yuv420p "$VID2"
     TXT="$SHELLSPEC_TMPBASE/plain.txt"
     print "plain text body" >"$TXT"
   }
+  BeforeAll 'fixtures'
   BeforeEach 'setup'
 
   It 'returns the source path as raster for displayable images'
@@ -341,6 +359,7 @@ Describe 'preview: --pixels machine interface'
   End
 
   It 'returns a cached frame as raster for video'
+    Skip if 'complete-only: real ffmpeg frame extraction (~90 ms)' spec_complete_only
     When run zsh -f -c "line=\$(zsh -f '$SCRIPT' --pixels '$VID2' | head -1)
       [[ \$line == \$XDG_CACHE_HOME/preview/*.png && -s \$line ]] && print ok"
     The output should equal "ok"
@@ -387,11 +406,12 @@ Describe 'preview: svg + font sample (Mode B fixes)'
     export BAT_CACHE_PATH="$HOME/.cache/bat"
     SVG="$SHELLSPEC_TMPBASE/box.svg"
     [ -f "$SVG" ] || printf '%s' '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="teal"/></svg>' >"$SVG"
-    FONT=$(zsh -c 'print -l /System/Library/Fonts/Supplemental/*.ttf(N) ~/Library/Fonts/*.ttf(N) 2>/dev/null | head -1')
+    FONT=$(zsh -f -c 'print -l /System/Library/Fonts/Supplemental/*.ttf(N) ~/Library/Fonts/*.ttf(N) 2>/dev/null | head -1')
   }
   BeforeEach 'setup'
 
   It 'converts svg to a cached raster for --pixels (rsvg-convert path)'
+    Skip if 'complete-only: real rsvg-convert render (~95 ms)' spec_complete_only
     command -v rsvg-convert >/dev/null || skip "rsvg-convert not installed"
     When run zsh -f -c "line=\$(zsh -f '$SCRIPT' --pixels '$SVG' | head -1)
       [[ \$line == \$XDG_CACHE_HOME/preview/*.png && -s \$line ]] && print ok"
@@ -415,15 +435,24 @@ Describe 'preview: office + iwork'
     rm -rf "$XDG_CACHE_HOME"
     export BAT_CACHE_PATH="$HOME/.cache/bat"
     DOCX="$SHELLSPEC_TMPBASE/qa.docx"
-    [ -f "$DOCX" ] || printf '# Office QA\n\nhello\n' | pandoc -f markdown -o "$DOCX"
+    # Built by the one example that reads it (pandoc: ~300 ms), so the fast
+    # suite, which skips that example, never builds it.
     NUMBERS="$SHELLSPEC_TMPBASE/qa.numbers"
-    if [ ! -f "$NUMBERS" ]; then
-      magick -size 120x90 xc:orchid "$SHELLSPEC_TMPBASE/preview.jpg"
-      (cd "$SHELLSPEC_TMPBASE" && zip -q qa.numbers preview.jpg)
-    fi
   }
+  # Built once, before the group: a magick and a zip run.
+  fixtures() {
+    magick -size 120x90 xc:orchid "$SHELLSPEC_TMPBASE/preview.jpg"
+    (cd "$SHELLSPEC_TMPBASE" && zip -q qa.numbers preview.jpg)
+  }
+  BeforeAll 'fixtures'
   BeforeEach 'setup'
 
+  # A Context of its own: the docx costs a pandoc run to build and a Quick
+  # Look render to read, and a Skip inside an It would still build it.
+  Context 'docx:'
+    Skip if 'complete-only: pandoc builds a docx and Quick Look renders it (~450 ms)' spec_complete_only
+    docx() { ! command -v pandoc >/dev/null || printf '# Office QA\n\nhello\n' | pandoc -f markdown -o "$SHELLSPEC_TMPBASE/qa.docx"; }
+    BeforeAll 'docx'
   It 'renders a docx first page via Quick Look into the cache'
     # Only through ql-thumb: the qlmanage fallback leaves an icon bouncing in
     # the Dock on every run, so a test never reaches it. The stand-in checks
@@ -433,6 +462,7 @@ Describe 'preview: office + iwork'
     When run zsh -f -c "line=\$(zsh -f '$SCRIPT' --pixels '$DOCX' | head -1)
       [[ \$line == \$XDG_CACHE_HOME/preview/*.png && -s \$line ]] && print ok"
     The output should equal "ok"
+  End
   End
 
   It 'extracts the embedded iWork preview.jpg as the raster'
@@ -459,7 +489,7 @@ Describe 'preview: image alignment knob'
   It 'passes --align through when PREVIEW_IMAGE_ALIGN is set'
     run_it() {
       PATH="$T/bin:$PATH" PREVIEW_IMAGE_ALIGN="center,center" \
-        zsh -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
+        zsh -f -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
         "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview" "$T/img.png" 2>/dev/null || true
       cat "$T/chafa.calls" 2>/dev/null
     }
@@ -470,7 +500,7 @@ Describe 'preview: image alignment knob'
   It 'omits --align when the knob is unset (the fzf preview pane)'
     run_it() {
       PATH="$T/bin:$PATH" \
-        zsh -c 'unset PREVIEW_IMAGE_ALIGN; w=100 h=25; source "$1"; preview-raster "$2"' _ \
+        zsh -f -c 'unset PREVIEW_IMAGE_ALIGN; w=100 h=25; source "$1"; preview-raster "$2"' _ \
         "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview" "$T/img.png" 2>/dev/null || true
       cat "$T/chafa.calls" 2>/dev/null
     }
@@ -497,7 +527,7 @@ Describe 'preview: sixel byte cap'
 
   renders() {
     env -u PREVIEW_IMAGE_MAX_BYTES "$@" PATH="$T/bin:$PATH" \
-      zsh -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
+      zsh -f -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
       "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview" "$T/img.png" >/dev/null 2>&1 || true
     grep -c -- ' -s ' "$T/chafa.calls"
     tail -n 1 "$T/chafa.calls" | grep -o -- '-s [0-9x]*'
@@ -510,12 +540,14 @@ Describe 'preview: sixel byte cap'
   End
 
   It 'still walks the shrink ladder inside tmux'
+    Skip if 'complete-only: five rounds of a 1.2 MB chafa stand-in (~170 ms)' spec_complete_only
     When call renders TMUX=/tmp/s,1,0
     The line 1 of output should equal "5"
     The line 2 of output should equal "-s 25x6"
   End
 
   It 'honours an explicit ceiling anywhere'
+    Skip if 'complete-only: five rounds of a 1.2 MB chafa stand-in (~115 ms)' spec_complete_only
     When call renders -u TMUX PREVIEW_IMAGE_MAX_BYTES=1000
     The line 1 of output should equal "5"
   End
@@ -544,9 +576,10 @@ Describe 'preview: raster temp cleanup on kill (MED-16)'
   AfterEach 'cleanup'
 
   It 'removes the temp file when the preview is killed mid-render'
+    Skip if 'complete-only: a preview killed mid-render and joined (~115 ms)' spec_complete_only
     run_it() {
       TMPDIR="$T/tmp" PATH="$T/bin:$PATH" \
-        zsh -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
+        zsh -f -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
         "$SCRIPT" "$T/img.png" >/dev/null 2>&1 &
       local pid=$!
       local -a f
@@ -589,13 +622,13 @@ Describe 'preview: option-shaped filenames'
   AfterEach 'cleanup'
 
   It 'previews a relative file named -s as content, not as a tool flag'
-    When run zsh -c 'cd "$1" && PREVIEW_LIB="$2" zsh "$3" -W 60 -H 20 "-s"' _ "$ADV_TMP" "$LIB" "$SCRIPT"
+    When run zsh -f -c 'cd "$1" && PREVIEW_LIB="$2" zsh -f "$3" -W 60 -H 20 "-s"' _ "$ADV_TMP" "$LIB" "$SCRIPT"
     The status should be success
     The output should include 'REAL DASH CONTENT'
   End
 
   It 'previews a file named help instead of printing the usage text'
-    When run zsh -c 'cd "$1" && PREVIEW_LIB="$2" zsh "$3" -W 60 -H 20 help' _ "$ADV_TMP" "$LIB" "$SCRIPT"
+    When run zsh -f -c 'cd "$1" && PREVIEW_LIB="$2" zsh -f "$3" -W 60 -H 20 help' _ "$ADV_TMP" "$LIB" "$SCRIPT"
     The status should be success
     The output should include 'REAL HELP CONTENT'
     The output should not include 'Usage: preview'
@@ -625,7 +658,7 @@ Describe 'preview: Kitty images in an fzf pane'
       TMPDIR="$KP_TMP" PREVIEW_TTY="$KP_TMP/tty" PREVIEW_TTY_NAME=ttys042 PREVIEW_NO_RUN=1 \
       PREVIEW_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
       PREVIEW_WIPE_IMAGES="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_preview-wipe-images" "${envs[@]}" \
-      zsh -c "source '$SCRIPT'; $1"
+      zsh -f -c "source '$SCRIPT'; $1"
   }
   sent() {
     [[ -s "$KP_TMP/tty" ]] || { print none; return; }

@@ -7,37 +7,19 @@
 Describe 'rip.zsh extra'
   RIPLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/rip.zsh"
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
+  # rip.zsh is loaded once, here; `When run rip_zsh "…"` runs the string a
+  # `zsh -f -c` used to get, in a subshell (tests/rip_helper.sh).
+  Include tests/rip_helper.sh
+  rip_lib_load
 
-  setup() {
-    RIP_SANDBOX=$(mktemp -d)
-    export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
-    export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
-    export JOB_STATE_ROOT="$RIP_SANDBOX/state"
-    export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
-    export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
-    export RIP_PUSH_MIN_AGE_S=0
-    mkdir -p "$RIP_STAGING_ROOT/movies" "$RIP_SANDBOX/server/movies"
-
-    # stand-in mounted DVD: a plain sandbox dir with a VIDEO_TS subdir,
-    # reached through the RIP_DVD_VOLUME seam instead of scanning /Volumes.
-    mkdir -p "$RIP_SANDBOX/dvd/VIDEO_TS"
-    export RIP_DVD_VOLUME="$RIP_SANDBOX/dvd"
-
-    cat > "$RIP_SANDBOX/pueue" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
-case "$1" in add) echo "7" ;; esac
-exit 0
-EOF
-    chmod +x "$RIP_SANDBOX/pueue"; export JOB_PUEUE_BIN="$RIP_SANDBOX/pueue"
-
-    # fake HandBrakeCLI, dual-mode: `--scan` prints a scan listing (two
-    # titles); otherwise it's an encode call (`-t N -o <file>`). Every
-    # invocation is logged so a test can assert NOTHING was called at all
-    # (the server-already-has-it idempotency path).
-    export RIP_FAKE_HB_LOG="$RIP_SANDBOX/hb.log"
-    : > "$RIP_FAKE_HB_LOG"
-    cat > "$RIP_SANDBOX/HandBrakeCLI" <<'EOF'
+  # The fakes of setup() are the same scripts for every example (what differs
+  # between examples reaches them through the environment), so each is written
+  # once per file, here, and setup() only points its seam at the shared copy
+  # under $RIP_STATIC. An example that needs a different one writes it under
+  # $RIP_SANDBOX and exports the seam to it (THE RULE, tests/rip_helper.sh).
+  static_stubs() {
+    rip_static_build || return 1
+    rip_static_put HandBrakeCLI <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$RIP_FAKE_HB_LOG"
 case "$*" in
@@ -57,16 +39,7 @@ case "$*" in
     ;;
 esac
 EOF
-    chmod +x "$RIP_SANDBOX/HandBrakeCLI"; export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
-    # Hermetic: no real pty in tests (the disc suite's rule). The pty-wrap
-    # example below overrides this with a logging fake.
-    export RIP_PTY_WRAP=""
-
-    # copying fake (mirrors rip-push_spec.sh's fake_copy_rsync): actually
-    # `cp`s the listed files from src to the local sandbox "remote" so a
-    # test can assert on the bytes that landed server-side, not just infer
-    # "shipped" from local absence.
-    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+    rip_static_put rsync <<'EOF'
 #!/bin/sh
 case "$*" in *-rcn*) exit 0 ;; esac
 lf="" a1="" a2=""
@@ -86,9 +59,48 @@ while IFS= read -r rel; do
 done < "$lf"
 exit 0
 EOF
-    chmod +x "$RIP_SANDBOX/rsync"; export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    rip_static_warm HandBrakeCLI rsync
   }
-  cleanup() { rm -rf "$RIP_SANDBOX"; }
+  BeforeAll 'static_stubs'
+
+  setup() {
+    rip_sandbox; typeset +x RIP_SANDBOX   # as before: not in the environment
+    export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
+    export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
+    export JOB_STATE_ROOT="$RIP_SANDBOX/state"
+    export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
+    export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+    export RIP_PUSH_MIN_AGE_S=0
+    rip_mkdir "$RIP_STAGING_ROOT/movies" "$RIP_SANDBOX/server/movies"
+
+    # stand-in mounted DVD: a plain sandbox dir with a VIDEO_TS subdir,
+    # reached through the RIP_DVD_VOLUME seam instead of scanning /Volumes.
+    rip_mkdir "$RIP_SANDBOX/dvd/VIDEO_TS"
+    export RIP_DVD_VOLUME="$RIP_SANDBOX/dvd"
+
+    export JOB_PUEUE_BIN="$RIP_STATIC/pueue"
+
+    # fake HandBrakeCLI, dual-mode: `--scan` prints a scan listing (two
+    # titles); otherwise it's an encode call (`-t N -o <file>`). Every
+    # invocation is logged so a test can assert NOTHING was called at all
+    # (the server-already-has-it idempotency path).
+    export RIP_FAKE_HB_LOG="$RIP_SANDBOX/hb.log"
+    : > "$RIP_FAKE_HB_LOG"
+    export RIP_HANDBRAKE_BIN="$RIP_STATIC/HandBrakeCLI"
+    # Hermetic: no real pty in tests (the disc suite's rule). The pty-wrap
+    # example below overrides this with a logging fake.
+    export RIP_PTY_WRAP=""
+
+    # copying fake (mirrors rip-push_spec.sh's fake_copy_rsync): actually
+    # `cp`s the listed files from src to the local sandbox "remote" so a
+    # test can assert on the bytes that landed server-side, not just infer
+    # "shipped" from local absence.
+    export RIP_RSYNC_BIN="$RIP_STATIC/rsync"
+  }
+  cleanup() {
+    rip_static_check RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI" RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    rip_rmtree "$RIP_SANDBOX"
+  }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -97,7 +109,7 @@ EOF
   # --- --list: scan the mounted DVD ------------------------------------
 
   It '--list parses the fake scan into title N: duration lines'
-    When run zsh -c "source $RIPLIB && rip::extra_list"
+    When run rip_zsh "source $RIPLIB && rip::extra_list"
     The status should equal 0
     The output should include "title 1: 00:00:38"
     The output should include "title 2: 02:08:59"
@@ -108,7 +120,7 @@ EOF
     # RIP_DVD_VOLUME, which would fall through to a real /Volumes scan and
     # could pick up a disc actually in this machine's drive right now.
     export RIP_DVD_VOLUME="$RIP_SANDBOX/no-disc"
-    When run zsh -c "source $RIPLIB && rip::extra_list"
+    When run rip_zsh "source $RIPLIB && rip::extra_list"
     The status should equal 1
     The stderr should include "no DVD volume"
   End
@@ -116,31 +128,31 @@ EOF
   # --- validation --------------------------------------------------------
 
   It 'rejects a non-numeric title number'
-    When run zsh -c "source $RIPLIB && rip::extra_enqueue abc 'A Movie (2001)' 'Trailer'"
+    When run rip_zsh "source $RIPLIB && rip::extra_enqueue abc 'A Movie (2001)' 'Trailer'"
     The status should equal 2
     The stderr should include "title number"
   End
 
   It 'rejects an extra name containing a slash'
-    When run zsh -c "source $RIPLIB && rip::extra_enqueue 2 'A Movie (2001)' 'Foo/Bar'"
+    When run rip_zsh "source $RIPLIB && rip::extra_enqueue 2 'A Movie (2001)' 'Foo/Bar'"
     The status should equal 2
     The stderr should include "slash"
   End
 
   It 'rejects a movie title containing a slash (reuses rip::_check_title)'
-    When run zsh -c "source $RIPLIB && rip::extra_enqueue 2 'A/B (2001)' 'Trailer'"
+    When run rip_zsh "source $RIPLIB && rip::extra_enqueue 2 'A/B (2001)' 'Trailer'"
     The status should equal 2
     The stderr should include "title"
   End
 
   It 'rejects a movie title of ".." (bare path-segment escape)'
-    When run zsh -c "source $RIPLIB && rip::extra_enqueue 2 '..' 'Trailer'"
+    When run rip_zsh "source $RIPLIB && rip::extra_enqueue 2 '..' 'Trailer'"
     The status should equal 2
     The stderr should include ".."
   End
 
   It 'rejects an extra name of ".." (defense-in-depth, hygiene)'
-    When run zsh -c "source $RIPLIB && rip::extra_enqueue 2 'A Movie (2001)' '..'"
+    When run rip_zsh "source $RIPLIB && rip::extra_enqueue 2 'A Movie (2001)' '..'"
     The status should equal 2
     The stderr should include ".."
   End
@@ -149,7 +161,7 @@ EOF
 
   It 'worker happy path: encodes direct from disc, publishes, pushes, and cleans'
     export JOB_ID="job-extra-1"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/extras/Behind the Scenes.mkv" should not be exist
@@ -178,7 +190,7 @@ exec "$@"
 EOF
     chmod +x "$RIP_SANDBOX/ptywrap"
     export RIP_PTY_WRAP="$RIP_SANDBOX/ptywrap"
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_PTY_LOG" should include "HandBrakeCLI"
@@ -192,7 +204,7 @@ EOF
   # PRODUCTION composition (rip.zsh alone) and demands the sidecar.
   It 'worker writes the progress sidecar without the caller pre-loading job.zsh'
     export JOB_ID="job-extra-prodcomp"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
-    When run zsh -c "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    When run rip_zsh "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 0
     The output should include "verified"
     The path "$JOB_STATE_ROOT/$JOB_ID/progress" should be exist
@@ -218,11 +230,17 @@ case "$*" in
     out=""; prev=""
     for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
     printf 'libdvdread: raw \251 metadata\r\n'
+    # The >64KB that must follow the bad byte: 100 records of 1 KB that are
+    # NOT progress records. (They were 3,000 "Encoding: … 42.50 %" records:
+    # the worker writes the job's progress sidecar for each one it parses,
+    # which was 13 s of this example and no part of its point.)
+    pad=xxxxxxxxxxxxxxxx; pad=$pad$pad$pad$pad; pad=$pad$pad$pad$pad; pad=$pad$pad$pad$pad
     i=0
-    while [ "$i" -lt 3000 ]; do
-      printf 'Encoding: task 1 of 1, 42.50 %%\r'
+    while [ "$i" -lt 100 ]; do
+      printf 'libdvdread: %s\r' "$pad"
       i=$((i+1))
     done
+    printf 'Encoding: task 1 of 1, 42.50 %%\r'
     printf 'Encoding: task 1 of 1, 100.00 %%\n'
     printf 'encoded' > "$out"
     exit 0
@@ -230,7 +248,8 @@ case "$*" in
 esac
 EOF
     chmod +x "$RIP_SANDBOX/HandBrakeCLI"
-    When run zsh -c "export LC_ALL=en_US.UTF-8; source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
+    When run zsh -f -c "export LC_ALL=en_US.UTF-8; source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_SANDBOX/server/movies/A Movie (2001)/extras/Behind the Scenes.mkv" should be exist
@@ -255,7 +274,8 @@ case "$*" in
 esac
 EOF
     chmod +x "$RIP_SANDBOX/HandBrakeCLI"
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 1
     The stderr should include "extra encode failed"
     # 42% of a 0-85 band -> 35 (42*85/100 truncated)
@@ -267,7 +287,7 @@ EOF
   It 'server already has the extra: nothing encoded, exit 0'
     mkdir -p "$RIP_SANDBOX/server/movies/A Movie (2001)/extras"
     printf 'already-there' > "$RIP_SANDBOX/server/movies/A Movie (2001)/extras/Behind the Scenes.mkv"
-    When run zsh -c "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    When run rip_zsh "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 0
     The output should include "server already has"
     The contents of file "$RIP_FAKE_HB_LOG" should equal ""
@@ -278,7 +298,7 @@ EOF
 
   It 'encode failure: temp gone, nothing published, rc propagated'
     export RIP_FAKE_HB_RC=5
-    When run zsh -c "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    When run rip_zsh "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 5
     The stderr should include "extra encode failed"
     The path "$RIP_STAGING_ROOT/.work/.extra-encode.mkv" should not be exist
@@ -298,7 +318,7 @@ EOF
   It 'push failure: encode published, rsync fails, extra kept locally, nothing server-side'
     printf '#!/bin/sh\nexit 23\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -c "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
+    When run rip_zsh "source $RIPLIB && rip::extra_worker 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 23
     The stderr should include "rsync failed"
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/extras/Behind the Scenes.mkv" should be exist
@@ -308,7 +328,7 @@ EOF
   # --- enqueue shape ---------------------------------------------------------
 
   It 'enqueue: heavy group, "extra: <Movie> — <Name>" title, absolute worker path'
-    When run zsh -c "source $RIPLIB && rip::extra_enqueue 2 'A Movie (2001)' 'Behind the Scenes'"
+    When run rip_zsh "source $RIPLIB && rip::extra_enqueue 2 'A Movie (2001)' 'Behind the Scenes'"
     The status should equal 0
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group heavy"

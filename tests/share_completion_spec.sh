@@ -7,11 +7,12 @@
 # Both defects below shipped because nothing exercised _share at all.
 
 Describe '_share completion'
+  Include tests/share_helper.sh
   COMP="$SHELLSPEC_PROJECT_ROOT/home/dot_local/share/zsh/site-functions/_share"
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
   setup() {
-    SB="$SHELLSPEC_TMPBASE/share-comp"; rm -rf "$SB"; mkdir -p "$SB/state"
+    SB="$SHELLSPEC_TMPBASE/share-comp"; share_fresh "$SB" state
     export SHARE_STATE_DIR="$SB/state" SHARE_LIB_DIR="$LIB" COMP
   }
   BeforeEach 'setup'

@@ -5,14 +5,18 @@
 # a sandbox and no real daemon, troupe binary, or mux backend is ever
 # consulted.
 Describe 'job.zsh'
+  Include tests/job_helper.sh
+  Include home/dot_local/lib/job.zsh
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
-  setup() {
-    unset SSH_CONNECTION SSH_CLIENT SSH_TTY NOTIFY_VIA_BRIDGE
-    JOB_SANDBOX=$(mktemp -d)
-    export JOB_STATE_ROOT="$JOB_SANDBOX/state"
-    export JOB_FAKE_LOG="$JOB_SANDBOX/pueue.log"
-    cat > "$JOB_SANDBOX/pueue" <<'EOF'
+  # The fakes, written ONCE for the file (job_helper.sh: job_fixture_script)
+  # into a directory every example shares. Each records where an exported
+  # variable of the example says (its own sandbox), so nothing of one example
+  # is left beside a fake for the next. An example that needs another fake
+  # writes it in its sandbox and points the seam there.
+  fixtures() {
+    JOB_FX="$SHELLSPEC_TMPBASE/job-fx"
+    job_fixture_script "$JOB_FX/pueue" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
 [ -n "${JOB_FAKE_RC:-}" ] && exit "$JOB_FAKE_RC"
@@ -23,22 +27,13 @@ case "$1" in
 esac
 exit 0
 EOF
-    chmod +x "$JOB_SANDBOX/pueue"
-    export JOB_PUEUE_BIN="$JOB_SANDBOX/pueue"
-    # job::start schedules a Rex tab: a rex that always fails keeps the
-    # background step off the live server (tests/job_rex_spec.sh covers it).
-    export JOB_REX_BIN=/usr/bin/false
-
     # FAKE tmux for the @jobs statusbar writers (JOB_TMUX_BIN): records
     # argv only — the sync helper's contract is the option value it sets.
-    export JOB_FAKE_TMUX_LOG="$JOB_SANDBOX/tmux.log"
-    cat > "$JOB_SANDBOX/tmux" <<'EOF'
+    job_fixture_script "$JOB_FX/tmux" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_TMUX_LOG"
 exit 0
 EOF
-    chmod +x "$JOB_SANDBOX/tmux"
-    export JOB_TMUX_BIN="$JOB_SANDBOX/tmux"
 
     # FAKE troupe (troupe-design.md §6's `troupe jobs`): records argv, then
     # emits either the next queued action popped off a rotating actions file
@@ -50,8 +45,7 @@ EOF
     # touches the actions queue — real troupe's --measure is its own code
     # path, not "another dashboard launch", and job::_dashboard_float issues
     # one per float on top of the real launch.
-    export JOB_FAKE_TROUPE_LOG="$JOB_SANDBOX/troupe.log"
-    cat > "$JOB_SANDBOX/troupe" <<'EOF'
+    job_fixture_script "$JOB_FX/troupe" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_TROUPE_LOG"
 case " $* " in
@@ -73,24 +67,25 @@ case " $* " in
     ;;
 esac
 if [ -n "${JOB_FAKE_TROUPE_ACTIONS:-}" ] && [ -s "$JOB_FAKE_TROUPE_ACTIONS" ]; then
-  line=$(head -n1 "$JOB_FAKE_TROUPE_ACTIONS")
-  tail -n +2 "$JOB_FAKE_TROUPE_ACTIONS" > "$JOB_FAKE_TROUPE_ACTIONS.next"
-  mv "$JOB_FAKE_TROUPE_ACTIONS.next" "$JOB_FAKE_TROUPE_ACTIONS"
+  # Pop the first line; the rest goes back. In the shell itself: this runs
+  # once per launch, and head + tail + mv were three processes each time.
+  rest=
+  { IFS= read -r line || :
+    while IFS= read -r more; do rest="$rest$more
+"; done; } < "$JOB_FAKE_TROUPE_ACTIONS"
+  printf '%s' "$rest" > "$JOB_FAKE_TROUPE_ACTIONS"
   printf '%s' "$line"
 else
   printf '%s' "${JOB_FAKE_TROUPE_ACTION:-}"
 fi
 exit 0
 EOF
-    chmod +x "$JOB_SANDBOX/troupe"
-    export JOB_TROUPE_BIN="$JOB_SANDBOX/troupe"
 
     # FAKE mux-modal: records argv, then behaves like tmux-modal's own
     # --capture mode — runs the trailing command and writes its stdout to
     # the --capture path — so the SAME fake troupe above is exercised
     # uniformly whether job::watch floats it or runs it inline.
-    export JOB_FAKE_MODAL_LOG="$JOB_SANDBOX/modal.log"
-    cat > "$JOB_SANDBOX/modal" <<'EOF'
+    job_fixture_script "$JOB_FX/modal" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_MODAL_LOG"
 capture=""
@@ -105,8 +100,6 @@ out=$("$@")
 [ -n "$capture" ] && printf '%s' "$out" > "$capture"
 exit 0
 EOF
-    chmod +x "$JOB_SANDBOX/modal"
-    export JOB_MUX_MODAL_BIN="$JOB_SANDBOX/modal"
 
     # FAKE tab-SPAWN seam (job::_open_log_tab's JOB_MUX_NEW_TAB_BIN — one
     # level lower than the whole function): records argv, then BACKGROUNDS
@@ -116,9 +109,7 @@ EOF
     # that process later to simulate the tab closing — the driver's own
     # FIFO-wait code in job::_open_log_tab genuinely runs and genuinely
     # unblocks, instead of the whole function being bypassed.
-    export JOB_FAKE_NEWTAB_LOG="$JOB_SANDBOX/newtab.log"
-    export JOB_FAKE_NEWTAB_PID="$JOB_SANDBOX/newtab.pid"
-    cat > "$JOB_SANDBOX/newtab" <<'EOF'
+    job_fixture_script "$JOB_FX/newtab" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_NEWTAB_LOG"
 rm -f "$JOB_FAKE_NEWTAB_PID"
@@ -132,9 +123,6 @@ done
 echo "$!" > "$JOB_FAKE_NEWTAB_PID"
 exit 0
 EOF
-    chmod +x "$JOB_SANDBOX/newtab"
-    export JOB_MUX_NEW_TAB_BIN="$JOB_SANDBOX/newtab"
-    export JOB_PUEUE_LOG_DIR="$JOB_SANDBOX/pueue-logs"
 
     # FAKE pane-SPAWN seam (job::_watch_pane's JOB_MUX_FLOAT_PANE_BIN — one
     # level lower than the whole function, same shape as JOB_MUX_NEW_TAB_BIN
@@ -144,9 +132,7 @@ EOF
     # into job::_watch_pane's own FIFO — keeps running independently), and
     # prints a fake pane id so the driver's re-summon state file gets a
     # real value to record.
-    export JOB_FAKE_FLOATPANE_LOG="$JOB_SANDBOX/floatpane.log"
-    export JOB_FAKE_FLOATPANE_PID="$JOB_SANDBOX/floatpane.pid"
-    cat > "$JOB_SANDBOX/floatpane" <<'EOF'
+    job_fixture_script "$JOB_FX/floatpane" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_FLOATPANE_LOG"
 rm -f "$JOB_FAKE_FLOATPANE_PID"
@@ -169,36 +155,55 @@ echo "$!" > "$JOB_FAKE_FLOATPANE_PID"
 printf '%s' "${JOB_FAKE_FLOATPANE_ID:-%9}"
 exit 0
 EOF
-    chmod +x "$JOB_SANDBOX/floatpane"
-    export JOB_MUX_FLOAT_PANE_BIN="$JOB_SANDBOX/floatpane"
 
     # FAKE focus-pane seam (job::_focus_pane_if_alive's
     # JOB_MUX_FOCUS_PANE_BIN): records argv, exits per JOB_FAKE_FOCUS_RC
     # (0 = "found it, focused" — the re-summon path; nonzero = "gone" — the
     # driver launches fresh).
-    export JOB_FAKE_FOCUS_LOG="$JOB_SANDBOX/focus.log"
-    cat > "$JOB_SANDBOX/focuspane" <<'EOF'
+    job_fixture_script "$JOB_FX/focuspane" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_FOCUS_LOG"
 exit "${JOB_FAKE_FOCUS_RC:-1}"
 EOF
-    chmod +x "$JOB_SANDBOX/focuspane"
-    export JOB_MUX_FOCUS_PANE_BIN="$JOB_SANDBOX/focuspane"
 
     # FAKE ai-playbook: the house confirm's inline widget backend
     # (input-common's documented seam), used by job::_watch_confirm_cancel
     # (mux.zsh degrades to it whenever no float backend is active).
-    export JOB_FAKE_CONFIRM_LOG="$JOB_SANDBOX/confirm.log"
-    cat > "$JOB_SANDBOX/ai-playbook" <<'EOF'
+    job_fixture_script "$JOB_FX/ai-playbook" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_CONFIRM_LOG"
 exit "${JOB_FAKE_CONFIRM_RC:-1}"
 EOF
-    chmod +x "$JOB_SANDBOX/ai-playbook"
-    export AI_PLAYBOOK_INPUT_BIN="$JOB_SANDBOX/ai-playbook"
   }
-  cleanup() { rm -rf "$JOB_SANDBOX"; }
+  BeforeAll 'fixtures'
+
+  setup() {
+    unset SSH_CONNECTION SSH_CLIENT SSH_TTY NOTIFY_VIA_BRIDGE
+    job_sandbox job; JOB_SANDBOX=$SANDBOX
+    # job::start schedules a Rex tab: a rex that always fails keeps the
+    # background step off the live server (tests/job_rex_spec.sh covers it).
+    # The Rex tab step job::start leaves in the background naps
+    # JOB_FOLLOW_DELAY (2 s) before it finds no Rex and ends. It holds the
+    # file's report pipe meanwhile, so the file ended 2 s after its last
+    # example. No delay: it is gone at once.
+    export JOB_STATE_ROOT="$JOB_SANDBOX/state" JOB_REX_BIN=/usr/bin/false JOB_FOLLOW_DELAY=0 \
+      JOB_PUEUE_BIN="$JOB_FX/pueue" JOB_FAKE_LOG="$JOB_SANDBOX/pueue.log" \
+      JOB_TMUX_BIN="$JOB_FX/tmux" JOB_FAKE_TMUX_LOG="$JOB_SANDBOX/tmux.log" \
+      JOB_TROUPE_BIN="$JOB_FX/troupe" JOB_FAKE_TROUPE_LOG="$JOB_SANDBOX/troupe.log" \
+      JOB_MUX_MODAL_BIN="$JOB_FX/modal" JOB_FAKE_MODAL_LOG="$JOB_SANDBOX/modal.log" \
+      JOB_MUX_NEW_TAB_BIN="$JOB_FX/newtab" JOB_FAKE_NEWTAB_LOG="$JOB_SANDBOX/newtab.log" \
+      JOB_FAKE_NEWTAB_PID="$JOB_SANDBOX/newtab.pid" JOB_PUEUE_LOG_DIR="$JOB_SANDBOX/pueue-logs" \
+      JOB_MUX_FLOAT_PANE_BIN="$JOB_FX/floatpane" JOB_FAKE_FLOATPANE_LOG="$JOB_SANDBOX/floatpane.log" \
+      JOB_FAKE_FLOATPANE_PID="$JOB_SANDBOX/floatpane.pid" \
+      JOB_MUX_FOCUS_PANE_BIN="$JOB_FX/focuspane" JOB_FAKE_FOCUS_LOG="$JOB_SANDBOX/focus.log" \
+      AI_PLAYBOOK_INPUT_BIN="$JOB_FX/ai-playbook" JOB_FAKE_CONFIRM_LOG="$JOB_SANDBOX/confirm.log"
+  }
+  # After each example the sandbox goes, as it always did: with zf_rm, rm as
+  # a zsh builtin (job_sandbox loads it). Silent: a hook may not write to
+  # stderr, and a straggler can still be creating files in there.
+  cleanup() { zf_rm -rf -- "$JOB_SANDBOX" 2>/dev/null || :; }
   BeforeEach 'setup'
+  AfterEach 'cleanup'
 
   # tab_killer [command…] — in the background: close the log tab the fake
   # spawner opened, once it is genuinely open; `$!` is the killer, to join
@@ -226,18 +231,26 @@ EOF
       "${@:-:}"
       kill -TERM "$(cat "$JOB_FAKE_NEWTAB_PID")" 2>/dev/null ) &
   }
-  AfterEach 'cleanup'
 
+  # run_job: the function in a zsh of its own, for what depends on being a
+  # process: the dashboard drivers (FIFOs, a reader in the background, traps,
+  # signals) and the confirm, which loads the widget stack.
   # -f: this repo's ~/.zshenv would re-export XDG vars over the sandbox.
   run_job() {
     zsh -f -c 'source "$1" >/dev/null 2>&1 || exit 99; shift; "$@"' \
       -- "$JOBLIB" "$@"
   }
+  # job_call: the same function from the library this file Included, in a
+  # subshell: no zsh to start and no library to load (15 ms a call), and a
+  # `die`, a changed option or a global still end with the call. `emulate -R
+  # zsh` gives it the options `zsh -f` starts with (shellspec runs the
+  # examples under errexit). For the plain calls: submit, report, cancel, list.
+  job_call() { ( emulate -R zsh; "$@" ); }
 
   Describe 'job::start'
     It 'prints an id, writes meta.json, and enqueues a labeled quoted command'
       started() {
-        id=$(run_job job::start --group heavy --title "Build X" \
+        id=$(job_call job::start --group heavy --title "Build X" \
           --icon "glyph:nf-md-wrench" -- echo "a b") || return 1
         dir="$JOB_STATE_ROOT/$id"
         [ -f "$dir/meta.json" ] || return 2
@@ -261,7 +274,7 @@ EOF
 
     It 'defaults the title to the command and the group to default'
       titled() {
-        id=$(run_job job::start -- sleep 5) || return 1
+        id=$(job_call job::start -- sleep 5) || return 1
         printf '%s|%s' \
           "$(jq -r .title "$JOB_STATE_ROOT/$id/meta.json")" \
           "$(jq -r .group "$JOB_STATE_ROOT/$id/meta.json")"
@@ -272,7 +285,7 @@ EOF
 
     It 'creates the heavy group before enqueueing into it'
       grouped() {
-        run_job job::start --group heavy -- true >/dev/null || return 1
+        job_call job::start --group heavy -- true >/dev/null || return 1
         # group add first, then the parallelism pin, then the add.
         awk '{print $1, $2}' "$JOB_FAKE_LOG" | paste -sd'|' -
       }
@@ -281,7 +294,7 @@ EOF
     End
 
     It 'dies loudly naming the service when pueued is unreachable'
-      down() { JOB_FAKE_RC=1 run_job job::start -- true; }
+      down() { JOB_FAKE_RC=1 job_call job::start -- true; }
       leftover() { ls "$JOB_STATE_ROOT" 2>/dev/null; }
       When call down
       The status should equal 1
@@ -345,7 +358,7 @@ FAKE
       # Would be lost to an unanchored `_PAT` pattern, breaking mise's PATH.
       export __MISE_ORIG_PATH=/usr/bin
 
-      run_job job::start --title Scrub -- echo hi >/dev/null || return 1
+      job_call job::start --title Scrub -- echo hi >/dev/null || return 1
       [ -f "$JOB_ENV_DUMP" ] || return 2
     }
 
@@ -374,8 +387,8 @@ FAKE
   Describe 'job::start --notify'
     It 'records the mode in meta.json (default all)'
       modes() {
-        id1=$(run_job job::start --title A -- true) || return 1
-        id2=$(run_job job::start --notify failures --title B -- true) || return 2
+        id1=$(job_call job::start --title A -- true) || return 1
+        id2=$(job_call job::start --notify failures --title B -- true) || return 2
         printf '%s|%s' \
           "$(jq -r '.notify' "$JOB_STATE_ROOT/$id1/meta.json")" \
           "$(jq -r '.notify' "$JOB_STATE_ROOT/$id2/meta.json")"
@@ -385,7 +398,7 @@ FAKE
     End
 
     It 'rejects an unknown mode'
-      When call run_job job::start --notify sometimes --title X -- true
+      When call job_call job::start --notify sometimes --title X -- true
       The status should be failure
       The stderr should include "--notify must be"
     End
@@ -394,8 +407,8 @@ FAKE
   Describe 'job::progress'
     It 'atomically rewrites the single-line sidecar'
       prog() {
-        id=$(run_job job::start -- true) || return 1
-        JOB_ID="$id" run_job job::progress 40 "step two" || return 2
+        id=$(job_call job::start -- true) || return 1
+        JOB_ID="$id" job_call job::progress 40 "step two" || return 2
         line="$(cat "$JOB_STATE_ROOT/$id/progress")"
         # <epoch> <pct> <message>
         printf '%s' "$line" | sed 's/^[0-9][0-9]* //'
@@ -406,8 +419,8 @@ FAKE
 
     It 'accepts -1 as indeterminate'
       indet() {
-        id=$(run_job job::start -- true) || return 1
-        JOB_ID="$id" run_job job::progress -1 "preparing" || return 2
+        id=$(job_call job::start -- true) || return 1
+        JOB_ID="$id" job_call job::progress -1 "preparing" || return 2
         sed 's/^[0-9][0-9]* //' "$JOB_STATE_ROOT/$id/progress"
       }
       When call indet
@@ -415,16 +428,16 @@ FAKE
     End
 
     It 'returns 1 with no JOB_ID in the environment'
-      When call run_job job::progress 10 "orphan"
+      When call job_call job::progress 10 "orphan"
       The status should equal 1
     End
 
     # W1: any progress report ends a waiting phase.
     It 'removes a waiting phase'
       cleared() {
-        id=$(run_job job::start -- true) || return 1
-        JOB_ID="$id" run_job job::waiting "waiting for recipient" || return 2
-        JOB_ID="$id" run_job job::progress 40 "sending x" || return 3
+        id=$(job_call job::start -- true) || return 1
+        JOB_ID="$id" job_call job::waiting "waiting for recipient" || return 2
+        JOB_ID="$id" job_call job::progress 40 "sending x" || return 3
         [ ! -e "$JOB_STATE_ROOT/$id/phase" ] && sed 's/^[0-9][0-9]* //' "$JOB_STATE_ROOT/$id/progress"
       }
       When call cleared
@@ -437,8 +450,8 @@ FAKE
     # one-word phase sidecar the new readers render as "waiting".
     It 'writes the indeterminate line and a waiting phase'
       waited() {
-        id=$(run_job job::start -- true) || return 1
-        JOB_ID="$id" run_job job::waiting "waiting for recipient" || return 2
+        id=$(job_call job::start -- true) || return 1
+        JOB_ID="$id" job_call job::waiting "waiting for recipient" || return 2
         printf '%s|%s' \
           "$(sed 's/^[0-9][0-9]* //' "$JOB_STATE_ROOT/$id/progress")" \
           "$(cat "$JOB_STATE_ROOT/$id/phase")"
@@ -449,8 +462,8 @@ FAKE
 
     It 'leaves no temp files behind'
       tidy() {
-        id=$(run_job job::start -- true) || return 1
-        JOB_ID="$id" run_job job::waiting "w" || return 2
+        id=$(job_call job::start -- true) || return 1
+        JOB_ID="$id" job_call job::waiting "w" || return 2
         # grep -c exits 1 on a zero count; the count is the assertion.
         ls -A "$JOB_STATE_ROOT/$id" | grep -c '\.tmp$' || true
       }
@@ -459,7 +472,7 @@ FAKE
     End
 
     It 'returns 1 and writes nothing with no JOB_ID in the environment'
-      When call run_job job::waiting "orphan"
+      When call job_call job::waiting "orphan"
       The status should equal 1
     End
   End
@@ -467,8 +480,8 @@ FAKE
   Describe 'job::cancel'
     It 'kills the recorded pueue task id'
       cancel() {
-        id=$(run_job job::start -- work 99) || return 1
-        run_job job::cancel "$id" || return 2
+        id=$(job_call job::start -- work 99) || return 1
+        job_call job::cancel "$id" || return 2
         grep -c '^kill 7$' "$JOB_FAKE_LOG"
       }
       When call cancel
@@ -477,9 +490,9 @@ FAKE
 
     It 'removes a queued job from the queue and records it as Killed'
       queued_cancel() {
-        id=$(run_job job::start --title q -- work 9) || return 1
+        id=$(job_call job::start --title q -- work 9) || return 1
         print -r -- '{"tasks":{"7":{"status":{"Queued":{}}}}}' > "$JOB_SANDBOX/status.json"
-        JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" run_job job::cancel "$id"; print -r -- "rc=$?"
+        JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" job_call job::cancel "$id"; print -r -- "rc=$?"
         grep -c '^remove 7$' "$JOB_FAKE_LOG"; grep -c '^kill' "$JOB_FAKE_LOG"
         cut -d' ' -f2 "$JOB_STATE_ROOT/$id/result"
       }
@@ -492,9 +505,9 @@ Killed"
 
     It 'still kills a running job'
       running_cancel() {
-        id=$(run_job job::start --title r -- work 9) || return 1
+        id=$(job_call job::start --title r -- work 9) || return 1
         print -r -- '{"tasks":{"7":{"status":{"Running":{}}}}}' > "$JOB_SANDBOX/status.json"
-        JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" run_job job::cancel "$id"; print -r -- "rc=$?"
+        JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" job_call job::cancel "$id"; print -r -- "rc=$?"
         grep -c '^kill 7$' "$JOB_FAKE_LOG"; grep -c '^remove' "$JOB_FAKE_LOG"
         [ -e "$JOB_STATE_ROOT/$id/result" ] && print -r -- result || print -r -- no-result
       }
@@ -509,10 +522,10 @@ no-result"
     # refuses the remove, and the job is running.
     It 'kills a queued job that started before it could be removed'
       raced_cancel() {
-        id=$(run_job job::start --title q -- work 9) || return 1
+        id=$(job_call job::start --title q -- work 9) || return 1
         print -r -- '{"tasks":{"7":{"status":{"Queued":{}}}}}' > "$JOB_SANDBOX/status.json"
         JOB_FAKE_REMOVE_RC=1 JOB_FAKE_STATUS="$JOB_SANDBOX/status.json" \
-          run_job job::cancel "$id"; print -r -- "rc=$?"
+          job_call job::cancel "$id"; print -r -- "rc=$?"
         grep -c '^remove 7$' "$JOB_FAKE_LOG"; grep -c '^kill 7$' "$JOB_FAKE_LOG"
         [ -e "$JOB_STATE_ROOT/$id/result" ] && print -r -- result || print -r -- no-result
       }
@@ -533,7 +546,7 @@ no-result"
         mkdir -p "$dir"
         echo old > "$dir/result"
         ln "$dir/result" "$JOB_SANDBOX/kept"
-        run_job job::_result_write "$dir" Failed 2 || return 1
+        job_call job::_result_write "$dir" Failed 2 || return 1
         cat "$JOB_SANDBOX/kept"
         cut -d' ' -f2- "$dir/result"
         ls -A "$dir" | grep -c -v '^result$' || :
@@ -548,11 +561,11 @@ Failed 2
   Describe 'job::list'
     It 'merges meta, sidecar line, done flag, and pueue status'
       listed() {
-        id=$(run_job job::start --title "T" -- true) || return 1
-        JOB_ID="$id" run_job job::progress 30 "warming" || return 2
+        id=$(job_call job::start --title "T" -- true) || return 1
+        JOB_ID="$id" job_call job::progress 30 "warming" || return 2
         printf '%s\n' '{"tasks":{}}' > "$JOB_SANDBOX/status.json"
         export JOB_FAKE_STATUS="$JOB_SANDBOX/status.json"
-        out=$(run_job job::list) || return 3
+        out=$(job_call job::list) || return 3
         printf '%s|%s|%s' \
           "$(printf '%s' "$out" | jq -r '.jobs[0].title')" \
           "$(printf '%s' "$out" | jq -r '.jobs[0].progress_line' | sed 's/^[0-9]* //')" \
@@ -564,9 +577,9 @@ Failed 2
 
     It 'flags a job with a result file as done'
       done_flag() {
-        id=$(run_job job::start -- true) || return 1
+        id=$(job_call job::start -- true) || return 1
         printf '1 Success 0\n' > "$JOB_STATE_ROOT/$id/result"
-        run_job job::list | jq -r '.jobs[0].done'
+        job_call job::list | jq -r '.jobs[0].done'
       }
       When call done_flag
       The output should equal 'true'
@@ -582,7 +595,7 @@ Failed 2
 printf '%s\n' "\$*" >> "$JOB_SANDBOX/hs.log"
 EOF
         chmod +x "$JOB_SANDBOX/bin/hs"
-        HS="$JOB_SANDBOX/bin/hs" run_job job::hud show || return 1
+        HS="$JOB_SANDBOX/bin/hs" job_call job::hud show || return 1
         cat "$JOB_SANDBOX/hs.log"
       }
       When call hud
@@ -628,7 +641,7 @@ EOF
   Describe 'job::watch — the troupe dashboard driver'
     It 'floats troupe through mux-modal under tmux — single chrome, sized+themed — and stops on a dismissed (blank) action'
       float_dismiss() {
-        id=$(run_job job::start -- work 9) || return 1
+        id=$(job_call job::start -- work 9) || return 1
         export JOB_FAKE_TROUPE_ACTION=""
         # Pinned to the popup path (job-runner design §6 rev 4 added a real
         # pane-host probe ahead of this loop — JOB_FORCE_HOST=popup skips it
@@ -668,7 +681,7 @@ EOF
 
     It 'runs troupe directly outside tmux — themed — and stops on a dismissed (blank) action'
       inline_dismiss() {
-        id=$(run_job job::start -- work 9) || return 1
+        id=$(job_call job::start -- work 9) || return 1
         export JOB_FAKE_TROUPE_ACTION=""
         run_job job::watch 2>"$JOB_SANDBOX/watch.err"
         rc=$?
@@ -677,7 +690,7 @@ EOF
           && themed="yes"
         printf 'rc=%s|themed=%s|calls=%s|modal_calls=%s' "$rc" "$themed" \
           "$(grep -c "jobs --state-root $JOB_STATE_ROOT" "$JOB_FAKE_TROUPE_LOG")" \
-          "$([ -f "$JOB_FAKE_MODAL_LOG" ] && wc -l < "$JOB_FAKE_MODAL_LOG" | tr -d ' ' || echo 0)"
+          "$([ -f "$JOB_FAKE_MODAL_LOG" ] && job_lines "$JOB_FAKE_MODAL_LOG" || echo 0)"
       }
       When call inline_dismiss
       The output should equal 'rc=0|themed=yes|calls=1|modal_calls=0'
@@ -687,7 +700,7 @@ EOF
     # the dashboard is the same box over the pane instead of taking it over.
     It 'floats troupe through mux-modal in a Rex pane, with the same single chrome'
       float_rex() {
-        id=$(run_job job::start -- work 9) || return 1
+        id=$(job_call job::start -- work 9) || return 1
         export JOB_FAKE_TROUPE_ACTION=""
         REX_BLOCK=block:here run_job job::watch 2>"$JOB_SANDBOX/watch.err"
         rc=$?
@@ -703,7 +716,7 @@ EOF
 
     It 'treats a literal "empty" action the same as dismissed — done, one invocation (binary-skew compat with an older troupe)'
       literal_empty() {
-        id=$(run_job job::start -- true) || return 1
+        id=$(job_call job::start -- true) || return 1
         export JOB_FAKE_TROUPE_ACTION="empty"
         run_job job::watch
         rc=$?
@@ -715,7 +728,7 @@ EOF
 
     It 'cancel action: Keep running declines the confirm — no kill, relaunches (two invocations)'
       keep_running() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
+        id=$(job_call job::start --title "C" -- work 9) || return 1
         printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_CONFIRM_RC=1
@@ -731,8 +744,8 @@ EOF
 
     It 'cancel action: confirmed with another job live — kills once and relaunches (two invocations)'
       cancel_other_live() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
-        id2=$(run_job job::start --title "Other" -- work 9) || return 2
+        id=$(job_call job::start --title "C" -- work 9) || return 1
+        id2=$(job_call job::start --title "Other" -- work 9) || return 2
         printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_CONFIRM_RC=0
@@ -748,7 +761,7 @@ EOF
 
     It 'cancel action: confirmed as the LAST live job — kills once and STILL relaunches (two invocations; the dashboard shows its own empty state instead of auto-closing)'
       cancel_last_job() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
+        id=$(job_call job::start --title "C" -- work 9) || return 1
         printf 'cancel\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_CONFIRM_RC=0
@@ -773,7 +786,7 @@ EOF
     # `tail -f` reaching some EOF of its own, which never happens.
     It 'logs action: opens the resolved pueue log in a mux tab, relaunches once it closes (two invocations)'
       logs_action() {
-        id=$(run_job job::start --title "L" -- work 9) || return 1
+        id=$(job_call job::start --title "L" -- work 9) || return 1
         mkdir -p "$JOB_PUEUE_LOG_DIR"
         : > "$JOB_PUEUE_LOG_DIR/7.log"
         printf 'logs\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
@@ -798,7 +811,7 @@ EOF
           && grep -qF -- "$JOB_PUEUE_LOG_DIR/7.log" "$JOB_FAKE_NEWTAB_LOG" \
           && match="yes"
         printf 'rc=%s|match=%s|tabs=%s|calls=%s' "$rc" "$match" \
-          "$(wc -l < "$JOB_FAKE_NEWTAB_LOG" | tr -d ' ')" \
+          "$(job_lines "$JOB_FAKE_NEWTAB_LOG")" \
           "$(grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG")"
       }
       When call logs_action
@@ -816,7 +829,7 @@ EOF
     # the re-measure round trip was genuinely skipped, not just uncounted.
     It 'resize action: relaunches immediately using the WIRE height (no re-measure), --select forwarded'
       resize_then_dismiss() {
-        id=$(run_job job::start --title "R" -- work 9) || return 1
+        id=$(job_call job::start --title "R" -- work 9) || return 1
         printf 'resize\t20\t%s\n\n' "$id" > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch
@@ -842,7 +855,7 @@ EOF
 
     It 'resize action with no selected job: relaunches with a bare resize (no --select), wire height used, no re-measure'
       resize_no_selection() {
-        run_job job::start --title "R" -- work 9 >/dev/null || return 1
+        job_call job::start --title "R" -- work 9 >/dev/null || return 1
         printf 'resize\t20\n\n' > "$JOB_SANDBOX/troupe-actions"
         export JOB_FAKE_TROUPE_ACTIONS="$JOB_SANDBOX/troupe-actions"
         JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::watch
@@ -868,8 +881,9 @@ EOF
     # of the 6 relaunches re-measures (every one carries a height on the
     # wire), so the measure count stays pinned at the initial launch's 1.
     It 'resize action: bails out past 5 consecutive resizes with no other action (log_error, rc 1), never re-measures'
+      Skip if 'complete-only: six dashboard launches, about 30 ms each in job::_dashboard_float' spec_complete_only
       resize_bailout() {
-        id=$(run_job job::start --title "R" -- work 9) || return 1
+        id=$(job_call job::start --title "R" -- work 9) || return 1
         local i
         for i in 1 2 3 4 5 6; do
           printf 'resize\t20\t%s\n' "$id"
@@ -892,8 +906,9 @@ EOF
     # fire (the streak wasn't secretly carried across the cancel), not
     # short-circuit early from the first resize's count alone.
     It 'resize action: a cancel in between resets the consecutive-resize streak'
+      Skip if 'complete-only: eight dashboard launches, about 30 ms each in job::_dashboard_float' spec_complete_only
       resize_streak_resets() {
-        id=$(run_job job::start --title "R" -- work 9) || return 1
+        id=$(job_call job::start --title "R" -- work 9) || return 1
         {
           printf 'resize\t20\t%s\n' "$id"
           printf 'cancel\t%s\n' "$id"
@@ -931,7 +946,7 @@ EOF
 
     It 'dies naming the install command when troupe is not on PATH'
       missing_troupe() {
-        id=$(run_job job::start -- true) || return 1
+        id=$(job_call job::start -- true) || return 1
         # HOME is sandboxed too: job::_troupe now falls back to
         # $HOME/.local/share/go/bin (the tmux-server-PATH fix), so a bare
         # PATH strip would find the real install and never die.
@@ -963,7 +978,7 @@ EOF
   Describe 'job::_statusbar_sync'
     It 'pokes refresh-client -S at the (seamed) tmux'
       poked() {
-        run_job job::_statusbar_sync
+        job_call job::_statusbar_sync
         cat "$JOB_FAKE_TMUX_LOG"
       }
       When call poked
@@ -972,7 +987,7 @@ EOF
 
     It 'job::start forces a repaint after enqueueing'
       start_pokes() {
-        run_job job::start --title T -- work 1 >/dev/null || return 1
+        job_call job::start --title T -- work 1 >/dev/null || return 1
         grep -c 'refresh-client -S' "$JOB_FAKE_TMUX_LOG"
       }
       When call start_pokes
@@ -982,19 +997,19 @@ EOF
 
   Describe 'job::_use_pane_host'
     It 'JOB_FORCE_HOST=pane wins outright, even with no TMUX at all'
-      selects() { JOB_FORCE_HOST=pane run_job job::_use_pane_host; }
+      selects() { JOB_FORCE_HOST=pane job_call job::_use_pane_host; }
       When call selects
       The status should be success
     End
 
     It 'JOB_FORCE_HOST=popup always declines, even under TMUX'
-      declines_forced() { JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" run_job job::_use_pane_host; }
+      declines_forced() { JOB_FORCE_HOST=popup TMUX="fake/sock,1,0" job_call job::_use_pane_host; }
       When call declines_forced
       The status should be failure
     End
 
     It 'declines outside TMUX with no force (no session to float a pane in)'
-      declines_no_tmux() { run_job job::_use_pane_host; }
+      declines_no_tmux() { job_call job::_use_pane_host; }
       When call declines_no_tmux
       The status should be failure
     End
@@ -1003,8 +1018,8 @@ EOF
   Describe 'job::_watch_pane — the pane-host driver body'
     It 'streams cancel (declined) then logs then EOF: one launch, confirm once, tab opened once, no respawn, cleanup'
       choreography() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
-        lid=$(run_job job::start --title "L" -- work 9) || return 2
+        id=$(job_call job::start --title "C" -- work 9) || return 1
+        lid=$(job_call job::start --title "L" -- work 9) || return 2
         mkdir -p "$JOB_PUEUE_LOG_DIR"
         : > "$JOB_PUEUE_LOG_DIR/7.log"
         printf 'cancel\t%s\nlogs\t%s\n' "$id" "$lid" > "$JOB_SANDBOX/follow-actions"
@@ -1021,8 +1036,8 @@ EOF
         local statefile_gone="no"
         [ ! -e "$JOB_STATE_ROOT/.dashboard-pane" ] && statefile_gone="yes"
         printf 'rc=%s|confirms=%s|tabs=%s|launches=%s|statefile_gone=%s' "$rc" \
-          "$(wc -l < "$JOB_FAKE_CONFIRM_LOG" | tr -d ' ')" \
-          "$(wc -l < "$JOB_FAKE_NEWTAB_LOG" | tr -d ' ')" \
+          "$(job_lines "$JOB_FAKE_CONFIRM_LOG")" \
+          "$(job_lines "$JOB_FAKE_NEWTAB_LOG")" \
           "$(grep -c -- '--follow' "$JOB_FAKE_FLOATPANE_LOG")" \
           "$statefile_gone"
       }
@@ -1032,7 +1047,7 @@ EOF
 
     It 'a confirmed cancel calls job::cancel — troupe keeps streaming, no relaunch (one launch total)'
       confirmed_cancel() {
-        id=$(run_job job::start --title "K" -- work 9) || return 1
+        id=$(job_call job::start --title "K" -- work 9) || return 1
         printf 'cancel\t%s\n' "$id" > "$JOB_SANDBOX/follow-actions"
         export JOB_FAKE_TROUPE_FOLLOW_ACTIONS="$JOB_SANDBOX/follow-actions"
         export JOB_FAKE_CONFIRM_RC=0
@@ -1055,7 +1070,7 @@ EOF
         rc=$?
         printf 'rc=%s|focus=%s|launches=%s' "$rc" \
           "$(tr -d '\n' < "$JOB_FAKE_FOCUS_LOG" 2>/dev/null)" \
-          "$([ -f "$JOB_FAKE_FLOATPANE_LOG" ] && wc -l < "$JOB_FAKE_FLOATPANE_LOG" | tr -d ' ' || echo 0)"
+          "$([ -f "$JOB_FAKE_FLOATPANE_LOG" ] && job_lines "$JOB_FAKE_FLOATPANE_LOG" || echo 0)"
       }
       When call focus_not_respawn
       The output should equal 'rc=0|focus=%42|launches=0'
@@ -1073,7 +1088,7 @@ EOF
         mkdir -p "$JOB_STATE_ROOT"
         printf '%s' '%99' > "$JOB_STATE_ROOT/.dashboard-pane"
         export JOB_FAKE_FOCUS_RC=1
-        id=$(run_job job::start --title "S" -- work 9) || return 1
+        id=$(job_call job::start --title "S" -- work 9) || return 1
         mkdir -p "$JOB_PUEUE_LOG_DIR"
         : > "$JOB_PUEUE_LOG_DIR/7.log"
         printf 'logs\t%s\n' "$id" > "$JOB_SANDBOX/follow-actions"
@@ -1095,7 +1110,7 @@ EOF
 
     It 'spawns the fixed 15-row float (no --measure) and wires --follow --no-frame --fill-height 15, resize hook absent'
       wiring() {
-        run_job job::start --title "W" -- work 9 >/dev/null || return 1
+        job_call job::start --title "W" -- work 9 >/dev/null || return 1
         export JOB_FAKE_TROUPE_FOLLOW_ACTIONS=""
         JOB_FORCE_HOST=pane run_job job::watch >/dev/null
         rc=$?
@@ -1216,7 +1231,7 @@ EOF
   Describe 'job::_watch_confirm_cancel'
     It 'cancels on confirm (rc 0) and asks with the danger-palette flags'
       confirmed() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
+        id=$(job_call job::start --title "C" -- work 9) || return 1
         JOB_FAKE_CONFIRM_RC=0 run_job job::_watch_confirm_cancel "$id" "C"
         rc=$?
         kills=$(grep -c '^kill 7$' "$JOB_FAKE_LOG")
@@ -1234,7 +1249,7 @@ EOF
 
     It 'declines on rc 1 — no kill, rc 1'
       declined() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
+        id=$(job_call job::start --title "C" -- work 9) || return 1
         JOB_FAKE_CONFIRM_RC=1 run_job job::_watch_confirm_cancel "$id" "C"
         rc=$?
         kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
@@ -1246,7 +1261,7 @@ EOF
 
     It 'declines on rc 130 (ESC cancel) — no kill, rc 1'
       esc_cancelled() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
+        id=$(job_call job::start --title "C" -- work 9) || return 1
         JOB_FAKE_CONFIRM_RC=130 run_job job::_watch_confirm_cancel "$id" "C"
         rc=$?
         kills=$(grep -c '^kill' "$JOB_FAKE_LOG")
@@ -1264,7 +1279,7 @@ EOF
     # fails the one `pueue kill` call job::cancel makes here).
     It 'propagates a failed cancel (pueue kill nonzero) — treated as not-cancelled, rc 1'
       cancel_fails() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
+        id=$(job_call job::start --title "C" -- work 9) || return 1
         JOB_FAKE_CONFIRM_RC=0 JOB_FAKE_RC=1 \
           run_job job::_watch_confirm_cancel "$id" "C" 2>"$JOB_SANDBOX/cc.err"
         rc=$?
@@ -1288,9 +1303,9 @@ EOF
     # reaching it.
     It 'survives a source-time exit from the widget stack when fzf is missing (never crashes the caller)'
       crash_guard() {
-        id=$(run_job job::start --title "C" -- work 9) || return 1
+        id=$(job_call job::start --title "C" -- work 9) || return 1
         mkdir -p "$JOB_SANDBOX/minbin"
-        ln -sf "$(command -v dirname)" "$JOB_SANDBOX/minbin/dirname"
+        ln -sf "${commands[dirname]}" "$JOB_SANDBOX/minbin/dirname"
         zsh -f -c '
           PATH="$1"; shift
           source "$1" >/dev/null 2>&1 || { print -r -- "JOBLIB-SOURCE-FAILED"; exit 99; }
@@ -1321,7 +1336,7 @@ EOF
   # needed pinning here).
   Describe 'job::start --modal (headless)'
     It 'prints exactly the id, skips the dashboard, rc 0 — zero troupe invocations'
-      headless() { run_job job::start --modal --title "M" -- work 9 </dev/null; }
+      headless() { job_call job::start --modal --title "M" -- work 9 </dev/null; }
       calls() { grep -c 'jobs --state-root' "$JOB_FAKE_TROUPE_LOG" 2>/dev/null || echo 0; }
       When call headless
       The status should equal 0
@@ -1334,8 +1349,8 @@ EOF
   Describe 'job::log'
     It 'passes through to pueue log for a known id'
       known() {
-        id=$(run_job job::start -- true) || return 1
-        run_job job::log "$id" >/dev/null
+        id=$(job_call job::start -- true) || return 1
+        job_call job::log "$id" >/dev/null
         grep -c '^log 7$' "$JOB_FAKE_LOG"
       }
       When call known
@@ -1343,7 +1358,7 @@ EOF
     End
 
     It 'rejects an unknown id'
-      When call run_job job::log no-such-job
+      When call job_call job::log no-such-job
       The status should equal 1
       The stderr should include 'unknown job'
     End

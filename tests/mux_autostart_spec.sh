@@ -152,6 +152,7 @@ EOS
     }
 
     It 'refuses to autostart when REX_SESSION is set'
+      Skip if 'complete-only: an interactive zsh over the rendered zshrc (~670 ms)' spec_complete_only
       When call gate "session:abc"
       The status should be failure
     End

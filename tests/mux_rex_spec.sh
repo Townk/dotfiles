@@ -147,6 +147,7 @@ Describe 'mux shim — Rex backend'
   End
 
   Describe 'verbs against a scratch server'
+    Skip if 'complete-only: starts a real scratch rex server and drives every verb against it (25-270 ms each)' spec_complete_only
     rex_missing() { ! command -v rex >/dev/null 2>&1; }
     Skip if 'rex is not installed' rex_missing
 

@@ -8,6 +8,10 @@ Describe 'rip audiobooks'
   ABS_BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-abs-authors"
   Include tests/rip_helper.sh
   Include tests/rip_audiobook_helper.sh
+  # rip.zsh is loaded once, here; `When run rip_zsh "…"` runs the string a
+  # `zsh -f -c` used to get, in a subshell (tests/rip_helper.sh).
+  rip_lib_load
+  BeforeAll 'rip_audiobook_static_build'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -45,7 +49,7 @@ Describe 'rip audiobooks'
     rc_mkbook
     rc_plain_sidecar
     before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions"
     The status should equal 0
     The output should include "A/B"
     The output should include "re-run with --apply"
@@ -56,7 +60,7 @@ Describe 'rip audiobooks'
     rc_mkbook
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"audible.asin":"X1"},"work":{"openlibrary":"OL9W"}}' \
       | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should equal 0
     The output should include "recorded companions for 1 of 1"
     The result of function rc_view should equal '[["pdf"],"X1","OL9W"]'
@@ -68,7 +72,7 @@ Describe 'rip audiobooks'
     rc_mkbook
     rc_plain_sidecar
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply && jq -c '.companions[0] | [.file,.kind,.bytes,.sha256]' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply && jq -c '.companions[0] | [.file,.kind,.bytes,.sha256]' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     The status should equal 0
     The output should include "[\"B.pdf\",\"pdf\",4,\"$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/B.pdf" | cut -d' ' -f1)\"]"
   End
@@ -79,7 +83,7 @@ Describe 'rip audiobooks'
       '{schema:1,kind:"audiobook",title:"B",authors:["A"],ids:{},companions:[{file:"B.pdf",kind:"pdf",bytes:4,sha256:$s}]}' \
       > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should equal 0
     The output should include "nothing to record"
     The result of function rc_sha should equal "$before"
@@ -95,7 +99,7 @@ Describe 'rip audiobooks'
     printf 'pdf\n'   > "$RIP_SANDBOX/server/audiobooks/A/B/B.pdf"
     printf '%s' '{"schema":1, "title": "B", BROKEN' > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should not equal 0
     The output should include "A/B"
     The output should not include "recorded companions for 1"
@@ -110,7 +114,7 @@ Describe 'rip audiobooks'
     rc_mkbook
     rc_plain_sidecar
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions"
     The status should equal 0
     The output should include "re-run with --apply"
     The result of function ssh_calls should equal "2"
@@ -126,7 +130,7 @@ Describe 'rip audiobooks'
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"D","authors":["C"],"ids":{}}' \
       | jq . > "$RIP_SANDBOX/server/audiobooks/C/D/.fleet-book.json"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should equal 0
     The output should include "recorded companions for 2 of 2"
     # THREE ssh calls for two books: enumerate, list, and ONE write batch.
@@ -151,7 +155,7 @@ Describe 'rip audiobooks'
     printf '%s' "$RC_RICH" > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     expected=$(printf '%s' "$RC_RICH" | jq -Sc .)
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should equal 0
     The output should include "recorded companions for 1 of 1"
     The result of function rc_has_path should equal "false"
@@ -170,7 +174,7 @@ Describe 'rip audiobooks'
     printf 'chapter\n' > "$RIP_SANDBOX/server/audiobooks/A/B/01 - Chapter One.MP3"
     rc_plain_sidecar
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should equal 0
     The result of function rc_kinds should equal '["pdf"]'
   End
@@ -184,7 +188,7 @@ Describe 'rip audiobooks'
     printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
     rc_plain_sidecar
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should equal 0
     The result of function rc_type should equal "array"
     The result of function rc_kinds should equal "[]"
@@ -199,7 +203,7 @@ Describe 'rip audiobooks'
     printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"
     chmod +x "$RIP_SANDBOX/ssh"
     before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should equal 2
     The output should not include "nothing to record"
     The output should not include "recorded companions"
@@ -217,7 +221,7 @@ Describe 'rip audiobooks'
     rc_plain_sidecar
     fake_server_ssh
     before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       chmod 555 '$RIP_SANDBOX/server/audiobooks/A/B'
       rip::ab_repair_companions --apply; rc=\$?
       chmod 755 '$RIP_SANDBOX/server/audiobooks/A/B'
@@ -242,7 +246,7 @@ Describe 'rip audiobooks'
     rc_mkbook
     printf 'null' > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should not equal 0
     The output should include "A/B"
     The output should not include "recorded companions for 1"
@@ -257,7 +261,7 @@ Describe 'rip audiobooks'
     rc_mkbook
     printf '{}' > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     before=$(shasum -a 256 "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" | cut -d' ' -f1)
-    When run zsh -c "source $RIPLIB && rip::ab_repair_companions --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_companions --apply"
     The status should not equal 0
     The output should include "A/B"
     The result of function rc_sha should equal "$before"
@@ -288,7 +292,7 @@ Describe 'rip audiobooks'
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B2","authors":["A2"],"ids":{}}' \
       | jq . > "$RIP_SANDBOX/server/audiobooks/A2/B2/.fleet-book.json"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       chmod 000 '$RIP_SANDBOX/server/audiobooks/A2'
       rip::ab_repair_companions --apply; rc=\$?
       chmod 755 '$RIP_SANDBOX/server/audiobooks/A2'
@@ -322,7 +326,7 @@ while IFS= read -r l; do
 done < <(printf 'a\nb\nc\n')
 print -r -- "loops=\$n"
 EOF
-    When run zsh "$RIP_SANDBOX/probe.zsh"
+    When run zsh -f "$RIP_SANDBOX/probe.zsh"
     The status should equal 0
     The output should include "loops=3"
   End
@@ -330,13 +334,13 @@ EOF
   It 'cli: --repair-companions is dispatched, and the usage names it'
     rc_mkbook
     rc_plain_sidecar
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --repair-companions
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --repair-companions
     The status should equal 0
     The output should include "re-run with --apply"
   End
 
   It 'cli: the usage line names --repair-companions'
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --help
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --help
     The status should equal 2
     The stderr should include "--repair-companions"
   End
@@ -351,11 +355,13 @@ EOF
   browse_a_tree() {
     mkdir -p "$RIP_SANDBOX/incoming/Martha Wells/Network Effect"
     printf 'audio\n' > "$RIP_SANDBOX/incoming/Martha Wells/Network Effect/Network Effect.m4b"
-    zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" \
+    zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" \
       --browse "$RIP_SANDBOX/incoming"
   }
 
   It 'cli: --browse emits the folder provider rows for a root'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     When call browse_a_tree
     The status should equal 0
     The output should include '"provider":"folder"'
@@ -364,13 +370,13 @@ EOF
   End
 
   It 'cli: --browse without a root refuses rather than scanning something'
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --browse
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --browse
     The status should not equal 0
     The stderr should include "root required"
   End
 
   It 'cli: the usage line names --browse'
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --help
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --help
     The status should equal 2
     The stderr should include "--browse"
   End
@@ -1806,7 +1812,7 @@ JS
   It 'backfill-work-uid: dry-run names the candidate and writes nothing at all'
     mkbook_empty "A/B" libation
     before=$(bwu_tree_digest)
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_work_uid"
     The status should equal 0
     The output should include "would assign a work uid: A/B"
     The output should include "re-run with --apply"
@@ -1815,7 +1821,7 @@ JS
 
   It 'backfill-work-uid: --apply mints a uuidv4 and leaves edition null'
     mkbook_empty "A/B" libation
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_work_uid --apply"
     The status should equal 0
     The output should include "backfilled 1 of 1 sidecar(s)"
     The result of function bwu_uid_ok_ab should equal "uuidv4"
@@ -1834,7 +1840,7 @@ JS
     printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"
     chmod +x "$RIP_SANDBOX/ssh"
     before=$(bwu_sha "A/B")
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_work_uid --apply"
     The status should equal 2
     The output should not include "nothing to backfill"
     The output should not include "backfilled"
@@ -1860,7 +1866,7 @@ JS
     printf '%s' "$ALREADY" > "$(sidecar_at "A/Already")"
     mkbook_empty "A/B" libation
     before=$(bwu_sha "A/Already")
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_work_uid --apply"
     The status should equal 0
     The output should include "backfilled 1 of 1"
     The result of function bwu_already_sha should equal "$before"
@@ -1869,7 +1875,7 @@ JS
   It 'backfill-work-uid: two candidate books mint two DIFFERENT uids'
     mkbook_empty "A/One" libation
     mkbook_empty "A/Two" libation
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_work_uid --apply"
     The status should equal 0
     The output should include "backfilled 2 of 2 sidecar(s)"
     The result of function bwu_two_uids_distinct should equal "distinct"
@@ -1879,7 +1885,7 @@ JS
     # No mkbook_empty call at all — nothing staged in $RIP_SANDBOX/server,
     # the same "seen==0" wording rip::ab_backfill_published uses so an
     # unreachable server is never conflated with a genuinely empty sweep.
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_work_uid"
     The status should equal 0
     The output should include "no sidecars found on the server"
     The output should include "cantina reachable"
@@ -1889,7 +1895,7 @@ JS
     mkbook_empty "A/B" libation
     mkbook_empty "C/D" libation
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_work_uid --apply"
     The status should equal 0
     The output should include "backfilled 2 of 2 sidecar(s)"
     # ONE ssh to enumerate, ONE for the whole write batch — not one per book.
@@ -1900,7 +1906,7 @@ JS
   It 'backfill-work-uid: a write that fails leaves the good sidecar untouched and reports the book failed'
     mkbook_empty "A/B" libation
     fake_server_ssh
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       chmod 555 '$RIP_SANDBOX/server/audiobooks/A/B'
       rip::ab_backfill_work_uid --apply; rc=\$?
       chmod 755 '$RIP_SANDBOX/server/audiobooks/A/B'
@@ -1916,7 +1922,7 @@ JS
   It 'backfill-work-uid: a dry run against the ssh branch writes nothing and opens no write connection'
     mkbook_empty "A/B" libation
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_work_uid"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_work_uid"
     The status should equal 0
     The output should include "re-run with --apply"
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"work": null'
@@ -1992,7 +1998,7 @@ EOF
       > "$RIP_SANDBOX/server/audiobooks/$nfc_author/Le Petit Prince/.fleet-book.json"
     fake_server_ssh_logs_stdin
     want_b64=$(printf '%s/Le Petit Prince' "$nfc_author" | jq -sRr '@base64')
-    When run zsh -c "source $RIPLIB && rip::_ab_work_uid_for '$nfd_author/Le Petit Prince' >/dev/null"
+    When run rip_zsh "source $RIPLIB && rip::_ab_work_uid_for '$nfd_author/Le Petit Prince' >/dev/null"
     The status should equal 0
     # The read asked for the NFC spelling...
     The contents of file "$RIP_SANDBOX/ssh.cmds" should include "$nfc_author"
@@ -2003,7 +2009,7 @@ EOF
   It 'remote sidecar: reads ONE stored sidecar over ssh, with no jq on the server'
     mkbook_empty "A/B" libation
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/B' | jq -r '.title'"
+    When run rip_zsh "source $RIPLIB && rip::_remote_sidecar_json 'A/B' | jq -r '.title'"
     The status should equal 0
     The output should equal "B"
     The result of function ssh_calls should equal "1"
@@ -2013,7 +2019,7 @@ EOF
   It 'remote sidecar: a book with no sidecar is confirmed ABSENT, not unknown'
     mkbook_bare "A/NoSidecar"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/NoSidecar'"
+    When run rip_zsh "source $RIPLIB && rip::_remote_sidecar_json 'A/NoSidecar'"
     The status should equal 1
     The output should equal ""
   End
@@ -2026,7 +2032,7 @@ EOF
     mkbook_empty "A/B" libation
     fake_server_ssh_reads_stdin
     printf 'sentinel\n' > "$RIP_SANDBOX/in.txt"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       { rip::_remote_sidecar_json 'A/B' >/dev/null; cat; } < $RIP_SANDBOX/in.txt"
     The status should equal 0
     The output should equal "sentinel"
@@ -2044,7 +2050,7 @@ EOF
 exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/B'"
+    When run rip_zsh "source $RIPLIB && rip::_remote_sidecar_json 'A/B'"
     The status should equal 2
     The output should equal ""
   End
@@ -2055,7 +2061,7 @@ EOF
   It 'remote sidecar: a malformed stored sidecar is unknown, never treated as readable'
     mkbook_malformed "A/Broken"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::_remote_sidecar_json 'A/Broken'"
+    When run rip_zsh "source $RIPLIB && rip::_remote_sidecar_json 'A/Broken'"
     The status should equal 2
     The output should equal ""
   End
@@ -2213,10 +2219,12 @@ EOF
   rtg_ids_f()     { rtg_ids "F Author/F Book"; }
 
   It 'retag: a dry run names every book whose tags disagree with its path and writes NOTHING'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
     before=$(rtg_tree_digest)
-    When run zsh -c "source $RIPLIB && rip::ab_retag"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag"
     The status should equal 0
     The output should include "would retag: A Author/B Book"
     The output should include 'album_artist="A Author"'
@@ -2230,9 +2238,11 @@ EOF
   # remux that dropped it would look identical to one that preserved it in
   # every other assertion here.
   It 'retag: --apply rewrites a mismatched book so its tags say what its path says'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The output should include "retagged: A Author/B Book"
     The output should include "retagged 1 of 1 book(s)"
@@ -2248,10 +2258,12 @@ EOF
   # no jq, so the canonical values are computed HERE and shipped base64-framed
   # beside the album_artist/album/title it already carries.
   It 'retag: --apply canonicalises a stored artist and composer in place, and creates neither where absent'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book_tags "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title" 'J.D. Jackson' 'A.B. Comp'
     rtg_book_tags "C Author/D Book" "Wrong" "Wrong Album" "Wrong Title" - -
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The output should include "retagged 2 of 2 book(s)"
     The result of function rtg_tags_ab should equal "A Author|B Book|B Book"
@@ -2271,9 +2283,11 @@ EOF
   # not by the absence of a log line: a sweep that rewrote the same book on
   # every run forever is the failure mode this project has walked into twice.
   It 'retag: a stored book whose ONLY fault is an un-spaced artist is swept, and the sweep then converges'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book_tags "A Author/B Book" "A Author" "B Book" "B Book" 'J.K. Rowling' -
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       book='$RIP_SANDBOX/server/audiobooks/A Author/B Book/book.m4b'
       rip::ab_retag --apply || exit 9
       s1=\$(shasum -a 256 \"\$book\" | cut -d' ' -f1)
@@ -2295,12 +2309,14 @@ EOF
   # comparing them against EACH OTHER is what catches a divergence that no
   # amount of agreeing-with-the-spec would.
   It 'retag: the staged retag and the sweep write the same artist and composer'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book_tags "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title" 'J.R.R. Tolkien' 'e.e. cummings'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A Author/B Book"
     cp "$RIP_SANDBOX/server/audiobooks/A Author/B Book/book.m4b" \
        "$RIP_STAGING_ROOT/audiobooks/A Author/B Book/book.m4b"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       $RT_PROBE
       export RIP_FFMPEG_BIN=ffmpeg RIP_FFPROBE_BIN=ffprobe
       staged='$RIP_STAGING_ROOT/audiobooks/A Author/B Book/book.m4b'
@@ -2323,11 +2339,13 @@ EOF
   # with only the matching book present the function returns before the write
   # path ever runs, so the digest would guard the classifier and nothing else.
   It 'retag: --apply leaves a book whose tags already match byte-for-byte identical'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "Good Author/Good Book" "Good Author" "Good Book" "Good Book"
     rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
     before=$(rtg_good_sha)
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The output should include "retagged 1 of 1 book(s)"
     The output should not include "retagged: Good Author/Good Book"
@@ -2339,13 +2357,15 @@ EOF
   # VPN yields zero rows, prints "nothing to retag" and exits 0 — on the sweep
   # that rewrites audio in the operator's only copy of their library.
   It 'retag: an unreachable server refuses with rc 2 and never says "nothing to retag"'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
     fake_server_ssh
     printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"
     chmod +x "$RIP_SANDBOX/ssh"
     before=$(rtg_tree_digest)
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 2
     The output should not include "nothing to retag"
     The output should not include "retagged"
@@ -2356,6 +2376,8 @@ EOF
   # can land and the probe die, and an empty probe reads exactly like a
   # library whose tags are all already correct.
   It 'retag: a probe connection that dies is refused, not read as a library already in order'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
     fake_server_ssh
@@ -2371,7 +2393,7 @@ exec "$dash_bin" -c "\$cmd"
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     before=$(rtg_tree_digest)
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 2
     The output should not include "nothing to retag"
     The output should not include "retagged"
@@ -2383,6 +2405,8 @@ EOF
   # ATTEMPTED. Here one book's remux fails, and the failure must show up as
   # both a smaller count and untouched bytes.
   It 'retag: --apply counts only the books whose bytes actually changed'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/Good Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
     rtg_book "A Author/Bad Book" "J.K. Rowling" "Wrong Album" "Wrong Title" manual \
@@ -2398,7 +2422,7 @@ exec "$real_ffmpeg" "\$@"
 EOF
     chmod +x "$RIP_SANDBOX/stub/ffmpeg"
     before=$(rtg_bad_sha)
-    When run zsh -c "PATH='$RIP_SANDBOX/stub':\$PATH; source $RIPLIB && rip::ab_retag --apply"
+    When run zsh -f -c "PATH='$RIP_SANDBOX/stub':\$PATH; source $RIPLIB && rip::ab_retag --apply"
     The status should equal 1
     The output should include "retagged 1 of 2 book(s)"
     The output should include "retagged: A Author/Good Book"
@@ -2428,12 +2452,14 @@ EOF
   # for every folder-imported book, which is the failure this whole re-key
   # exists to prevent, pointed the other way.
   It 'retag: --apply re-keys a Case C stored-bytes hash and PRESERVES an acquire source hash'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "M Author/M Book" "Wrong" "Wrong Album" "Wrong Title" manual \
       '{"fleet.uid":"11111111-1111-4111-8111-111111111111","local.sha256":"aaaa"}'
     rtg_book "F Author/F Book" "Wrong" "Wrong Album" "Wrong Title" folder \
       '{"fleet.uid":"22222222-2222-4222-8222-222222222222","local.sha256":"bbbb"}'
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The output should include "retagged 2 of 2 book(s)"
     The output should include "re-keyed: M Author/M Book"
@@ -2449,10 +2475,12 @@ EOF
   # touched; the key becomes wrong exactly when the bytes change, so that is
   # when it moves.
   It 'retag: --apply leaves the local.sha256 of a book it did not rewrite exactly where it was'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "M Author/M Book" "M Author" "M Book" "M Book" manual '{"local.sha256":"aaaa"}'
     rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title"
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The output should include "retagged 1 of 1 book(s)"
     The output should not include "re-keyed"
@@ -2466,12 +2494,14 @@ EOF
   # non-zero here would report the operator's library as permanently broken
   # every single run.
   It 'retag: a container that cannot carry album_artist is skipped with a warning, never refused'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     mkdir -p "$RIP_SANDBOX/server/audiobooks/W Author/W Book"
     ffmpeg -v error -y -i "$RIP_SANDBOX/rtg-a.m4a" "$RIP_SANDBOX/server/audiobooks/W Author/W Book/book.wav"
     rtg_sidecar "W Author/W Book" libation '{}'
     before=$(rtg_tree_digest)
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The stderr should include "not retagging W Author/W Book/book.wav"
     The stderr should include "cannot carry album_artist"
@@ -2488,11 +2518,13 @@ EOF
   # `set --` that assembles the conditional -metadata flags have no other
   # example that exercises them under a genuinely POSIX shell.
   It 'retag: --apply drives a server with NO jq, in ONE ssh per stage'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book_tags "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title" 'J.K. Rowling' 'A.B. Comp'
     rtg_book_tags "C Author/D Book" "Wrong" "Wrong Album" "Wrong Title" - -
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The output should include "retagged 2 of 2 book(s)"
     # enumerate, list, probe, write — one per STAGE, not one per book.
@@ -2505,21 +2537,25 @@ EOF
   End
 
   It 'CLI: --retag is wired and dry-run by default'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/B Book" "J.K. Rowling" "Wrong Album" "Wrong Title"
     before=$(rtg_tree_digest)
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --retag
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --retag
     The status should equal 0
     The output should include "would retag: A Author/B Book"
     The result of function rtg_tree_digest should equal "$before"
   End
 
   It 'retag: a dry run against the ssh branch writes nothing and opens no write connection'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title"
     fake_server_ssh
     before=$(rtg_tree_digest)
-    When run zsh -c "source $RIPLIB && rip::ab_retag"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag"
     The status should equal 0
     The output should include "re-run with --apply"
     # enumerate + list. No probe-side write, and no write connection at all.
@@ -2548,7 +2584,7 @@ EOF
     printf 'audio\n' > "$RIP_SANDBOX/stage/A Author/B Book/book.m4b"
     rtg_meta "$RIP_SANDBOX/meta-manual.json" manual '{}'
     rtg_meta "$RIP_SANDBOX/meta-folder.json" folder '{"local.sha256":"SOURCEHASH"}'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       SC='$RIP_SANDBOX/stage/A Author/B Book/.fleet-book.json'
       rip::_book_sidecar '$RIP_SANDBOX/stage/A Author/B Book' '$RIP_SANDBOX/meta-manual.json' || exit 9
       jq -r '.source.provider' \"\$SC\"
@@ -2573,7 +2609,7 @@ EOF
     printf '%s\n' '{"schema":1,"kind":"audiobook","source":[],"ids":{"audible.asin":"B0KEEP"}}' \
       > "$RIP_SANDBOX/stage2/A Author/B Book/.fleet-book.json"
     rtg_meta "$RIP_SANDBOX/meta-folder.json" folder '{}'
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       rip::_book_sidecar '$RIP_SANDBOX/stage2/A Author/B Book' '$RIP_SANDBOX/meta-folder.json' || exit 9
       jq -r '.ids[\"audible.asin\"]' '$RIP_SANDBOX/stage2/A Author/B Book/.fleet-book.json'"
     The status should equal 0
@@ -2586,14 +2622,16 @@ EOF
   # the gate is supposed to see — a hand-written sidecar would pass whatever
   # the merge does.
   It 'retag: a book re-acquired by the folder provider keeps its source hash through the sweep'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title" manual '{}'
     rtg_meta "$RIP_SANDBOX/meta-manual.json" manual '{}'
     rtg_meta "$RIP_SANDBOX/meta-folder.json" folder '{"local.sha256":"SOURCEHASH"}'
-    zsh -c "source $RIPLIB
+    ( rip_zsh "source $RIPLIB
       rip::_book_sidecar '$RIP_SANDBOX/server/audiobooks/A Author/B Book' '$RIP_SANDBOX/meta-manual.json'
-      rip::_book_sidecar '$RIP_SANDBOX/server/audiobooks/A Author/B Book' '$RIP_SANDBOX/meta-folder.json'"
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+      rip::_book_sidecar '$RIP_SANDBOX/server/audiobooks/A Author/B Book' '$RIP_SANDBOX/meta-folder.json'" )
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The output should include "retagged 1 of 1 book(s)"
     The output should not include "re-keyed"
@@ -2609,13 +2647,15 @@ EOF
   # rip::ab_repair_sidecars' `norow` bucket, which that verb reports by name
   # and deliberately never repairs.
   It 'retag: a stored book with no sidecar at all is named, never counted as done'
+    Skip if 'complete-only: real ffmpeg/ffprobe runs on real media (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
     rtg_seed
     rtg_book "A Author/B Book" "Wrong" "Wrong Album" "Wrong Title"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Orphan Author/Orphan Book"
     ffmpeg -v error -y -i "$RIP_SANDBOX/rtg-a.m4a" -c:a copy \
       "$RIP_SANDBOX/server/audiobooks/Orphan Author/Orphan Book/book.m4b"
     orphan_before=$(rtg_orphan_sha)
-    When run zsh -c "source $RIPLIB && rip::ab_retag --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retag --apply"
     The status should equal 0
     The stderr should include "no sidecar for Orphan Author/Orphan Book"
     The stderr should include "run --repair-sidecars"

@@ -7,15 +7,16 @@
 
 Describe 'share:: rclone backend'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-rclone"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
+    share_fresh "$SB" bin
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
     SHARE_STATE_DIR="$SB/state"
     SHARE_PROFILE=work
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [onedrive]
 backend = "rclone"
 remote = "onedrive:Shared/drop"
@@ -58,7 +59,7 @@ TOML
   End
 
   It 'sends: copies, links, records a receipt and prints one line'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
@@ -73,7 +74,7 @@ SH
   End
 
   It 'surfaces the admin-disabled link failure with an actionable message'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'Invalid request\n' >&2; exit 1; fi
@@ -96,7 +97,7 @@ SH
   # that prints stats-shaped output and THEN exits non-zero is the case that
   # would fool a check reading the wrong side of the pipe.
   It 'fails when rclone copy exits non-zero, even after it printed output'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = copyto ]; then
@@ -117,7 +118,7 @@ SH
   # that case must be the DIRECTORY, not any one file inside it — otherwise
   # the recipient's link would only ever reach the last file copied.
   It 'links the shared directory (not a file inside it) for a multi-file send'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
 for a in "$@"; do
@@ -156,7 +157,7 @@ SH
   # reported percent to a file, and sets JOB_ID to turn share::_progress on.
 
   It 'reports monotonic weighted progress across a multi-file send, never reaching 100 before the link step'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'https://corp.example.com/:f:/g/dir\n'; exit 0; fi
@@ -190,7 +191,7 @@ SH
   End
 
   It 'reports 100 only after the link succeeds for a single-file send'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
@@ -218,7 +219,7 @@ SH
   End
 
   It 'leaves the last progress value below 100 when the link fails'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'Invalid request\n' >&2; exit 1; fi
@@ -250,7 +251,7 @@ SH
   # 50 (1*100/2), then the link brings it to 100 — matching the resolution
   # worked example exactly.
   It 'still reaches 100 for a fast transfer that prints no interim stats line'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
@@ -299,7 +300,7 @@ SH
   # on a multi-file rclone share a silent no-op: the link stayed live and the
   # objects stayed in OneDrive. `purge` removes the directory regardless.
   It 'revokes by purging the shared directory'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
 SH
@@ -321,7 +322,7 @@ SH
   # deletefile` (now `purge`) fail on that case specifically once a
   # directory-only revoke command was in play.
   It 'records the shared directory, not a file inside it, as the ledger ref for a single-file send'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
 for a in "$@"; do
@@ -355,7 +356,7 @@ SH
   # threading for rclone, driven straight at share::rclone_send the way the
   # rest of this file already does.
   It 'records a real expiry using the default duration when none is given'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
@@ -376,7 +377,7 @@ SH
   End
 
   It 'records a real expiry honouring an explicit --expiration override'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
@@ -398,7 +399,7 @@ SH
   End
 
   It 'prints the real expiry in the blurb instead of the hardcoded "never"'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 for a in "$@"; do
   if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
@@ -412,7 +413,7 @@ SH
   End
 
   It 'records the shared directory as the ledger ref for a multi-file send, and revoke purges it'
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
 for a in "$@"; do

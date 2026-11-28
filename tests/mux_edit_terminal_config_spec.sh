@@ -6,6 +6,10 @@
 # and a remote-attached session edits ~/.ssh/config, regardless of the server's
 # birth env. This is the deliberate behavior change; it pins that behavior.
 Describe 'edit-terminal-config — session-env SSH detection (Decision 4)'
+  # Two warm slots for the two stubs every example writes: see
+  # tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   SCRIPT="home/dot_config/mux/scripts/executable_edit-terminal-config"
 
   setup() {
@@ -54,7 +58,7 @@ EOS
 
   It 'opens ~/.ssh/config when the SESSION env reports a remote client'
     export STUB_SSH="10.0.0.2 55000 10.0.0.9 22"
-    When call zsh "$SCRIPT"
+    When call zsh -f "$SCRIPT"
     The contents of file "$NEWWIN_LOG" should include "Remote SSH Config"
     The contents of file "$NEWWIN_LOG" should include ".ssh/config"
     The status should be success
@@ -66,7 +70,7 @@ EOS
   # (the Cmd+, regression once Decision 4 stopped masking it as SSH).
   It 'opens the Ghostty config for the real lowercase TERM_PROGRAM=ghostty'
     export STUB_TERM_PROGRAM="ghostty"
-    When call zsh "$SCRIPT"
+    When call zsh -f "$SCRIPT"
     The contents of file "$NEWWIN_LOG" should include "Ghostty Config"
     The contents of file "$NEWWIN_LOG" should not include ".ssh/config"
     The status should be success
@@ -74,14 +78,14 @@ EOS
 
   It 'still matches a capitalized TERM_PROGRAM (case-insensitive)'
     export STUB_TERM_PROGRAM="Ghostty"
-    When call zsh "$SCRIPT"
+    When call zsh -f "$SCRIPT"
     The contents of file "$NEWWIN_LOG" should include "Ghostty Config"
     The status should be success
   End
 
   It 'opens the Wezterm config for TERM_PROGRAM=WezTerm'
     export STUB_TERM_PROGRAM="WezTerm"
-    When call zsh "$SCRIPT"
+    When call zsh -f "$SCRIPT"
     The contents of file "$NEWWIN_LOG" should include "Wezterm Config"
     The status should be success
   End
@@ -112,9 +116,12 @@ EOS
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
+  # A HOME that does not exist, and NOT under /home: that is an automount
+  # point on macOS, where every lookup of a dotfile below it (jq's ~/.jq,
+  # zsh's ~/.zshenv) waits ~100 ms for autofs to say no.
   edit() {
-    env -u TMUX -u MUX_BACKEND -u REX_CLIENT -u REX_BLOCK HOME=/home/u PATH="$TEST_TMP:$PATH" \
-      REX_SESSION=session:s MUX_REX_BIN="$TEST_TMP/rex" MUX_LIB="$PWD/home/dot_local/lib" zsh "$SCRIPT" 2>/dev/null
+    env -u TMUX -u MUX_BACKEND -u REX_CLIENT -u REX_BLOCK HOME=/nohome/u PATH="$TEST_TMP:$PATH" \
+      REX_SESSION=session:s MUX_REX_BIN="$TEST_TMP/rex" MUX_LIB="$PWD/home/dot_local/lib" zsh -f "$SCRIPT" 2>/dev/null
     print -r -- "rc=$?"
   }
   calls() { grep -E ' window | session\.select ' "$TEST_TMP/rex.log" | sed -e 's/^--autostart=false //' -e 's/^--timeout 3s //'; }
@@ -123,7 +130,7 @@ EOS
     run() { edit; calls; }
     When call run
     The output should equal "rc=0
-window new -s session:s --json Rex Config -- $TEST_TMP/nvim /home/u/.config/rex/init.lua
+window new -s session:s --json Rex Config -- $TEST_TMP/nvim /nohome/u/.config/rex/init.lua
 -C client:mac do -s session:s session.select session_id=session:s window_id=window:new"
   End
 

@@ -9,8 +9,9 @@
 # These examples run in a FRESH zsh with nothing preloaded — like the real job.
 
 Describe 'share inside a job (job.zsh not preloaded)'
+  Include tests/share_helper.sh
   setup() {
-    SB="$SHELLSPEC_TMPBASE/share-job-side"; rm -rf "$SB"; mkdir -p "$SB/jobs/j1"
+    SB="$SHELLSPEC_TMPBASE/share-job-side"; share_fresh "$SB" jobs/j1
     export JOB_STATE_ROOT="$SB/jobs" SHARE_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/share.zsh"
   }
   BeforeEach 'setup'

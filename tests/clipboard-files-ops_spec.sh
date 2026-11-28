@@ -349,6 +349,7 @@ Describe 'recobd: clip.set.files (was U)'
   # assertion is that the row was really restored -- it was the OLDER of two
   # rows, and afterwards it is the one `files.list` resolves.
   It 'restores a stored clip by bare rowid'
+    Skip if 'complete-only: a real recobd restores a stored clip onto its private pasteboard (~100 ms)' spec_complete_only
     restore_row() {
       store_ready
       id=$(sql "INSERT INTO clips (type_kind,source_host,last_ts)
@@ -401,6 +402,7 @@ End
 # for the manifest is who these two operations exist for, and `files.grant`
 # handing a token to a remote is the security-relevant half.
 Describe 'recobd: files.list and files.grant (was L and K)'
+  Skip if 'complete-only: a real recobd per example, sqlite3 seeding and the real bridge client (90-135 ms)' spec_complete_only
   Include tests/recob_helper.sh
   BeforeEach 'setup'
   AfterEach 'recob_stop'
@@ -607,6 +609,7 @@ Describe 'recobd: store.persist.files (was M)'
   }
 
   It 'inserts a files row and its manifest blob without touching the pasteboard'
+    Skip if 'complete-only: a real recobd persists a files row and the store is read back with sqlite3 (115-160 ms)' spec_complete_only
     Skip if 'the pasteboard read is the macOS build (§14.7)' recob_no_pasteboard
     persist() {
       ask op:clip.set text=sentinel regtype=v >/dev/null
@@ -735,6 +738,7 @@ Describe 'recobd: store.persist.files (was M)'
   # like a text clip of the same bytes, so an unscoped dedup would bump the
   # unrelated TEXT row's last_ts instead of inserting a files row.
   It 'inserts a NEW files row (not bumping a same-hash TEXT row) when the joined paths collide with an old text clip'
+    Skip if 'complete-only: a real recobd persists a files row and the store is read back with sqlite3 (115-160 ms)' spec_complete_only
     collide() {
       store_ready
       joined=$(printf '/tmp/mcollide-a.txt\n/tmp/mcollide-b.txt')
@@ -758,6 +762,7 @@ End
 # to match an existing FILES row must insert its own row rather than bump that
 # one, and it may not persist a file kind at all.
 Describe 'recobd: store.persist.text (was P)'
+  Skip if 'complete-only: a real recobd persists a text row and the store is read back with sqlite3 (110-135 ms)' spec_complete_only
   Include tests/recob_helper.sh
   BeforeEach 'setup'
   AfterEach 'recob_stop'
@@ -807,6 +812,7 @@ End
 # mid-stream `E` that ends the exchange rather than the connection -- is what
 # the last two examples are about, and neither was expressible before.
 Describe 'recobd: files.fetch (was f and a)'
+  Skip if 'complete-only: a real recobd per example, a seeded grant and a streamed fetch through the real client (86-115 ms)' spec_complete_only
   Include tests/recob_helper.sh
   BeforeEach 'setup'
   AfterEach 'recob_stop'

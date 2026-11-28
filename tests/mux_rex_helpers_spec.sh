@@ -6,18 +6,26 @@
 Describe 'Rex primitives of the mux shim'
   Include home/dot_local/lib/mux-bootstrap.zsh
 
-  setup() {
-    RH_TMP=$(mktemp -d)
-    cat >"$RH_TMP/rex" <<EOS
+  # The fake rex and its two fixtures are the same for every example, so they
+  # are written ONCE per file (and the fake is run once here: the first exec
+  # of a new script is the expensive one). The fake finds the example's own
+  # directory in $RH_TMP at run time: its log, the request it saves and the
+  # inspect counter go there, and a view.json or clients.json an example
+  # writes there is answered instead of the shared one.
+  build_fake() {
+    RH_STATIC="$SHELLSPEC_TMPBASE/rh-static"
+    mkdir -p "$RH_STATIC" || return 1
+    cat >"$RH_STATIC/rex" <<EOS
 #!/bin/sh
-printf '%s\n' "\$*" >>"$RH_TMP/rex.log"
+printf '%s\n' "\$*" >>"\$RH_TMP/rex.log"
+fixture() { if [ -e "\$RH_TMP/\$1" ]; then cat "\$RH_TMP/\$1"; else cat "$RH_STATIC/\$1"; fi; }
 case " \$* " in
-  *" client ls "*) cat "$RH_TMP/clients.json" ;;
-  *" session.view "*) [ "\${STUB_VIEW:-ok}" = ok ] || exit 1; cat "$RH_TMP/view.json" ;;
+  *" client ls "*) fixture clients.json ;;
+  *" session.view "*) [ "\${STUB_VIEW:-ok}" = ok ] || exit 1; fixture view.json ;;
   *" ls --json "*) echo '{"sessions":[{"session_id":"session:1","label":"Main"},{"session_id":"session:2","label":"Jobs"},{"session_id":"session:3","label":"Jobs"}]}' ;;
-  *" session.new_layer "*) cat >"$RH_TMP/req.json"; echo '{"block_ids":["block:layer"]}' ;;
+  *" session.new_layer "*) cat >"\$RH_TMP/req.json"; echo '{"block_ids":["block:layer"]}' ;;
   *" block inspect "*)
-    n=\$(cat "$RH_TMP/inspects" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\$n" >"$RH_TMP/inspects"
+    n=\$(cat "\$RH_TMP/inspects" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\$n" >"\$RH_TMP/inspects"
     # STUB_INSPECT: one exit status per call, the last one repeating.
     set -- \${STUB_INSPECT:-0}
     [ "\$n" -le "\$#" ] || n=\$#
@@ -25,8 +33,8 @@ case " \$* " in
 esac
 exit 0
 EOS
-    chmod +x "$RH_TMP/rex"
-    cat >"$RH_TMP/view.json" <<'EOS'
+    chmod +x "$RH_STATIC/rex"
+    cat >"$RH_STATIC/view.json" <<'EOS'
 {"session_id":"session:1","active_window_id":"window:b","windows":[
  {"window_id":"window:a","label":"logs","focused_block_id":"block:a1","layers":[
    {"layer_id":"layer:a","kind":"tiled","blocks":[{"block_id":"block:a1","label":"shell"}]}]},
@@ -36,7 +44,7 @@ EOS
  {"window_id":"window:c","label":"logs","layers":[
    {"layer_id":"layer:c","kind":"tiled","blocks":[{"block_id":"block:c1"}]}]}]}
 EOS
-    cat >"$RH_TMP/clients.json" <<'EOS'
+    cat >"$RH_STATIC/clients.json" <<'EOS'
 {"clients":[
  {"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","principal":{"transport":"unix"},"session_ids":["session:1","session:2"]},
  {"client_id":"client:ipad","info":{"kind":"app"},"connection_state":"connected","principal":{"transport":"tailscale"},"session_ids":["session:2"]},
@@ -44,10 +52,19 @@ EOS
  {"client_id":"client:gone","info":{"kind":"app"},"connection_state":"lost","principal":{"transport":"unix"},"session_ids":["session:1"]},
  {"client_id":"client:cli","info":{"kind":"cli"},"connection_state":"connected","principal":{"transport":"unix"}}]}
 EOS
-    export MUX_REX_BIN="$RH_TMP/rex" REX_SESSION=session:1 REX_BLOCK=block:b1
+    RH_TMP="$RH_STATIC/warm" && mkdir -p "$RH_TMP" && RH_TMP="$RH_TMP" "$RH_STATIC/rex" whoami
+  }
+  BeforeAll 'build_fake'
+  Include tests/exec_warm_helper.sh
+
+  setup() {
+    # :a squeezes the `//` of the tmpbase path: an example compares this
+    # directory with the cwd the code reports.
+    spec_sandbox rh; RH_TMP=${SANDBOX:a}
+    export RH_TMP MUX_REX_BIN="$RH_STATIC/rex" REX_SESSION=session:1 REX_BLOCK=block:b1
     unset TMUX STUB_VIEW STUB_INSPECT _MUX_RX_AWAIT_MISSES
   }
-  cleanup() { rm -rf "$RH_TMP"; unset MUX_REX_BIN REX_SESSION REX_BLOCK TMUX STUB_VIEW STUB_INSPECT; }
+  cleanup() { unset MUX_REX_BIN REX_SESSION REX_BLOCK TMUX STUB_VIEW STUB_INSPECT; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -57,7 +74,10 @@ EOS
   # The one launcher of a layer running rex-modal: the floats, mux-modal and
   # rex-picker all go through it, so the command line is pinned here once.
   Describe '_mux_rx_modal_layer'
-    layer() { ( cd "$RH_TMP" && HOME=/home/u _mux_rx_modal_layer "$@" ); }
+    # A HOME that does not exist, and NOT under /home: that is an automount
+    # point on macOS, where every lookup of a dotfile below it (jq's ~/.jq,
+    # zsh's ~/.zshenv) waits ~100 ms for autofs to say no.
+    layer() { ( cd "$RH_TMP" && HOME=/nohome/u _mux_rx_modal_layer "$@" ); }
     cmdline() { jq -r '.layout.block.options.command | join(" ")' "$RH_TMP/req.json"; }
     req_cwd() { jq -r '.layout.block.options.cwd // "none"' "$RH_TMP/req.json"; }
 
@@ -65,7 +85,7 @@ EOS
       plain() { layer 70% 60% Pick -- --no-chrome -- /bin/true a; cmdline; [[ "$(req_cwd)" == "$RH_TMP" ]] && print cwd-ours; jq -r '.layout.block.label' "$RH_TMP/req.json"; }
       When call plain
       The output should equal "block:layer
-/home/u/.config/mux/scripts/rex-modal --origin block:b1 --no-chrome -- /bin/true a
+/nohome/u/.config/mux/scripts/rex-modal --origin block:b1 --no-chrome -- /bin/true a
 cwd-ours
 Pick"
     End
@@ -73,7 +93,7 @@ Pick"
     It 'promises a height in cells to the target, ahead of the caller'"'"'s variables'
       rows() { layer --env A=1 --env B=2 57 15 "" -- -- /bin/true >/dev/null; cmdline; }
       When call rows
-      The output should equal "env MUX_REX_MODAL_ROWS=15 A=1 B=2 /home/u/.config/mux/scripts/rex-modal --origin block:b1 -- /bin/true"
+      The output should equal "env MUX_REX_MODAL_ROWS=15 A=1 B=2 /nohome/u/.config/mux/scripts/rex-modal --origin block:b1 -- /bin/true"
     End
 
     It 'takes another directory, or none, from the caller'
@@ -272,6 +292,13 @@ client:ipad session:2"
   End
 
   Describe '_mux_rx_wait_block_gone'
+    # The code naps between probes (_mux_sleep): on the virtual clock, so no
+    # example waits. The clock is made once for the group; each example
+    # starts it again from an empty journal (one fork instead of ten).
+    rewind() { : >"$SPEC_CLOCK_FILE"; spec_clock_set; }
+    clock_once() { spec_clock_set && spec_clock_warm; }   # made, and run once
+    BeforeAll 'clock_once'
+    BeforeEach 'rewind'
     waited() { _mux_rx_wait_block_gone "$@"; print -r -- "rc=$? probes=$(inspects)"; }
 
     It 'returns as soon as the block is gone'
@@ -287,6 +314,7 @@ client:ipad session:2"
     End
 
     It 'starts the count again when the server answers'
+      Skip if 'complete-only: nine probes, each a fake rex and a fake sleep (~135 ms)' spec_complete_only
       export STUB_INSPECT="1 1 0 1 1 0 1 1 1"
       When call waited block:x 3
       The output should equal "rc=0 probes=9"
@@ -335,6 +363,13 @@ client:ipad session:2"
   End
 
   Describe 'the pane tty size'
+    # The code naps between probes (_mux_sleep): on the virtual clock, so no
+    # example waits. The clock is made once for the group; each example
+    # starts it again from an empty journal (one fork instead of ten).
+    rewind() { : >"$SPEC_CLOCK_FILE"; spec_clock_set; }
+    clock_once() { spec_clock_set && spec_clock_warm; }   # made, and run once
+    BeforeAll 'clock_once'
+    BeforeEach 'rewind'
     # A canned tty: one "rows cols" per read from $RH_TMP/sizes, the last
     # line repeating; `none` is a tty that cannot be read.
     fake_tty() {
@@ -453,6 +488,7 @@ Describe 'the Rex app bundle path'
   End
 
   It 'reaches all three hooks through one preamble'
+    Skip if 'complete-only: renders four chezmoi templates (~110 ms)' spec_complete_only
     preambles() {
       local f
       for f in run_onchange_after_59-reload-rex run_after_60-rex-main-session run_onchange_after_61-rex-settings; do

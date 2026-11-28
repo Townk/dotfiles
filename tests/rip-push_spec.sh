@@ -30,25 +30,24 @@ Describe 'rip.zsh push'
     fi
   }
   RIPLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/rip.zsh"
+  # rip.zsh is loaded once, here; `When run rip_zsh "…"` runs the string a
+  # `zsh -f -c` used to get, in a subshell (tests/rip_helper.sh).
+  Include tests/rip_helper.sh
+  rip_lib_load
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
   setup() {
-    export RIP_SANDBOX=$(mktemp -d)
+    rip_sandbox
     export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
     export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
     export JOB_STATE_ROOT="$RIP_SANDBOX/state"
     export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
-    mkdir -p "$RIP_STAGING_ROOT/movies" "$RIP_STAGING_ROOT/music" \
+    rip_mkdir "$RIP_STAGING_ROOT/movies" "$RIP_STAGING_ROOT/music" \
              "$RIP_STAGING_ROOT/audiobooks" \
              "$RIP_SANDBOX/server/movies" "$RIP_SANDBOX/server/music" "$RIP_SANDBOX/server/audiobooks"
-    cat > "$RIP_SANDBOX/pueue" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
-case "$1" in add) echo "7" ;; esac
-exit 0
-EOF
-    chmod +x "$RIP_SANDBOX/pueue"
-    export JOB_PUEUE_BIN="$RIP_SANDBOX/pueue"
+    # The recording fake pueue (argv to $JOB_FAKE_LOG, "7" for `add`) is the
+    # same script for every example: rip_static_build wrote it once.
+    export JOB_PUEUE_BIN="$RIP_STATIC/pueue"
     # the bins under test must source the SOURCE-TREE lib, not ~/.local/lib
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
     # rip::ab_provider_bin defaults to $HOME/.local/libexec when unset — an
@@ -70,13 +69,11 @@ EOF
     # calls against cantina after its verified push. A sandbox dir holding
     # a silent success stub (rip_stub_remote_hops, below) keeps it hermetic.
     export RIP_BIN_DIR="$RIP_SANDBOX/bin"
-    mkdir -p "$RIP_BIN_DIR"
     # rip::_enrich_audiobooks retags every staged book and REFUSES one whose
     # tags cannot be written and verified; the audiobooks examples here stage
     # text files named "*.m4b", which no real ffmpeg can remux. The shared
     # fake pair keeps them testing what they are about. The tag behaviour
     # itself is pinned against real media in tests/rip-audiobook_spec.sh.
-    . "$SHELLSPEC_PROJECT_ROOT/tests/rip_helper.sh"
     rip_fake_ffmpeg_pair "$RIP_SANDBOX/tools"
     rip_stub_remote_hops "$RIP_BIN_DIR"
     # Every pre-existing example here stages files moments before running
@@ -91,7 +88,8 @@ EOF
     export RIP_MB_PAUSE_S=0
     export RIP_MB_RETRY_PAUSE_S=0
   }
-  cleanup() { rm -rf "$RIP_SANDBOX"; }
+  cleanup() { rip_static_check; rip_rmtree "$RIP_SANDBOX"; }
+  BeforeAll 'rip_static_build'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -137,13 +135,13 @@ EOF
   ssh_calls() { wc -l < "$RIP_SANDBOX/ssh.count" 2>/dev/null | tr -d ' '; }
 
   It 'rejects an unknown type'
-    When run zsh -f -c "source $RIPLIB && rip::push_enqueue books"
+    When run rip_zsh "source $RIPLIB && rip::push_enqueue books"
     The status should equal 2
     The stderr should include "unknown type"
   End
 
   It 'skips an empty type without enqueuing'
-    When run zsh -f -c "source $RIPLIB && rip::push_enqueue movies"
+    When run rip_zsh "source $RIPLIB && rip::push_enqueue movies"
     The status should equal 0
     The output should include "nothing to push"
     The path "$JOB_FAKE_LOG" should not be exist
@@ -152,7 +150,7 @@ EOF
   It 'enqueues a transfer-group job for staged files'
     mkdir -p "$RIP_STAGING_ROOT/movies/A (2001)"
     touch "$RIP_STAGING_ROOT/movies/A (2001)/A (2001).mkv"
-    When run zsh -f -c "source $RIPLIB && rip::push_enqueue movies"
+    When run rip_zsh "source $RIPLIB && rip::push_enqueue movies"
     The status should equal 0
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group transfer"
@@ -164,7 +162,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/movies/A (2001)" "$RIP_STAGING_ROOT/music/B/Alb"
     touch "$RIP_STAGING_ROOT/movies/A (2001)/A (2001).mkv" \
           "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-push"
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-push"
     The status should equal 0
     The output should not equal ""
     The result of function titles should include "rip push: movies"
@@ -172,7 +170,7 @@ EOF
   End
 
   It 'maps staging dirs per type — all three are <root>/<type>, no extra level'
-    When run zsh -f -c "source $RIPLIB && rip::staging_for movies && rip::staging_for music && rip::staging_for audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::staging_for movies && rip::staging_for music && rip::staging_for audiobooks"
     The status should equal 0
     The line 1 should equal "$RIP_STAGING_ROOT/movies"
     The line 2 should equal "$RIP_STAGING_ROOT/music"
@@ -182,7 +180,7 @@ EOF
   It 'accepts audiobooks as a type and enqueues from the staging root'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
     touch "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
-    When run zsh -f -c "source $RIPLIB && rip::push_enqueue audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_enqueue audiobooks"
     The status should equal 0
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group transfer"
@@ -193,7 +191,7 @@ EOF
   It 'pushes audiobooks to the server and clears the verified staging file'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
     touch "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     The path "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should not be exist
@@ -215,7 +213,7 @@ EOF
     printf 'partial\n' > "$RIP_STAGING_ROOT/audiobooks/A/.rip-folder.1/x.m4b"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
     touch "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/A/.rip-folder.1" should not be exist
@@ -233,7 +231,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B" "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'partial\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
     printf 'complete\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should equal "complete"
     The output should include 'rip: audiobooks verified on cantina — cleaning staging'
@@ -249,7 +247,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien" should not be exist
@@ -263,7 +261,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Fellowship"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Two Towers/The Two Towers.m4b" should equal "keep"
     The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
@@ -278,7 +276,7 @@ EOF
   It 'push: server reachable but holds no matching author — staged author untouched'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
     The output should include 'rip: audiobooks verified on cantina — cleaning staging'
@@ -294,7 +292,7 @@ EOF
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/unreachable"
     export RIP_REMOTE_BASE="$RIP_SANDBOX/unreachable"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/unreachable/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
     The output should include 'rip: audiobooks verified on cantina — cleaning staging'
@@ -322,7 +320,7 @@ EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
     export RIP_REMOTE_BASE="media@cantina:/srv/media"
-    When run zsh -f -c "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
+    When run rip_zsh "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
     The status should equal 0
     The result of function ssh_calls should equal "1"
   End
@@ -339,7 +337,7 @@ EOF
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     printf 'not a dir\n' > "$RIP_STAGING_ROOT/audiobooks/J. R. R. Tolkien"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Fellowship"
-    When run zsh -f -c "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
+    When run rip_zsh "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
     The status should equal 0
     The stderr should include "could not rename"
     The stderr should not include "renamed to"
@@ -358,7 +356,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'staged copy\n' > "$RIP_STAGING_ROOT/audiobooks/J.R.R. Tolkien/The Hobbit/The Hobbit.m4b"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Fellowship"
-    When run zsh -f -c "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
+    When run rip_zsh "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
     The status should equal 0
     The stderr should include "already holds"
     The stderr should not include "renamed to"
@@ -392,7 +390,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/.work"
     printf '%s\n' '{"path":"J.R.R. Tolkien/The Hobbit","title":"The Hobbit","authors":["J.R.R. Tolkien"],"narrators":["Rob Inglis"],"duration_s":39000,"published":"1937-09-21T07:00:00","ids":{"audible.asin":"B0079POAT8"},"provider":"libation","format":"m4b"}' \
       > "$RIP_STAGING_ROOT/.work/ab-meta.jsonl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/The Hobbit.m4b" should be exist
     # The sidecar is written pretty-printed, so assert on the VALUES rather
@@ -422,7 +420,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"audible.asin": "B0079POAT8"'
     The contents of file "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/.fleet-book.json" should include '"published": "1937-09-21T07:00:00"'
@@ -444,7 +442,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/.work"
     printf '%s\n' '{"path":"J.R.R. Tolkien/The Hobbit","title":"The Hobbit","ids":{"audible.asin":"B0079POAT8"}}' \
       > "$RIP_STAGING_ROOT/.work/ab-meta.jsonl"
-    When run zsh -f -c "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
+    When run rip_zsh "source $RIPLIB && rip::_canonicalize_staged_authors '$RIP_STAGING_ROOT/audiobooks'"
     The status should equal 0
     The stderr should include "already holds"
     The contents of file "$RIP_STAGING_ROOT/.work/ab-meta.jsonl" should include '"path":"J.R.R. Tolkien/The Hobbit"'
@@ -486,7 +484,7 @@ EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
     export RIP_REMOTE_BASE="media@cantina:/srv/media"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/lock-witness" should equal "held"
     # …and STILL before the listfile is built: the rename happened, so the
@@ -501,7 +499,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/music/A.B. Artist/Album"
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/A.B. Artist/Album/01 T.flac"
     mkdir -p "$RIP_SANDBOX/server/music/A. B. Artist/Other"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The path "$RIP_SANDBOX/server/music/A.B. Artist/Album/01 T.flac" should be exist
     The output should include 'rip: music verified on cantina — cleaning staging'
@@ -523,7 +521,7 @@ EOF
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
     chmod 0700 "$RIP_STAGING_ROOT/music/B/Alb"
     chmod 0600 "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The path "$RIP_SANDBOX/server/music/B/Alb/01 T.flac" should be exist
     # The assertions that actually matter: g+rx on the directory (traverse)
@@ -550,7 +548,7 @@ EOF
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
     export JOB_ID="job-test-1"
     mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "100"
@@ -582,7 +580,7 @@ EOF
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
     export JOB_ID="job-test-2"
     mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::push_worker music"
     The status should equal 1
     The stderr should include "verify"
     The contents of file "$JOB_STATE_ROOT/$JOB_ID/progress" should include "50"
@@ -600,7 +598,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/music/B/Alb"; touch "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac"
     printf '#!/bin/sh\nexit 23\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-push" --worker music
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-push" --worker music
     The status should equal 23
     The stderr should include "rip"
     The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist
@@ -614,7 +612,7 @@ case "$*" in *-rcn*) exit 0 ;; *) exit 0 ;; esac
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should not be exist
@@ -644,7 +642,7 @@ esac
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # what the push actually covered is gone…
@@ -663,7 +661,7 @@ case "$*" in *-rcn*) printf 'B/Alb/01 T.flac\n'; exit 0 ;; *) exit 0 ;; esac
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 1
     The stderr should include "verify"
     The path "$RIP_STAGING_ROOT/music/B/Alb/01 T.flac" should be exist
@@ -684,7 +682,7 @@ EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
     export RIP_FAKE_RSYNC_LOG="$RIP_SANDBOX/rsync.log"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # the settled file was pushed (files-from list) and deleted
@@ -700,7 +698,7 @@ EOF
     touch "$RIP_STAGING_ROOT/music/C/New/01 Fresh.flac"
     printf '#!/bin/sh\nexit 99\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "nothing settled"
     The path "$RIP_STAGING_ROOT/music/C/New/01 Fresh.flac" should be exist
@@ -715,7 +713,7 @@ exit 0
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB && RIP_PUSH_MIN_AGE_S=0 rip::push_worker movies"
+    When run rip_zsh "source $RIPLIB && RIP_PUSH_MIN_AGE_S=0 rip::push_worker movies"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_STAGING_ROOT/movies/A (2001)/A (2001).mkv" should not be exist
@@ -807,7 +805,7 @@ EOF
 
   It 'enrichment embeds picture + lyrics and ships cover.jpg'
     enrich_setup
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_MF_LOG" should include "--import-picture-from"
@@ -820,7 +818,7 @@ EOF
   It 'enrichment failures never fail the push'
     enrich_setup
     printf '#!/bin/sh\nexit 7\n' > "$RIP_SANDBOX/curl"; chmod +x "$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # cover fetch failed (curl rc 7) so lyrics fetch is tried and also fails
@@ -847,7 +845,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/metaflac"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_MF_LOG" should not include "--import-picture-from"
@@ -889,7 +887,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/metaflac"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_MF_LOG" should include "--export-picture-to"
@@ -926,7 +924,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/metaflac"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_SANDBOX/curl.log" should include "date:2004"
@@ -976,7 +974,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # the date-filtered query was tried and missed…
@@ -1001,7 +999,7 @@ EOF
     # unlisted: written just now, well inside the 90s gate — simulates a
     # sibling track XLD is still mid-write on
     touch "$RIP_STAGING_ROOT/music/Art/Alb/02 Other.flac"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_MF_LOG" should include "01 Song.flac"
@@ -1045,7 +1043,7 @@ esac
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # the listfile is private per invocation: --files-from carries a $$
@@ -1078,7 +1076,7 @@ EOF
     enrich_setup
     mkdir -p "$RIP_SANDBOX/server/music/Art"
     printf 'REMOTE-ALREADY-THERE' > "$RIP_SANDBOX/server/music/Art/artist.jpg"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_SANDBOX/curl.log" should not include "deezer"
@@ -1114,7 +1112,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_SANDBOX/curl.log" should include "search/artist"
@@ -1154,7 +1152,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # the placeholder-carrying deezer URL was never downloaded…
@@ -1203,7 +1201,7 @@ exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
     export RIP_DEEZER_PLACEHOLDER_FILE_MD5S="$(printf 'DZPLACEHOLDER' | md5 | awk '{print $NF}')"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # the clean-URL image WAS downloaded (unlike the URL-reject case)…
@@ -1241,7 +1239,7 @@ exit 1
 FAKESSH
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -f -c "source $RIPLIB && rip::_remote_has_file \"music/$(printf 'Pe\xcc\x81')/artist.jpg\""
+    When run rip_zsh "source $RIPLIB && rip::_remote_has_file \"music/$(printf 'Pe\xcc\x81')/artist.jpg\""
     The status should equal 0
   End
 
@@ -1264,7 +1262,7 @@ case "$*" in *-rcn*) exit 0 ;; *) exit 0 ;; esac
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The line 1 of contents of file "$RIP_FAKE_RSYNC_ARGS" should include "--iconv=utf-8-mac,utf-8"
@@ -1380,7 +1378,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/metaflac"
-    When run zsh -f -c "source $RIPLIB && rip::_track_meta whatever.flac"
+    When run rip_zsh "source $RIPLIB && rip::_track_meta whatever.flac"
     The status should equal 0
     # composed forms present (í = C3 AD, ê = C3 AA)…
     The output should include "$(printf 'A\xc3\xad c\xc3\xaa falou')"
@@ -1390,7 +1388,7 @@ EOF
 
   It 'artist image: total miss across every source — logs and never blocks the push'
     enrich_setup
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The output should include "no artist image found"
@@ -1443,7 +1441,7 @@ exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
     export RIP_CURL_BIN="$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The result of function deezer_search_count should equal "1"
@@ -1453,7 +1451,7 @@ EOF
     enrich_setup
     mkdir -p "$RIP_STAGING_ROOT/music/Art"
     printf 'LOCAL-ALREADY-HERE' > "$RIP_STAGING_ROOT/music/Art/artist.jpg"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_SANDBOX/curl.log" should not include "search/artist"
@@ -1474,7 +1472,7 @@ exit 1
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_SANDBOX/ssh.log" should include "fakehost"
@@ -1513,7 +1511,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_SANDBOX/curl.log" should include "search/artist"
@@ -1525,7 +1523,7 @@ EOF
     export RIP_REMOTE_BASE="fakehost:/srv/media"
     printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"; chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The output should include "rip: artist image"
@@ -1572,7 +1570,7 @@ EOF
     touch "$RIP_STAGING_ROOT/music/N' Roses/Alb/01 Song.flac"
     export RIP_REMOTE_BASE="fakehost:$RIP_SANDBOX/server"
     fake_roundtrip_ssh
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # rc 1 — the remote `test -f` ran cleanly and legitimately found the
@@ -1593,7 +1591,7 @@ EOF
     touch "$RIP_STAGING_ROOT/music/$evil/Alb/01 Song.flac"
     export RIP_REMOTE_BASE="fakehost:$RIP_SANDBOX/server"
     fake_roundtrip_ssh
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     # the payload never executed…
@@ -1643,7 +1641,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_MF_LOG" should include "--import-picture-from"
@@ -1685,7 +1683,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_SANDBOX/server/music/Art/artist.jpg" should be exist
@@ -1733,7 +1731,7 @@ EOF
     # art-less track listed FIRST — the exact ordering the old ${flacs[1]}-
     # only code would have gotten wrong.
     printf 'Art/Alb/01 NoArt.flac\nArt/Alb/02 HasArt.flac\n' > "$listfile"
-    When run zsh -f -c "source $RIPLIB && rip::_enrich_music '$RIP_STAGING_ROOT/music' '$listfile'"
+    When run rip_zsh "source $RIPLIB && rip::_enrich_music '$RIP_STAGING_ROOT/music' '$listfile'"
     The status should equal 0
     The contents of file "$RIP_FAKE_MF_LOG" should include "--export-picture-to"
     The path "$RIP_STAGING_ROOT/music/Art/Alb/cover.jpg" should be exist
@@ -1784,7 +1782,7 @@ esac
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/curl"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The stderr should include "enrich"
     The result of function mb_release_call_count should equal "1"
@@ -1802,7 +1800,7 @@ EOF
     enrich_setup
     mkdir -p "$RIP_SANDBOX/server/music/Art/Alb"
     printf 'CURATED-SERVER-COVER' > "$RIP_SANDBOX/server/music/Art/Alb/cover.jpg"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The output should include "rip: cover — server already has Art/Alb/cover.jpg, skipping this run"
@@ -1830,7 +1828,7 @@ EOF
     touch "$RIP_STAGING_ROOT/music/Art/Alb1/01 Song.flac" "$RIP_STAGING_ROOT/music/Art/Alb2/01 Other.flac"
     printf '#!/bin/sh\nexit 0\n' > "$RIP_SANDBOX/rsync"; chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The output should include "verified"
     The output should not include "='"
@@ -1843,7 +1841,7 @@ EOF
     printf '%s\n' '{"path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"narrators":["MacLeod Andrews"],"duration_s":45720,"series":"Reckoners","series_position":"1","language":"en","abridged":false,"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' \
       > "$RIP_SANDBOX/index.jsonl"
     export RIP_AB_META_INDEX="$RIP_SANDBOX/index.jsonl"
-    When run zsh -f -c "source $RIPLIB && rip::_book_meta_for 'Brandon Sanderson/Steelheart' > $RIP_SANDBOX/m.json && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.schema,.kind,.title,.ids[\"audible.asin\"],.work,.source.provider,.abridged]' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_meta_for 'Brandon Sanderson/Steelheart' > $RIP_SANDBOX/m.json && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.schema,.kind,.title,.ids[\"audible.asin\"],.work,.source.provider,.abridged]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal '[1,"audiobook","Steelheart","B00ECDZ08I",null,"libation",false]'
   End
@@ -1851,7 +1849,7 @@ EOF
   It 'sidecar: minimal identity when the book is not in the index'
     mkdir -p "$RIP_SANDBOX/bk"
     export RIP_AB_META_INDEX="$RIP_SANDBOX/missing.jsonl"
-    When run zsh -f -c "source $RIPLIB && rip::_book_meta_for 'Some Author/Some Title' > $RIP_SANDBOX/m.json && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.title,.authors,.ids,.work,.source.provider]' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_meta_for 'Some Author/Some Title' > $RIP_SANDBOX/m.json && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.title,.authors,.ids,.work,.source.provider]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal '["Some Title",["Some Author"],{},null,"unknown"]'
   End
@@ -1862,7 +1860,7 @@ EOF
       | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
     printf '%s\n' '{"path":"A/B","title":"Steelheart","authors":["Brandon Sanderson"],"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' \
       > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.work.openlibrary,.ids[\"librofm.id\"],.authors]' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.work.openlibrary,.ids[\"librofm.id\"],.authors]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal '["OL15168631W","x1",["Brandon Sanderson"]]'
   End
@@ -1883,7 +1881,7 @@ EOF
       | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
     printf '%s\n' '{"path":"A/B","title":"Steelheart","subtitle":"The Reckoners, Book 1","authors":["Brandon Sanderson"],"ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","provider_version":"13.7.10","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' \
       > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.subtitle,.work.openlibrary,.ids[\"librofm.id\"],.ids[\"audible.asin\"]]' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.subtitle,.work.openlibrary,.ids[\"librofm.id\"],.ids[\"audible.asin\"]]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","OL15168631W","x1","B00ECDZ08I"]'
   End
@@ -1901,7 +1899,7 @@ EOF
     printf 'pdf-bytes\n' > "$RIP_SANDBOX/bk/B.pdf"
     printf 'jpg-bytes\n' > "$RIP_SANDBOX/bk/B.jpg"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.companions[] | {file,kind,bytes}] | sort_by(.file)' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.companions[] | {file,kind,bytes}] | sort_by(.file)' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal '[{"file":"B.jpg","kind":"cover","bytes":10},{"file":"B.pdf","kind":"pdf","bytes":10}]'
   End
@@ -1910,7 +1908,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/bk"
     printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '.companions' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '.companions' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal "[]"
   End
@@ -1928,7 +1926,7 @@ EOF
     printf 'source-audio\n' > "$RIP_SANDBOX/bk/B.aax"
     printf 'chapter\n' > "$RIP_SANDBOX/bk/01 - Chapter One.mp3"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '.companions' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '.companions' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal "[]"
   End
@@ -1938,7 +1936,7 @@ EOF
     printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B"}' | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '[.companions[].file] | index(\".fleet-book.json\") // \"absent\"' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '[.companions[].file] | index(\".fleet-book.json\") // \"absent\"' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal "absent"
   End
@@ -1948,7 +1946,7 @@ EOF
     printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
     printf 'pdf-bytes\n' > "$RIP_SANDBOX/bk/B.pdf"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '.companions[0].sha256' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '.companions[0].sha256' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal "$(shasum -a 256 "$RIP_SANDBOX/bk/B.pdf" | cut -d' ' -f1)"
   End
@@ -1962,7 +1960,7 @@ EOF
     printf 'audio\n' > "$RIP_SANDBOX/bk/B.m4b"
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","ids":{"audible.asin":"X1"},"work":{"openlibrary":"OL9W"}}' | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.work.openlibrary,.ids[\"audible.asin\"],(.companions|type),(.companions|length)]' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.work.openlibrary,.ids[\"audible.asin\"],(.companions|type),(.companions|length)]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal '["OL9W","X1","array",0]'
   End
@@ -1970,7 +1968,7 @@ EOF
   It 'sidecar: records published from the meta row'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"published":"2022-10-04T07:00:00","provider":"libation","format":"m4b"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '.published' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -r '.published' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal "2022-10-04T07:00:00"
   End
@@ -1978,7 +1976,7 @@ EOF
   It 'sidecar: published is null when the row omits it'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"manual"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[has(\"published\"),.published]' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[has(\"published\"),.published]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal '[true,null]'
   End
@@ -1987,7 +1985,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","ids":{"audible.asin":"X1"},"work":{"openlibrary":"OL9W"}}' | jq . > "$RIP_SANDBOX/bk/.fleet-book.json"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"published":"2015-10-06T07:00:00","provider":"libation"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.published,.work.openlibrary,.ids[\"audible.asin\"]]' $RIP_SANDBOX/bk/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && jq -c '[.published,.work.openlibrary,.ids[\"audible.asin\"]]' $RIP_SANDBOX/bk/.fleet-book.json"
     The status should equal 0
     The output should equal '["2015-10-06T07:00:00","OL9W","X1"]'
   End
@@ -2011,7 +2009,7 @@ EOF
       > "$RIP_STAGING_ROOT/.work/ab-meta.jsonl"
     # RIP_AB_META_INDEX is deliberately NOT set — this is the watcher's own
     # call shape (rip-push audiobooks, no session, no override).
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
   End
@@ -2028,7 +2026,7 @@ EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
   End
@@ -2040,7 +2038,7 @@ EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Some Author/Some Title"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/Some Author/Some Title/Some Title.m4b"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.title,.authors,.ids]' '$RIP_SANDBOX/server/audiobooks/Some Author/Some Title/.fleet-book.json'"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks >/dev/null && jq -c '[.title,.authors,.ids]' '$RIP_SANDBOX/server/audiobooks/Some Author/Some Title/.fleet-book.json'"
     The status should equal 0
     The output should equal '["Some Title",["Some Author"],{}]'
   End
@@ -2063,7 +2061,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/One" "$RIP_STAGING_ROOT/audiobooks/A/Two"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/One/One.m4b"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/Two/Two.m4b"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The result of function provider_call_count should equal "1"
   End
@@ -2074,7 +2072,7 @@ EOF
   It 'sidecar: re-running leaves the file byte-identical'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"ids":{},"provider":"unknown","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && touch -t 200001010000 $RIP_SANDBOX/bk/.fleet-book.json && mtime1=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && mtime2=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && [ -z \"\$(find $RIP_SANDBOX/bk -name '.fleet-book.json.tmp.*' 2>/dev/null)\" ] && [ \"\$mtime1\" = \"\$mtime2\" ] && echo stable"
+    When run rip_zsh "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && touch -t 200001010000 $RIP_SANDBOX/bk/.fleet-book.json && mtime1=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && mtime2=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && [ -z \"\$(find $RIP_SANDBOX/bk -name '.fleet-book.json.tmp.*' 2>/dev/null)\" ] && [ \"\$mtime1\" = \"\$mtime2\" ] && echo stable"
     The status should equal 0
     The output should equal "stable"
   End
@@ -2096,7 +2094,7 @@ EOF
   It 'sidecar: the scratch write goes to a tmp path under .work/, never inside the book dir'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"ids":{},"provider":"unknown","format":"m4b"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -f -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       mv() { local -a a=(\"\$@\"); print -r -- \"MV_SRC:\${a[3]}\"; command mv \"\$@\" }
       rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json"
     The status should equal 0
@@ -2119,7 +2117,7 @@ EOF
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"provider":"folder","ids":{"local.sha256":"deadbeef"}}' > "$RIP_AB_META_INDEX"
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
-    When run zsh -f -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       uuidgen() { return 1 }
       rip::push_worker audiobooks"
     The stderr should include "could not write the identity sidecar for A/B"
@@ -2131,7 +2129,7 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
     printf 'art\n'   > "$RIP_STAGING_ROOT/audiobooks/A/B/B.jpg"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker audiobooks"
+    When run rip_zsh "source $RIPLIB && rip::push_worker audiobooks"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should equal "audio"
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/B.jpg" should equal "art"
@@ -2142,7 +2140,7 @@ EOF
   It 'enrichment: a hop that adds a registered file gets it pushed and cleaned'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
-    When run zsh -f -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       hop_note() { printf 'note\n' > \"\$1/note.txt\"; rip::_enrich_add \"\$3/note.txt\"; }
       RIP_AB_ENRICH_HOPS=(hop_note)
       rip::push_worker audiobooks"
@@ -2155,7 +2153,7 @@ EOF
   It 'enrichment: a failing hop is logged and never fails the push'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
-    When run zsh -f -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       hop_boom() { return 1; }
       RIP_AB_ENRICH_HOPS=(hop_boom)
       rip::push_worker audiobooks"
@@ -2168,7 +2166,7 @@ EOF
   It 'enrichment: an UNregistered file is neither pushed nor deleted'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
-    When run zsh -f -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       hop_sneaky() { printf 'x\n' > \"\$1/sneaky.txt\"; }
       RIP_AB_ENRICH_HOPS=(hop_sneaky)
       rip::push_worker audiobooks"
@@ -2181,7 +2179,7 @@ EOF
   It 'enrichment: music pushes are untouched by the audiobook stage'
     mkdir -p "$RIP_STAGING_ROOT/music/Artist/Album"
     printf 'flac\n' > "$RIP_STAGING_ROOT/music/Artist/Album/01 T.flac"
-    When run zsh -f -c "source $RIPLIB && rip::push_worker music"
+    When run rip_zsh "source $RIPLIB && rip::push_worker music"
     The status should equal 0
     The path "$RIP_SANDBOX/server/music/Artist/Album/.fleet-book.json" should not be exist
     The output should include 'rip: music verified on cantina — cleaning staging'
@@ -2192,7 +2190,7 @@ EOF
   It 'remote hops run after a clean verify, with the pushed relpaths'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
-    When run zsh -f -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       hop_remote() { printf '%s\n' \"\$@\" > $RIP_SANDBOX/remote.log; }
       RIP_AB_REMOTE_HOPS=(hop_remote)
       rip::push_worker audiobooks"
@@ -2212,7 +2210,7 @@ exit 0
 EOF
     chmod +x "$RIP_SANDBOX/rsync"
     export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    When run zsh -f -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       hop_remote() { printf 'ran\n' > $RIP_SANDBOX/remote.log; }
       RIP_AB_REMOTE_HOPS=(hop_remote)
       rip::push_worker audiobooks"
@@ -2229,7 +2227,7 @@ EOF
   It 'a failing remote hop never fails the job — the files are already safe'
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
     printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
-    When run zsh -f -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       hop_boom() { printf 'boomed\n' > $RIP_SANDBOX/hop.log; return 9; }
       RIP_AB_REMOTE_HOPS=(hop_boom)
       rip::push_worker audiobooks"

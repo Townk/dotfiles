@@ -6,14 +6,15 @@
 
 Describe 'share:: blurb composition'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-blurb"
-    rm -rf "$SB"; mkdir -p "$SB"
+    share_fresh "$SB"
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
     SHARE_PROFILE=personal
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [withweb]
 store = "https://drop.example.com"
 web = true

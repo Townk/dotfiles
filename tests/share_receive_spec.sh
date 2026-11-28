@@ -9,26 +9,26 @@
 
 Describe 'share:: receive'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
-  setup() {
-    SB="$SHELLSPEC_TMPBASE/share-receive"
-    rm -rf "$SB"; mkdir -p "$SB/bin" "$SB/out"
-    SHARE_CONFIG_DIR="$SB"
-    SHARE_STATE_DIR="$SB/state"
-    SHARE_PROFILE=personal
-    cat >"$SB/bin/croc" <<'SH'
+  # The three fakes, written once for the file (share_helper.sh:
+  # share_fixture_script) into a directory behind the example's own $SB/bin
+  # on PATH. They record where the example's exported variables say.
+  #
+  # HOUSE RULE: a test must never touch a live service. Receiving is
+  # backgrounded BY DEFAULT since the live-first amendment, so without the
+  # pueue and tmux fakes an example enqueues real work against the running
+  # pueued — it did, twice per run — and share::clip would overwrite the
+  # user's clipboard.
+  fixtures() {
+    FX="$SHELLSPEC_TMPBASE/share-receive-fx"
+    share_fixture_script "$FX/bin/croc" <<'SH'
 #!/bin/sh
 { printf 'argv:%s\n' "$*"
   printf 'token:%s\n' "${CROC_STORE_TOKEN:-}"
   printf 'secret:%s\n' "${CROC_SECRET:-}"; } >>"$SHARE_CALLS"
 SH
-    chmod +x "$SB/bin/croc"
-
-    # HOUSE RULE: a test must never touch a live service. Receiving is
-    # backgrounded BY DEFAULT since the live-first amendment, so without these
-    # an example enqueues real work against the running pueued — it did, twice
-    # per run — and share::clip would overwrite the user's clipboard.
-    cat >"$SB/bin/pueue" <<'SH'
+    share_fixture_script "$FX/bin/pueue" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"${SHARE_PUEUE_CALLS:-/dev/null}"
 case "$1" in
@@ -36,18 +36,31 @@ case "$1" in
   *)   : ;;
 esac
 SH
-    cat >"$SB/bin/tmux" <<'SH'
+    share_fixture_script "$FX/bin/tmux" <<'SH'
 #!/bin/sh
 exit 0
 SH
-    chmod +x "$SB/bin/pueue" "$SB/bin/tmux"
-    JOB_PUEUE_BIN="$SB/bin/pueue"; export JOB_PUEUE_BIN
-    JOB_TMUX_BIN="$SB/bin/tmux";   export JOB_TMUX_BIN
+  }
+  BeforeAll 'fixtures'
+
+  setup() {
+    SB="$SHELLSPEC_TMPBASE/share-receive"
+    share_fresh "$SB" bin out
+    SHARE_CONFIG_DIR="$SB"
+    SHARE_STATE_DIR="$SB/state"
+    SHARE_PROFILE=personal
+    JOB_PUEUE_BIN="$FX/bin/pueue"; export JOB_PUEUE_BIN
+    JOB_TMUX_BIN="$FX/bin/tmux";   export JOB_TMUX_BIN
     JOB_STATE_ROOT="$SB/jobs";     export JOB_STATE_ROOT
+    # The Rex tab step job::start leaves in the background naps
+    # JOB_FOLLOW_DELAY (2 s) before it finds no Rex and ends. It holds the
+    # file's report pipe meanwhile, so the file ended 2 s after its last
+    # example. No delay: it is gone at once.
+    export JOB_FOLLOW_DELAY=0
     SHARE_PUEUE_CALLS="$SB/pueue-calls"; export SHARE_PUEUE_CALLS
     SHARE_LIVE_DIR="$SB/live";     export SHARE_LIVE_DIR
 
-    PATH="$SB/bin:$PATH"
+    PATH="$SB/bin:$FX/bin:$PATH"
     SHARE_CALLS="$SB/calls"; export SHARE_CALLS
   }
   BeforeEach 'setup'
@@ -282,7 +295,7 @@ SH
   # absence on any host, rather than depending on the platform's toolset.
 
   It 'fails helpfully when no value is given and pbpaste is unavailable'
-    PATH="$SB/bin"
+    PATH="$SB/bin:$FX/bin"
     When run share::get --out "$SB/out"
     The status should be failure
     The stderr should include 'pbpaste is unavailable'

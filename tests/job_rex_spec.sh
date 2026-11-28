@@ -3,13 +3,16 @@
 # lives in a sandbox; pueue, tmux and rex are fakes (JOB_PUEUE_BIN,
 # JOB_TMUX_BIN, JOB_REX_BIN) and no Rex server is ever consulted.
 Describe 'job/rex.zsh'
+  Include tests/job_helper.sh
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
 
-  setup() {
-    JOB_SANDBOX=$(mktemp -d)
-    export JOB_STATE_ROOT="$JOB_SANDBOX/state"
-    export JOB_CLI="$JOB_SANDBOX/job"
-    cat > "$JOB_SANDBOX/pueue" <<'EOS'
+  # The three fakes, written once for the file into a directory the examples
+  # share (job_helper.sh: job_fixture_script). They keep nothing beside
+  # themselves: the rex log and every fixture are named by variables the
+  # example exports, and live in its own sandbox.
+  fixtures() {
+    JOB_FX="$SHELLSPEC_TMPBASE/job-fx"
+    job_fixture_script "$JOB_FX/pueue" <<'EOS'
 #!/bin/sh
 case "$1" in
   add) echo 7 ;;
@@ -17,11 +20,10 @@ case "$1" in
 esac
 exit 0
 EOS
-    chmod +x "$JOB_SANDBOX/pueue"
-    export JOB_PUEUE_BIN="$JOB_SANDBOX/pueue"
-    printf '#!/bin/sh\nexit 0\n' > "$JOB_SANDBOX/tmux"
-    chmod +x "$JOB_SANDBOX/tmux"
-    export JOB_TMUX_BIN="$JOB_SANDBOX/tmux"
+    job_fixture_script "$JOB_FX/tmux" <<'EOS'
+#!/bin/sh
+exit 0
+EOS
     # rex: records argv to JOB_FAKE_REX_LOG. `whoami` exits
     # JOB_FAKE_REX_WHOAMI_RC (4 = no server); with JOB_FAKE_REX_GATE naming a
     # FIFO it first writes a line there, so it is held until the example
@@ -35,24 +37,20 @@ EOS
     # CLI, exits 1 when the ls fixture has no Jobs session; `block close`
     # notes in JOB_FAKE_REX_CLOSING_SEEN whether $JOB_STATE_ROOT/.rex_closing
     # lists the block at that moment, then exits JOB_FAKE_REX_CLOSE_RC.
-    export JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log"
-    export JOB_FAKE_REX_CLOSING_SEEN="$JOB_SANDBOX/closing.seen"
-    export JOB_FAKE_REX_LS="$JOB_SANDBOX/ls.json"
-    export JOB_FAKE_REX_BLOCKS="$JOB_SANDBOX/blocks.json"
-    printf '%s\n' '{"blocks":[]}' > "$JOB_FAKE_REX_BLOCKS"
-    printf '%s\n' '{"sessions":[{"session_id":"session:main","label":"Main"}]}' \
-      > "$JOB_FAKE_REX_LS"
-    cat > "$JOB_SANDBOX/rex" <<'EOS'
+    job_fixture_script "$JOB_FX/rex" <<'EOS'
 #!/bin/sh
 printf '%s\n' "$*" >> "$JOB_FAKE_REX_LOG"
+# emit <file>: cat, in the shell (the fake answers every rex call of every
+# example: a process saved here is saved a few hundred times).
+emit() { while IFS= read -r l || [ -n "$l" ]; do printf '%s\n' "$l"; done < "$1"; }
 case "$*" in
   *' whoami'*)
     [ -p "${JOB_FAKE_REX_GATE:-}" ] && echo whoami > "$JOB_FAKE_REX_GATE"
     exit "${JOB_FAKE_REX_WHOAMI_RC:-0}"
     ;;
   *' block ls '*)
-    grep -q '"label":"Jobs"' "$JOB_FAKE_REX_LS" || exit 1
-    cat "$JOB_FAKE_REX_BLOCKS"
+    case $(emit "$JOB_FAKE_REX_LS") in *'"label":"Jobs"'*) ;; *) exit 1 ;; esac
+    emit "$JOB_FAKE_REX_BLOCKS"
     ;;
   *' block close '*)
     for a; do last=$a; done
@@ -63,7 +61,7 @@ case "$*" in
     fi
     exit "${JOB_FAKE_REX_CLOSE_RC:-0}"
     ;;
-  *' ls --json'*) cat "$JOB_FAKE_REX_LS" ;;
+  *' ls --json'*) emit "$JOB_FAKE_REX_LS" ;;
   *' window new '*)
     echo '{"window_id":"window:w2","block_ids":["block:b2"]}'
     ;;
@@ -80,13 +78,25 @@ case "$*" in
 esac
 exit 0
 EOS
-    chmod +x "$JOB_SANDBOX/rex"
-    export JOB_REX_BIN="$JOB_SANDBOX/rex"
-    export JOB_FOLLOW_DELAY=0
-    # job::_rex_log writes under $XDG_CACHE_HOME/jobs, never the real cache.
-    export XDG_CACHE_HOME="$JOB_SANDBOX/cache"
   }
-  cleanup() { rm -rf "$JOB_SANDBOX"; }
+  BeforeAll 'fixtures'
+
+  setup() {
+    job_sandbox job; JOB_SANDBOX=$SANDBOX
+    # job::_rex_log writes under $XDG_CACHE_HOME/jobs, never the real cache.
+    export JOB_STATE_ROOT="$JOB_SANDBOX/state" JOB_CLI="$JOB_SANDBOX/job" \
+      JOB_PUEUE_BIN="$JOB_FX/pueue" JOB_TMUX_BIN="$JOB_FX/tmux" JOB_REX_BIN="$JOB_FX/rex" \
+      JOB_FAKE_REX_LOG="$JOB_SANDBOX/rex.log" JOB_FAKE_REX_CLOSING_SEEN="$JOB_SANDBOX/closing.seen" \
+      JOB_FAKE_REX_LS="$JOB_SANDBOX/ls.json" JOB_FAKE_REX_BLOCKS="$JOB_SANDBOX/blocks.json" \
+      JOB_FOLLOW_DELAY=0 XDG_CACHE_HOME="$JOB_SANDBOX/cache"
+    printf '%s\n' '{"blocks":[]}' > "$JOB_FAKE_REX_BLOCKS"
+    printf '%s\n' '{"sessions":[{"session_id":"session:main","label":"Main"}]}' \
+      > "$JOB_FAKE_REX_LS"
+  }
+  # After each example the sandbox goes, as it always did: with zf_rm, rm as
+  # a zsh builtin (job_sandbox loads it). Silent: a hook may not write to
+  # stderr, and a straggler can still be creating files in there.
+  cleanup() { zf_rm -rf -- "$JOB_SANDBOX" 2>/dev/null || :; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -113,12 +123,14 @@ EOS
   # about how long to look.
   joined() {
     local fifo joiner rc=0
-    fifo=$(mktemp -u "$JOB_SANDBOX/join.XXXXXX") && mkfifo "$fifo" || return 1
+    # One name will do: the FIFO is gone again before `joined` returns, and
+    # a sandbox belongs to one example.
+    fifo="$JOB_SANDBOX/join.fifo"; mkfifo "$fifo" || return 1
     cat "$fifo" > /dev/null &
     joiner=$!
     "$@" 9> "$fifo" || rc=$?
     wait "$joiner"
-    rm -f "$fifo"
+    zf_rm -f -- "$fifo"
     return $rc
   }
   # The rex log has a line matching $1. No polling: ask after `joined`.
@@ -183,6 +195,7 @@ EOS
     # with no lock the second would reach `new` instead, and the example
     # would say so rather than hang.
     It 'creates one session for two simultaneous jobs'
+      Skip if 'complete-only: the second opener waits a real second in zsystem flock (lock::hold retries at 1 s)' spec_complete_only
       both() {
         local p1 p2 w first second
         export JOB_FAKE_REX_NEW_HOLD="$JOB_SANDBOX/new"
@@ -220,7 +233,7 @@ $(printf 'b%.0s' $(seq 1 99))"
           > "$JOB_STATE_ROOT/j1/meta.json"
         run_job job::_rex_open_tab j1 || return 1
         # The label is the argument after --window: one line, ≤128 chars.
-        wc -l < "$JOB_FAKE_REX_LOG" | tr -d ' '
+        job_lines "$JOB_FAKE_REX_LOG"
         sed -n 's/.* --window=\(.*\) --json .*/\1/p' "$JOB_FAKE_REX_LOG"
       }
       When call long
@@ -679,7 +692,7 @@ block:b9"
         jobs_session
         id=$(joined run_job job::start --title "second" -- true) || return 1
         wait_log " follow $id" || return 2
-        echo "calls=$(wc -l < "$JOB_FAKE_REX_LOG" | tr -d ' ')"
+        echo "calls=$(job_lines "$JOB_FAKE_REX_LOG")"
         echo "without=$(grep -vc '^--autostart=false ' "$JOB_FAKE_REX_LOG")"
       }
       When call calls

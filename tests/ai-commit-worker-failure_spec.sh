@@ -17,6 +17,7 @@
 # (a) exits non-zero AND (b) prints the "failed (see <log>)" diagnostic — i.e.
 # the die is now reached — in BOTH the non-verbose and verbose paths.
 Describe 'ai-commit worker agent-failure handling (HI-3)'
+  Skip if 'complete-only: a whole ai-commit worker run against a real git repository, to its failure (125-175 ms)' spec_complete_only
   BINDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin"
   LIBDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 

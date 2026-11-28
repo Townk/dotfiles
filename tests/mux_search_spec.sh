@@ -11,7 +11,7 @@ Describe 'mux-search --toggle'
     LOG="$MS_TMP/calls.log"
     # a tmux that records every call and answers the formats the relay reads
     cat > "$MS_TMP/tmux" <<'EOS'
-#!/usr/bin/env zsh
+#!/usr/bin/env -S zsh -f
 print -r -- "$*" >> "$LOG"
 if [[ "$1" == show && "$3" == @mux_stack ]]; then print -r -- "$STUB_STACK"; exit 0; fi
 if [[ "$1" == display ]]; then
@@ -30,8 +30,10 @@ exit 0
 EOS
     chmod +x "$MS_TMP/tmux"
     export LOG MUX_TMUX_BIN="$MS_TMP/tmux" MUX_LIB_DIR="$PWD/home/dot_local/lib"
-    chezmoi execute-template <home/dot_config/mux/whichkey.data.tmpl >"$MS_TMP/wk.data" 2>/dev/null
-    export WK_DATA="$MS_TMP/wk.data"
+    # Rendered once per file (chezmoi: ~25 ms), read by every example.
+    WK_DATA="$SHELLSPEC_TMPBASE/wk.data"
+    [ -s "$WK_DATA" ] || chezmoi execute-template <home/dot_config/mux/whichkey.data.tmpl >"$WK_DATA" 2>/dev/null
+    export WK_DATA
     S="$PWD/home/dot_config/mux/scripts/executable_mux-search"
   }
   cleanup() { rm -rf "$MS_TMP"; unset LOG MUX_TMUX_BIN MUX_LIB_DIR WK_DATA S STUB_STACK STUB_FLAG STUB_TERM STUB_WRAP \
@@ -39,21 +41,24 @@ EOS
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  toggle() { STUB_STACK="$1" zsh "$S" --toggle "${2:-case}" '%1'; }
-  step()   { STUB_STACK="${2:-search:0}" zsh "$S" "$1" '%1'; }
+  toggle() { STUB_STACK="$1" zsh -f "$S" --toggle "${2:-case}" '%1'; }
+  step()   { STUB_STACK="${2:-search:0}" zsh -f "$S" "$1" '%1'; }
   logged() { cat "$LOG"; }
 
   It 'flips the flag while the stack is standing in Search'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     When call toggle 'command:1 scroll:1 search:0'
     The result of 'logged()' should include 'set -p -t %1 @search_case 1'
   End
 
   It 're-runs the search so the new flag takes effect'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     When call toggle 'command:1 scroll:1 search:0'
     The result of 'logged()' should include 'search-backward'
   End
 
   It 'still works when the last search matched NOTHING'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     # exactly the Mode B case: case-sensitivity dropped every match, so
     # tmux cleared search_present — the chord that undoes it must survive
     When call toggle 'search:0'
@@ -92,6 +97,7 @@ EOS
   End
 
   It 'leaves wrapping alone for a case toggle'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     When call toggle 'search:0' case
     The result of 'logged()' should not include 'wrap-search'
   End
@@ -106,7 +112,7 @@ Describe 'mux-search --next / --prev'
     MS_TMP=$(mktemp -d)
     LOG="$MS_TMP/calls.log"
     cat > "$MS_TMP/tmux" <<'EOS'
-#!/usr/bin/env zsh
+#!/usr/bin/env -S zsh -f
 print -r -- "$*" >> "$LOG"
 if [[ "$1" == show && "$3" == @mux_stack ]]; then print -r -- "$STUB_STACK"; exit 0; fi
 if [[ "$1" == display ]]; then
@@ -129,28 +135,32 @@ EOS
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  step()   { STUB_STACK="${2:-search:0}" zsh "$S" "$1" '%1'; }
+  step()   { STUB_STACK="${2:-search:0}" zsh -f "$S" "$1" '%1'; }
   logged() { cat "$LOG"; }
 
   It 'puts the cursor back on the search position before searching'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     When call step --next
     The result of 'logged()' should include 'top-line'
     The result of 'logged()' should include 'search-again'
   End
 
   It 'counts up toward older matches'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     export STUB_IDX=1 STUB_COUNT=3
     When call step --next
     The result of 'logged()' should include '@search_idx 2'
   End
 
   It 'wraps to the newest match past the oldest'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     export STUB_IDX=3 STUB_COUNT=3
     When call step --next
     The result of 'logged()' should include '@search_idx 1'
   End
 
   It 'counts back down on N'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     export STUB_IDX=2 STUB_COUNT=3
     When call step --prev
     The result of 'logged()' should include '@search_idx 1'
@@ -158,6 +168,7 @@ EOS
   End
 
   It 'holds the index when the search did not move'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     # wrap off at the last match: tmux leaves the cursor where it was
     export STUB_IDX=3 STUB_COUNT=3 STUB_BEFORE='4:4:4' STUB_AFTER='4:4:4'
     When call step --next
@@ -165,6 +176,7 @@ EOS
   End
 
   It 'remembers where it landed'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     export STUB_AFTER='7:5:3'
     When call step --next
     The result of 'logged()' should include '@search_mpos 7'
@@ -200,7 +212,7 @@ Describe 'mux-search build_pattern escaping'
     # whole-word off (no [[:<:]] boundary wrap), so the only transformation
     # left in the built pattern is metacharacter escaping.
     cat > "$MS_TMP/tmux" <<'EOS'
-#!/usr/bin/env zsh
+#!/usr/bin/env -S zsh -f
 print -r -- "$*" >> "$LOG"
 if [[ "$1" == show && "$3" == @mux_stack ]]; then print -r -- "$STUB_STACK"; exit 0; fi
 if [[ "$1" == display ]]; then
@@ -229,10 +241,11 @@ EOS
   # keeps letters literal, so a term of plain letters + one metacharacter
   # shows the escaping directly; the trailing smart-case atom ([A]{0}) is not
   # asserted here.
-  pattern() { STUB_STACK='search:0' STUB_TERM="$1" zsh "$S" --toggle case '%1'; }
+  pattern() { STUB_STACK='search:0' STUB_TERM="$1" zsh -f "$S" --toggle case '%1'; }
   logged()  { cat "$LOG"; }
 
   It 'escapes a dot with exactly one backslash (config.zsh)'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     When call pattern 'config.zsh'
     # single backslash before the dot, plain letters left untouched
     The result of 'logged()' should include 'search-backward config\.zsh'
@@ -241,16 +254,19 @@ EOS
   End
 
   It 'escapes a bare dot between plain letters (a.b)'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     When call pattern 'a.b'
     The result of 'logged()' should include 'search-backward a\.b'
   End
 
   It 'single-escapes each parenthesis (foo(1))'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     When call pattern 'foo(1)'
     The result of 'logged()' should include 'search-backward foo\(1\)'
   End
 
   It 'single-escapes every dot in an IP address'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     When call pattern '192.168.1.1'
     The result of 'logged()' should include 'search-backward 192\.168\.1\.1'
   End
@@ -269,7 +285,7 @@ Describe 'mux-search dialog input loop'
     # A tmux that logs every call, hands out the pane id the dialog anchors on,
     # and answers a FRESH search (search_present 0) so the buffer starts empty.
     cat > "$MS_TMP/tmux" <<'EOS'
-#!/usr/bin/env zsh
+#!/usr/bin/env -S zsh -f
 print -r -- "$*" >> "$LOG"
 if [[ "$1" == display ]]; then
   case "$*" in
@@ -292,16 +308,18 @@ EOS
   AfterEach 'cleanup'
 
   # Feed the dialog raw bytes on stdin, exactly as a terminal would.
-  drive()  { printf '%b' "$1" | zsh "$S" >/dev/null 2>&1; cat "$LOG"; }
+  drive()  { printf '%b' "$1" | zsh -f "$S" >/dev/null 2>&1; cat "$LOG"; }
   logged() { cat "$LOG"; }
 
   It 'does not append a control byte to the term'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     # C-w, then two printable letters, then Enter: only the letters survive.
     When call drive '\x17ab\r'
     The result of 'logged()' should include 'set -p -t %1 @search_term ab'
   End
 
   It 'writes no term at all for a lone control byte'
+    Skip if 'complete-only: the tmux search relay end to end: ten to twenty calls of a zsh tmux stand-in (85-350 ms)' spec_complete_only
     # C-w alone then Enter: the byte is swallowed, the empty term pops out and
     # the value form of @search_term is never written (only the setup unset).
     When call drive '\x17\r'

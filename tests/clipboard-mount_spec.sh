@@ -5,6 +5,11 @@
 Describe 'clipboard-mount: map + host validation'
   CM="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-mount"
 
+  # For the whole file (the pool is per file): six stubs at once is the most
+  # an example writes, in the groups below. See tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 6'
+
   setup() {
     export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
     MNT_ROOT="$XDG_STATE_HOME/clipboard/mnt"
@@ -134,6 +139,7 @@ Describe 'clipboard-mount: unmount + sweep'
   End
 
   It 'sweep leaves a healthy mount alone'
+    Skip if 'complete-only: a whole sweep through the script: mount table, health probe, teardown stubs, naps on the virtual clock (95-285 ms)' spec_complete_only
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     # Healthy signature under the new probe: the child-lookup completes with
@@ -146,6 +152,7 @@ Describe 'clipboard-mount: unmount + sweep'
   End
 
   It 'sweep reaps a mounted volume whose daemon died (attr-cache trap: lookup gets ENXIO, not ENOENT)'
+    Skip if 'complete-only: a whole sweep through the script: mount table, health probe, teardown stubs, naps on the virtual clock (95-285 ms)' spec_complete_only
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     # THE live regression this task fixes: a ROOT stat is answered from the
@@ -161,6 +168,7 @@ Describe 'clipboard-mount: unmount + sweep'
   End
 
   It 'sweep leaves alone a probe that bizarrely succeeds (rc 0 -- the probe child exists)'
+    Skip if 'complete-only: a whole sweep through the script: mount table, health probe, teardown stubs, naps on the virtual clock (95-285 ms)' spec_complete_only
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     # rc 0 can only mean the daemon answered a real lookup either way, so
@@ -181,6 +189,7 @@ Describe 'clipboard-mount: unmount + sweep'
   End
 
   It 'sweep reaps a mounted-but-hung volume (probe timeout) with force escalation'
+    Skip if 'complete-only: a whole sweep through the script: mount table, health probe, teardown stubs, naps on the virtual clock (95-285 ms)' spec_complete_only
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     # stat hangs -> probe must time out (bounded), then teardown runs. The
@@ -290,6 +299,7 @@ Describe 'clipboard-mount: check'
   BeforeEach 'setup'
 
   It 'prints the mountpoint and succeeds when mounted and answering'
+    Skip if 'complete-only: the health check through the stubbed mount table and stat probe (95-190 ms)' spec_complete_only
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     # Healthy signature under the new probe: ENOENT on the child lookup.
@@ -300,6 +310,7 @@ Describe 'clipboard-mount: check'
   End
 
   It 'probes by looking up a nonexistent CHILD of the mountpoint, never the bare root (the attr-cache defeat mechanism)'
+    Skip if 'complete-only: the health check through the stubbed mount table and stat probe (95-190 ms)' spec_complete_only
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     # A recording stub that exits 0 reads as healthy under BOTH the old
@@ -324,6 +335,7 @@ STUB
   End
 
   It 'fails when mounted but the daemon died (root-stat attr-cache trap: lookup gets ENXIO, not ENOENT)'
+    Skip if 'complete-only: the health check through the stubbed mount table and stat probe (95-190 ms)' spec_complete_only
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     printf '#!/bin/sh\necho "stat: x: stat: Device not configured" >&2\nexit 1\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
@@ -394,6 +406,7 @@ STUB
   BeforeEach 'setup'
 
   It 'mounts with the pinned rclone argv, _SYNCREMOTE set, alias defaulting to host'
+    Skip if 'complete-only: a whole ensure: lock, rclone stand-in, mount check, health probe (100-135 ms)' spec_complete_only
     When run command zsh -f "$CM" ensure peer-mini
     The status should be success
     The path "$MNT_ROOT/peer-mini" should be directory
@@ -407,6 +420,7 @@ STUB
   End
 
   It 'uses the explicit alias for ssh while keying the mountpoint by host'
+    Skip if 'complete-only: a whole ensure: lock, rclone stand-in, mount check, health probe (100-135 ms)' spec_complete_only
     When run command zsh -f "$CM" ensure peer-mini mini
     The status should be success
     The line 2 of contents of file "$SHELLSPEC_TMPBASE/rclone-argv" should equal ":sftp,ssh='ssh -o ControlPath=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 mini':/"
@@ -418,6 +432,7 @@ STUB
   # loopback :2492. Token present -> the direct-sftp backend, obscured pass
   # (the stub's `obscure` arm is the deterministic stand-in).
   It 'reverse-mounts a visiting host via its mount-serve token'
+    Skip if 'complete-only: a whole ensure: lock, rclone stand-in, mount check, health probe (100-135 ms)' spec_complete_only
     mkdir -p "$XDG_STATE_HOME/clipboard/mount-tokens"
     printf '%s' "visitor-token" > "$XDG_STATE_HOME/clipboard/mount-tokens/lap-top"
     When run command zsh -f "$CM" ensure lap-top
@@ -432,6 +447,7 @@ STUB
   End
 
   It 'is a no-op when already healthy (rclone not re-invoked)'
+    Skip if 'complete-only: a whole ensure: lock, rclone stand-in, mount check, health probe (100-135 ms)' spec_complete_only
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     When run command zsh -f "$CM" ensure peer-mini
@@ -450,6 +466,7 @@ STUB
   End
 
   It 'falls back to the mise shim path when rclone is off PATH (headless launchd context)'
+    Skip if 'complete-only: a whole ensure: lock, rclone stand-in, mount check, health probe (100-135 ms)' spec_complete_only
     rm -f "$STUBS/rclone"
     # A recording stub standing in for the mise shim, at a path OTHER than
     # $STUBS (which is on PATH) — proves resolution really used the

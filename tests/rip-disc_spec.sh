@@ -4,52 +4,20 @@
 Describe 'rip.zsh disc'
   RIPLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/rip.zsh"
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
+  # rip.zsh is loaded once, here; `When run rip_zsh "…"` runs the string a
+  # `zsh -f -c` used to get, in a subshell (tests/rip_helper.sh).
+  Include tests/rip_helper.sh
+  rip_lib_load
   RIPBIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-disc"
 
-  setup() {
-    RIP_SANDBOX=$(mktemp -d)
-    export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
-    export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
-    export JOB_STATE_ROOT="$RIP_SANDBOX/state"
-    export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
-    export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
-    export RIP_PUSH_MIN_AGE_S=0
-    # No real pty in the fake harness — it isn't buffered, so it needs no
-    # help staying line-buffered, and shellspec's own sandboxing has no
-    # reason to fight a real `script` invocation on every run.
-    export RIP_PTY_WRAP=""
-    # A real disc may be mounted in the drive while this suite runs (it has
-    # been, live). Every Blu-ray-kind scan example must fail the pre-fill
-    # harvest's volume/helper lookups deterministically rather than falling
-    # through to rip::_bd_volume's /Volumes/* glob or the deployed
-    # ~/.local/libexec/rip-bd-menu — neither may ever be reached from a spec.
-    # Both paths point at sandbox locations that do not exist; bd_fixture
-    # overrides both when an example actually wants the harvest to run.
-    export RIP_BD_VOLUME="$RIP_SANDBOX/no-bd"
-    export RIP_BD_MENU_BIN="$RIP_SANDBOX/no-rip-bd-menu"
-    mkdir -p "$RIP_STAGING_ROOT/movies" "$RIP_SANDBOX/server/movies"
-    cat > "$RIP_SANDBOX/pueue" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
-case "$1" in add) echo "7" ;; esac
-exit 0
-EOF
-    chmod +x "$RIP_SANDBOX/pueue"; export JOB_PUEUE_BIN="$RIP_SANDBOX/pueue"
-    # fake makemkvcon.
-    #
-    # `-r info` prints three titles (idx 0 short, idx 1 long, idx 2 middling)
-    # in the real -r TINFO shape: attr 9 = duration, attr 10 = human size
-    # string, attr 11 = size in bytes (MakeMKV's ap_ItemAttributeId enum).
-    # Deliberately interleaved with attributes the parse must IGNORE —
-    # including a NAME (attr 2) whose value carries a comma and a source
-    # filename (attr 27) — so a naive comma-split parse cannot pass.
-    #
-    # `mkv` emits PRGV progress and drops a file in the target dir under a
-    # name of MakeMKV's own choosing (the session worker must not trust it:
-    # it renames the newest file to title-<no>.mkv itself). RIP_FAKE_MKV_RC
-    # fails every rip; RIP_FAKE_MKV_FAIL_TITLE fails only the named title
-    # number (the mid-session rip failure).
-    cat > "$RIP_SANDBOX/makemkvcon" <<'EOF'
+  # The fakes of setup() are the same scripts for every example (what differs
+  # between examples reaches them through the environment), so each is written
+  # once per file, here, and setup() only points its seam at the shared copy
+  # under $RIP_STATIC. An example that needs a different one writes it under
+  # $RIP_SANDBOX and exports the seam to it (THE RULE, tests/rip_helper.sh).
+  static_stubs() {
+    rip_static_build || return 1
+    rip_static_put makemkvcon <<'EOF'
 #!/bin/sh
 case "$*" in
   *info*)
@@ -105,12 +73,7 @@ case "$*" in
 esac
 exit 0
 EOF
-    chmod +x "$RIP_SANDBOX/makemkvcon"; export RIP_MAKEMKVCON_BIN="$RIP_SANDBOX/makemkvcon"
-    # fake HandBrakeCLI: logs every invocation (so an example can assert an
-    # item was NEVER encoded — the per-item server-idempotency path) and can
-    # be failed for exactly one input file (RIP_FAKE_HB_FAIL_INPUT).
-    export RIP_FAKE_HB_LOG="$RIP_SANDBOX/hb.log"; : > "$RIP_FAKE_HB_LOG"
-    cat > "$RIP_SANDBOX/HandBrakeCLI" <<'EOF'
+    rip_static_put HandBrakeCLI <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${RIP_FAKE_HB_LOG:-/dev/null}"
 out=""; inp=""; prev=""
@@ -126,12 +89,7 @@ echo 'Encoding: task 1 of 1, 100.00 %'
 printf 'encoded' > "$out"
 exit 0
 EOF
-    chmod +x "$RIP_SANDBOX/HandBrakeCLI"; export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
-    # copying fake (mirrors rip-extra_spec.sh / rip-push_spec.sh): actually
-    # `cp`s the listed files into the local sandbox "remote" so an example
-    # can assert on the bytes that landed server-side rather than inferring
-    # "shipped" from local absence.
-    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+    rip_static_put rsync <<'EOF'
 #!/bin/sh
 case "$*" in *-rcn*) exit 0 ;; esac
 # RIP_FAKE_RSYNC_RC fails the TRANSFER only (the verify dry-run above has
@@ -154,28 +112,82 @@ while IFS= read -r rel; do
 done < "$lf"
 exit 0
 EOF
-    chmod +x "$RIP_SANDBOX/rsync"; export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
-    # fake mkvpropedit: logs every invocation's args so an example can assert
-    # the title tag it was asked to set (or that it was never called at all,
-    # on the DVD path).
-    export RIP_FAKE_MKVPROPEDIT_LOG="$RIP_SANDBOX/mkvpropedit.log"; : > "$RIP_FAKE_MKVPROPEDIT_LOG"
-    cat > "$RIP_SANDBOX/mkvpropedit" <<'EOF'
+    rip_static_put mkvpropedit <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${RIP_FAKE_MKVPROPEDIT_LOG:-/dev/null}"
 exit 0
 EOF
-    chmod +x "$RIP_SANDBOX/mkvpropedit"; export RIP_MKVPROPEDIT_BIN="$RIP_SANDBOX/mkvpropedit"
+    rip_static_warm makemkvcon HandBrakeCLI rsync mkvpropedit
+  }
+  BeforeAll 'static_stubs'
+
+  setup() {
+    rip_sandbox; typeset +x RIP_SANDBOX   # as before: not in the environment
+    export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
+    export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
+    export JOB_STATE_ROOT="$RIP_SANDBOX/state"
+    export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
+    export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
+    export RIP_PUSH_MIN_AGE_S=0
+    # No real pty in the fake harness — it isn't buffered, so it needs no
+    # help staying line-buffered, and shellspec's own sandboxing has no
+    # reason to fight a real `script` invocation on every run.
+    export RIP_PTY_WRAP=""
+    # A real disc may be mounted in the drive while this suite runs (it has
+    # been, live). Every Blu-ray-kind scan example must fail the pre-fill
+    # harvest's volume/helper lookups deterministically rather than falling
+    # through to rip::_bd_volume's /Volumes/* glob or the deployed
+    # ~/.local/libexec/rip-bd-menu — neither may ever be reached from a spec.
+    # Both paths point at sandbox locations that do not exist; bd_fixture
+    # overrides both when an example actually wants the harvest to run.
+    export RIP_BD_VOLUME="$RIP_SANDBOX/no-bd"
+    export RIP_BD_MENU_BIN="$RIP_SANDBOX/no-rip-bd-menu"
+    rip_mkdir "$RIP_STAGING_ROOT/movies" "$RIP_SANDBOX/server/movies"
+    export JOB_PUEUE_BIN="$RIP_STATIC/pueue"
+    # fake makemkvcon.
+    #
+    # `-r info` prints three titles (idx 0 short, idx 1 long, idx 2 middling)
+    # in the real -r TINFO shape: attr 9 = duration, attr 10 = human size
+    # string, attr 11 = size in bytes (MakeMKV's ap_ItemAttributeId enum).
+    # Deliberately interleaved with attributes the parse must IGNORE —
+    # including a NAME (attr 2) whose value carries a comma and a source
+    # filename (attr 27) — so a naive comma-split parse cannot pass.
+    #
+    # `mkv` emits PRGV progress and drops a file in the target dir under a
+    # name of MakeMKV's own choosing (the session worker must not trust it:
+    # it renames the newest file to title-<no>.mkv itself). RIP_FAKE_MKV_RC
+    # fails every rip; RIP_FAKE_MKV_FAIL_TITLE fails only the named title
+    # number (the mid-session rip failure).
+    export RIP_MAKEMKVCON_BIN="$RIP_STATIC/makemkvcon"
+    # fake HandBrakeCLI: logs every invocation (so an example can assert an
+    # item was NEVER encoded — the per-item server-idempotency path) and can
+    # be failed for exactly one input file (RIP_FAKE_HB_FAIL_INPUT).
+    export RIP_FAKE_HB_LOG="$RIP_SANDBOX/hb.log"; : > "$RIP_FAKE_HB_LOG"
+    export RIP_HANDBRAKE_BIN="$RIP_STATIC/HandBrakeCLI"
+    # copying fake (mirrors rip-extra_spec.sh / rip-push_spec.sh): actually
+    # `cp`s the listed files into the local sandbox "remote" so an example
+    # can assert on the bytes that landed server-side rather than inferring
+    # "shipped" from local absence.
+    export RIP_RSYNC_BIN="$RIP_STATIC/rsync"
+    # fake mkvpropedit: logs every invocation's args so an example can assert
+    # the title tag it was asked to set (or that it was never called at all,
+    # on the DVD path).
+    export RIP_FAKE_MKVPROPEDIT_LOG="$RIP_SANDBOX/mkvpropedit.log"; : > "$RIP_FAKE_MKVPROPEDIT_LOG"
+    export RIP_MKVPROPEDIT_BIN="$RIP_STATIC/mkvpropedit"
   }
 
   # A session plan on disk, as Hammerspoon's hs.json.encode would write it.
   write_plan() { cat > "$RIP_SANDBOX/plan.json"; }
-  cleanup() { rm -rf "$RIP_SANDBOX"; }
+  cleanup() {
+    rip_static_check RIP_MAKEMKVCON_BIN="$RIP_SANDBOX/makemkvcon" RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI" RIP_RSYNC_BIN="$RIP_SANDBOX/rsync" RIP_MKVPROPEDIT_BIN="$RIP_SANDBOX/mkvpropedit"
+    rip_rmtree "$RIP_SANDBOX"
+  }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
   It 'happy path: rips longest title, encodes, pushes, cleans autorip'
     export JOB_ID="job-disc-1"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_STAGING_ROOT/.work/autorip" should not be exist
@@ -185,7 +197,7 @@ EOF
   It 'auto flow: a Blu-ray publishes the longest title as ripped — no encode'
     export JOB_ID="job-disc-bd"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     export RIP_FAKE_DISC_KIND=bluray
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'Project Hail Mary (2026)'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::disc_worker 'Project Hail Mary (2026)'"
     The status should equal 0
     The output should include "publishing"
     The output should include "verified"
@@ -198,7 +210,7 @@ EOF
 
   It 'rip failure keeps nothing and propagates rc'
     export RIP_FAKE_MKV_RC=5
-    When run zsh -c "source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
+    When run rip_zsh "source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
     The status should equal 5
     The stderr should include "disc rip failed"
     The path "$RIP_STAGING_ROOT/.work/autorip" should not be exist
@@ -209,7 +221,8 @@ EOF
     # freeze after the rip: encode fails so the sidecar's last write is rip-stage
     printf '#!/bin/sh\nexit 1\n' > "$RIP_SANDBOX/HandBrakeCLI"
     chmod +x "$RIP_SANDBOX/HandBrakeCLI"
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
+    export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
     The status should equal 1
     The stderr should include "encode failed"
     # last rip-stage write was PRGV 65536/65536 → 100% of a 0-40 band → 40
@@ -219,7 +232,7 @@ EOF
   It 'progress: CR-terminated PRGV lines (pty ONLCR) still parse mid-rip'
     export JOB_ID="job-disc-3"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
     export RIP_FAKE_MKV_RC=9
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
     The status should equal 9
     The stderr should include "disc rip failed"
     # PRGV:16384,0,65536 -> 25% of the 0-40 band -> 10. If the trailing \r
@@ -231,7 +244,7 @@ EOF
 
   It 'enqueue: heavy group, rip: title, absolute worker path'
     titles() { cat "$JOB_STATE_ROOT"/*/meta.json 2>/dev/null; }
-    When run zsh -c "source $RIPLIB && rip::disc_enqueue 'A Movie (2001)'"
+    When run rip_zsh "source $RIPLIB && rip::disc_enqueue 'A Movie (2001)'"
     The status should equal 0
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group heavy"
@@ -246,7 +259,7 @@ EOF
   # --- --scan: the panel's row data ----------------------------------------
 
   It '--scan leads with the disc kind, then one JSON line per title'
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The line 1 of output should equal '{"kind":"DVD"}'
     The line 2 of output should equal '{"no":0,"duration":"0:00:38","seconds":38,"size":"58.0 MB","bytes":60817408,"source":"00003.mpls","segments":"3"}'
@@ -260,7 +273,7 @@ EOF
 
   It '--scan reports a Blu-ray as Blu-ray'
     export RIP_FAKE_DISC_KIND=bluray
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The line 1 of output should equal '{"kind":"Blu-ray"}'
     The line 2 of output should include '"no":0'
@@ -287,7 +300,7 @@ EOF
 
   It '--scan on a Blu-ray runs the harvester with the volume and the rows, and merges its answer'
     export RIP_FAKE_DISC_KIND=bluray; bd_fixture
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The line 1 of output should equal '{"kind":"Blu-ray"}'
     The line 2 of output should equal '{"candidates":["Making Of","Trailer"]}'
@@ -301,7 +314,7 @@ EOF
 
   It '--scan on a Blu-ray degrades to bare rows when the harvester fails'
     export RIP_FAKE_DISC_KIND=bluray; bd_fixture; export RIP_FAKE_BDM_RC=3
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The line 1 of output should equal '{"kind":"Blu-ray"}'
     The line 2 of output should include '"no":0,'
@@ -312,7 +325,7 @@ EOF
 
   It '--scan on a Blu-ray with no mounted BDMV volume degrades the same way'
     export RIP_FAKE_DISC_KIND=bluray; bd_fixture; rm -rf "$RIP_BD_VOLUME"
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The output should not include '"candidates"'
     The stderr should include "harvest"
@@ -336,7 +349,7 @@ EOF
   It "--scan degrades to bare rows when the harvester prints two JSON documents"
     export RIP_FAKE_DISC_KIND=bluray; bd_fixture
     bd_fixture_says "printf '%s\n' '{\"suggest\":{\"0\":{\"role\":\"skip\",\"name\":\"\",\"why\":\"unmapped\"}},\"candidates\":[\"Making Of\"]}' '{\"debug\":true}'"
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The output should not include '"suggest"'
     The output should not include '"candidates"'
@@ -349,7 +362,7 @@ EOF
   It "--scan degrades to bare rows when the harvester's suggest is not an object"
     export RIP_FAKE_DISC_KIND=bluray; bd_fixture
     bd_fixture_says "printf '%s\n' '{\"suggest\":\"x\",\"candidates\":[\"A\"]}'"
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The output should not include '"suggest"'
     The output should not include '"candidates"'
@@ -361,7 +374,7 @@ EOF
 
   It '--scan on a DVD never runs the harvester'
     bd_fixture
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The output should not include '"candidates"'
     The contents of file "$RIP_FAKE_BDM_LOG" should equal ""
@@ -369,7 +382,7 @@ EOF
 
   It '--scan omits the kind line when MakeMKV reports none (the panel keeps its folder label)'
     export RIP_FAKE_DISC_KIND=none
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The line 1 of output should include '"no":0'
     The output should not include '"kind"'
@@ -377,14 +390,14 @@ EOF
 
   It '--scan reports rc 1 when the drive holds no readable titles'
     export RIP_FAKE_INFO_EMPTY=1
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 1
     The stderr should include "no titles"
   End
 
   It '--scan reports rc 1 and empty stdout when a disc has a kind but no titles'
     export RIP_FAKE_INFO_NO_TITLES=1
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 1
     The stderr should include "no titles"
     The output should equal ""
@@ -392,7 +405,7 @@ EOF
 
   It '--scan asks MakeMKV for every title of 30 s or more'
     export RIP_FAKE_INFO_LOG="$RIP_SANDBOX/info.log"; : > "$RIP_FAKE_INFO_LOG"
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The line 1 of output should equal '{"kind":"DVD"}'
     The contents of file "$RIP_FAKE_INFO_LOG" should include "--minlength=30 "
@@ -404,7 +417,7 @@ EOF
     write_plan <<'EOF'
 {"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_MKC_LOG" should include "--minlength=30 "
@@ -415,7 +428,7 @@ EOF
     export RIP_FAKE_INFO_LOG="$RIP_SANDBOX/info.log"; : > "$RIP_FAKE_INFO_LOG"
     export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
     export RIP_MAKEMKV_MINLENGTH=45
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::disc_worker 'A Movie (2001)'"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_INFO_LOG" should include "--minlength=45 "
@@ -427,7 +440,7 @@ EOF
     printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$RIP_FAKE_PTY_LOG"\nexec "$@"\n' > "$RIP_SANDBOX/ptywrap"
     chmod +x "$RIP_SANDBOX/ptywrap"
     export RIP_PTY_WRAP="$RIP_SANDBOX/ptywrap"
-    When run zsh "$RIPBIN" --scan
+    When run zsh -f "$RIPBIN" --scan
     The status should equal 0
     The output should include '"no":1'
     The contents of file "$RIP_FAKE_PTY_LOG" should include "makemkvcon"
@@ -438,13 +451,13 @@ EOF
   It '--have exits 0 when the server already holds the movie'
     mkdir -p "$RIP_SANDBOX/server/movies/A Movie (2001)"
     printf 'x' > "$RIP_SANDBOX/server/movies/A Movie (2001)/A Movie (2001).mkv"
-    When run zsh "$RIPBIN" --have "A Movie (2001)"
+    When run zsh -f "$RIPBIN" --have "A Movie (2001)"
     The status should equal 0
     The output should equal ""
   End
 
   It '--have exits 1 when the server confirms the movie is absent'
-    When run zsh "$RIPBIN" --have "A Movie (2001)"
+    When run zsh -f "$RIPBIN" --have "A Movie (2001)"
     The status should equal 1
     The output should equal ""
   End
@@ -453,13 +466,13 @@ EOF
     export RIP_REMOTE_BASE="fakehost:/srv/media"
     printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"; chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh "$RIPBIN" --have "A Movie (2001)"
+    When run zsh -f "$RIPBIN" --have "A Movie (2001)"
     The status should equal 2
     The output should equal ""
   End
 
   It '--have rejects a movie title carrying a slash before it ever asks'
-    When run zsh "$RIPBIN" --have "A/B (2001)"
+    When run zsh -f "$RIPBIN" --have "A/B (2001)"
     The status should equal 2
     The stderr should include "slash"
   End
@@ -469,14 +482,14 @@ EOF
   It '--library lists the movie directories the server already holds'
     mkdir -p "$RIP_SANDBOX/server/movies/A Movie (2001)" \
              "$RIP_SANDBOX/server/movies/Elvis TTWII (1970)"
-    When run zsh "$RIPBIN" --library
+    When run zsh -f "$RIPBIN" --library
     The status should equal 0
     The line 1 of output should equal "A Movie (2001)"
     The line 2 of output should equal "Elvis TTWII (1970)"
   End
 
   It '--library on a reachable but empty library prints nothing and exits 0'
-    When run zsh "$RIPBIN" --library
+    When run zsh -f "$RIPBIN" --library
     The status should equal 0
     The output should equal ""
   End
@@ -485,7 +498,7 @@ EOF
     export RIP_REMOTE_BASE="fakehost:/srv/media"
     printf '#!/bin/sh\nexit 255\n' > "$RIP_SANDBOX/ssh"; chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh "$RIPBIN" --library
+    When run zsh -f "$RIPBIN" --library
     The status should equal 2
     The output should equal ""
     The stderr should include "library"
@@ -509,7 +522,7 @@ shift                      # the host
 exec /bin/sh -c "$*"       # sshd hands the command to a remote shell
 EOF
     chmod +x "$RIP_SANDBOX/ssh"; export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh "$RIPBIN" --library
+    When run zsh -f "$RIPBIN" --library
     The status should equal 0
     The line 1 of output should equal "A Movie (2001)"
     The contents of file "$RIP_FAKE_SSH_LOG" should include "BatchMode=yes"
@@ -528,7 +541,7 @@ EOF
            {"no":0,"name":"Trailer","attachTo":"U2 360 at the Rose Bowl (2010)"}],
  "skipped":[3]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_SANDBOX/server/movies/U2 360 at the Rose Bowl (2010)/U2 360 at the Rose Bowl (2010).mkv" should be exist
@@ -558,7 +571,7 @@ EOF
  "extras":[{"no":2,"name":"Rehearsals","attachTo":"Elvis TTWII (1970)"}],
  "skipped":[1]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_SANDBOX/server/movies/Elvis TTWII (1970)/extras/Rehearsals.mkv" should be exist
@@ -576,7 +589,7 @@ EOF
  "extras":[{"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
  "skipped":[]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "server already has"
     The path "$RIP_SANDBOX/server/movies/U2 (2010)/U2 (2010).mkv" should be exist
@@ -594,7 +607,7 @@ EOF
  "extras":[{"no":2,"name":"Making Of","attachTo":"Project Hail Mary (2026)"}],
  "skipped":[0]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "publishing"
     The output should include "verified"
@@ -619,7 +632,7 @@ EOF
  "extras":[],
  "skipped":[0,2]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "verified"
     The stderr should include "mkvpropedit"
@@ -634,7 +647,7 @@ EOF
 {"volume":"PHM","kind":"Blu-ray","feature":{"no":1,"movie":"PHM (2026)"},
  "extras":[{"no":2,"name":"Trailer","attachTo":"PHM (2026)"}],"skipped":[]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "server already has"
     The contents of file "$RIP_SANDBOX/server/movies/PHM (2026)/PHM (2026).mkv" should equal "already-there"
@@ -648,7 +661,7 @@ EOF
     write_plan <<'EOF'
 {"volume":"U2","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
-    When run zsh -c "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 2
     The stderr should include "kind"
     The contents of file "$RIP_FAKE_MKC_LOG" should be blank
@@ -664,7 +677,7 @@ EOF
            {"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
  "skipped":[]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should not equal 0
     The stderr should include "encode failed"
     The output should include "verified"
@@ -685,7 +698,7 @@ EOF
     write_plan <<'EOF'
 {"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 23
     The stderr should include "rsync failed"
     The stderr should include "session finished with failures"
@@ -699,7 +712,7 @@ EOF
     write_plan <<'EOF'
 {"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "verified"
     # .work/session-plans/ is outside the startup sweep by design, so the
@@ -715,7 +728,7 @@ EOF
  "extras":[{"no":2,"name":"Squaring the Circle","attachTo":"U2 (2010)"}],
  "skipped":[]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 1
     The stderr should include "session rip failed"
     The path "$RIP_STAGING_ROOT/.work/session" should not be exist
@@ -732,7 +745,7 @@ EOF
     write_plan <<'EOF'
 {"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
-    When run zsh -c "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "verified"
     The path "$JOB_STATE_ROOT/$JOB_ID/progress" should be exist
@@ -748,7 +761,7 @@ EOF
     write_plan <<'EOF'
 {"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},"extras":[],"skipped":[]}
 EOF
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 0
     The output should include "verified"
     The contents of file "$RIP_FAKE_PTY_LOG" should include "makemkvcon"
@@ -761,7 +774,7 @@ EOF
     write_plan <<'EOF'
 {"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"Face/Off (1997)"},"extras":[],"skipped":[]}
 EOF
-    When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
+    When run zsh -f "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include "slash"
     The path "$JOB_FAKE_LOG" should not be exist
@@ -772,7 +785,7 @@ EOF
 {"volume":"U2","kind":"DVD","feature":null,
  "extras":[{"no":2,"name":"..","attachTo":"U2 (2010)"}],"skipped":[]}
 EOF
-    When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
+    When run zsh -f "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include ".."
     The path "$JOB_FAKE_LOG" should not be exist
@@ -782,7 +795,7 @@ EOF
     write_plan <<'EOF'
 {"volume":"X","kind":"HD DVD","feature":{"no":1,"movie":"X (2001)"},"extras":[],"skipped":[]}
 EOF
-    When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
+    When run zsh -f "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include "kind"
     The path "$JOB_FAKE_LOG" should not be exist
@@ -800,7 +813,7 @@ EOF
            {"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
  "skipped":[]}
 EOF
-    When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
+    When run zsh -f "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
     The status should equal 2
     The stderr should include "same file twice"
     The path "$JOB_FAKE_LOG" should not be exist
@@ -814,7 +827,7 @@ EOF
            {"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],
  "skipped":[]}
 EOF
-    When run zsh -c "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    When run rip_zsh "source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
     The status should equal 2
     The stderr should include "same file twice"
     The contents of file "$RIP_FAKE_MKC_LOG" should equal ""
@@ -832,7 +845,7 @@ EOF
  "extras":[{"no":2,"name":"Squaring the Circle","attachTo":"U2 360 at the Rose Bowl (2010)"}],
  "skipped":[3]}
 EOF
-    When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
+    When run zsh -f "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
     The status should equal 0
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group heavy"
@@ -854,7 +867,7 @@ EOF
 {"volume":"ELVIS_TTWII","kind":"DVD","feature":null,
  "extras":[{"no":2,"name":"Rehearsals","attachTo":"Elvis TTWII (1970)"}],"skipped":[]}
 EOF
-    When run zsh "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
+    When run zsh -f "$RIPBIN" --session "$RIP_SANDBOX/plan.json"
     The status should equal 0
     The output should not equal ""
     The result of function titles should include "rip session: ELVIS_TTWII"

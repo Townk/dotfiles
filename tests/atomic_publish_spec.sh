@@ -230,6 +230,7 @@ Describe 'generate-theme.sh render atomicity (#3b redirect-into-live)'
   }
 
   It 'leaves the live artifact intact and exits non-zero when a render fails'
+    Skip if 'complete-only: the whole theme generator under bash, up to a failing render (110-190 ms)' spec_complete_only
     When run run_gen
     The status should be failure
     The stderr should include 'render failed'
@@ -278,6 +279,7 @@ Describe 'generate-theme.sh nvim ctp atomicity (B2 rm-before-copy)'
   }
 
   It 'leaves the live nvim engine dir intact when a source file is missing'
+    Skip if 'complete-only: the whole theme generator under bash, up to the nvim engine copy (~315 ms)' spec_complete_only
     When run run_gen
     The status should be failure
     The stderr should be present

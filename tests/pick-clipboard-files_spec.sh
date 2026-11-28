@@ -59,7 +59,49 @@ spec_paths_hex() {
   } | xxd -p | tr -d '\n'
 }
 
+# The store's schema, built by ONE sqlite3 run per file and copied into each
+# example's database (a copy costs a third of a sqlite3 start). `plain` is
+# clips + clip_types; `authorities` adds file_authorities. The copy replaces
+# whatever database a previous example left at the path.
+pcf_schema() {  # <db path> <plain|authorities>
+  _ps_tpl="$SHELLSPEC_TMPBASE/schema-$2.db"
+  if [ ! -f "$_ps_tpl" ]; then
+    _ps_sql='
+      CREATE TABLE clips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text_preview TEXT,
+        text_plain TEXT,
+        len INTEGER,
+        first_ts REAL,
+        last_ts REAL,
+        source_app TEXT,
+        source_bundle_id TEXT,
+        type_kind TEXT,
+        regtype TEXT,
+        pinned INTEGER DEFAULT 0,
+        type_hash TEXT,
+        source_host TEXT
+      );
+      CREATE TABLE clip_types (
+        clip_id INTEGER,
+        uti TEXT,
+        blob BLOB,
+        PRIMARY KEY (clip_id, uti)
+      );'
+    [ "$2" = plain ] || _ps_sql="$_ps_sql"'
+      CREATE TABLE file_authorities (
+        clip_id INTEGER,
+        item_index INTEGER,
+        path BLOB,
+        PRIMARY KEY (clip_id, item_index)
+      );'
+    sqlite3 "$_ps_tpl.new" "$_ps_sql" && mv "$_ps_tpl.new" "$_ps_tpl" || return 1
+  fi
+  cp "$_ps_tpl" "$1"
+}
+
 Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
+  Skip if 'complete-only: real recobd per example, and the picker'\''s copy path (100-250 ms of sqlite3/bridge forks)' spec_complete_only
   Include tests/recob_helper.sh
 
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
@@ -101,36 +143,7 @@ Describe 'pick-clipboard: Ctrl-Y files branch (clip::copy_by_id)'
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
     mkdir -p "$XDG_DATA_HOME/pick-clipboard"
-    rm -f "$DB"
-    sqlite3 "$DB" '
-      CREATE TABLE clips (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text_preview TEXT,
-        text_plain TEXT,
-        len INTEGER,
-        first_ts REAL,
-        last_ts REAL,
-        source_app TEXT,
-        source_bundle_id TEXT,
-        type_kind TEXT,
-        regtype TEXT,
-        pinned INTEGER DEFAULT 0,
-        type_hash TEXT,
-        source_host TEXT
-      );
-      CREATE TABLE clip_types (
-        clip_id INTEGER,
-        uti TEXT,
-        blob BLOB,
-        PRIMARY KEY (clip_id, uti)
-      );
-      CREATE TABLE file_authorities (
-        clip_id INTEGER,
-        item_index INTEGER,
-        path BLOB,
-        PRIMARY KEY (clip_id, item_index)
-      );
-    '
+    pcf_schema "$DB" authorities
 
     PBCOPYLOG="$SHELLSPEC_TMPBASE/pbcopylog"; : > "$PBCOPYLOG"
     # Fake pbcopy: clip::copy_by_id's last-resort fallback pipes the clip
@@ -956,6 +969,7 @@ End
 # (live_reply). The script is re-read from the start on every connection, so
 # ONE `ok` directive serves the text, host and timestamp reads identically.
 Describe 'pick-clipboard: live-peer row ordering (X9)'
+  Skip if 'complete-only: real recobd per example, and the picker loads and emits against it (~200 ms)' spec_complete_only
   Include tests/recob_helper.sh
 
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
@@ -979,30 +993,7 @@ Describe 'pick-clipboard: live-peer row ordering (X9)'
     # example runs at the default cap (500) rather than inheriting a stale
     # tiny limit from a previous It.
     unset PICK_CLIPBOARD_LIMIT
-    rm -f "$DB"
-    sqlite3 "$DB" '
-      CREATE TABLE clips (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text_preview TEXT,
-        text_plain TEXT,
-        len INTEGER,
-        first_ts REAL,
-        last_ts REAL,
-        source_app TEXT,
-        source_bundle_id TEXT,
-        type_kind TEXT,
-        regtype TEXT,
-        pinned INTEGER DEFAULT 0,
-        type_hash TEXT,
-        source_host TEXT
-      );
-      CREATE TABLE clip_types (
-        clip_id INTEGER,
-        uti TEXT,
-        blob BLOB,
-        PRIMARY KEY (clip_id, uti)
-      );
-    '
+    pcf_schema "$DB" plain
 
     # Peer fixtures: text distinct from every seeded local row's text_plain
     # (so the §22.5 dedup check never suppresses the live row out from under
@@ -1214,6 +1205,7 @@ End
 # scripted replies -- exactly why Task 1 used the same op-dispatching fake for
 # clipbridge::peer_snapshot's own spec.
 Describe 'pick-clipboard: live FILES row (6b, Task 3)'
+  Skip if 'complete-only: the picker loads with a live peer: snapshot fetch and store writes (~170 ms)' spec_complete_only
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
@@ -1230,36 +1222,7 @@ Describe 'pick-clipboard: live FILES row (6b, Task 3)'
 
     DB="$SHELLSPEC_TMPBASE/history-livef.db"
     export PICK_CLIPBOARD_DB="$DB"
-    rm -f "$DB"
-    sqlite3 "$DB" '
-      CREATE TABLE clips (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text_preview TEXT,
-        text_plain TEXT,
-        len INTEGER,
-        first_ts REAL,
-        last_ts REAL,
-        source_app TEXT,
-        source_bundle_id TEXT,
-        type_kind TEXT,
-        regtype TEXT,
-        pinned INTEGER DEFAULT 0,
-        type_hash TEXT,
-        source_host TEXT
-      );
-      CREATE TABLE clip_types (
-        clip_id INTEGER,
-        uti TEXT,
-        blob BLOB,
-        PRIMARY KEY (clip_id, uti)
-      );
-      CREATE TABLE file_authorities (
-        clip_id INTEGER,
-        item_index INTEGER,
-        path BLOB,
-        PRIMARY KEY (clip_id, item_index)
-      );
-    '
+    pcf_schema "$DB" authorities
 
     BINDIR="$SHELLSPEC_TMPBASE/binlivef"; mkdir -p "$BINDIR"
     export PATH="$BINDIR:$PATH"
@@ -1526,39 +1489,18 @@ Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
     # No SSH_CONNECTION -> bridge_up is false -> no live row, so emit_rows'
     # output below is exactly the seeded DB rows, nothing synthetic mixed in.
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-    export HOME="$SHELLSPEC_TMPBASE/home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export HOME="$SHELLSPEC_TMPBASE/home"
     # Phase 7: sandbox self_host's self-name lookup too (see the matching
     # comment in the Ctrl-Y files branch Describe's setup() above) so this
     # machine's own self-name file, if any, can never leak into MY_HOST here.
     export XDG_STATE_HOME="$HOME/.local/state"
-    export TMPDIR="$SHELLSPEC_TMPBASE/tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
-    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    export TMPDIR="$SHELLSPEC_TMPBASE/tmp"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/data"
+    # One rm and one mkdir for the three directories: a fork each is 2 ms.
+    rm -rf "$HOME" "$TMPDIR"; mkdir -p "$HOME" "$TMPDIR" "$XDG_DATA_HOME/pick-clipboard"
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
-    rm -f "$DB"
-    sqlite3 "$DB" '
-      CREATE TABLE clips (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text_preview TEXT,
-        text_plain TEXT,
-        len INTEGER,
-        first_ts REAL,
-        last_ts REAL,
-        source_app TEXT,
-        source_bundle_id TEXT,
-        type_kind TEXT,
-        regtype TEXT,
-        pinned INTEGER DEFAULT 0,
-        type_hash TEXT,
-        source_host TEXT
-      );
-      CREATE TABLE clip_types (
-        clip_id INTEGER,
-        uti TEXT,
-        blob BLOB,
-        PRIMARY KEY (clip_id, uti)
-      );
-    '
+    pcf_schema "$DB" plain
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
@@ -1581,6 +1523,11 @@ Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
     '
   }
 
+  # The examples that render rows are complete-only, as a group: a Skip inside
+  # an It does not stop the statements the example runs before its `When`.
+  # (Not re-indented, to keep the history of the examples readable.)
+  Context 'rendered from the store:'
+  Skip if 'complete-only: loads the whole picker and renders rows from sqlite3 (~100 ms)' spec_complete_only
   It 'a long single-file path in a narrow CW: list content keeps the basename, elides the head with a leading …/'
     export PICK_CLIPBOARD_CONTENT_WIDTH=20
     sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('file','/Users/thiago/.local/share/chezmoi/Makefile','mac-mini',100);"
@@ -1642,6 +1589,8 @@ Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
     The status should be success
     The variable result should include "/tmp/a.txt"
     The variable result should include "/tmp/b.txt"
+  End
+
   End
 
   # --- clip::shorten_path (pure-function unit tests) --------------------------
@@ -1707,6 +1656,8 @@ Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
   # bare ${#var} counts bytes). Cross-kind parity: render a multibyte file row
   # AND an ASCII text row at the same CW, strip ANSI, and assert the visible
   # content columns have equal character width.
+  Context 'rendered from the store:'
+  Skip if 'complete-only: loads the whole picker and renders rows from sqlite3 (~100 ms)' spec_complete_only
   It 'file-row content aligns to the same char width as a text-row at the same CW, even under LC_ALL=C (multibyte)'
     export PICK_CLIPBOARD_CONTENT_WIDTH=14
     sqlite3 "$DB" "INSERT INTO clips (type_kind, text_preview, source_host, last_ts) VALUES ('file','/tmp/café/résumé.txt','mac-mini',100);"
@@ -1726,6 +1677,7 @@ Describe 'pick-clipboard: file-path rendering keeps the basename (X8)'
     text_w=$(printf '%s\n' "$out" | sed -n 2p)
     When call test "$file_w" = "$text_w"
     The status should be success
+  End
   End
 End
 
@@ -1781,37 +1733,21 @@ End
 # off its column. clip::sql_flatten/$SNIPPET_EXPR repair those rows at render
 # time, the way clipboard-picker.lua's query_items does for the GUI picker.
 Describe 'pick-clipboard: the content column trims and flattens its snippet'
+  Skip if 'complete-only: loads the whole picker (~50 ms of top-level forks) and renders its rows from sqlite3: ~100 ms' spec_complete_only
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
   setup() {
     # No SSH_CONNECTION -> no live row, so the output is exactly the seeded rows.
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
-    export HOME="$SHELLSPEC_TMPBASE/snippet-home"; rm -rf "$HOME"; mkdir -p "$HOME"
+    export HOME="$SHELLSPEC_TMPBASE/snippet-home"
     export XDG_STATE_HOME="$HOME/.local/state"
-    export TMPDIR="$SHELLSPEC_TMPBASE/snippet-tmp"; rm -rf "$TMPDIR"; mkdir -p "$TMPDIR"
-    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/snippet-data"; mkdir -p "$XDG_DATA_HOME/pick-clipboard"
+    export TMPDIR="$SHELLSPEC_TMPBASE/snippet-tmp"
+    export XDG_DATA_HOME="$SHELLSPEC_TMPBASE/snippet-data"
+    rm -rf "$HOME" "$TMPDIR"; mkdir -p "$HOME" "$TMPDIR" "$XDG_DATA_HOME/pick-clipboard"
     DB="$XDG_DATA_HOME/pick-clipboard/history.db"
     export PICK_CLIPBOARD_DB="$DB"
-    rm -f "$DB"
-    sqlite3 "$DB" '
-      CREATE TABLE clips (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text_preview TEXT,
-        text_plain TEXT,
-        len INTEGER,
-        first_ts REAL,
-        last_ts REAL,
-        source_app TEXT,
-        source_bundle_id TEXT,
-        type_kind TEXT,
-        regtype TEXT,
-        pinned INTEGER DEFAULT 0,
-        type_hash TEXT,
-        source_host TEXT
-      );
-      CREATE TABLE clip_types (clip_id INTEGER, uti TEXT, blob BLOB, PRIMARY KEY (clip_id, uti));
-    '
+    pcf_schema "$DB" plain
     export PICK_COMMON_LIB="$LIB_DIR/pick-common.zsh"
     export PICK_BRIDGE_CLIENT_LIB="$LIB_DIR/clipboard-bridge-client.zsh"
     export PICK_CLIPBOARD_NO_RUN=1
@@ -1905,6 +1841,7 @@ End
 # clip.set arm and a probe arm that can be told to fail (the bridge-down
 # example).
 Describe 'pick-clipboard: headless GUI verbs (--peer-snapshot / --pull-live, Task 4)'
+  Skip if 'complete-only: runs the whole picker per verb, up to the real restore engine (100-500 ms)' spec_complete_only
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
@@ -1919,36 +1856,7 @@ Describe 'pick-clipboard: headless GUI verbs (--peer-snapshot / --pull-live, Tas
 
     DB="$SHELLSPEC_TMPBASE/history-verbs.db"
     export PICK_CLIPBOARD_DB="$DB"
-    rm -f "$DB"
-    sqlite3 "$DB" '
-      CREATE TABLE clips (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        text_preview TEXT,
-        text_plain TEXT,
-        len INTEGER,
-        first_ts REAL,
-        last_ts REAL,
-        source_app TEXT,
-        source_bundle_id TEXT,
-        type_kind TEXT,
-        regtype TEXT,
-        pinned INTEGER DEFAULT 0,
-        type_hash TEXT,
-        source_host TEXT
-      );
-      CREATE TABLE clip_types (
-        clip_id INTEGER,
-        uti TEXT,
-        blob BLOB,
-        PRIMARY KEY (clip_id, uti)
-      );
-      CREATE TABLE file_authorities (
-        clip_id INTEGER,
-        item_index INTEGER,
-        path BLOB,
-        PRIMARY KEY (clip_id, item_index)
-      );
-    '
+    pcf_schema "$DB" authorities
 
     BINDIR="$SHELLSPEC_TMPBASE/binverbs"; mkdir -p "$BINDIR"
 
@@ -2321,6 +2229,7 @@ End
 # same manifest over its PUBLIC endpoint, which is precisely the phase-6
 # remote-push path this pull has to be indistinguishable from.
 Describe 'pick-clipboard: the live FILES pointer row mirrors the daemon (6b, C1)'
+  Skip if 'complete-only: real recobd per example, daemon and picker each write a store row (~180 ms)' spec_complete_only
   Include tests/recob_helper.sh
 
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"

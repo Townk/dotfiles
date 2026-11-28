@@ -8,6 +8,10 @@ Describe 'rip audiobooks'
   ABS_BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-abs-authors"
   Include tests/rip_helper.sh
   Include tests/rip_audiobook_helper.sh
+  # rip.zsh is loaded once, here; `When run rip_zsh "…"` runs the string a
+  # `zsh -f -c` used to get, in a subshell (tests/rip_helper.sh).
+  rip_lib_load
+  BeforeAll 'rip_audiobook_static_build'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -61,7 +65,7 @@ EOF
     mkbook "A" "B" X1 "" B
     mkbook "C" "D" X2 "" D
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published --apply"
     The status should equal 0
     The output should include "backfilled 2 of 2 sidecar(s)"
     The result of function two_dates should equal "2019-05-07T07:00:00 2021-11-30T08:00:00"
@@ -100,7 +104,7 @@ exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published --apply"
     The status should equal 0
     The output should include "backfilled 1 of 1 sidecar(s)"
     The result of function rich_published should equal "2019-05-07T07:00:00"
@@ -116,7 +120,7 @@ EOF
     fake_provider_two
     mkbook "A" "B" X1 "" B
     fake_server_ssh
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       chmod 555 '$RIP_SANDBOX/server/audiobooks/A/B'
       rip::ab_backfill_published --apply; rc=\$?
       chmod 755 '$RIP_SANDBOX/server/audiobooks/A/B'
@@ -153,7 +157,7 @@ PATH="$RIP_SANDBOX/remotebin"; export PATH
 exec "$dash_bin" -c "\$cmd"
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published --apply"
     The status should equal 1
     The output should include "backfilled 0 of 1 sidecar(s)"
     The stderr should include "could not backfill A/B"
@@ -164,7 +168,7 @@ EOF
     fake_provider_two
     mkbook "A" "B" X1 "" B
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 0
     The output should include "re-run with --apply"
     The contents of file "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json" should include '"published":null'
@@ -183,6 +187,7 @@ EOF
   # assert exactly which ABS calls were made AND, just as importantly, that
   # none were made when the operator was refused.
   fake_abs_ops_bin() {
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
@@ -205,7 +210,7 @@ EOF
     fake_abs_ops_bin
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/B'"
+    When run rip_zsh "source $RIPLIB && rip::ab_retire 'A/B'"
     The status should equal 0
     The output should include "would remove"
     The output should include "A/B"
@@ -218,7 +223,7 @@ EOF
     fake_abs_ops_bin
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/B' --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retire 'A/B' --apply"
     The status should equal 0
     The output should include "retired A/B"
     The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
@@ -234,6 +239,7 @@ EOF
   # missing; a rescan does not drop it), reported as a success. This is the
   # most destructive verb in the module.
   It 'retire: a failed ABS item delete is reported as such, never as a completed retire'
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
@@ -246,7 +252,7 @@ EOF
     chmod +x "$RIP_BIN_DIR/rip-abs-authors"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/B' --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retire 'A/B' --apply"
     The status should equal 1
     The output should not include "retired A/B"
     The stderr should include "could NOT be deleted"
@@ -264,7 +270,7 @@ EOF
   # filename it was given and would otherwise read as "not stored" forever.
   It 'retire: refuses a path the server does not hold'
     fake_abs_ops_bin
-    When run zsh -c "source $RIPLIB && rip::ab_retire 'No/Such' --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retire 'No/Such' --apply"
     The status should equal 2
     The stderr should include "not stored"
     # Refused before ABS was touched at all.
@@ -283,7 +289,7 @@ exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/B' --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retire 'A/B' --apply"
     The status should equal 2
     The stderr should include "not stored"
     The path "$RIP_SANDBOX/absbin.log" should not be exist
@@ -298,7 +304,7 @@ EOF
     fake_abs_ops_bin
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/Orphan"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/Orphan/Orphan.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_retire 'A/Orphan' --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_retire 'A/Orphan' --apply"
     The status should equal 2
     The stderr should include "could not resolve"
     The path "$RIP_SANDBOX/server/audiobooks/A/Orphan/Orphan.m4b" should be exist
@@ -309,7 +315,7 @@ EOF
     fake_abs_ops_bin
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors"
     The status should equal 0
     The output should include "J.R.R. Tolkien"
     The output should include "J. R. R. Tolkien"
@@ -326,7 +332,7 @@ EOF
     fake_abs_ops_bin
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The output should include "author variants"
     The output should include "J.R.R. Tolkien"
@@ -339,7 +345,7 @@ EOF
   It 'sweep: a library with no collisions reports nothing to do'
     fake_abs_ops_bin
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors"
     The status should equal 0
     The output should include "nothing to do"
   End
@@ -348,7 +354,7 @@ EOF
     fake_abs_ops_bin
     mkdir -p "$RIP_SANDBOX/server/audiobooks/A/B"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b"
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --retire "A/B"
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --retire "A/B"
     The status should equal 0
     The output should include "would remove"
     The path "$RIP_SANDBOX/server/audiobooks/A/B/B.m4b" should be exist
@@ -390,6 +396,7 @@ EOF
   # example can assert on WHICH destructive verbs were issued rather than on
   # a lookup failing.
   fake_abs_ops_bin_any() {
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
@@ -414,7 +421,7 @@ EOF
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit" \
              "$RIP_SANDBOX/server/audiobooks/J R R Tolkien/Leaf by Niggle" \
              "$RIP_SANDBOX/server/audiobooks/JRR Tolkien/Farmer Giles"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The output should include "author variants"
     The path "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit" should be exist
@@ -439,7 +446,7 @@ EOF
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'canon\n' > "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/h.m4b"
     printf 'variant\n' > "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit/h.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
     The output should include "author variants"
     The stderr should include "still holds books"
@@ -463,6 +470,7 @@ EOF
   # branch (a repoint that was attempted and refused).
   It 'sweep (ssh): an unresolvable canonical author keeps the variant record, without failing'
     fake_ssh_server
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
@@ -475,7 +483,7 @@ EOF
     chmod +x "$RIP_BIN_DIR/rip-abs-authors"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The output should include "author variants"
     The stderr should include "still name it in Audiobookshelf"
@@ -497,7 +505,7 @@ exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors"
     The status should equal 2
     The output should not include "nothing to do"
     The stderr should include "could not list the audiobook library"
@@ -519,7 +527,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/.DS_Store"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     # Not a clean sweep: a directory is left behind for the operator.
     The status should equal 1
     The output should include "author variants"
@@ -548,6 +556,7 @@ EOF
 
   It 'sweep (ssh): an unresolvable variant author id is reported, never claimed as removed'
     fake_ssh_server
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
@@ -561,7 +570,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/.DS_Store"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
     The output should include "author variants"
     # The book still moved and was repointed — only the record is unaccounted for.
@@ -575,6 +584,7 @@ EOF
 
   It 'sweep (ssh): a --delete-author that fails is reported, never claimed as removed'
     fake_ssh_server
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
@@ -589,7 +599,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
     printf 'x\n' > "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/.DS_Store"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
     The output should include "author variants"
     The stderr should include "could not remove its Audiobookshelf author record"
@@ -604,6 +614,7 @@ EOF
   # silent rc 0 there would be the same false success.
   It 'sweep (ssh): a fully-swept variant whose record will not delete still reports it'
     fake_ssh_server
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/absbin.log"
@@ -617,7 +628,7 @@ EOF
     chmod +x "$RIP_BIN_DIR/rip-abs-authors"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/Two Towers" \
              "$RIP_SANDBOX/server/audiobooks/J.R.R. Tolkien/The Hobbit"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
     The output should include "author variants"
     # The sweep itself worked: the book moved and the variant folder is gone.
@@ -692,6 +703,7 @@ EOF
   # POSIX case) and left that example passing for the wrong reason. Nothing a
   # fixture supplies may be quietly overridden by the fixture builder.
   ca_abs_bin() {
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     {
       printf '#!/bin/sh\n'
       printf 'printf "%%s\\n" "$*" >> "%s/absbin.log"\n' "$RIP_SANDBOX"
@@ -747,7 +759,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Ursula K Le Guin/A Wizard of Earthsea" \
              "$RIP_SANDBOX/server/audiobooks/Ursula K Le Guin/The Tombs of Atuan" \
              "$RIP_SANDBOX/server/audiobooks/Ursula K. Le Guin/The Farthest Shore"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The output should include "author variants"
     The path "$RIP_SANDBOX/server/audiobooks/Ursula K Le Guin/The Farthest Shore" should be exist
@@ -759,7 +771,7 @@ EOF
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
     ca_book 'J.K. Rowling/Goblet of Fire' 'J.K. Rowling'
     ca_snap_tree
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors"
     The status should equal 0
     # The canonical form is NOT a substring of the stored one, so this cannot
     # pass on an echo of the input.
@@ -779,7 +791,7 @@ EOF
     fake_abs_ops_bin_any
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/J.K. Rowling" should not be exist
@@ -800,7 +812,7 @@ EOF
     fake_abs_ops_bin_any
     ca_book 'J. K. Rowling/Deathly Hallows' 'J. K. Rowling'
     ca_snap_tree
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The output should include "nothing to do"
     The result of function ca_tree_unchanged should equal "tree-identical"
@@ -812,9 +824,9 @@ EOF
     fake_abs_ops_bin_any
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
-    zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply" >/dev/null 2>&1
+    ( rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply" ) >/dev/null 2>&1
     ca_snap_tree
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The output should include "nothing to do"
     The result of function ca_tree_unchanged should equal "tree-identical"
@@ -835,7 +847,7 @@ EOF
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
     ca_book 'J.K. Rowling/Goblet of Fire' 'J.K. Rowling'
     ca_book 'J. K. Rowling/Order of the Phoenix' 'J. K. Rowling'
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
     The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Goblet of Fire/Goblet of Fire.m4b" should be exist
@@ -862,7 +874,7 @@ EOF
     printf 'canonical-copy\n' > "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b"
     ca_snap_hallows
     ca_snap_variant
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
     The stderr should include "still holds books"
     # Neither copy of the audio moved or changed.
@@ -911,7 +923,7 @@ EOF
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
     ca_book 'J. K. Rowling/Deathly Hallows' 'J. K. Rowling'
     ca_snap_variant
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
     # THE CLAIM. Nothing may say this book moved.
     The stderr should not include "moved Deathly Hallows"
@@ -942,7 +954,7 @@ EOF
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
     ca_book 'J. K. Rowling/Order of the Phoenix' 'J.K. Rowling'
     chmod 500 "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Order of the Phoenix"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     chmod 700 "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Order of the Phoenix" 2>/dev/null
     The status should equal 1
     The output should include "re-spelled 1 of 2"
@@ -972,7 +984,7 @@ EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
     mkdir -p "$RIP_SANDBOX/server/audiobooks/Ann Leckie/Ancillary Justice"
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors"
     The status should equal 2
     The output should not include "nothing to do"
     The stderr should include "could not read the stored sidecars"
@@ -985,7 +997,7 @@ EOF
     fake_abs_ops_bin_any
     ca_book 'J. K. Rowling/Deathly Hallows' 'Robert Galbraith'
     ca_snap_tree
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 0
     The output should include "nothing to do"
     The result of function ca_tree_unchanged should equal "tree-identical"
@@ -1007,7 +1019,7 @@ EOF
     fake_server_ssh
     ca_abs_bin '  --find-item) echo item-x ;;\n  --author-id) case "$2" in "J. K. Rowling") exit 1 ;; *) echo auth-x ;; esac ;;'
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     # Nothing went wrong. The files are where they should be.
     The status should equal 0
     The path "$RIP_SANDBOX/server/audiobooks/J. K. Rowling/Deathly Hallows/Deathly Hallows.m4b" should be exist
@@ -1030,7 +1042,7 @@ EOF
     fake_server_ssh
     ca_abs_bin '  --find-item) echo item-x ;;\n  --author-id) echo auth-x ;;\n  --repoint-item) exit 1 ;;'
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     The status should equal 1
     The stderr should include "could not repoint its ABS item"
     The stderr should include "could not be repointed"
@@ -1065,7 +1077,7 @@ EOF
     fake_server_ssh
     ca_abs_bin '  --find-item) exit 1 ;;\n  --author-id) echo auth-x ;;'
     ca_book 'J.K. Rowling/Deathly Hallows' 'J.K. Rowling'
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     # Nothing went wrong: there was simply nothing to repoint.
     The status should equal 0
     The stderr should include "does not know this book yet"
@@ -1100,9 +1112,9 @@ EOF
     fake_server_ssh
     ca_book 'J.K. Rowling/Deathly Hallows' 'J. K. Rowling'
     ca_book 'J. K. Rowling/Deathly Hallows' 'J. K. Rowling'
-    zsh -c "source $RIPLIB && rip::ab_canonicalize_authors" > "$RIP_SANDBOX/dry.txt" 2>/dev/null
+    ( rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors" ) > "$RIP_SANDBOX/dry.txt" 2>/dev/null
     ca_snap_variant
-    When run zsh -c "source $RIPLIB && rip::ab_canonicalize_authors --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_canonicalize_authors --apply"
     # The same-title collision still refuses, exactly as before.
     The status should equal 1
     The stderr should include "still holds books"
@@ -1190,7 +1202,7 @@ EOF
     fake_provider_rows "$ROW_WIND"
     mkbook_bare "$WIND"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 0
     The output should include "repaired: $WIND"
     The output should include "repaired 1 of 1 sidecar(s)"
@@ -1210,7 +1222,7 @@ EOF
     fake_provider_rows "$ROW_WIND"
     mkbook_bare "$WIND"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars"
     The status should equal 0
     The output should include "would create sidecar: $WIND"
     The output should include "re-run with --apply"
@@ -1236,7 +1248,7 @@ EOF
     mkbook_bare "$WIND"
     mkbook_empty "$RPO" manual
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars"
     The status should equal 0
     The output should include "would create sidecar: $WIND"
     The output should include "would assign local identity: $RPO"
@@ -1254,7 +1266,7 @@ EOF
     fake_provider_rows "$ROW_WIND"
     mkbook_bare "Nobody At All/Orphan Book"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The output should include "unrepairable (no sidecar, no provider row): Nobody At All/Orphan Book"
     The output should include "1 book(s) have no sidecar and no provider row"
@@ -1274,7 +1286,7 @@ EOF
     mkbook_malformed "$WIND"
     snapshot "$WIND"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     # THE load-bearing assertion: the bytes on disk, not a re-read field.
     The result of function sidecar_unchanged should equal "byte-identical"
@@ -1294,7 +1306,7 @@ EOF
     mkbook "Brandon Sanderson" "Steelheart" B00ECDZ08I 2013-09-24T07:00:00 Steelheart
     snapshot "Brandon Sanderson/Steelheart"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 0
     The output should include "nothing to repair (1 book(s) checked, 1 already identified)"
     The result of function sidecar_unchanged should equal "byte-identical"
@@ -1321,7 +1333,7 @@ EOF
     fake_provider_rows "$(nfd_row)"
     mkbook_bare "$NFC_AUTHOR/Germinal"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 0
     The output should include "repaired 1 of 1 sidecar(s)"
     The result of function nfd_asin should equal "B0NFD00001"
@@ -1337,7 +1349,7 @@ EOF
     mkbook_empty "$UNF" unknown
     snapshot "$UNF"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The result of function sidecar_unchanged should equal "byte-identical"
     The output should include "recoverable (needs confirmation): $UNF"
@@ -1355,7 +1367,7 @@ EOF
     mkbook_empty "$UNF" unknown
     snapshot "$UNF"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The output should include "ambiguous (nothing written): $UNF"
     The output should include "B07PX3DC46"
@@ -1379,7 +1391,7 @@ EOF
     mkbook_empty "$HOB_B" unknown
     snapshot "$HOB_A"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The output should include "ambiguous (nothing written): $HOB_A"
     The output should include "ambiguous (nothing written): $HOB_B"
@@ -1424,7 +1436,7 @@ EOF
     fake_provider_rows "$ROW_WIND"
     mkbook_empty "$RPO" manual
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 0
     The output should include "repaired: $RPO"
     The output should include "repaired 1 of 1 sidecar(s)"
@@ -1455,7 +1467,7 @@ EOF
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"Book","authors":["Z Control"],"ids":{"fleet.uid":"u1","local.sha256":"deadbeef"}}' \
       > "$RIP_SANDBOX/server/audiobooks/Z Control/Book/.fleet-book.json"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       rip::ab_repair_sidecars --apply >/dev/null 2>&1
       rip::_stored_sha_index"
     The status should equal 0
@@ -1471,7 +1483,7 @@ EOF
     fake_provider_rows "$ROW_WIND"
     mkbook_empty "$RPO" manual
     fake_server_ssh
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       rip::ab_repair_sidecars --apply >/dev/null 2>&1
       u1=\$(jq -r '.ids[\"fleet.uid\"] // \"\"' '$RIP_SANDBOX/server/audiobooks/$RPO/.fleet-book.json')
       rip::ab_repair_sidecars --apply
@@ -1493,7 +1505,7 @@ EOF
     mkbook_empty "Ghost Author/Returned Book" unknown
     snapshot "Ghost Author/Returned Book"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The output should include "unidentifiable (empty identity, no provider row, provider \"unknown\"): Ghost Author/Returned Book"
     The output should include "1 book(s) are unidentifiable"
@@ -1509,7 +1521,7 @@ EOF
     mkbook_empty "$RPO" manual
     snapshot "$RPO"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 2
     The stderr should include "returned no rows"
     The result of function sidecar_unchanged should equal "byte-identical"
@@ -1523,7 +1535,7 @@ EOF
     fake_provider_rows "$ROW_WIND"
     mkbook_bare "$WIND"
     fake_server_ssh
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --repair-sidecars --apply
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --repair-sidecars --apply
     The status should equal 0
     The output should include "repaired 1 of 1 sidecar(s)"
     The result of function wind_identity should equal '["B0CQ3759C3","2024-12-06T08:00:00","Michael Kramer",220320,"The Stormlight Archive","english",false,"libation",null,false]'
@@ -1542,7 +1554,7 @@ EOF
     mkbook_empty "$UNF" unknown
     snapshot "$UNF"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$UNF' B0NOTREAL01 --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_adopt_asin '$UNF' B0NOTREAL01 --apply"
     The status should equal 2
     The stderr should include "has no B0NOTREAL01"
     The stderr should include "resolves to nothing"
@@ -1554,7 +1566,7 @@ EOF
     mkbook "Brandon Sanderson" "Wind and Truth: Book Five of the Stormlight Archive" B0OLDASIN1 "" "Wind and Truth"
     snapshot "$WIND"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$WIND' B0CQ3759C3 --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_adopt_asin '$WIND' B0CQ3759C3 --apply"
     The status should equal 2
     The stderr should include "already carries audible.asin B0OLDASIN1"
     The stderr should include "never overwrites"
@@ -1572,7 +1584,7 @@ EOF
     mkbook "Shawn Speakman" "Unfettered II" B07PX3DC46 2016-01-01T07:00:00 "Unfettered II"
     snapshot "$UNF"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46 --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46 --apply"
     The status should equal 2
     The stderr should include "Shawn Speakman/Unfettered II already carries audible.asin B07PX3DC46"
     The stderr should include "one ASIN identifies one book"
@@ -1584,7 +1596,7 @@ EOF
     fake_provider_rows "$ROW_UNF"
     mkbook_empty "$UNF" unknown
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46 --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46 --apply"
     The status should equal 0
     The output should include "rip: adopted B07PX3DC46 for $UNF"
     # published, narrators, duration_s, series, language and abridged all
@@ -1600,7 +1612,7 @@ EOF
     mkbook_empty "$UNF" unknown
     snapshot "$UNF"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46"
+    When run rip_zsh "source $RIPLIB && rip::ab_adopt_asin '$UNF' B07PX3DC46"
     The status should equal 0
     The output should include "would adopt: $UNF"
     The output should include "ASIN         : B07PX3DC46"
@@ -1615,7 +1627,7 @@ EOF
     mkbook_empty "$UNF" unknown
     snapshot "$UNF"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       chmod 555 '$RIP_SANDBOX/server/audiobooks/$UNF'
       rip::ab_adopt_asin '$UNF' B07PX3DC46 --apply; rc=\$?
       chmod 755 '$RIP_SANDBOX/server/audiobooks/$UNF'
@@ -1652,7 +1664,7 @@ EOF
     mkbook_bare "Becky Chambers/A Closed and Common Orbit"
     mkbook_bare "Cixin Liu/The Three-Body Problem"
     fake_server_ssh_reads_stdin
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars < /dev/null"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars < /dev/null"
     The status should equal 0
     The output should include "would create sidecar: Ann Leckie/Ancillary Justice"
     The output should include "would create sidecar: Becky Chambers/A Closed and Common Orbit"
@@ -1679,7 +1691,7 @@ EOF
     mkbook_empty "$HOB_B" unknown
     snapshot "$HOB_B"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The output should include "ambiguous (nothing written): $HOB_A"
     The output should include "ambiguous (nothing written): $HOB_B"
@@ -1705,7 +1717,7 @@ EOF
     mkbook_bare "$HOB_A"
     mkbook "J. R. R. Tolkien" "The Hobbit" B0DUP00001 2012-01-01T00:00:00 "The Hobbit"
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The output should include "ambiguous (nothing written): $HOB_A"
     The output should include "already carried by $HOB_B"
@@ -1725,7 +1737,7 @@ EOF
     fake_provider_rows "$ROW_WIND"
     mkbook_bare "$WIND"
     fake_server_ssh_probe_fails
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The output should include "unreadable sidecar (not repaired): $WIND"
     The output should include "could not confirm whether a sidecar is there"
@@ -1752,7 +1764,7 @@ EOF
     mkbook_empty "Nil One/Alpha" unknown
     mkbook_empty "Nil Two/Beta" unknown
     fake_server_ssh
-    When run zsh -c "source $RIPLIB && rip::ab_repair_sidecars --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_repair_sidecars --apply"
     The status should equal 1
     The output should include "recoverable (needs confirmation): Nil One/Alpha"
     The output should include "recoverable (needs confirmation): Nil Two/Beta"
@@ -1767,7 +1779,7 @@ EOF
     mkbook_empty "$UNF" unknown
     snapshot "$UNF"
     fake_server_ssh
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --adopt-asin "$UNF" B0NOTREAL01 --apply
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --adopt-asin "$UNF" B0NOTREAL01 --apply
     The status should equal 2
     The stderr should include "resolves to nothing"
     The result of function sidecar_unchanged should equal "byte-identical"

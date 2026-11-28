@@ -11,14 +11,26 @@
 Describe 'rip-bd-menu'
   HELPER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_rip-bd-menu"
 
-  cleanup() { rm -rf "$S"; }
+  Include tests/rip_helper.sh
+  cleanup() { rip_rmtree "$S"; }
   AfterEach 'cleanup'
+
+  # Each group's fake disc is the same for every example, so it is built
+  # ONCE (BeforeAll: the resources XML, the jar, the fake binaries) and an
+  # example gets its own copy of the DATA with one `cp -R`. The fake
+  # tesseract/magick are not copied: they read nothing of the sandbox, and a
+  # script that ran before is a cheap one to run again.
+  bd_copy() {   # <master dir> -> $S (a fresh sandbox) and $D
+    rip_sandbox bd; S=$RIP_SANDBOX; unset RIP_SANDBOX
+    D="$S/disc/BDMV/JAR"
+    cp -R "$1/disc" "$1/rows.jsonl" "$1/handlers.txt" "$S/"
+  }
 
   run_helper() { python3 "$HELPER" "$S/disc" < "$S/rows.jsonl" > "$S/out.json"; jq -r "$1" "$S/out.json"; }
 
   Describe 'legacy disc — a resources XML with no atlas regions'
-    legacy_fixture() {
-      S=$(mktemp -d)
+    legacy_master() {
+      S="$SHELLSPEC_TMPBASE/bd-legacy"; BD_LEGACY=$S
       D="$S/disc/BDMV/JAR"
       mkdir -p "$D/00001"
       cat > "$D/00001/resources_eng.xml" <<'EOF'
@@ -79,6 +91,10 @@ EOF
 {"no":10,"seconds":107,"source":"00718.mpls","segments":"647"}
 EOF
     }
+    legacy_fixture() { bd_copy "$BD_LEGACY"; export RIP_TESSERACT_BIN="$BD_LEGACY/tesseract"; }
+    # ...and runs its fake once: the first exec of a new script is the slow one.
+    legacy_once() { legacy_master; "$BD_LEGACY/tesseract" warm >/dev/null 2>&1; :; }
+    BeforeAll 'legacy_once'
     BeforeEach 'legacy_fixture'
 
     It 'skips the feature twin (same segments, raw m2ts)'
@@ -191,8 +207,8 @@ EOF
   # disc's own atlas regions, its seven handler names, and the strings
   # tesseract actually returned from the ImageMagick-prepared crops.
   Describe 'atlas disc — PROJECT_HAIL_MARY, the real live-pass material'
-    atlas_fixture() {
-      S=$(mktemp -d)
+    atlas_master() {
+      S="$SHELLSPEC_TMPBASE/bd-atlas"; BD_ATLAS=$S
       D="$S/disc/BDMV/JAR"
       mkdir -p "$D/00001"
       cat > "$D/00001/resources_eng.xml" <<'EOF'
@@ -232,13 +248,17 @@ EOF
         printf 'PNG\n' > "$D/00001/$sheet.png"
       done
       # fake magick: log argv, then copy the SOURCE (first argument) onto the
-      # OUTPUT (last argument) so the crop the helper then OCRs exists
+      # OUTPUT (last argument) so the crop the helper then OCRs exists. Every
+      # sheet of this fixture is the one line "PNG" (just above), so the copy
+      # is a read and a printf: the same bytes as `cp "$src" "$out"`, which
+      # was a process per crop, six crops per example.
       cat > "$S/magick" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "${FAKE_MAGICK_LOG:-/dev/null}"
 src=$1
 for a in "$@"; do out=$a; done
-cp "$src" "$out"
+IFS= read -r sheet < "$src" || exit 1
+printf '%s\n' "$sheet" > "$out"
 EOF
       chmod +x "$S/magick"; export RIP_MAGICK_BIN="$S/magick"
       # fake tesseract: the readings the real one produced from these crops,
@@ -287,6 +307,17 @@ EOF
 {"no":20,"seconds":107,"source":"00647.m2ts","segments":"647"}
 EOF
     }
+    atlas_fixture() {
+      bd_copy "$BD_ATLAS"
+      export RIP_MAGICK_BIN="$BD_ATLAS/magick" RIP_TESSERACT_BIN="$BD_ATLAS/tesseract"
+    }
+    atlas_once() {
+      atlas_master
+      "$BD_ATLAS/tesseract" warm >/dev/null 2>&1
+      "$BD_ATLAS/magick" "$BD_ATLAS/handlers.txt" /dev/null >/dev/null 2>&1
+      :
+    }
+    BeforeAll 'atlas_once'
     BeforeEach 'atlas_fixture'
 
     It 'names the five deleted scenes 16-20 in menu order'

@@ -105,6 +105,7 @@ ZSH
   }
 
   It 'prints a Title Case name with --title'
+    Skip if 'complete-only: draws random names against a list of some 4,000 taken ones through zsh stand-ins of tmux and rex (90-340 ms, by luck)' spec_complete_only
     When call generate_title
     The status should be success
     The output should match pattern '[A-Z][a-z]* [A-Z][a-z]*'
@@ -122,6 +123,7 @@ ZSH
   # possible answer. (One adjective in 65 is left free rather than one name in
   # 4,000: the script gives up after 1,000 draws.)
   It 'skips a name whose Title Case form is taken'
+    Skip if 'complete-only: draws random names against a list of some 4,000 taken ones through zsh stand-ins of tmux and rex (90-340 ms, by luck)' spec_complete_only
     only_zippy_free() {
       export STUB_SESSIONS="$(all_title_names | grep -v '^Zippy ')"
       generate_title
@@ -132,6 +134,7 @@ ZSH
   End
 
   It 'still treats a hyphenated name as free when only --title names are taken'
+    Skip if 'complete-only: draws random names against a list of some 4,000 taken ones through zsh stand-ins of tmux and rex (90-340 ms, by luck)' spec_complete_only
     lower_free() {
       export STUB_SESSIONS="$(all_title_names)"
       generate
@@ -160,6 +163,7 @@ ZSH
   End
 
   It 'prints no name, with status 3, when a Rex listing fails'
+    Skip if 'complete-only: draws random names against a list of some 4,000 taken ones through zsh stand-ins of tmux and rex (90-340 ms, by luck)' spec_complete_only
     export STUB_LIST_FAILS=1
     When call generate_rex --title
     The status should equal 3
@@ -176,6 +180,7 @@ ZSH
   End
 
   It 'checks a --title name against the Rex listing when it can be read'
+    Skip if 'complete-only: draws random names against a list of some 4,000 taken ones through zsh stand-ins of tmux and rex (90-340 ms, by luck)' spec_complete_only
     only_zippy_free() {
       export STUB_SESSIONS="$(all_title_names | grep -v '^Zippy ')"
       generate_rex --title

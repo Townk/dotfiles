@@ -8,10 +8,36 @@
 
 Describe 'share:: background sends'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
+
+  # The three fakes, written once for the file (share_helper.sh:
+  # share_fixture_script); setup's comments say why each is there. They
+  # record where the example's exported variables say, in its sandbox, and
+  # the two on PATH sit behind the example's own $SB/bin.
+  fixtures() {
+    FX="$SHELLSPEC_TMPBASE/share-job-fx"
+    share_fixture_script "$FX/fakepueue" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"$SHARE_PUEUE_CALLS"
+case "$1" in
+  add) printf '1\n' ;;
+  *)   : ;;
+esac
+SH
+    share_fixture_script "$FX/bin/tmux" <<'SH'
+#!/bin/sh
+exit 0
+SH
+    share_fixture_script "$FX/bin/pbcopy" <<'SH'
+#!/bin/sh
+cat >"$SHARE_FAKE_CLIP"
+SH
+  }
+  BeforeAll 'fixtures'
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-job"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
+    share_fresh "$SB" bin
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
     SHARE_STATE_DIR="$SB/state"
@@ -24,16 +50,7 @@ Describe 'share:: background sends'
     # mint live phrases, and without this they leave 0600 files behind in
     # ~/.local/state/share/live on the dev machine (they did — 44 of them).
     SHARE_LIVE_DIR="$SB/live"; export SHARE_LIVE_DIR
-    cat >"$SB/fakepueue" <<'SH'
-#!/bin/sh
-printf '%s\n' "$*" >>"$SHARE_PUEUE_CALLS"
-case "$1" in
-  add) printf '1\n' ;;
-  *)   : ;;
-esac
-SH
-    chmod +x "$SB/fakepueue"
-    JOB_PUEUE_BIN="$SB/fakepueue"
+    JOB_PUEUE_BIN="$FX/fakepueue"
     SHARE_PUEUE_CALLS="$SB/pueue-calls"; export SHARE_PUEUE_CALLS
     # job::start unconditionally calls job::_statusbar_sync, which resolves
     # ${JOB_TMUX_BIN:-tmux} and runs `refresh-client -S` against the DEFAULT
@@ -41,27 +58,22 @@ SH
     # tests/job_callback_spec.sh: a test must never touch the live server.
     # Left unset here, every share::send_background call in this block
     # repaints this dev shell's real, attached tmux status bar.
-    cat >"$SB/bin/tmux" <<'SH'
-#!/bin/sh
-exit 0
-SH
-    chmod +x "$SB/bin/tmux"
-    JOB_TMUX_BIN="$SB/bin/tmux"
+    JOB_TMUX_BIN="$FX/bin/tmux"
     # job::start also schedules a Rex tab; a rex that always fails keeps
     # that background step off the live Rex server.
     JOB_REX_BIN=/usr/bin/false
+    # The Rex tab step job::start leaves in the background naps
+    # JOB_FOLLOW_DELAY (2 s) before it finds no Rex and ends. It holds the
+    # file's report pipe meanwhile, so the file ended 2 s after its last
+    # example. No delay: it is gone at once.
+    export JOB_FOLLOW_DELAY=0
 
     # A fake pbcopy, and PATH ahead of the real one — same house rule as the
     # tmux stub above and for the same reason: share::clip now runs pbcopy on
     # every send, and on a dev machine that is the USER'S clipboard. It also
     # gives the live examples below something to assert against.
-    cat >"$SB/bin/pbcopy" <<'SH'
-#!/bin/sh
-cat >"$SHARE_FAKE_CLIP"
-SH
-    chmod +x "$SB/bin/pbcopy"
     SHARE_FAKE_CLIP="$SB/clip.txt"; export SHARE_FAKE_CLIP
-    PATH="$SB/bin:$PATH"
+    PATH="$SB/bin:$FX/bin:$PATH"
   }
   BeforeEach 'setup'
 
@@ -82,7 +94,7 @@ SH
   # `pueue status` is a seam of this predicate's own, and IS satisfiable: a
   # fake pueue whose `status` exits non-zero.
   It 'reports jobs unavailable when pueue resolves but the daemon does not answer'
-    cat >"$SB/deadpueue" <<'SH'
+    share_write "$SB/deadpueue" <<'SH'
 #!/bin/sh
 case "$1" in
   status) exit 1 ;;
@@ -315,6 +327,24 @@ End
 # and for --store-downloads 1 that is a wasted upload to redo.
 Describe 'share:: acknowledgable completion toast'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
+
+  # hs and the --ack status-bar poke's tmux, written once for the group
+  # (share_helper.sh: share_fixture_script). Each logs where the example's
+  # variable says. An example whose hs must fail writes its own in $SB/bin.
+  fixtures() {
+    FX="$SHELLSPEC_TMPBASE/share-ack-fx"
+    share_fixture_script "$FX/hs" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"${SHARE_FAKE_HS_LOG:-/dev/null}"
+SH
+    share_fixture_script "$FX/tmux" <<'SH'
+#!/bin/sh
+printf '%s\n' "$*" >>"${SHARE_FAKE_TMUX_LOG:-/dev/null}"
+exit 0
+SH
+  }
+  BeforeAll 'fixtures'
 
   setup() {
     # Hermetic notify(), same pattern as job_callback_spec.sh: this suite's
@@ -327,25 +357,14 @@ Describe 'share:: acknowledgable completion toast'
     # status-bar poke off the real tmux server too.
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY NOTIFY_VIA_BRIDGE
     SB="$SHELLSPEC_TMPBASE/share-ack"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
+    share_fresh "$SB" bin
     SHARE_STATE_DIR="$SB/state"
     JOB_STATE_ROOT="$SB/jobs"
     NOTIFY_UNACKED_FILE="$SB/unacked"
     NOTIFY_HISTORY_FILE="$SB/history.jsonl"
-    cat >"$SB/bin/hs" <<'SH'
-#!/bin/sh
-printf '%s\n' "$*" >>"${SHARE_FAKE_HS_LOG:-/dev/null}"
-SH
-    chmod +x "$SB/bin/hs"
-    HS="$SB/bin/hs"
+    HS="$FX/hs"
     SHARE_FAKE_HS_LOG="$SB/hs.log"
-    cat >"$SB/bin/tmux" <<'SH'
-#!/bin/sh
-printf '%s\n' "$*" >>"${SHARE_FAKE_TMUX_LOG:-/dev/null}"
-exit 0
-SH
-    chmod +x "$SB/bin/tmux"
-    NOTIFY_TMUX_BIN="$SB/bin/tmux"
+    NOTIFY_TMUX_BIN="$FX/tmux"
     SHARE_FAKE_TMUX_LOG="$SB/tmux.log"
   }
   BeforeEach 'setup'
@@ -454,12 +473,12 @@ SH
     printf '[drop]\nstore = "https://d.example.com"\nweb = true\nprofiles = ["personal"]\ndefault_for = ["personal"]\n' \
       >"$SHARE_ENDPOINTS_FILE"
     printf 'x' >"$SB/Report.pdf"
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf 'https://d.example.com/s/abc#v1.KEY\ncroc-store-v1.b64.abc.KEY\n'
 SH
     chmod +x "$SB/bin/croc"
-    cat >"$SB/bin/hs" <<'SH'
+    share_write "$SB/bin/hs" <<'SH'
 #!/bin/sh
 exit 1
 SH

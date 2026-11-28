@@ -774,6 +774,7 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
     }
 
     Describe 'the probe, run by Rex'
+      Skip if 'complete-only: starts a real scratch rex server and has it run the probe (85-190 ms each)' spec_complete_only
       rex_missing() { ! command -v rex >/dev/null 2>&1; }
       Skip if 'rex is not installed' rex_missing
 
@@ -886,6 +887,7 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
     End
 
     Describe 'the resize action, run by Rex'
+      Skip if 'complete-only: starts a real scratch rex server and has it run the resize action (~190 ms each)' spec_complete_only
       rex_missing() { ! command -v rex >/dev/null 2>&1; }
       Skip if 'rex is not installed' rex_missing
 

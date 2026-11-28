@@ -4,26 +4,19 @@
 Describe 'rip.zsh pipeline'
   RIPLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/rip.zsh"
   JOBLIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/job.zsh"
+  # rip.zsh is loaded once, here; `When run rip_zsh "…"` runs the string a
+  # `zsh -f -c` used to get, in a subshell (tests/rip_helper.sh).
+  Include tests/rip_helper.sh
+  rip_lib_load
 
-  setup() {
-    RIP_SANDBOX=$(mktemp -d)
-    export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
-    export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
-    export JOB_STATE_ROOT="$RIP_SANDBOX/state"
-    export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
-    mkdir -p "$RIP_STAGING_ROOT/intermediate" "$RIP_STAGING_ROOT/movies" \
-             "$RIP_SANDBOX/server/movies"
-    printf 'raw' > "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv"
-    cat > "$RIP_SANDBOX/pueue" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >> "$JOB_FAKE_LOG"
-case "$1" in add) echo "7" ;; esac
-exit 0
-EOF
-    chmod +x "$RIP_SANDBOX/pueue"
-    export JOB_PUEUE_BIN="$RIP_SANDBOX/pueue"
-    # fake HandBrakeCLI: emits CR-separated progress, writes the -o target
-    cat > "$RIP_SANDBOX/HandBrakeCLI" <<'EOF'
+  # The fakes of setup() are the same scripts for every example (what differs
+  # between examples reaches them through the environment), so each is written
+  # once per file, here, and setup() only points its seam at the shared copy
+  # under $RIP_STATIC. An example that needs a different one writes it under
+  # $RIP_SANDBOX and exports the seam to it (THE RULE, tests/rip_helper.sh).
+  static_stubs() {
+    rip_static_build || return 1
+    rip_static_put HandBrakeCLI <<'EOF'
 #!/bin/sh
 out=""
 prev=""
@@ -44,10 +37,7 @@ printf 'Encoding: task 1 of 1, 100.00 %%\n'
 printf 'encoded' > "$out"
 exit 0
 EOF
-    chmod +x "$RIP_SANDBOX/HandBrakeCLI"
-    export RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI"
-    export RIP_PTY_WRAP="" # hermetic: no real pty in tests (the disc suite's rule)
-    cat > "$RIP_SANDBOX/rsync" <<'EOF'
+    rip_static_put rsync <<'EOF'
 #!/bin/sh
 case "$*" in
   *-rcn*) exit "${RIP_FAKE_VERIFY_RC:-0}" ;;
@@ -58,8 +48,24 @@ case "$*" in
      exit "${RIP_FAKE_RSYNC_RC:-0}" ;;
 esac
 EOF
-    chmod +x "$RIP_SANDBOX/rsync"
-    export RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    rip_static_warm HandBrakeCLI rsync
+  }
+  BeforeAll 'static_stubs'
+
+  setup() {
+    rip_sandbox; typeset +x RIP_SANDBOX   # as before: not in the environment
+    export RIP_STAGING_ROOT="$RIP_SANDBOX/Rips"
+    export RIP_REMOTE_BASE="$RIP_SANDBOX/server"
+    export JOB_STATE_ROOT="$RIP_SANDBOX/state"
+    export JOB_FAKE_LOG="$RIP_SANDBOX/pueue.log"
+    rip_mkdir "$RIP_STAGING_ROOT/intermediate" "$RIP_STAGING_ROOT/movies" \
+             "$RIP_SANDBOX/server/movies"
+    printf 'raw' > "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv"
+    export JOB_PUEUE_BIN="$RIP_STATIC/pueue"
+    # fake HandBrakeCLI: emits CR-separated progress, writes the -o target
+    export RIP_HANDBRAKE_BIN="$RIP_STATIC/HandBrakeCLI"
+    export RIP_PTY_WRAP="" # hermetic: no real pty in tests (the disc suite's rule)
+    export RIP_RSYNC_BIN="$RIP_STATIC/rsync"
     # the bins under test must source the SOURCE-TREE lib, not ~/.local/lib
     export RIP_LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
     # cancel-drive — reproduce `pueue kill` faithfully: pueue signals the
@@ -87,7 +93,10 @@ exit $?
 EOF
     chmod +x "$RIP_SANDBOX/cancel-drive.zsh"
   }
-  cleanup() { rm -rf "$RIP_SANDBOX"; }
+  cleanup() {
+    rip_static_check RIP_HANDBRAKE_BIN="$RIP_SANDBOX/HandBrakeCLI" RIP_RSYNC_BIN="$RIP_SANDBOX/rsync"
+    rip_rmtree "$RIP_SANDBOX"
+  }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -98,7 +107,7 @@ EOF
 
   It 'happy path: encodes, pushes, cleans intermediate and encode'
     export JOB_ID="job-pl-1"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
-    When run zsh -c "source $JOBLIB; source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
     The status should equal 0
     The output should include "verified"
     The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should not be exist
@@ -107,7 +116,7 @@ EOF
 
   It 'names the encode movies/<Title>/<Title>.mkv (visible on push failure)'
     export RIP_FAKE_RSYNC_RC=23
-    When run zsh -c "source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
+    When run rip_zsh "source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
     The status should equal 23
     The stderr should include "rip"
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should be exist
@@ -124,7 +133,7 @@ EOF
   # suite once already; this is the regression guard for it.
   It 'encode failure keeps the intermediate, skips the push, and leaves no orphan dir'
     export RIP_FAKE_HB_RC=1
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
       --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
     The status should equal 1
     The stderr should include "encode failed"
@@ -142,8 +151,8 @@ EOF
   # cleans the temp and reports itself.
   It 'cancel mid-encode leaves nothing under movies/ and keeps the intermediate'
     export RIP_FAKE_HB_HANG=1
-    When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
-      zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
+    When run zsh -f "$RIP_SANDBOX/cancel-drive.zsh" \
+      zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
       --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
     The status should equal 130
     The stderr should include "cancelled"
@@ -162,8 +171,8 @@ EOF
   It 'SIGKILL mid-encode still leaves nothing pushable under movies/'
     export RIP_FAKE_HB_HANG=1
     export CANCEL_SIGNAL=KILL
-    When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
-      zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
+    When run zsh -f "$RIP_SANDBOX/cancel-drive.zsh" \
+      zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
       --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
     The status should equal 137
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should not be exist
@@ -178,8 +187,8 @@ EOF
   # silently throwing away an hour of x265.
   It 'cancel mid-push keeps the finished encode and the intermediate'
     export RIP_FAKE_RSYNC_HANG=1
-    When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
-      zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
+    When run zsh -f "$RIP_SANDBOX/cancel-drive.zsh" \
+      zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
       --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
     The status should equal 143
     The path "$RIP_STAGING_ROOT/movies/A Movie (2001)/A Movie (2001).mkv" should be exist
@@ -188,7 +197,7 @@ EOF
 
   It 'verify failure keeps intermediate and encode'
     export RIP_FAKE_VERIFY_RC=1
-    When run zsh -c "source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
+    When run rip_zsh "source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
     The status should equal 1
     The stderr should include "verify"
     The path "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" should be exist
@@ -196,13 +205,13 @@ EOF
   End
 
   It 'rejects a title containing a slash'
-    When run zsh -c "source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A/B (2001)'"
+    When run rip_zsh "source $RIPLIB && rip::pipeline_worker '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A/B (2001)'"
     The status should equal 2
     The stderr should include "title"
   End
 
   It 'enqueue lands in the heavy group with the movie title'
-    When run zsh -c "source $RIPLIB && rip::pipeline_enqueue '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
+    When run rip_zsh "source $RIPLIB && rip::pipeline_enqueue '$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv' 'A Movie (2001)'"
     The status should equal 0
     The output should not equal ""
     The contents of file "$JOB_FAKE_LOG" should include "--group heavy"

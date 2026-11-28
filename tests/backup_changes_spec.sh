@@ -166,6 +166,7 @@ EOF
     }
 
     It 'synthesizes a patch with live-relative a/b labels'
+      Skip if 'complete-only: a snapshot-pair patch synthesized through the restic recorder with real diff runs (~90 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup.zsh"; stub_restic
         bkp::changeset::patch aaaa bbbb "$FIX/home"
@@ -189,6 +190,7 @@ EOF
     End
 
     It 'stubs oversized files and logs the skip'
+      Skip if 'complete-only: a snapshot-pair patch synthesized through the restic recorder with real diff runs (~90 ms)' spec_complete_only
       run_it() {
         source "$LIB/backup.zsh"; stub_restic
         printf '\n[changes]\nsize_threshold = "1k"\n' >> "$FIX/c.toml"
@@ -212,6 +214,7 @@ EOF
   End
 
   Describe 'bkp::changeset::patch_live'
+    Skip if 'complete-only: a live patch: an rsync live view, capture-rule filtering and real diff runs per example (120-390 ms)' spec_complete_only
     setup_fix() {
       FIX=$(mktemp -d)
       export BKP_CONFIG="$FIX/c.toml" BKP_MANIFEST="$FIX/m.toml"

@@ -6,14 +6,35 @@
 
 Describe 'share:: send dispatch'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
+
+  # The croc and rclone every example starts with, written once for the file
+  # (share_helper.sh: share_fixture_script) into a directory BEHIND the
+  # example's own $SB/bin on PATH: an example that needs another croc or
+  # rclone writes it there, and never touches these.
+  fixtures() {
+    FX="$SHELLSPEC_TMPBASE/share-dispatch-fx"
+    share_fixture_script "$FX/bin/croc" <<'SH'
+#!/bin/sh
+printf 'https://drop.example.com/s/abc123#v1.KEY\ncroc-store-v1.b64.abc123.KEY\n'
+SH
+    share_fixture_script "$FX/bin/rclone" <<'SH'
+#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
+done
+exit 0
+SH
+  }
+  BeforeAll 'fixtures'
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-dispatch"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
+    share_fresh "$SB" bin
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
     SHARE_STATE_DIR="$SB/state"
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [drop]
 store = "https://drop.example.com"
 web = true
@@ -34,19 +55,7 @@ profiles = ["work"]
 default_for = ["work"]
 TOML
     printf 'x' >"$SB/Report.pdf"
-    cat >"$SB/bin/croc" <<'SH'
-#!/bin/sh
-printf 'https://drop.example.com/s/abc123#v1.KEY\ncroc-store-v1.b64.abc123.KEY\n'
-SH
-    cat >"$SB/bin/rclone" <<'SH'
-#!/bin/sh
-for a in "$@"; do
-  if [ "$a" = link ]; then printf 'https://corp.example.com/:b:/g/abc\n'; exit 0; fi
-done
-exit 0
-SH
-    chmod +x "$SB/bin/croc" "$SB/bin/rclone"
-    PATH="$SB/bin:$PATH"
+    PATH="$SB/bin:$FX/bin:$PATH"
   }
   BeforeEach 'setup'
 
@@ -95,7 +104,7 @@ SH
   # faith. Checked once in share::send, before either backend runs.
   It 'rejects a malformed --expiration before the croc backend ever runs'
     SHARE_PROFILE=personal
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf 'called\n' >>"$SHARE_CALLS"
 SH
@@ -109,7 +118,7 @@ SH
 
   It 'rejects a malformed --expiration before the rclone backend ever runs'
     SHARE_PROFILE=work
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf 'called\n' >>"$SHARE_CALLS"
 SH
@@ -127,7 +136,7 @@ SH
   # backend.
   It 'rejects a negative --expiration before any backend ever runs'
     SHARE_PROFILE=personal
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf 'called\n' >>"$SHARE_CALLS"
 SH
@@ -142,7 +151,7 @@ SH
   It 'revokes a croc receipt through the croc backend'
     SHARE_PROFILE=personal
     share::ledger_add rid croc drop 'R' abc123 'https://x' 0
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_CALLS"
 SH
@@ -156,7 +165,7 @@ SH
   It 'revokes an rclone receipt by deleting the object'
     SHARE_PROFILE=work
     share::ledger_add rid rclone onedrive 'R' 'onedrive:Shared/drop/x/R' 'https://x' 0
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_CALLS"
 SH
@@ -175,7 +184,7 @@ SH
   It 'refuses to revoke a live croc share, with a clear message, and keeps the receipt'
     SHARE_PROFILE=personal
     share::ledger_add rid croc-live drop 'R' '' '8878-salary-courage-roger' 0
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf 'called\n' >>"$SHARE_CALLS"
 SH
@@ -202,7 +211,7 @@ SH
   # there left a ledger row nothing could ever remove. Past expiry, that
   # refusal means "already gone": forget the receipt and say so.
   croc_refuses() {
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_CALLS"
 # The real croc prints this on STDOUT (Mode B 2026-09-29: the stderr-only
@@ -274,7 +283,7 @@ SH
   It 'rejects a path containing a literal newline before any transfer starts'
     SHARE_PROFILE=personal
     SHARE_CALLS="$SB/calls"; export SHARE_CALLS
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf 'called\n' >>"$SHARE_CALLS"
 printf 'https://drop.example.com/s/abc123#v1.KEY\ncroc-store-v1.b64.abc123.KEY\n'
@@ -294,7 +303,7 @@ SH
   # actually runs, so this is where the guard becomes user-visible.
   It 'fails a send to an rclone endpoint with no remote, instead of echoing a blank host'
     SHARE_PROFILE=work
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [bare]
 backend = "rclone"
 profiles = ["work"]
@@ -307,7 +316,7 @@ TOML
 
   It 'makes share::destination_host itself fail on a remote-less rclone endpoint'
     SHARE_PROFILE=work
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [bare]
 backend = "rclone"
 profiles = ["work"]
@@ -321,7 +330,7 @@ TOML
   It 'fails a multi-file send before any transfer when one path does not exist'
     SHARE_PROFILE=personal
     SHARE_CALLS="$SB/calls"; export SHARE_CALLS
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf 'called\n' >>"$SHARE_CALLS"
 printf 'https://drop.example.com/s/abc123#v1.KEY\ncroc-store-v1.b64.abc123.KEY\n'
@@ -358,7 +367,7 @@ SH
   run_bare_flag() {
     local rc
     {
-      zsh -c "source home/dot_local/lib/share.zsh; share::send $1" 2>&1 >&3 3>&- | head -c 300 >&2
+      zsh -f -c "source home/dot_local/lib/share.zsh; share::send $1" 2>&1 >&3 3>&- | head -c 300 >&2
       rc=${pipestatus[1]}
     } 3>&1
     return $rc

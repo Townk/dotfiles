@@ -8,6 +8,9 @@
 # inside a single render, so no mode pill ever appeared. The question now
 # lives here, driven by the client-resized hook.
 Describe 'mux-fullscreen-probe'
+  # Warm slots for the stubs the examples write: see tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   Include tests/recob_helper.sh
 
   BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_mux-fullscreen-probe"

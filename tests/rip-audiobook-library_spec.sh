@@ -8,6 +8,10 @@ Describe 'rip audiobooks'
   ABS_BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-abs-authors"
   Include tests/rip_helper.sh
   Include tests/rip_audiobook_helper.sh
+  # rip.zsh is loaded once, here; `When run rip_zsh "…"` runs the string a
+  # `zsh -f -c` used to get, in a subshell (tests/rip_helper.sh).
+  rip_lib_load
+  BeforeAll 'rip_audiobook_static_build'
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -29,7 +33,7 @@ Describe 'rip audiobooks'
   It 'sidecar: a composed row with no edition still writes work: null — byte-identical to today'
     work_book_sidecar_meta
     mkdir -p "$RIP_SANDBOX/work-book-a"
-    When run zsh -c "source $RIPLIB \
+    When run rip_zsh "source $RIPLIB \
       && rip::_book_sidecar '$RIP_SANDBOX/work-book-a' '$RIP_SANDBOX/work-meta.json' >/dev/null \
       && jq -c '.work' '$RIP_SANDBOX/work-book-a/.fleet-book.json'"
     The status should equal 0
@@ -39,7 +43,7 @@ Describe 'rip audiobooks'
   It 'sidecar: work already recorded as an object survives a second push unchanged'
     work_book_sidecar_meta
     mkdir -p "$RIP_SANDBOX/work-book-b"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       rip::_book_sidecar '$RIP_SANDBOX/work-book-b' '$RIP_SANDBOX/work-meta.json' >/dev/null
       # Simulate a work already resolved on this staged sidecar — nothing in
       # this task sets it yet (that is Task 3); this stands in for it so the
@@ -141,7 +145,7 @@ Describe 'rip audiobooks'
   It 'work uid: an edition whose base book already anchors a work REUSES that uid'
     wu_base "9f1c2a4e-2222-4b22-8aa0-abc123456789"
     wu_plan "Full Cast"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_ed_work should equal '{"uid":"9f1c2a4e-2222-4b22-8aa0-abc123456789","edition":"Full Cast"}'
   End
@@ -150,7 +154,7 @@ Describe 'rip audiobooks'
     wu_base ""
     wu_plan "Full Cast"
     before=$(wu_base_nonwork)
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_uids_shared should equal "uuidv4"
     # ...and the base book anchors the work rather than claiming the edition
@@ -167,7 +171,7 @@ Describe 'rip audiobooks'
     printf 'other\n' > "$RIP_SANDBOX/server/audiobooks/Z/Other/Other.m4b"
     wu_plan "Full Cast"
     before=$(wu_digest_but_edition)
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_ed_uid_shape should equal "uuidv4"
     The path "$RIP_SANDBOX/server/audiobooks/A/B" should not be exist
@@ -184,7 +188,7 @@ Describe 'rip audiobooks'
       > "$(wu_base_path)"
     before=$(wu_base_sha)
     wu_plan "Full Cast"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_base_sha should equal "$before"
     The result of function wu_ed_uid should equal "11111111-1111-4111-8111-111111111111"
@@ -204,7 +208,7 @@ Describe 'rip audiobooks'
       > "$(wu_base_path)"
     before=$(wu_base_sha)
     wu_plan "Full Cast"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_base_sha should equal "$before"
     The result of function wu_ed_uid_shape should equal "uuidv4"
@@ -224,7 +228,7 @@ Describe 'rip audiobooks'
     printf '%s' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{},"work":[],"source":{"provider":"libation"}}' \
       > "$(wu_base_path)"
     wu_plan "Full Cast"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_uids_shared should equal "uuidv4"
     The result of function wu_base_work should include '"edition":null'
@@ -243,7 +247,7 @@ Describe 'rip audiobooks'
       > "$(wu_base_path)"
     before=$(wu_base_sha)
     wu_plan "Full Cast"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_base_sha should equal "$before"
     The result of function wu_ed_uid_shape should equal "uuidv4"
@@ -276,7 +280,7 @@ Describe 'rip audiobooks'
          {id:$f,path:"A/B (Full Cast)",title:"B",authors:["A"],provider:"folder",edition:"Full Cast"},
          {id:$a,path:"A/B (Unabridged)",title:"B",authors:["A"],provider:"folder",edition:"Unabridged"}]}' \
       > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_two_editions_share should equal "uuidv4"
     # ...one work, two DIFFERENT edition labels. Sharing a uid must not be
@@ -313,7 +317,7 @@ exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::_ab_work_uid_for 'A/B'"
+    When run rip_zsh "source $RIPLIB && rip::_ab_work_uid_for 'A/B'"
     The status should equal 0
     The result of function wu_uid_shape_of_output should equal "uuidv4"
     The stderr should include "could not read"
@@ -332,7 +336,7 @@ exit 1
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::_ab_work_uid_for 'A/B'"
+    When run rip_zsh "source $RIPLIB && rip::_ab_work_uid_for 'A/B'"
     The status should equal 0
     The result of function wu_uid_shape_of_output should equal "uuidv4"
     The stderr should equal ""
@@ -388,7 +392,7 @@ EOF
 
   It 'work uid: a base book and its edition in ONE batch share a uid (base first)'
     wu_pair_plan base
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_base_and_edition_share should equal "uuidv4"
     The result of function wu_base_and_edition_labels should equal '{"has_uid":true,"edition":null}
@@ -397,7 +401,7 @@ EOF
 
   It 'work uid: a base book and its edition in ONE batch share a uid (edition first)'
     wu_pair_plan edition
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_base_and_edition_share should equal "uuidv4"
     The result of function wu_base_and_edition_labels should equal '{"has_uid":true,"edition":null}
@@ -455,6 +459,7 @@ echo "Completed"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
   }
   # Read from the LANDED paths, not the planned ones — that is where the two
   # books actually are once the provider has had its way with the name.
@@ -470,7 +475,7 @@ EOF
 
   It 'work uid: a base book RE-KEYED by its provider is still anchored (base first)'
     wu_rekey_plan base
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     # The re-key is what this example is about: assert it HAPPENED, or a
     # provider fake that quietly landed the planned path would make the
@@ -486,7 +491,7 @@ EOF
   # alternative cannot break it.
   It 'work uid: a base book RE-KEYED by its provider is still anchored (edition first)'
     wu_rekey_plan edition
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should include "re-keying the plan identity"
     The result of function wu_rekey_share should equal "uuidv4"
@@ -504,7 +509,7 @@ EOF
     wu_base "9f1c2a4e-3333-4b22-8aa0-abc123456789"
     before=$(wu_base_sha)
     wu_plan "Full Cast"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_ed_uid should equal "9f1c2a4e-3333-4b22-8aa0-abc123456789"
     The result of function wu_base_sha should equal "$before"
@@ -518,7 +523,7 @@ EOF
     wu_base "9f1c2a4e-2222-4b22-8aa0-abc123456789"
     wu_plan omit
     before=$(wu_base_sha)
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The result of function wu_ed_work should equal "null"
     The result of function wu_base_sha should equal "$before"
@@ -542,7 +547,8 @@ printf 'audio\n' > "$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should not equal 0
     The path "$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/Steelheart.m4b" should be exist
     The stderr should include "acquire failed"
@@ -551,7 +557,7 @@ EOF
 
   It 'worker: re-keys the identity when the folder that landed differs'
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart: The Reckoners, Book 1","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/Steelheart/.fleet-book.json'"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
     The stderr should include "re-keying"
@@ -602,7 +608,8 @@ printf 'audio\n' > "\$books/Brandon Sanderson/${nfd}/${nfd}.m4b"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/${nfc}/.fleet-book.json'"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json >/dev/null && jq -c '[.subtitle,.ids[\"audible.asin\"]]' '$RIP_SANDBOX/server/audiobooks/Brandon Sanderson/${nfc}/.fleet-book.json'"
     The status should equal 0
     The output should equal '["The Reckoners, Book 1","B00ECDZ08I"]'
     The stderr should include "re-keying"
@@ -611,7 +618,7 @@ EOF
   It 'worker: the queued plan copy is removed once read'
     cp "$RIP_SANDBOX/plan.json" "$RIP_STAGING_ROOT/.work/ab-plans/x.json" 2>/dev/null || mkdir -p "$RIP_STAGING_ROOT/.work/ab-plans"
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_STAGING_ROOT/.work/ab-plans/x.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_STAGING_ROOT/.work/ab-plans/x.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_STAGING_ROOT/.work/ab-plans/x.json"
     The status should equal 0
     The path "$RIP_STAGING_ROOT/.work/ab-plans/x.json" should not be exist
     The output should include 'rip: audiobooks verified on cantina — cleaning staging'
@@ -648,12 +655,13 @@ printf 'audio\n' > "\$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
   }
 
   It 'worker: an acquire that exits 0 but produces no files is reported as a failure, and the batch continues'
     locked_libation LOCKED
     printf '%s\n' '{"provider":"libation","items":[{"id":"LOCKED","path":"Pierce Brown/Red Rising","title":"Red Rising"},{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     # the failure is the RUN's exit code, not just a log line
     The status should not equal 0
     The stderr should include "acquire produced no files for Pierce Brown/Red Rising"
@@ -681,8 +689,9 @@ mkdir -p "$books/Pierce Brown/Red Rising"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
     printf '%s\n' '{"provider":"libation","items":[{"id":"LOCKED","path":"Pierce Brown/Red Rising","title":"Red Rising"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should not equal 0
     The stderr should include "acquire produced no files for Pierce Brown/Red Rising"
     The output should include 'rip: nothing settled to push for audiobooks (age gate 0s)'
@@ -694,7 +703,7 @@ EOF
   It 'worker: a Plus + absent-from-last-scan row names the lapsed licence'
     locked_libation LOCKED
     printf '%s\n' '{"provider":"libation","items":[{"id":"LOCKED","path":"Pierce Brown/Red Rising","title":"Red Rising","plus":true,"absent":true}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should not equal 0
     The stderr should include "acquire produced no files for Pierce Brown/Red Rising"
     The stderr should include "Audible Plus and absent from Audible's last scan"
@@ -728,8 +737,9 @@ printf 'audio\n' > "$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart"},{"id":"LOCKED","path":"Brandon Sanderson/Wind and Truth","title":"Wind and Truth"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should not equal 0
     The stderr should include "acquire produced no files for Brandon Sanderson/Wind and Truth"
     The stderr should not include "Wind and Truth landed as"
@@ -765,6 +775,7 @@ printf 'audio\n' > "$books/Brandon Sanderson/Steelheart/Steelheart.m4b"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"},{"id":"LOCKED","path":"Brandon Sanderson/Wind and Truth","title":"Wind and Truth"}]}' > "$RIP_SANDBOX/plan.json"
     # rip::ab_worker removes the meta index at the very END of the run (after
     # the push), so it cannot be read once `When run` returns. Snapshot it at
@@ -779,7 +790,7 @@ rip::push_worker() {
 }
 rip::ab_worker "\$RIP_SANDBOX/plan.json"
 EOF
-    When run zsh "$RIP_SANDBOX/run.zsh"
+    When run zsh -f "$RIP_SANDBOX/run.zsh"
     The status should not equal 0
     The stderr should include "acquire produced no files for Brandon Sanderson/Wind and Truth"
     # THE NON-FACT: the empty composed dir the provider left behind is itself
@@ -814,8 +825,9 @@ mkdir -p "$books/Brandon Sanderson/Steelheart"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
     printf '%s\n' '{"provider":"libation","items":[{"id":"B00ECDZ08I","path":"Brandon Sanderson/Steelheart","title":"Steelheart","subtitle":"The Reckoners, Book 1","ids":{"audible.asin":"B00ECDZ08I"},"provider":"libation","format":"m4b"}]}' > "$RIP_SANDBOX/plan.json"
-    When run zsh -c "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_worker $RIP_SANDBOX/plan.json"
     The status should equal 0
     The stderr should include "landed as Brandon Sanderson/Steelheart (Unabridged)"
     The stderr should not include "acquire produced no files"
@@ -1062,7 +1074,7 @@ EOF
     export RIP_ABS_AUTHOR_POLL_TRIES=2
     export RIP_ABS_AUTHOR_POLL_INTERVAL_S=0
     fake_abs_curl '{"authors":[]}'
-    When run zsh -c "zsh -f $ABS_BIN --delete-item item-1 && zsh -f $ABS_BIN --delete-author auth-9"
+    When run zsh -f -c "zsh -f $ABS_BIN --delete-item item-1 && zsh -f $ABS_BIN --delete-author auth-9"
     The status should equal 0
     The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/items/item-1"
     The contents of file "$RIP_SANDBOX/abscurl.log" should include "/api/authors/auth-9"
@@ -1105,6 +1117,7 @@ EOF
   # line per invocation with its full argv, so an example can assert both
   # HOW MANY TIMES the hop invoked it and WITH WHAT.
   fake_rip_abs_authors_bin() {
+    rip_own "$RIP_BIN_DIR/rip-abs-authors"
     cat > "$RIP_BIN_DIR/rip-abs-authors" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$RIP_SANDBOX/hop-calls.log"
@@ -1117,7 +1130,7 @@ EOF
 
   It 'hop: derives and dedupes author names from relpaths — one call for two books by one author'
     fake_rip_abs_authors_bin
-    When run zsh -c "source $RIPLIB && rip::_abs_match_authors '$RIP_SANDBOX/server' 'Brandon Sanderson/Steelheart/Steelheart.m4b' 'Brandon Sanderson/Wind and Truth/Wind and Truth.m4b' 'Other Author/Book/Book.m4b'"
+    When run rip_zsh "source $RIPLIB && rip::_abs_match_authors '$RIP_SANDBOX/server' 'Brandon Sanderson/Steelheart/Steelheart.m4b' 'Brandon Sanderson/Wind and Truth/Wind and Truth.m4b' 'Other Author/Book/Book.m4b'"
     The status should equal 0
     The result of function hop_call_count should equal "1"
     The contents of file "$RIP_SANDBOX/hop-calls.log" should include "Brandon Sanderson"
@@ -1126,7 +1139,7 @@ EOF
 
   It 'hop: no relpaths means no call at all'
     fake_rip_abs_authors_bin
-    When run zsh -c "source $RIPLIB && rip::_abs_match_authors '$RIP_SANDBOX/server'"
+    When run rip_zsh "source $RIPLIB && rip::_abs_match_authors '$RIP_SANDBOX/server'"
     The status should equal 0
     The path "$RIP_SANDBOX/hop-calls.log" should not be exist
   End
@@ -1134,7 +1147,7 @@ EOF
   It 'hop: a failing/hanging ABS never fails the push — rip::_enrich_audiobooks_remote swallows it'
     fake_rip_abs_authors_bin "exit 1"
     printf '%s\n' "Brandon Sanderson/Steelheart/Steelheart.m4b" > "$RIP_SANDBOX/listfile"
-    When run zsh -c "source $RIPLIB && rip::_enrich_audiobooks_remote $RIP_SANDBOX/listfile"
+    When run rip_zsh "source $RIPLIB && rip::_enrich_audiobooks_remote $RIP_SANDBOX/listfile"
     The status should equal 0
     The stderr should include "remote enrichment hop failed"
     The result of function hop_call_count should equal "1"
@@ -1144,7 +1157,7 @@ EOF
 
   It 'import: stages a single file as <Author>/<Title>/<Title>.<ext>'
     printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice'"
     The status should equal 0
     The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should be exist
     The contents of file "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "audio"
@@ -1155,7 +1168,7 @@ EOF
     mkdir -p "$RIP_SANDBOX/incoming"
     printf 'audio\n' > "$RIP_SANDBOX/incoming/part1.m4b"
     printf 'art\n' > "$RIP_SANDBOX/incoming/cover.jpg"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'Ann Leckie' 'Ancillary Sword'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'Ann Leckie' 'Ancillary Sword'"
     The status should equal 0
     The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Sword/part1.m4b" should be exist
     The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Sword/cover.jpg" should be exist
@@ -1164,7 +1177,7 @@ EOF
 
   It 'import: records a manual-provider identity row in the meta index'
     printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice' && jq -c '{path,title,authors,provider}' \$(rip::_ab_meta_index_default)"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice' && jq -c '{path,title,authors,provider}' \$(rip::_ab_meta_index_default)"
     The status should equal 0
     The output should equal '{"path":"Ann Leckie/Ancillary Justice","title":"Ancillary Justice","authors":["Ann Leckie"],"provider":"manual"}'
     The stderr should include 'rip: imported Ann Leckie/Ancillary Justice — the watcher will push it'
@@ -1172,13 +1185,13 @@ EOF
 
   It 'import: rejects a traversing author or title'
     printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' '..' 'X'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' '..' 'X'"
     The status should equal 2
     The stderr should include "may not be . or .."
   End
 
   It 'import: refuses a missing source'
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/nope.m4b' 'A' 'B'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/nope.m4b' 'A' 'B'"
     The status should equal 2
     The stderr should include "no such source"
   End
@@ -1187,14 +1200,14 @@ EOF
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice"
     printf 'old\n' > "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b"
     printf 'new\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Ann Leckie' 'Ancillary Justice'"
     The status should equal 2
     The stderr should include "already staged"
     The contents of file "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Justice/Ancillary Justice.m4b" should equal "old"
   End
 
   It 'manual provider: capabilities says it cannot acquire, list is empty'
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_rip-provider-manual" capabilities
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_rip-provider-manual" capabilities
     The status should equal 0
     The output should include '"name":"manual"'
     The output should include '"can_acquire":false'
@@ -1204,7 +1217,7 @@ EOF
     nfc=$(printf 'Ant\xc3\xb4nio')
     nfd=$(printf 'Anto\xcc\x82nio')
     printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Test Author' '${nfd}'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Test Author' '${nfd}'"
     The status should equal 0
     # The staged file must use NFC bytes in its name, even though the title arg was NFD
     The path "$RIP_STAGING_ROOT/audiobooks/Test Author/${nfc}/${nfc}.m4b" should be exist
@@ -1228,7 +1241,7 @@ FAKECP
     mkdir -p "$RIP_SANDBOX/incoming"
     printf 'part1\n' > "$RIP_SANDBOX/incoming/part1.m4b"
     printf 'part2\n' > "$RIP_SANDBOX/incoming/part2.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B'"
     The status should equal 1
     The stderr should include "could not copy"
     # Verify the destination directory does not exist (not even empty)
@@ -1237,14 +1250,14 @@ FAKECP
 
   It 'import: rejects a source file with no extension'
     printf 'audio\n' > "$RIP_SANDBOX/incoming"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B'"
     The status should equal 2
     The stderr should include "no extension"
   End
 
   It 'import: records the actual format from a single-file import'
     printf 'audio\n' > "$RIP_SANDBOX/incoming.mp3"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.mp3' 'Ann Leckie' 'Test' && jq -c '.format' \$(rip::_ab_meta_index_default)"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.mp3' 'Ann Leckie' 'Test' && jq -c '.format' \$(rip::_ab_meta_index_default)"
     The status should equal 0
     The output should equal '"mp3"'
     The stderr should include 'rip: imported Ann Leckie/Test — the watcher will push it'
@@ -1256,7 +1269,7 @@ FAKECP
   # permanently absent from the server (2026-08-23 review finding).
   It 'import: lowercases an uppercase source extension in both the staged filename and the recorded format'
     printf 'audio\n' > "$RIP_SANDBOX/incoming.M4B"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.M4B' 'Ann Leckie' 'Ancillary Mercy' && jq -c '.format' \$(rip::_ab_meta_index_default)"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.M4B' 'Ann Leckie' 'Ancillary Mercy' && jq -c '.format' \$(rip::_ab_meta_index_default)"
     The status should equal 0
     The output should equal '"m4b"'
     The path "$RIP_STAGING_ROOT/audiobooks/Ann Leckie/Ancillary Mercy/Ancillary Mercy.m4b" should be exist
@@ -1266,7 +1279,7 @@ FAKECP
   It 'import: directory with no audio files omits the format key'
     mkdir -p "$RIP_SANDBOX/incoming"
     printf 'text\n' > "$RIP_SANDBOX/incoming/readme.txt"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B' && jq -c 'has(\"format\")' \$(rip::_ab_meta_index_default)"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming' 'A' 'B' && jq -c 'has(\"format\")' \$(rip::_ab_meta_index_default)"
     The status should equal 0
     The output should equal 'false'
     The stderr should include 'rip: imported A/B — the watcher will push it'
@@ -1277,7 +1290,7 @@ FAKECP
     local custom_staging="$RIP_SANDBOX/custom-audiobooks"
     export RIP_AB_STAGING="$custom_staging"
     printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Test' 'Book'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Test' 'Book'"
     The status should equal 0
     # Book lands in the override tree
     The path "$custom_staging/Test/Book/Book.m4b" should be exist
@@ -1292,7 +1305,7 @@ FAKECP
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Author/Title"
     printf 'macOS\n' > "$RIP_STAGING_ROOT/audiobooks/Author/Title/.DS_Store"
     printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
     The status should equal 0
     # Book lands directly under Title/, not nested
     The path "$RIP_STAGING_ROOT/audiobooks/Author/Title/Title.m4b" should be exist
@@ -1306,7 +1319,7 @@ FAKECP
     printf 'old\n' > "$RIP_STAGING_ROOT/audiobooks/Author/Title/old.m4b"
     printf 'macOS\n' > "$RIP_STAGING_ROOT/audiobooks/Author/Title/.DS_Store"
     printf 'new\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
     The status should equal 2
     The stderr should include "already staged"
     # Old file remains unchanged
@@ -1323,7 +1336,7 @@ FAKECP
     # dotfiles, reopened here for dot-directories.
     mkdir -p "$RIP_STAGING_ROOT/audiobooks/Author/Title/.stray"
     printf 'audio\n' > "$RIP_SANDBOX/incoming.m4b"
-    When run zsh -c "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
+    When run rip_zsh "source $RIPLIB && rip::ab_import '$RIP_SANDBOX/incoming.m4b' 'Author' 'Title'"
     The status should equal 2
     The stderr should include "Author/Title"
     # Destination is left exactly as it was: the dot-directory survives,
@@ -1366,7 +1379,7 @@ FAKECP
   It 'editions: two editions of one work group, newest marked'
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should include "Edgedancer"
     The output should include "B07626B9D2"
@@ -1384,7 +1397,7 @@ FAKECP
     # all (review finding 2026-08-24).
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should not include "Scientific American"
     The output should include "Edgedancer"
@@ -1406,7 +1419,7 @@ FAKECP
     # Control book in the SAME fixture — see rationale above.
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should not include "Test Digest"
     The output should include "Edgedancer"
@@ -1430,7 +1443,7 @@ FAKECP
     # Control book in the SAME fixture — see rationale above.
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should not include "Test Digest"
     The output should include "Edgedancer"
@@ -1448,7 +1461,7 @@ FAKECP
     # Control book in the SAME fixture — see rationale above.
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should not include "Anthology"
     The output should include "Edgedancer"
@@ -1460,7 +1473,7 @@ FAKECP
     # Control book in the SAME fixture — see rationale above.
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should not include "Tress"
     The output should include "Edgedancer"
@@ -1469,13 +1482,13 @@ FAKECP
   It 'editions: a book with no published date is never grouped'
     mkbook "A" "T one" X1 "" T
     mkbook "A" "T two" X2 2020-01-01T00:00:00 T
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should not include "X1"
   End
 
   It 'editions: an empty library reports nothing and succeeds'
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should equal ""
   End
@@ -1491,7 +1504,7 @@ FAKECP
   # heading_order — the uid heading must precede the date heading (design S6:
   # "Print the uid section first"), not merely both be present somewhere.
   heading_order() {
-    out="$(zsh -c "source $RIPLIB && rip::ab_editions")"
+    out="$(rip_zsh "source $RIPLIB && rip::ab_editions")"
     uid_line="$(print -r -- "$out" | grep -n '^== confirmed editions' | head -1 | cut -d: -f1)"
     date_line="$(print -r -- "$out" | grep -n '^== possible duplicate editions' | head -1 | cut -d: -f1)"
     if [[ -n "$uid_line" && -n "$date_line" && "$uid_line" -lt "$date_line" ]]; then
@@ -1510,7 +1523,7 @@ FAKECP
     # default".
     mkbook_work "X Author" "Foobar" S1 2020-01-01T00:00:00 Foobar U-SILM ""
     mkbook_work "X Author" "Foobar (Full Cast)" S2 2020-01-01T00:00:00 Foobar U-SILM "Full Cast"
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should include "U-SILM"
     The output should include "(none)"
@@ -1522,7 +1535,7 @@ FAKECP
   It 'editions: the date-derived heuristic still reports its group, under its own heading'
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should include "== possible duplicate editions"
     The output should include "Edgedancer"
@@ -1536,7 +1549,7 @@ FAKECP
     mkbook_work "X Author" "Foobar (Full Cast)" S2 2020-01-01T00:00:00 Foobar U-SILM "Full Cast"
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should include "== confirmed editions"
     The output should include "== possible duplicate editions"
@@ -1552,7 +1565,7 @@ FAKECP
     mkbook_work "X Author" "Foobar" S1 2020-01-01T00:00:00 Foobar U-SILM ""
     mkbook_work "X Author" "Foobar (Full Cast)" S2 2020-01-01T00:00:00 Foobar U-SILM "Full Cast"
     mkbook_work "Y Author" "SoloTitle" S3 2020-06-01T00:00:00 SoloTitle U-SOLO ""
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should include "U-SILM"
     The output should not include "U-SOLO"
@@ -1575,7 +1588,7 @@ FAKECP
     mkbook_work "X Author" "Foobar (Full Cast)" S2 2020-01-01T00:00:00 Foobar U-SILM "Full Cast"
     mkbook "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer
     mkbook "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should include "U-SILM"
     The output should include "Full Cast"
@@ -1602,7 +1615,7 @@ FAKECP
   It 'editions: a date-derived duplicate pair still reports after the required backfill has anchored every book'
     mkbook_work "Brandon Sanderson" "Edgedancer: From the Stormlight Archive" B07626B9D2 2017-10-03T07:00:00 Edgedancer U-ANCH-1 ""
     mkbook_work "Brandon Sanderson" "Edgedancer: Stormlight Archive" B0B5M28HZK 2022-10-04T07:00:00 Edgedancer U-ANCH-2 ""
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should include "== possible duplicate editions"
     The output should include "B07626B9D2"
@@ -1624,7 +1637,7 @@ FAKECP
   It 'editions: a reported uid group is not ALSO reported by the date heuristic'
     mkbook_work "X Author" "Foobar" S1 2020-01-01T00:00:00 Foobar U-SILM ""
     mkbook_work "X Author" "Foobar (Full Cast)" S2 2021-01-01T00:00:00 Foobar U-SILM "Full Cast"
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 0
     The output should include "== confirmed editions"
     The output should include "U-SILM"
@@ -1664,7 +1677,7 @@ EOF
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"fleet.uid":"u1","local.sha256":"deadbeef"}}' \
       | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     server_sidecars_ssh
-    When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
+    When run rip_zsh "source $RIPLIB && rip::_stored_sha_index"
     The status should equal 0
     The output should include "deadbeef	A/B"
     The result of function ssh_calls should equal "1"
@@ -1675,7 +1688,7 @@ EOF
     printf '%s\n' '{"schema":1,"kind":"audiobook","title":"B","authors":["A"],"ids":{"audible.asin":"X1"}}' \
       | jq . > "$RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     server_sidecars_ssh
-    When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
+    When run rip_zsh "source $RIPLIB && rip::_stored_sha_index"
     The status should equal 0
     The output should equal ""
     The result of function ssh_calls should equal "1"
@@ -1696,7 +1709,7 @@ exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::_stored_sha_index"
+    When run rip_zsh "source $RIPLIB && rip::_stored_sha_index"
     The status should not equal 0
     The output should equal ""
     The stderr should include "could not read the stored sidecars"
@@ -1730,7 +1743,7 @@ EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
     export RIP_REMOTE_BASE="media@cantina:/srv/media"
-    When run zsh -c "source $RIPLIB
+    When run rip_zsh "source $RIPLIB
       rip::_stored_sha_index >/dev/null 2>/dev/null
       first_rc=\$?
       rm -f '$RIP_SANDBOX/ssh-sentinel'
@@ -1757,7 +1770,7 @@ exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::ab_editions"
+    When run rip_zsh "source $RIPLIB && rip::ab_editions"
     The status should equal 2
     The output should equal ""
     The stderr should include "could not read the stored sidecars"
@@ -1775,7 +1788,7 @@ exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-editions
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-editions
     The status should not equal 0
     The output should equal ""
     The stderr should include "could not read the stored sidecars"
@@ -1788,7 +1801,7 @@ EOF
   It 'CLI: --server-editions emits published rows as {author,title,published,path}'
     mkbook "A" "B" X1 2020-01-01T00:00:00 T
     mkbook "A" "C" X2 "" T2
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-editions
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --server-editions
     The status should equal 0
     The output should include '"author":"A"'
     The output should include '"title":"T"'
@@ -1823,6 +1836,7 @@ cp "$RIP_SANDBOX/atrisk-library.json" "$out"
 exit 0
 EOF
     chmod +x "$RIP_SANDBOX/LibationCli"
+    export RIP_LIBATION_BIN="$RIP_SANDBOX/LibationCli"
   }
 
   It 'CLI: --at-risk lists the stored books whose Audible Plus licence has lapsed'
@@ -1841,7 +1855,7 @@ EOF
   "BookStatus":"NotLiberated","IsAudiblePlus":true,"AbsentFromLastScan":true}
 ]
 JSON
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --at-risk
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --at-risk
     The status should equal 0
     The output should include "Martha Wells/Network Effect"
     The output should include "Martha Wells/All Systems Red"
@@ -1863,7 +1877,7 @@ JSON
   "BookStatus":"Liberated","IsAudiblePlus":false,"AbsentFromLastScan":false}
 ]
 JSON
-    When run zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --at-risk
+    When run zsh -f "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-audiobook" --at-risk
     The status should equal 0
     The output should include "nothing at risk"
   End
@@ -1879,7 +1893,7 @@ JSON
   "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":false}
 ]
 JSON
-    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    When run rip_zsh "source $RIPLIB && rip::ab_at_risk"
     The status should equal 0
     The output should include "nothing at risk"
     The output should not include "Fugitive Telemetry"
@@ -1897,7 +1911,7 @@ exit 255
 EOF
     chmod +x "$RIP_SANDBOX/ssh"
     export RIP_SSH_BIN="$RIP_SANDBOX/ssh"
-    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    When run rip_zsh "source $RIPLIB && rip::ab_at_risk"
     The status should equal 2
     The output should not include "nothing at risk"
     The stderr should include "could not read the stored sidecars"
@@ -1910,7 +1924,7 @@ EOF
     at_risk_library <<'JSON'
 []
 JSON
-    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    When run rip_zsh "source $RIPLIB && rip::ab_at_risk"
     The status should equal 2
     The output should not include "nothing at risk"
     The stderr should include "refusing to report an at-risk set"
@@ -1937,7 +1951,7 @@ JSON
   "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":true}
 ]
 JSON
-    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    When run rip_zsh "source $RIPLIB && rip::ab_at_risk"
     The status should equal 0
     The output should include "2 stored book(s) can NEVER be re-acquired"
     The output should include "Shawn Speakman/Unfettered III"
@@ -1962,7 +1976,7 @@ JSON
   "BookStatus":"Liberated","IsAudiblePlus":true,"AbsentFromLastScan":true}
 ]
 JSON
-    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    When run rip_zsh "source $RIPLIB && rip::ab_at_risk"
     The status should equal 0
     The output should include "1 stored book(s) can NEVER be re-acquired"
     The output should include "Shawn Speakman/Unfettered III Anthology"
@@ -1985,7 +1999,7 @@ JSON
   "BookStatus":"Liberated","IsAudiblePlus":false,"AbsentFromLastScan":false}
 ]
 JSON
-    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    When run rip_zsh "source $RIPLIB && rip::ab_at_risk"
     The status should equal 0
     The output should include "1 stored book(s) carries an Audible ASIN that libation no longer lists"
     The output should include "its Plus status could not be established"
@@ -2015,7 +2029,7 @@ JSON
   "BookStatus":"Liberated","IsAudiblePlus":false,"AbsentFromLastScan":false}
 ]
 JSON
-    When run zsh -c "source $RIPLIB && rip::ab_at_risk"
+    When run rip_zsh "source $RIPLIB && rip::ab_at_risk"
     The status should equal 0
     The output should include "1 stored book(s) does not seem to be an Audible book:"
     The output should include "Ernest Cline/Ready Player One"
@@ -2053,7 +2067,7 @@ JSON
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 0
     The output should include "A/B"
     The output should include "2019-05-07"
@@ -2071,7 +2085,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply && jq -c '[.published,.title,.authors[0],.ids[\"audible.asin\"],.kind]' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published --apply && jq -c '[.published,.title,.authors[0],.ids[\"audible.asin\"],.kind]' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     The status should equal 0
     The output should include '["2019-05-07T07:00:00","B","A","X1","audiobook"]'
   End
@@ -2086,7 +2100,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply && jq -r '.published' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published --apply && jq -r '.published' $RIP_SANDBOX/server/audiobooks/A/B/.fleet-book.json"
     The status should equal 0
     # "nothing to backfill" is now unconditional (review finding 2026-08-24,
     # Risk 1): an already-dated book is the to_fill==0 case in BOTH modes, so
@@ -2108,7 +2122,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published --apply"
     # rc 1 and a summary line naming the count, not a bare "nothing to
     # backfill" with rc 0 (review finding 3B, 2026-08-24) — see the
     # every-candidate-failed example below.
@@ -2138,7 +2152,7 @@ echo "LibationCli not found" >&2
 exit 3
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 1
     The output should include "2 book(s) still undated"
     The output should not include "nothing to backfill"
@@ -2159,7 +2173,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 1
     The output should include "1 book(s) still undated"
     The stderr should include "no ASIN"
@@ -2174,7 +2188,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 0
     The output should include "nothing to backfill"
     # Distinguishes this branch (sidecars WERE seen, all already dated) from
@@ -2205,7 +2219,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 0
     The output should include "no sidecars found on the server"
     The output should include "cantina reachable"
@@ -2229,7 +2243,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 0
     # The healthy book is still processed correctly — a `return 0` stub
     # would print none of this.
@@ -2257,7 +2271,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published --apply"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published --apply"
     # A/B matches the provider row and gets filled; A/C has no matching row
     # and stays undated — the summary must say so, not just the tally for
     # the books it touched, and the exit code must tell a wrapper too.
@@ -2281,7 +2295,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 1
     The output should include "would fill: A/B"
     The output should include "re-run with --apply"
@@ -2308,7 +2322,7 @@ EOF
 exit 0
 EOF
     chmod +x "$RIP_LIBEXEC_DIR/rip-provider-libation"
-    When run zsh -c "source $RIPLIB && rip::ab_backfill_published"
+    When run rip_zsh "source $RIPLIB && rip::ab_backfill_published"
     The status should equal 1
     The output should include "1 book(s) still undated"
     The output should include "no ASIN"

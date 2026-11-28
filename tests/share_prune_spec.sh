@@ -9,10 +9,11 @@
 
 Describe 'share:: prune'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-prune"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
+    share_fresh "$SB" bin
     SHARE_STATE_DIR="$SB"
     SHARE_PROFILE=work
     zmodload zsh/datetime 2>/dev/null
@@ -30,7 +31,7 @@ Describe 'share:: prune'
     share::ledger_add old rclone onedrive 'Report.pdf (1 B)' onedrive:Shared/drop/x 'https://x' 1
     share::ledger_add newer rclone onedrive 'Notes.txt (1 B)' onedrive:Shared/drop/y 'https://y' 9999999999
     mkdir -p "$SB/bin"
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
 SH
@@ -49,7 +50,7 @@ SH
 
   It 'never touches rclone (nor calls it) when nothing is overdue'
     share::ledger_add live rclone onedrive 'a' onedrive:Shared/drop/x 'https://x' 9999999999
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
 SH
@@ -72,7 +73,7 @@ SH
     share::ledger_add liverow croc-live public 'l' '' 'aaaa-bbbb' 0
     share::ledger_add freshrow rclone onedrive 'b' onedrive:Shared/drop/fresh 'https://fresh' 9999999999
     share::ledger_add overdue rclone onedrive 'c' onedrive:Shared/drop/stale 'https://stale' 1
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
 exit 0
@@ -114,7 +115,7 @@ SH
   It 'reports purged/failed and exits non-zero when a purge fails, without aborting the sweep'
     share::ledger_add good rclone onedrive 'a' onedrive:Shared/drop/good 'https://good' 1
     share::ledger_add bad rclone onedrive 'b' onedrive:Shared/drop/bad 'https://bad' 1
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_RCLONE_CALLS"
 case "$*" in
@@ -134,7 +135,7 @@ SH
   It 'leaves the failed row in the ledger and removes the succeeded one'
     share::ledger_add good rclone onedrive 'a' onedrive:Shared/drop/good 'https://good' 1
     share::ledger_add bad rclone onedrive 'b' onedrive:Shared/drop/bad 'https://bad' 1
-    cat >"$SB/bin/rclone" <<'SH'
+    share_write "$SB/bin/rclone" <<'SH'
 #!/bin/sh
 case "$*" in
   *bad*) exit 1 ;;

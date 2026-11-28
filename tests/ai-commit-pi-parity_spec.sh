@@ -8,6 +8,7 @@
 # the shared lib, a stub `pi` that extracts the plan path from the prompt,
 # writes a valid one-commit plan, and bumps an invocation counter.
 Describe 'ai-commit-pi plan-cache parity'
+  Skip if 'complete-only: a whole ai-commit-pi worker run against a real git repository (180-290 ms)' spec_complete_only
   BINDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin"
   LIBDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
@@ -96,6 +97,7 @@ End
 # agent, that the worker's own preamble survived, and that the rule section is
 # byte-identical across the three.
 Describe 'ai-commit worker prompt parity'
+  Skip if 'complete-only: renders each worker prompt by running the whole worker against a real git repository (175-490 ms)' spec_complete_only
   BINDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin"
   LIBDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 

@@ -405,3 +405,53 @@ does nothing for this; it only `wait`s for what it started.
 Not stepped: whatever the free-running clock does not reach either, and the
 two local stand-ins for `common::sleep` (`_mux_sleep` in `mux-bootstrap.zsh`
 when common.zsh is not loaded, `backup-drift.zsh`), which run free.
+
+### Marking: what a `Skip` does not skip
+
+In shellspec 0.28.1 a `Skip if` inside an `It` skips the `When` and `The`
+lines only. Statements written before `When` still run, so an example whose
+body builds a fixture first pays for it in the fast suite while reporting
+SKIPPED. Two ways out:
+
+```sh
+It 'retags a real m4b'
+  Skip if 'complete-only: real ffmpeg' spec_complete_only
+  spec_complete_only && return 0        # nothing below runs in the fast suite
+  build_real_media
+  When call retag
+  ...
+End
+```
+
+or give the examples a `Describe`/`Context` of their own and mark that: a
+skipped group runs neither its hooks nor its examples' bodies. A body that
+only DEFINES a function before `When` needs neither.
+
+Decide marks from a quiet run with the exec pool warm (below): the first
+examples of a file to write stubs pay macOS's first-exec charge for the
+pool's slots, and look slow for no reason of their own.
+
+## Per-example cost: what to know
+
+- **The exec pool** (`spec_helper.sh`, "THE EXEC POOL"): a `#!` script made
+  executable inside an example runs from a pooled inode and is removed when
+  the example ends. Write stubs that several examples share in `BeforeAll`.
+  `Include tests/exec_warm_helper.sh` and `BeforeAll 'spec_exec_pool_warm 6'`
+  pay for the slots before the first example instead of inside it.
+- **Build static fixtures once per file** (stubs, schema databases, git
+  repositories, rendered templates) and copy or link them per example. A
+  shared stub logs into a per-example path named by an exported variable; an
+  example that needs its own version of a stub writes it to its own
+  directory, ahead of the shared one on PATH.
+- **`HOME=/home/…` costs 100 ms per dotfile lookup on macOS**: `/home` is an
+  autofs mount point, and every jq (`~/.jq`) and every zsh without `-f` waits
+  for it to answer. Use a path that does not exist anywhere else, such as
+  `/nohome/u`.
+- **`-f` on every zsh the spec starts**: without it `~/.zshenv` is read, which
+  costs time and lets the machine's configuration into the example.
+- **A sandbox path contains `//`** (`$TMPDIR` ends in a slash): compare
+  against `${SANDBOX:a}` when the code under test prints `$PWD`.
+- **`spec_clock_set` forks about ten times.** In a group where every example
+  needs the clock, set it in `BeforeAll` and reset per example with
+  `: >"$SPEC_CLOCK_FILE"; spec_clock_set N`.
+

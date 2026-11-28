@@ -6,6 +6,10 @@ Describe 'rex-picker'
   PICKER="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_rex-picker"
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
+  # One warm slot for the fake rex every example writes: see
+  # tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   setup() {
     spec_sandbox; RP_TMP=$SANDBOX
     # All canned: `session.view` from view.json when an example writes one,
@@ -15,9 +19,12 @@ Describe 'rex-picker'
   }
   BeforeEach 'setup'
 
+  # A HOME that does not exist, and NOT under /home: that is an automount
+  # point on macOS, where every lookup of a dotfile below it (jq's ~/.jq,
+  # zsh's ~/.zshenv) waits ~100 ms for autofs to say no.
   picker() {
-    env -u TMUX HOME=/home/u REX_SESSION=session:s REX_BLOCK="${RP_BLOCK-block:origin}" \
-      MUX_REX_BIN="$RP_TMP/rex" MUX_LIB="$LIB" zsh "$PICKER" "$@" 2>"$RP_TMP/err"
+    env -u TMUX HOME=/nohome/u REX_SESSION=session:s REX_BLOCK="${RP_BLOCK-block:origin}" \
+      MUX_REX_BIN="$RP_TMP/rex" MUX_LIB="$LIB" zsh -f "$PICKER" "$@" 2>"$RP_TMP/err"
     print -r -- "rc=$?"
   }
   cmdline() { jq -r '.layout.block.options.command | join(" ")' "$RP_TMP/req.json"; }
@@ -27,33 +34,33 @@ Describe 'rex-picker'
     run() { picker glyph; cmdline; bounds; }
     When call run
     The output should equal "rc=0
-env PICK_GLYPH_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Glyph Picker --inject --no-chrome -- /home/u/.local/libexec/pick-glyph
+env PICK_GLYPH_PADDING=0,2,0,2 /nohome/u/.config/mux/scripts/rex-modal --origin block:origin --title Glyph Picker --inject --no-chrome -- /nohome/u/.local/libexec/pick-glyph
 [15,20,70,60]"
   End
 
   It 'resumes the glyph picker'
     run() { picker glyph --resume >/dev/null; cmdline; }
     When call run
-    The output should equal "env PICK_GLYPH_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Glyph Picker (resumed) --inject --no-chrome -- /home/u/.local/libexec/pick-glyph --resume"
+    The output should equal "env PICK_GLYPH_PADDING=0,2,0,2 /nohome/u/.config/mux/scripts/rex-modal --origin block:origin --title Glyph Picker (resumed) --inject --no-chrome -- /nohome/u/.local/libexec/pick-glyph --resume"
   End
 
   It 'opens the gitmoji picker'
     run() { picker gitmoji >/dev/null; cmdline; }
     When call run
-    The output should equal "env PICK_GITMOJI_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Gitmoji Picker --inject --no-chrome -- /home/u/.local/libexec/pick-gitmoji"
+    The output should equal "env PICK_GITMOJI_PADDING=0,2,0,2 /nohome/u/.config/mux/scripts/rex-modal --origin block:origin --title Gitmoji Picker --inject --no-chrome -- /nohome/u/.local/libexec/pick-gitmoji"
   End
 
   It 'opens the clipboard history taller'
     run() { picker clipboard >/dev/null; cmdline; bounds; }
     When call run
-    The output should equal "/home/u/.config/mux/scripts/rex-modal --origin block:origin --title Clipboard history --inject --no-chrome -- /home/u/.local/libexec/pick-clipboard
+    The output should equal "/nohome/u/.config/mux/scripts/rex-modal --origin block:origin --title Clipboard history --inject --no-chrome -- /nohome/u/.local/libexec/pick-clipboard
 [15,13,70,75]"
   End
 
   It 'opens the notification history WITHOUT injecting'
     run() { picker notifications >/dev/null; cmdline; }
     When call run
-    The output should equal "/home/u/.config/mux/scripts/rex-modal --origin block:origin --title Notifications --no-chrome -- /home/u/.local/libexec/pick-notifications"
+    The output should equal "/nohome/u/.config/mux/scripts/rex-modal --origin block:origin --title Notifications --no-chrome -- /nohome/u/.local/libexec/pick-notifications"
   End
 
   It 'never calls rex without --autostart=false'

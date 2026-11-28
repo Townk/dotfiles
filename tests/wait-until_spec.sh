@@ -10,7 +10,13 @@ Describe 'wait-until'
   # answers in whole seconds (`+%s.%N` gives N.000000000, or the script falls
   # back to +%s by itself), so a budget below a second ends when the virtual
   # second turns: the clock starts on a whole second to make that a fixed count.
-  setup() { spec_sandbox; WU=$SANDBOX; spec_clock_set 1000; }
+  # The clock's three stubs are made once for the file, and run once, with a
+  # warm slot for the stub two examples write (tests/exec_warm_helper.sh); an
+  # example only starts the clock again from an empty journal.
+  Include tests/exec_warm_helper.sh
+  clock_once() { spec_clock_set && spec_clock_warm && spec_exec_pool_warm 1; }
+  BeforeAll 'clock_once'
+  setup() { spec_sandbox; WU=$SANDBOX; : >"$SPEC_CLOCK_FILE"; spec_clock_set 1000; }
   BeforeEach 'setup'
   # What the script asked `sleep` for, as "<naps>x<seconds>" (one interval).
   naps() { spec_clock_slept | sort | uniq -c | awk '{ printf "%sx%s\n", $1, $2 }'; }
@@ -23,6 +29,7 @@ Describe 'wait-until'
   End
 
   It 'times out and exits 1 when the condition never holds'
+    Skip if 'complete-only: ten rounds of the fake date and the fake sleep, each two or three forks (~300 ms)' spec_complete_only
     # Ten naps of 0.1 s turn the virtual second: 1 >= 0.3, it gives up.
     When run command sh "$SCRIPT" --timeout 0.3s --quiet -- false
     The status should eq 1
@@ -36,6 +43,7 @@ Describe 'wait-until'
   End
 
   It 'returns as soon as the condition becomes true'
+    Skip if 'complete-only: four rounds of the condition stub, the fake date and the fake sleep (~160 ms)' spec_complete_only
     # The condition holds from its fourth check on: three naps, then out,
     # with 2.85 s of the budget unused.
     spec_stub "$WU" cond 'n=$(wc -l <"$STUB_LOG"); [ "$n" -ge 4 ]'
@@ -57,6 +65,7 @@ Describe 'wait-until'
   End
 
   It 'bounds total time by the wall-clock timeout, not attempts * interval'
+    Skip if 'complete-only: two rounds of a stub that advances the clock, the fake date and the fake sleep (~115 ms)' spec_complete_only
     # A condition slower than the interval (3 s each, on the virtual clock)
     # under a 6 s budget. The old code fixed the attempt COUNT up front
     # (ceil(6/1)+1 = 7) and never consulted the clock, so it ran all seven

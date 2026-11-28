@@ -99,6 +99,7 @@ STUB
   }
 
   It 'rejects a message-less plan instead of committing subject "null"'
+    Skip if 'complete-only: a whole ai-commit-pi worker run against a real git repository (~200 ms)' spec_complete_only
     When run run_pi "$REPO" '{"commits":[{"files":["file.txt"]}]}'
     The status should be failure
     The stderr should include "invalid plan"
@@ -107,6 +108,7 @@ STUB
   End
 
   It 'stages against the repo root when run from a subdirectory'
+    Skip if 'complete-only: a whole ai-commit-pi worker run against a real git repository (~200 ms)' spec_complete_only
     When run run_pi "$REPO/sub" '{"commits":[{"files":["file.txt"],"message":"chore: root file"}]}'
     The status should be success
     The output should include "HEAD_SUBJECT=chore: root file"

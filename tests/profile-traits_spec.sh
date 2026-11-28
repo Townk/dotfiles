@@ -141,7 +141,21 @@ rendered_matrix() {
   mv "$tmp" "$RENDER_CACHE/$1"
 }
 
+# Every profile the examples below ask for, rendered BEFORE the first of them
+# and side by side: four renders of ~0.9 s each used to land inside whichever
+# four examples asked first (each then cost a second), one after the other.
+# A render that fails here is not cached, and says nothing: the example that
+# needs it renders again and reports the failure itself.
+prerender_matrices() {
+  local p
+  local -a profiles=(server personal appliance work)
+  [[ $OSTYPE != linux* ]] || profiles+=(dev-shell)
+  ( for p in $profiles; do rendered_matrix "$p" & done; wait ) >/dev/null 2>&1
+  return 0
+}
+
 Describe '.chezmoiignore profile gating'
+  BeforeAll 'prerender_matrices'
   ignored_for() {
     rendered_matrix "$1" || return $?
     cat "$RENDER_CACHE/$1/ignored.txt"

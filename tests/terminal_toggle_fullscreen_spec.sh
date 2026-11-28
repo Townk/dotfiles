@@ -1,5 +1,8 @@
 # Tests for terminal-toggle-fullscreen's host-terminal dispatch.
 Describe 'terminal-toggle-fullscreen'
+  # Warm slots for the stubs the examples write: see tests/exec_warm_helper.sh.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 5'
   Include tests/recob_helper.sh
 
   setup() {
@@ -195,6 +198,7 @@ rc=1"
     End
 
     It 'sends ONE window.fullscreen.toggle naming the terminal, on the public endpoint'
+      Skip if 'complete-only: a real recobd per example and the whole toggle script over its ssh route (90-120 ms)' spec_complete_only
       recob_script 'ok'
       sent() {
         run_it
@@ -218,6 +222,7 @@ rc=1"
     # the invocation and execs the suite's real system-bridge, so the
     # exchange itself still runs against the real recorder.
     It 'goes out under the action deadline, tuned by MUX_BRIDGE_TIMEOUT_S'
+      Skip if 'complete-only: a real recobd per example and the whole toggle script over its ssh route (90-120 ms)' spec_complete_only
       recob_script 'ok'
       spied() {
         print -r -- '#!/bin/sh' > "$BR_TMP/spy"
@@ -279,6 +284,7 @@ rc=1"
       BeforeEach 'tmux_setup'
 
       It 'asks tmux for the client terminal instead of believing TERM'
+        Skip if 'complete-only: a real recobd per example and the whole toggle script over its ssh route (90-120 ms)' spec_complete_only
         recob_script 'ok'
         named() { run_it; printf 'terminal=<%s>' "$(recob_field 1 terminal)"; }
         When call named
@@ -287,6 +293,7 @@ rc=1"
       End
 
       It 'falls back to the session environment tmux refreshes on attach'
+        Skip if 'complete-only: a real recobd per example and the whole toggle script over its ssh route (90-120 ms)' spec_complete_only
         export STUB_CLIENT_TERM= STUB_SESSION_TERM=wezterm-256color
         recob_script 'ok'
         named() { run_it; printf 'terminal=<%s>' "$(recob_field 1 terminal)"; }
@@ -298,6 +305,7 @@ rc=1"
       # `ops=0`: the refusal is decided before anything is sent — a daemon is
       # up and answering, and still no operation crosses.
       It 'still fails honestly when tmux knows of no outer terminal'
+        Skip if 'complete-only: a real recobd per example and the whole toggle script over its ssh route (90-120 ms)' spec_complete_only
         export STUB_CLIENT_TERM= STUB_SESSION_TERM=
         When call run_err
         The output should include "cannot tell which terminal"

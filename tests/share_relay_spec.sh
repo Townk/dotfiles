@@ -8,16 +8,17 @@
 
 Describe 'share:: relays (literal addresses; @self retired)'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-relay"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
+    share_fresh "$SB" bin
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
     SHARE_STATE_DIR="$SB/state"
     SHARE_LIVE_DIR="$SB/live"; export SHARE_LIVE_DIR
     SHARE_PROFILE=work
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [mine]
 relay    = "lappy.example-tailnet.ts.net:9009"
 pass     = "@secret:TEST_RELAY_PASS"
@@ -103,7 +104,7 @@ TOML
   # test was looking for, because both halves were individually correct.
   Describe 'receiving through a relay that has a password'
     rx_setup() {
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 { printf 'argv:%s\n' "$*"; printf 'pass:%s\n' "${CROC_PASS-UNSET}"; } > "$SB_RX_LOG"
 SH
