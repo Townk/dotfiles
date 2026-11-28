@@ -414,8 +414,9 @@ _mux_rx_popup() {
 # is a process this shell waits on. A Rex layer is a real pane created by an
 # API call that returns at once, and it can be closed by hand — its command is
 # then killed before it ever opens the FIFO, and a bare `cat "$fifo"` would
-# block forever. So the reader runs in the background and is abandoned once
-# the layer's block is gone.
+# block forever. So the reader runs in the background, and this shell keeps a
+# write end of the FIFO that it lets go of once the layer's block is gone:
+# the reader then ends by itself, with the answer or with nothing.
 
 # _mux_rx_modal_layer [--cwd DIR] [--env NAME=VALUE]… <w> <h> <title> --
 #   <rex-modal args and target…> — THE way a layer running rex-modal is
@@ -509,23 +510,29 @@ _mux_rx_wait_block_gone() {
   return 1
 }
 
-# _mux_rx_await_modal <layer block> <reader pid> — wait for the reader to
-# finish (the modal answered). Returns 1 after abandoning it because nobody
-# will ever write the answer: the layer went away (_mux_rx_wait_block_gone,
-# bounded by $_MUX_RX_AWAIT_MISSES) while the reader was still waiting.
+# _mux_rx_await_modal <layer block> <reader pid> — wait until the layer is
+# gone (_mux_rx_wait_block_gone, bounded by $_MUX_RX_AWAIT_MISSES), then let
+# the reader finish and join it.
+#
+# The caller holds a write end of the capture FIFO ($capture_wfd, from
+# _mux_rx_capture_open), so the reader cannot see end of file before this
+# releases it. That is what makes the end deterministic: with the layer gone
+# nobody new will write, so releasing our end gives the reader its end of file
+# after whatever the modal wrote - all of it, even when the last bytes arrive
+# after the layer is seen gone - or at once when it wrote nothing. No grace
+# period and no kill: the reader always ends by itself. (It used to be given
+# 0.3 s after the layer went and then killed, which could cut an answer short
+# on a slow machine and left a blocked reader to be killed otherwise.)
+# READS and clears the caller's: capture_wfd.
 _mux_rx_await_modal() {
-  local block="$1" reader="$2"
-  if _mux_rx_wait_block_gone "$block" "${_MUX_RX_AWAIT_MISSES:-25}" "$reader"; then
-    # The modal writes its answer as it exits, so give a reader that is
-    # mid-read a moment before calling it abandoned.
-    sleep 0.3
-    if kill -0 "$reader" 2>/dev/null; then
-      kill "$reader" 2>/dev/null
-      wait "$reader" 2>/dev/null
-      return 1
-    fi
-  fi
-  wait "$reader" 2>/dev/null
+  local reader="$2"
+  _mux_rx_wait_block_gone "$1" "${_MUX_RX_AWAIT_MISSES:-25}" "$reader" || :
+  _mux_rx_capture_release
+  # A trapped signal interrupts `wait` with the reader still alive; the trap
+  # has closed the layer, so the end of file is on its way: wait again.
+  while kill -0 "$reader" 2>/dev/null; do
+    wait "$reader" 2>/dev/null
+  done
   return 0
 }
 
@@ -541,21 +548,35 @@ _mux_rx_await_modal() {
 # _mux_rx_capture_open <prefix> — the FIFO the modal answers on, the file the
 # answer lands in, and the background reader between them: the reader exists
 # before any writer can. Temps are named <prefix>-fifo.* / <prefix>-out.*.
-# SETS the caller's: fifo, out, reader_pid. Non-zero, nothing left behind,
-# when either temp cannot be made.
+# We keep an end of the FIFO open ourselves (read-write, so the open cannot
+# block), until _mux_rx_await_modal or _mux_rx_capture_abort releases it:
+# the reader's own open returns at once, and its end of file is ours to give.
+# The reader must not inherit that end, or it would wait on itself.
+# SETS the caller's: fifo, out, reader_pid, capture_wfd. Non-zero, nothing
+# left behind, when either temp cannot be made.
 _mux_rx_capture_open() {
   fifo=$(mktemp -u "${TMPDIR:-/tmp}/$1-fifo.XXXXXX")
   mkfifo -m 600 "$fifo" 2>/dev/null || return 1
   out=$(mktemp "${TMPDIR:-/tmp}/$1-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
-  cat "$fifo" >"$out" 2>/dev/null &
+  exec {capture_wfd}<>"$fifo" || { rm -f -- "$fifo" "$out"; return 1; }
+  cat "$fifo" >"$out" 2>/dev/null {capture_wfd}>&- &
   reader_pid=$!
 }
 
+# _mux_rx_capture_release — close our end of the capture FIFO, once.
+# READS and clears the caller's: capture_wfd.
+_mux_rx_capture_release() {
+  [[ -n "${capture_wfd:-}" ]] || return 0
+  exec {capture_wfd}>&-
+  capture_wfd=""
+}
+
 # _mux_rx_capture_abort — end a capture no layer was opened for: no writer
-# will ever come, so unblock and reap the reader and remove the temps.
-# READS the caller's: fifo, out, reader_pid.
+# will ever come, so give the reader its end of file, join it and remove the
+# temps.
+# READS the caller's: fifo, out, reader_pid, capture_wfd.
 _mux_rx_capture_abort() {
-  kill "$reader_pid" 2>/dev/null
+  _mux_rx_capture_release
   wait "$reader_pid" 2>/dev/null
   rm -f -- "$fifo" "$out"
 }
@@ -564,13 +585,15 @@ _mux_rx_capture_abort() {
 # remove the temps. Returns 130 when there is none: cancelled, closed by
 # hand, or the caller was interrupted (the layer is closed here for a signal
 # that landed before it existed).
-# READS the caller's: fifo, out, reader_pid, interrupted. SETS: result.
+# READS the caller's: fifo, out, reader_pid, capture_wfd, interrupted.
+# SETS: result.
 # No local here may be called `block` or `interrupted`: the caller's trap can
 # fire while this runs, and must find the caller's.
 _mux_rx_capture_finish() {
   (( interrupted )) && _mux_rx_close_block "$1"
   result=""
-  _mux_rx_await_modal "$1" "$reader_pid" && result=$(cat "$out")
+  _mux_rx_await_modal "$1" "$reader_pid"
+  result=$(cat "$out")
   rm -f -- "$fifo" "$out"
   [[ -n "$result" ]] || return 130
 }
@@ -585,7 +608,7 @@ _mux_rx_pick_float() {
   local tmp
   tmp=$(mktemp "${TMPDIR:-/tmp}/rxpick.XXXXXX") || return 1
   setopt localoptions localtraps
-  local block="" interrupted=0 fifo out reader_pid result rc=0
+  local block="" interrupted=0 fifo out reader_pid capture_wfd="" result rc=0
   trap 'interrupted=1; _mux_rx_close_block "$block"' INT TERM
   _mux_rx_capture_open rxpick || { rm -f -- "$tmp"; return 1; }
 
@@ -635,7 +658,7 @@ _mux_rx_float() {
   local widget="$HOME/.local/libexec/input-widget"
 
   setopt localoptions localtraps
-  local block="" interrupted=0 fifo out reader_pid result
+  local block="" interrupted=0 fifo out reader_pid capture_wfd="" result
   trap 'interrupted=1; _mux_rx_close_block "$block"' INT TERM
   _mux_rx_capture_open rxinput || return 1
 

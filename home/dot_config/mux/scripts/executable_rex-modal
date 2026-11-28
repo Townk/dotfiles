@@ -211,7 +211,19 @@ if [[ -n "$capture" ]]; then
   # Only ever into a FIFO: once the caller has given up (interrupted, timed
   # out) it removes its FIFO, and a plain redirect would then leave the
   # answer behind as a stray regular file.
-  trap '[[ -p "$capture" ]] && printf "%s" "$result" > "$capture"; rm -f -- "$tmp"' EXIT
+  # And only while someone is reading it: a caller whose float was closed by
+  # hand stops reading before it removes the FIFO, and opening a FIFO nobody
+  # reads blocks for ever. The non-blocking open succeeds only with a reader
+  # there; it is held across the write so that reader cannot go unnoticed.
+  zmodload zsh/system 2>/dev/null || true
+  answer() {
+    local probe
+    [[ -p "$capture" ]] || return 0
+    sysopen -w -o nonblock -u probe "$capture" 2>/dev/null || return 0
+    printf '%s' "$result" > "$capture"
+    exec {probe}>&-
+  }
+  trap 'answer; rm -f -- "$tmp"' EXIT
   "${cmd[@]}" >"$tmp" || true
   result=$(cat "$tmp")
   result="${result%$'\n'}"

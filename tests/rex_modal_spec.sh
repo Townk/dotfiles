@@ -75,6 +75,15 @@ EOS
 clean"
     End
 
+    It 'does not wait for a reader that is no longer there'
+      # The caller's FIFO still exists but its reader has ended (the float
+      # was closed by hand and the caller is about to remove it). A plain
+      # redirect would block in open() for ever, leaving this script behind.
+      run() { mkfifo "$RM_TMP/deaf"; raw_modal --no-chrome --capture "$RM_TMP/deaf" -- "$RM_TMP/target" x; print -r -- "rc=$?"; }
+      When call run
+      The output should equal "rc=0"
+    End
+
     It 'hides an inherited tmux or zellij from the target'
       run() { modal --no-chrome --capture "$RM_TMP/out" -- "$RM_TMP/target" x; cat "$RM_TMP/mux.log"; }
       When call run

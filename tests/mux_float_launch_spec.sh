@@ -293,15 +293,18 @@ Describe 'mux/rex.zsh — float launch guard'
     # to it mid-wait happens during an exact poll (at_poll). STUB_MODE:
     #   ok      the modal answers $STUB_ANSWER on the capture FIFO before the
     #           call returns (the open blocks until the float's reader is
-    #           there: a rendezvous), and the layer stays until closed;
+    #           there: a rendezvous), and its layer goes with it, as a real
+    #           one does when its command exits;
+    #   inflight  the modal has written half of $STUB_ANSWER and still holds
+    #           the FIFO open when its layer goes (during the first poll); it
+    #           writes the rest only after that;
     #   fail    the layer cannot be created;
     #   closed  nobody answers, and the layer is closed by hand: it is alive
     #           for ${STUB_LAYER_LIFE:-2} polls and gone at the next;
     #   slow    alive and silent, until an at_poll snippet says otherwise.
-    # In `ok` the layer does NOT go away once it has answered, as a real one
-    # does: the float allows a reader 0.3 s to finish reading after its layer
-    # is gone, and on the virtual clock that grace is no time at all — a
-    # reader that had the answer but had not exited yet would be abandoned.
+    # The float holds a write end of the capture FIFO itself until its layer
+    # is gone, so its reader sees end of file exactly then: after an answer
+    # (complete, however late its last byte), or with none.
     cat >"$stub" <<'STUB'
 #!/usr/bin/env zsh
 print -r -- "$*" >> "$STUB_ARGV_LOG"
@@ -314,9 +317,14 @@ case " $* " in
     case "${STUB_MODE:-ok}" in
       closed) print -r -- "${STUB_LAYER_LIFE:-2}" > "$STUB_LIFE" ;;
       slow) print open > "$STUB_LIFE" ;;
+      inflight)
+        print open > "$STUB_LIFE"; mkfifo "$STUB_EV/go"
+        a="${STUB_ANSWER-picked}"; h=$(( ${#a} / 2 ))
+        { exec 3>"$fifo"; printf "%s" "${a[1,h]}" >&3; read -r _ < "$STUB_EV/go"
+          printf "%s" "${a[h+1,-1]}" >&3; exec 3>&-; } >/dev/null 2>&1 </dev/null &! ;;
       *)
-        print open > "$STUB_LIFE"
-        { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER-picked}" >&3; exec 3>&-; } ;;
+        { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER-picked}" >&3; exec 3>&-; }
+        print 0 > "$STUB_LIFE" ;;
     esac
     print -r -- '{"block_ids":["block:layer"]}'
     exit 0 ;;
@@ -338,9 +346,8 @@ STUB
     mkdir -p "$TEST_TMP/ev"
     export MUX_REX_BIN="$stub" STUB_ARGV_LOG="$TEST_TMP/argv.log" STUB_REQ="$TEST_TMP/req.json" \
       STUB_LIFE="$TEST_TMP/layer.life" STUB_EV="$TEST_TMP/ev" STUB_MODE=ok STUB_ANSWER=picked
-    # The floats nap between polls (`sleep 0.2`) and before giving a reader
-    # up (`sleep 0.3`): on the virtual clock, which says afterwards how long
-    # they believe they waited.
+    # The floats nap between polls (`sleep 0.2`), and nowhere else: on the
+    # virtual clock, which says afterwards how long they believe they waited.
     spec_clock_set 1000
   }
   cleanup() {
@@ -531,12 +538,13 @@ Quit"
   # will ever write the answer either.
   # Both on a layer that never goes away by itself and never answers, so only
   # the bound under test can end the wait. `slept` is the naps between polls
-  # (0.2 s each) plus the 0.3 s the float allows a reader before giving it up.
+  # (0.2 s each) and nothing more: once the layer counts as gone the reader
+  # is given its end of file, not a grace period.
   It 'returns 130 at once when the server is gone mid-wait'
     export STUB_MODE=slow STUB_INSPECT_RC=4
     gone() { run_and_report 4 _mux_rx_float --type confirm --title Quit -- "Really?"; print -r -- "rc=$? $(waited)"; }
     When call gone
-    The output should equal "rc=130 polls=1 slept=300ms"
+    The output should equal "rc=130 polls=1 slept=0ms"
     The error should equal ""
   End
 
@@ -544,7 +552,7 @@ Quit"
     export STUB_MODE=slow STUB_INSPECT_RC=1 _MUX_RX_AWAIT_MISSES=3
     failing() { run_and_report 6 _mux_rx_float --type confirm --title Quit -- "Really?"; print -r -- "rc=$? $(waited)"; }
     When call failing
-    The output should equal "rc=130 polls=3 slept=700ms"
+    The output should equal "rc=130 polls=3 slept=400ms"
     The error should equal ""
   End
 
@@ -554,12 +562,40 @@ Quit"
       # poll, many more than the miss limit: successful checks must not count
       # as misses. A float that gave up at the limit never gets to that poll.
       export _MUX_RX_AWAIT_MISSES=2 STUB_MODE=slow
-      at_poll 7 'print -rn -- late > "$(cat "$STUB_EV/fifo")"'
+      at_poll 7 'print -rn -- late > "$(cat "$STUB_EV/fifo")"; print 0 > "$STUB_LIFE"'
       _mux_rx_float --type confirm --title Quit -- "Really?"
     }
     When call run_and_report 8 slow
     The output should equal "late"
     The status should be success
+  End
+
+  # A modal writes its answer as it exits, and its layer can be seen gone
+  # while the last bytes are still on their way. The float used to allow such
+  # a reader 0.3 s and then kill it, answer and all.
+  It 'delivers an answer still being written when its layer goes'
+    export STUB_MODE=inflight STUB_ANSWER=wezterm
+    inflight() {
+      # During the first poll: the layer is gone, and only then is the modal
+      # told to write the second half.
+      at_poll 1 'print 0 > "$STUB_LIFE"; print go > "$STUB_EV/go"'
+      _mux_rx_float --type line --title Term -- "Which?"
+      print -r -- " rc=$? $(waited) left=$(ls "$TEST_TMP" | grep -c "^rxinput-")"
+    }
+    When call inflight
+    The output should equal "wezterm rc=0 polls=1 slept=0ms left=0"
+    The error should equal ""
+  End
+
+  It 'never kills its reader: a layer closed by hand ends it with an end of file'
+    export STUB_MODE=closed STUB_LAYER_LIFE=0
+    closed() {
+      _mux_rx_float --type confirm --title Quit -- "Really?"
+      print -r -- "rc=$? $(waited) left=$(ls "$TEST_TMP" | grep -c "^rxinput-") readers=$(pgrep -f "cat $TEST_TMP/rxinput-fifo" | wc -l | tr -d " ")"
+    }
+    When call closed
+    The output should equal "rc=130 polls=1 slept=0ms left=0 readers=0"
+    The error should equal ""
   End
 
   Describe 'dispatch'
