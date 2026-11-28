@@ -512,6 +512,46 @@ Quit"
     The line 2 of output should equal "1"
   End
 
+  # The pane that asked for the float is closed: its shell gets a hangup. The
+  # float must not outlive it (nor its temp files), and the caller must still
+  # die of the hangup, as it would have without a float: nothing after the
+  # float runs in a shell whose terminal is gone. (rc=1 is how zsh ends on a
+  # hangup with no trap at all: it exits by itself instead of being killed.
+  # "survived" is what would show a caller that carried on.)
+  hup_at_first_poll() { at_poll 1 'kill -HUP "$(cat "$STUB_EV/pid")"'; }
+
+  It '_mux_rx_float closes its float and still dies when the caller is hung up'
+    export STUB_MODE=slow
+    hung_up() {
+      hup_at_first_poll
+      ( own_pid; _mux_rx_float --type confirm --title Quit -- "Really?"; print survived ) &
+      wait $! 2>/dev/null
+      print -r -- "rc=$?"
+      grep -c 'block close .*block:layer' "$STUB_ARGV_LOG"
+    }
+    When call run_and_report 12 hung_up
+    The line 1 of output should equal "rc=1"
+    The line 2 of output should equal "1"
+    The lines of output should equal 2
+    The error should equal ""
+  End
+
+  It '_mux_rx_pick_float closes its float and still dies when the caller is hung up'
+    export STUB_MODE=slow
+    hung_up() {
+      hup_at_first_poll
+      ( own_pid; print -r -- 'a  A' | _mux_rx_pick_float 70% 60% Pick --output field:1; print survived ) &
+      wait $! 2>/dev/null
+      print -r -- "rc=$?"
+      grep -c 'block close .*block:layer' "$STUB_ARGV_LOG"
+    }
+    When call run_and_report 12 hung_up
+    The line 1 of output should equal "rc=1"
+    The line 2 of output should equal "1"
+    The lines of output should equal 2
+    The error should equal ""
+  End
+
   It '_mux_rx_float promises the widget its measured rows, a percent picker none'
     rows() {
       _mux_rx_float --type confirm --title Quit --pane-height 11 -- "Really?" >/dev/null

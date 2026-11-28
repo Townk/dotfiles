@@ -469,6 +469,22 @@ _mux_rx_close_block() {
 # path, temp files removed, with 130. Without it the float outlived its
 # caller, and answering that orphan found nobody listening.
 
+# A HANGUP (the pane that asked for the float was closed) takes the same
+# path, so the float and the temps go too — and then the shell dies of the
+# hangup after all (_mux_rx_rehup), as it would have with no float open:
+# nothing after the float may run in a shell whose terminal is gone.
+
+# _mux_rx_rehup — after the cleanup: die of the hangup that was caught.
+# READS the caller's: hupped. A no-op when there was none.
+_mux_rx_rehup() {
+  (( ${hupped:-0} )) || return 0
+  zmodload zsh/system 2>/dev/null
+  trap - HUP
+  # sysparams[pid], not $$: inside `$(…)` this is a subshell, and $$ names
+  # its parent.
+  kill -HUP "${sysparams[pid]:-$$}"
+}
+
 # _mux_rx_block_gone <block> — ONE probe, three answers:
 #   0  gone: `block inspect` exits 3 for a block the server no longer knows,
 #      and 4 when no server is running, which takes every block with it;
@@ -608,8 +624,9 @@ _mux_rx_pick_float() {
   local tmp
   tmp=$(mktemp "${TMPDIR:-/tmp}/rxpick.XXXXXX") || return 1
   setopt localoptions localtraps
-  local block="" interrupted=0 fifo out reader_pid capture_wfd="" result rc=0
+  local block="" interrupted=0 hupped=0 fifo out reader_pid capture_wfd="" result rc=0
   trap 'interrupted=1; _mux_rx_close_block "$block"' INT TERM
+  trap 'interrupted=1; hupped=1; _mux_rx_close_block "$block"' HUP
   _mux_rx_capture_open rxpick || { rm -f -- "$tmp"; return 1; }
 
   # Stage rows to a file: the layer's command cannot read our stdin pipe.
@@ -625,11 +642,13 @@ _mux_rx_pick_float() {
     (( interrupted )) && rc=130
     (( rc )) || pick::start "${pick_args[@]}" <"$tmp" || rc=$?
     rm -f -- "$tmp"
+    _mux_rx_rehup
     return $rc
   fi
 
   _mux_rx_capture_finish "$block" || rc=$?
   rm -f -- "$tmp"
+  _mux_rx_rehup
   (( rc )) && return $rc
   print -r -- "$result"
 }
@@ -658,8 +677,9 @@ _mux_rx_float() {
   local widget="$HOME/.local/libexec/input-widget"
 
   setopt localoptions localtraps
-  local block="" interrupted=0 fifo out reader_pid capture_wfd="" result
+  local block="" interrupted=0 hupped=0 fifo out reader_pid capture_wfd="" result rc=0
   trap 'interrupted=1; _mux_rx_close_block "$block"' INT TERM
+  trap 'interrupted=1; hupped=1; _mux_rx_close_block "$block"' HUP
   _mux_rx_capture_open rxinput || return 1
 
   # Same measured-height contract as the other floats (input-common's
@@ -696,12 +716,15 @@ _mux_rx_float() {
   if [[ -z "$block" ]]; then
     # No layer: ask inline, as outside a multiplexer, and return ITS status.
     _mux_rx_capture_abort
+    _mux_rx_rehup
     (( interrupted )) && return 130
     input::"$type" "${wargs[@]}"
     return
   fi
 
-  _mux_rx_capture_finish "$block" || return
+  _mux_rx_capture_finish "$block" || rc=$?
+  _mux_rx_rehup
+  (( rc )) && return $rc
   print -rn -- "$result"
 }
 
