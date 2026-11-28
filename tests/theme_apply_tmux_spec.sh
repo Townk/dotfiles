@@ -5,6 +5,7 @@
 # + a PATH-shimmed `tmux` that records its argv, so the tmux (and json/zsh)
 # branches run against the sandbox.
 Describe 'theme-apply (tmux branch)'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup() {
     SANDBOX=$(mktemp -d)
     export HOME="$SANDBOX"

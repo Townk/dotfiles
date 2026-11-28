@@ -18,6 +18,7 @@
 # a swallowed click and a `word-separators` value left narrowed behind it,
 # neither of which is visible from calling the pieces directly.
 Describe 'mouse word/WORD selection'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup_all() {
     MS_TMP=$(mktemp -d)
     chezmoi execute-template <home/dot_config/tmux/keymap-base.conf.tmpl >"$MS_TMP/keymap.conf" 2>/dev/null

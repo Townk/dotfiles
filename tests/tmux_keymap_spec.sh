@@ -9,6 +9,7 @@
 # with list-keys. Servers are cheap and the socket never touches a real
 # session.
 Describe 'tmux keymap tables'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup_all() {
     # Own TMUX_TMPDIR: the -L socket lands here, never in the shared
     # /tmp/tmux-$UID (tests/tmux_socket_isolation_spec.sh guards this).
@@ -493,6 +494,7 @@ Describe 'tmux keymap tables'
 End
 
 Describe 'prompt-marks.sh (OSC 133 emitter)'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   It 'is a silent no-op in a non-interactive shell'
     When call zsh -c 'source home/dot_config/zsh/functions.d/prompt-marks.sh; echo ok'
     The output should equal "ok"
@@ -512,6 +514,7 @@ End
 # each attaching client — so what is in that array decides whether a shell
 # spawned later believes it is on SSH.
 Describe 'tmux update-environment'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup_all() {
     UE_TMP=$(mktemp -d "$SHELLSPEC_TMPBASE/tu.XXXXXX")
     export TMUX_TMPDIR="$UE_TMP"   # socket off the shared /tmp/tmux-$UID

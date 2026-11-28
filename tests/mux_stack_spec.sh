@@ -9,6 +9,7 @@
 # DERIVED VIEWS of the stack. Every behaviour asserted here was once a Mode B
 # bug report (pops needing two presses, visibility leaking between modes).
 Describe 'mux mode stack'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup_all() {
     MS_TMP=$(mktemp -d)
     chezmoi execute-template <home/dot_config/mux/whichkey.data.tmpl >"$MS_TMP/wk.data" 2>/dev/null

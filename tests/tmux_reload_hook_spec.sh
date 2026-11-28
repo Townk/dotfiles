@@ -5,6 +5,7 @@
 # bar still paints, the keys still do something, and the deployed config is
 # correct the whole time. So the reload rides along with the change.
 Describe 'tmux config reload hook'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   HOOK="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_58-reload-tmux.sh.tmpl"
 
   It 'exists and runs after the theme is generated'

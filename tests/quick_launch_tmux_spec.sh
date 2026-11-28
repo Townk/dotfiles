@@ -1,6 +1,7 @@
 # Tests for lib/dispatch-tmux.zsh — the quick-launch tmux backend (mux
 # migration Phase 3). A stub tmux records every invocation.
 Describe 'quick-launch tmux dispatch'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup() {
     TEST_TMP=$(mktemp -d)
     TX_LOG="$TEST_TMP/tmux-calls.log"
@@ -133,6 +134,7 @@ EOF
 End
 
 Describe 'quick-launch terminal window detection'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup_window() {
     TEST_TMP=$(mktemp -d)
     OSASCRIPT_LOG="$TEST_TMP/osascript-calls.log"

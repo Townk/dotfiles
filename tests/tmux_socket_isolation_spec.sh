@@ -5,6 +5,7 @@
 # nested shellspec, isolated from this run's SHELLSPEC_* environment with
 # `env -i`.
 Describe 'tmux spec socket isolation'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   RUNNER="$PWD/tests/run-shellspec.sh"
   SOCK_DIR="/tmp/tmux-$(id -u)"
 

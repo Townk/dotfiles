@@ -14,6 +14,7 @@
 # matters, because the alternative is a gesture whose only failure mode is
 # "nothing happened", indistinguishable from an unbound key.
 Describe 'mux-click'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup() {
     MC_TMP=$(mktemp -d)
     MC="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_mux-click"

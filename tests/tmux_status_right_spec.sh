@@ -3,6 +3,7 @@
 # pmset/networksetup/tmux; theme colors come from a fixture JSON; the
 # fullscreen mirror and hostname alias are fixture files.
 Describe 'tmux-status-right'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup() {
     TEST_TMP=$(mktemp -d)
     W="$PWD/home/dot_local/libexec/executable_tmux-status-right"

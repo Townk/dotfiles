@@ -7,6 +7,7 @@
 # "node". These drive a real server: the title arrives as an escape sequence
 # from a real shell, which is the only way to prove tmux tracks it.
 Describe 'tmux window titles'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   setup_all() {
     WT_TMP=$(mktemp -d "$SHELLSPEC_TMPBASE/tw.XXXXXX")
     export TMUX_TMPDIR="$WT_TMP"   # socket off the shared /tmp/tmux-$UID

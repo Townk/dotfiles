@@ -11,6 +11,7 @@
 # `tmux load-buffer` OSC-52 mirror, falling back to /usr/bin/pbcopy when the
 # shim is missing.
 Describe 'copy-pwd (clipboard shim routing)'
+  Skip if 'complete-only: tmux, which is being retired for Rex' spec_complete_only
   CP_SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_copy-pwd"
 
   # Same resolution copy-pwd uses, so the readiness probes below agree with the
