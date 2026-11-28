@@ -170,6 +170,23 @@ Describe 'card_render.py + the viewers that use it'
       The output should include "Confirmed"
       The line 1 of output should start with "$(printf '\033[38;2;180;190;254m╭')"
     End
+
+    # Any STATUS outside CONFIRMED / TENTATIVE / CANCELLED used to crash the
+    # viewer: the fallback named an icon the style does not have.
+    It 'renders an event whose status it does not know, with a neutral pill'
+      Data
+        #|BEGIN:VCALENDAR
+        #|BEGIN:VEVENT
+        #|SUMMARY:Review
+        #|STATUS:NEEDS-ACTION
+        #|END:VEVENT
+        #|END:VCALENDAR
+      End
+      When run python3 "$ICS" -W 50
+      The status should be success
+      The output should include "Review"
+      The error should equal ""
+    End
   End
 
   Describe 'a half-applied tree (card_render.py missing)'

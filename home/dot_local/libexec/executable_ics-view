@@ -728,7 +728,7 @@ class CardRenderer:
             return (self.s.ICON_QUESTION, self.s.warning, CTP.YELLOW)
         if st == "CANCELLED":
             return (self.s.ICON_TIMES, self.s.danger, CTP.RED)
-        return (self.s.ICON_BULLET, self.s.muted, CTP.OVERLAY1)
+        return (self.s.BULLET, self.s.muted, CTP.OVERLAY1)
 
     def _pill(self, text: str, rgb: tuple[int, int, int]) -> str:
         """Render text as a filled pill badge using powerline rounded separators."""
