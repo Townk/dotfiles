@@ -10,6 +10,18 @@
 # SOURCED, never executed. Pulls in the base (C_*, log_*, die) and the prompt
 # module (prompt::confirm), so a front-end only needs to source THIS file.
 #
+# A worker is, in order:
+#   defaults + --probe            (its own)
+#   usage                         (its own text around cagent::usage_options_*)
+#   cagent::parse_args "$@"       (+ optional cagent::worker_flag hook)
+#   cagent::preflight <name>
+#   trap cagent::cleanup EXIT INT TERM   (top level — see cagent::cleanup)
+#   cagent::begin <name>
+#   cached plan → cagent::load_cached_plan; otherwise
+#     prompt="$(cagent::plan_prompt <conventions> <message-ref> <write-lead>)"
+#     cagent::log_run_header <fields>; cagent::run_agent <label> <cmd…> "$prompt"
+#   cagent::finish "$*" <no-plan hint lines…>
+#
 # Worker contract (zsh dynamic scope — the cagent:: helpers read and set the
 # caller's conventionally-named globals rather than threading a dozen args):
 #   usage            function printing the worker's help (parse_args calls it)
@@ -21,6 +33,9 @@
 #                    verbose extra_guidance
 #   preflight sets:  repo_root cache_file use_cached_plan have_modified
 #                    have_untracked
+#   begin sets:      cagent_worker tmpdir plan_file state_dir log_file
+#                    scope_clause extra_block cagent_agent_pid
+#   finish sets:     commit_count
 #   cache trio read: cache_file plan_file include_untracked commit_count
 
 # Source the base + prompt module relative to THIS file.
@@ -28,6 +43,37 @@ _cagent_self="${(%):-%x}"
 source "$(dirname "$_cagent_self")/common.zsh"
 source "$(dirname "$_cagent_self")/prompt-common.zsh"
 unset _cagent_self
+
+# cagent::usage_options_head <agent-noun>
+# cagent::usage_options_tail <output-noun>
+# The option help every worker shares, split around the slot where a worker
+# prints its own `-m` text and extra flags. <agent-noun> is who gets asked to
+# re-plan ("Claude"); <output-noun> is whose output --verbose shows ("claude").
+cagent::usage_options_head() {
+  cat <<EOF
+Options:
+  -u, --untracked     Also include untracked files in the commits.
+  -d, --dry-run       Print the plan (groupings + messages) without
+                      staging or committing anything.
+  -n, --no-commit     For each planned commit: stage the files, open
+                      \$EDITOR with the message, then prompt to commit.
+                      Saying No aborts without creating the commit.
+  -f, --force-refresh
+      --replan        Ignore any cached commit plan and ask $1 to
+                      analyze the current working tree again.
+EOF
+}
+
+cagent::usage_options_tail() {
+  cat <<EOF
+  -v, --verbose       Show $1 output as it plans.
+  -h, --help          Show this help.
+
+Extra positional args (after \`--\`) are passed to the agent as
+additional commit guidance — file globs to scope to, scope hints,
+JIRA references, etc.
+EOF
+}
 
 # cagent::parse_args "$@"
 # The universal worker CLI (every flag here is part of the cross-harness
@@ -152,6 +198,214 @@ cagent::preflight() {
     exit 0
   fi
   return 0
+}
+
+# cagent::cleanup — the workers' exit handler: stop a still-running agent and
+# drop the scratch dir. Install it from the worker's TOP LEVEL
+# (`trap cagent::cleanup EXIT INT TERM`): zsh scopes an EXIT trap set inside a
+# function to that function, so the lib cannot install it for the worker. It is
+# safe to install before cagent::begin — every variable is read with a default.
+cagent::cleanup() {
+  if [[ -n "${cagent_agent_pid:-}" ]]; then
+    kill "$cagent_agent_pid" 2>/dev/null
+  fi
+  if [[ -n "${tmpdir:-}" ]]; then
+    rm -rf "$tmpdir"
+  fi
+  return 0
+}
+
+# cagent::begin <worker-name>
+# Per-run scratch + log locations and the two prompt fragments derived from
+# the parsed flags. <worker-name> keys the scratch dir prefix and the state
+# dir (${XDG_STATE_HOME:-~/.local/state}/<worker-name>/errors.log).
+cagent::begin() {
+  cagent_worker="$1"
+  cagent_agent_pid=""
+  tmpdir="$(mktemp -d -t "${cagent_worker}.XXXXXX")"
+  plan_file="$tmpdir/plan.json"
+
+  state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/${cagent_worker}"
+  mkdir -p "$state_dir"
+  log_file="$state_dir/errors.log"
+
+  scope_clause="modified (tracked) files only"
+  [[ "$include_untracked" -eq 1 ]] && scope_clause="modified files AND untracked files"
+
+  extra_block=""
+  if [[ ${#extra_guidance[@]} -gt 0 ]]; then
+    extra_block=$'\n\nAdditional guidance from the caller:\n'"${extra_guidance[*]}"
+  fi
+  return 0
+}
+
+# cagent::load_cached_plan — reuse the fingerprint-fresh cache as this run's plan.
+cagent::load_cached_plan() {
+  cp "$cache_file" "$plan_file"
+  log_info "Using cached commit plan: $cache_file"
+}
+
+# cagent::plan_prompt <conventions> <message-ref> <write-lead>
+# Print the planning prompt. This text is BEHAVIOUR — it is what the model is
+# told — and it lives here once so the workers cannot drift apart again (the pi
+# worker had lost the scope rule and the write-operation ban). A worker
+# supplies only what is truly tool-specific:
+#   <conventions>  paragraph(s) naming where message conventions come from
+#                  (a skill path, "the project's commit skill", plain
+#                  Conventional Commits)
+#   <message-ref>  appended to "draft a polished message" in step 3, e.g.
+#                  " per the commit skill" (empty for none)
+#   <write-lead>   how this agent writes a file, e.g. "Use the Write tool to
+#                  save the plan" or "Write the plan"
+# Reads repo_root plan_file scope_clause extra_block.
+cagent::plan_prompt() {
+  local conventions="$1" message_ref="$2" write_lead="$3"
+  cat <<EOF
+You are PLANNING a series of git commits for the repository at:
+
+\`${repo_root}\`
+
+${conventions}
+
+Important: DO NOT execute any \`git add\`, \`git commit\`, \`git push\`,
+or other write operation in the repository. The calling script does all git
+operations after you finish. You may run read-only git commands and read files
+as needed. The only file you may create or modify is the JSON plan file below:
+
+\`${plan_file}\`
+
+Workflow:
+
+1. Inspect the working tree with \`git status\`, \`git diff\`,
+   \`git log\`, and per-file reads as needed. Scope: ${scope_clause}.
+2. Group the changes into one or more logical commits. Prefer ONE
+   commit when changes are coherent; only split when topics are
+   clearly independent.
+3. For each group, draft a polished message${message_ref}
+   (subject + Markdown body sized to the change).
+4. ${write_lead} as JSON at the absolute path
+   \`${plan_file}\`. Do not just describe the plan in your reply — the
+   calling script reads it from disk. The file MUST exist when you
+   finish. Shape MUST be EXACTLY:
+
+\`\`\`json
+{
+  "commits": [
+    {
+      "files": ["relative/path/one", "relative/path/two"],
+      "message": "feat(scope): subject\\n\\n## Changes Description\\n\\n..."
+    }
+  ]
+}
+\`\`\`
+
+Rules:
+- File paths must be repo-relative, exactly as \`git status --short\` would
+  identify them when run from the repository root.
+- Every in-scope changed file must appear in exactly one commit's
+  \`files\` array. No duplicates, no omissions.
+- Do not include files outside the requested scope.
+- \`message\` is the full commit message (subject + blank line + body
+  when warranted); use JSON \`\\n\` for newlines.
+- Do NOT add a \`Co-Authored-By\`, \`Signed-off-by\`, or any AI/agent
+  attribution trailer to \`message\`. The repository owner is the sole
+  author and sole responsible party for every commit.
+- Do NOT stage. Do NOT commit. Do NOT push.
+- When you are done, reply with the literal text \`PLAN_WRITTEN\` and
+  nothing else.${extra_block}
+EOF
+}
+
+# cagent::log_run_header <worker-fields>
+# Append the per-run separator + settings line to the worker's log. The
+# worker passes its own leading fields ("bin=… model=…"); the shared flag
+# state follows.
+cagent::log_run_header() {
+  {
+    print -- ""
+    print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
+    print -- "$1 untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit force_refresh=$force_refresh cache=$cache_file"
+  } >>"$log_file"
+}
+
+# cagent::run_agent <label> <command> [args…]
+# Run the agent with its stdout+stderr always appended to the log (some agent
+# TUIs clear the screen on exit, taking their error with them): streamed
+# through tee with --verbose, otherwise in the background behind a spinner.
+# Dies with "<label> failed (see <log>)" on a non-zero agent.
+cagent::run_agent() {
+  local label="$1"
+  shift
+  local rc=0
+  if [[ "$verbose" -eq 1 ]]; then
+    # `|| rc=…` keeps a non-zero agent from tripping errexit before rc is read,
+    # so the diagnostic below is reachable. pipestatus[1] is the agent's status
+    # (tee is [2]); reading it in the `||` branch is safe — a bare `|| true`
+    # would reset pipestatus and mask the failure as rc=0.
+    { "$@" 2>&1 | tee -a "$log_file" } || rc=${pipestatus[1]}
+  else
+    "$@" >>"$log_file" 2>&1 &
+    cagent_agent_pid=$!
+
+    spin::wait "$cagent_agent_pid" "thinking"
+    # `|| rc=$?` keeps a non-zero agent from tripping errexit at `wait`, which
+    # would abort before the diagnostic below and leave the user with silence.
+    wait "$cagent_agent_pid" || rc=$?
+    cagent_agent_pid=""
+  fi
+
+  [[ "$rc" -eq 0 ]] || die "$label failed (see $log_file)"
+  return 0
+}
+
+# cagent::finish <original-args> [no-plan hint line…]
+# Everything after the plan file should exist: the missing-plan diagnostic,
+# shape validation, the summary, the dry-run/no-commit cache save, and the
+# dry-run dump or the stage/commit loop. <original-args> is the worker's "$*"
+# (echoed in the "regenerate" hint); the hint lines are the worker's own advice
+# for an agent that replied without writing the plan.
+cagent::finish() {
+  local rerun_args="$1"
+  shift
+  local hint total_files
+
+  if [[ ! -s "$plan_file" ]]; then
+    if [[ "$use_cached_plan" -eq 1 ]]; then
+      log_warn "the cached commit plan disappeared or is empty: $cache_file"
+      log_warn "Regenerate it with:"
+      log_warn "  ${cagent_worker} --force-refresh ${rerun_args}"
+    else
+      for hint in "$@"; do
+        log_warn "$hint"
+      done
+    fi
+    die "no plan written (see $log_file)"
+  fi
+
+  if ! cagent::validate_plan "$plan_file"; then
+    if [[ "$use_cached_plan" -eq 1 ]]; then
+      die "cached commit plan is invalid; rerun with --force-refresh (cache: $cache_file)"
+    fi
+    die "agent produced an invalid plan (see $log_file and $plan_file)"
+  fi
+
+  total_files=$(jq '[.commits[].files[]] | length' "$plan_file")
+  [[ "$total_files" -gt 0 ]] || die "plan groups have no files"
+
+  commit_count=$(jq -r '.commits | length' "$plan_file")
+
+  cagent::print_plan_summary "$plan_file" "$commit_count"
+
+  if [[ "$dry_run" -eq 1 || "$no_commit" -eq 1 ]]; then
+    cagent::save_plan_cache
+  fi
+
+  if [[ "$dry_run" -eq 1 ]]; then
+    cagent::print_dry_run "$plan_file"
+    exit 0
+  fi
+
+  cagent::execute_plan "$plan_file" "$commit_count" "$tmpdir" "$no_commit" cagent::save_remaining_plan_cache
 }
 
 # cagent::save_plan_cache — persist the current plan, fingerprint-stamped.

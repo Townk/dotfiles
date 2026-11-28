@@ -52,25 +52,15 @@ Usage: ai-commit-claude [options] [-- extra-guidance...]
 Use Claude Code in headless mode to group the working tree's changes into one
 or more logical commits and create them following Conventional Commits.
 
-Options:
-  -u, --untracked     Also include untracked files in the commits.
-  -d, --dry-run       Print the plan (groupings + messages) without
-                      staging or committing anything.
-  -n, --no-commit     For each planned commit: stage the files, open
-                      \$EDITOR with the message, then prompt to commit.
-                      Saying No aborts without creating the commit.
-  -f, --force-refresh
-      --replan        Ignore any cached commit plan and ask Claude to
-                      analyze the current working tree again.
+EOF
+  cagent::usage_options_head "Claude"
+  cat <<EOF
   -m, --model <id>    Override the model (default: \$AI_COMMIT_MODEL or
                       sonnet). Accepts Claude Code aliases (sonnet, opus,
                       haiku) or a full model id.
-  -v, --verbose       Show claude output as it plans.
-  -h, --help          Show this help.
-
-Extra positional args (after \`--\`) are passed to the agent as
-additional commit guidance — file globs to scope to, scope hints,
-JIRA references, etc.
+EOF
+  cagent::usage_options_tail "claude"
+  cat <<EOF
 
 Environment:
   AI_COMMIT_CLAUDE_BIN             claude binary (default: claude).
@@ -97,104 +87,29 @@ cagent::parse_args "$@"
 cagent::preflight ai-commit-claude
 
 # ────────────────────────────────────────────────────────────────────
-# Build prompt
+# Plan: reuse the cached plan, or ask claude for one. The prompt body is
+# shared (cagent::plan_prompt); claude's own part is the conventions paragraph
+# and how it writes the plan file.
 # ────────────────────────────────────────────────────────────────────
-tmpdir="$(mktemp -d -t ai-commit-claude.XXXXXX)"
-claude_pid=""
-cleanup() {
-  [[ -n "$claude_pid" ]] && kill "$claude_pid" 2>/dev/null
-  rm -rf "$tmpdir"
-}
-trap cleanup EXIT INT TERM
-
-plan_file="$tmpdir/plan.json"
-
-state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/ai-commit-claude"
-mkdir -p "$state_dir"
-log_file="$state_dir/errors.log"
-
-scope_clause="modified (tracked) files only"
-[[ "$include_untracked" -eq 1 ]] && scope_clause="modified files AND untracked files"
-
-extra_block=""
-if [[ ${#extra_guidance[@]} -gt 0 ]]; then
-  extra_block=$'\n\nAdditional guidance from the caller:\n'"${extra_guidance[*]}"
-fi
+trap cagent::cleanup EXIT INT TERM
+cagent::begin ai-commit-claude
 
 if [[ "$use_cached_plan" -eq 1 ]]; then
-  cp "$cache_file" "$plan_file"
-  log_info "Using cached commit plan: $cache_file"
+  cagent::load_cached_plan
 else
   command -v "$AI_COMMIT_CLAUDE_BIN" >/dev/null 2>&1 || die "claude ($AI_COMMIT_CLAUDE_BIN) not on PATH"
 
-  prompt=$(
+  conventions=$(
     cat <<EOF
-You are PLANNING a series of git commits for the repository at:
-
-\`${repo_root}\`
-
 Follow Conventional Commits conventions for every message: a
 \`type(scope): subject\` subject line, an optional Markdown body sized to the
 change, and no sign-off/trailer lines. If this project defines a commit skill,
 use it for message-format conventions.
-
-Important: DO NOT execute any \`git add\`, \`git commit\`, \`git push\`,
-or other write operation in the repository. The calling script does all git
-operations after you finish. You may run read-only git commands and read files
-as needed. The only file you may create or modify is the JSON plan file below:
-
-\`${plan_file}\`
-
-Workflow:
-
-1. Inspect the working tree with \`git status\`, \`git diff\`,
-   \`git log\`, and per-file reads as needed. Scope: ${scope_clause}.
-2. Group the changes into one or more logical commits. Prefer ONE
-   commit when changes are coherent; only split when topics are
-   clearly independent.
-3. For each group, draft a polished message (subject + Markdown body
-   sized to the change).
-4. Use the Write tool to save the plan as JSON at the absolute path
-   \`${plan_file}\`. Do not just describe the plan in your reply — the
-   calling script reads it from disk. The file MUST exist when you
-   finish. Shape MUST be EXACTLY:
-
-\`\`\`json
-{
-  "commits": [
-    {
-      "files": ["relative/path/one", "relative/path/two"],
-      "message": "feat(scope): subject\\n\\n## Changes Description\\n\\n..."
-    }
-  ]
-}
-\`\`\`
-
-Rules:
-- File paths must be repo-relative, exactly as \`git status --short\` would
-  identify them when run from the repository root.
-- Every in-scope changed file must appear in exactly one commit's
-  \`files\` array. No duplicates, no omissions.
-- Do not include files outside the requested scope.
-- \`message\` is the full commit message (subject + blank line + body
-  when warranted); use JSON \`\\n\` for newlines.
-- Do NOT add a \`Co-Authored-By\`, \`Signed-off-by\`, or any AI/agent
-  attribution trailer to \`message\`. The repository owner is the sole
-  author and sole responsible party for every commit.
-- Do NOT stage. Do NOT commit. Do NOT push.
-- When you are done, reply with the literal text \`PLAN_WRITTEN\` and
-  nothing else.${extra_block}
 EOF
   )
+  prompt="$(cagent::plan_prompt "$conventions" "" "Use the Write tool to save the plan")"
 
-  # ────────────────────────────────────────────────────────────────────
-  # Run agent
-  # ────────────────────────────────────────────────────────────────────
-  {
-    print -- ""
-    print -- "─── $(date '+%Y-%m-%d %H:%M:%S') ─────────────────────────"
-    print -- "bin=$AI_COMMIT_CLAUDE_BIN model=${model:-<default>} permission=$AI_COMMIT_CLAUDE_PERMISSION_MODE untracked=$include_untracked dry_run=$dry_run no_commit=$no_commit force_refresh=$force_refresh cache=$cache_file"
-  } >>"$log_file"
+  cagent::log_run_header "bin=$AI_COMMIT_CLAUDE_BIN model=${model:-<default>} permission=$AI_COMMIT_CLAUDE_PERMISSION_MODE"
 
   if [[ -n "$model" ]]; then
     log_info "Planning commits with Claude ${C_BWH}${model}${C_RES}…"
@@ -211,68 +126,13 @@ EOF
 
   [[ -n "$model" ]] && claude_args+=(--model "$model")
 
-  if [[ "$verbose" -eq 1 ]]; then
-    # `|| rc=…` keeps a non-zero agent from tripping errexit before rc is read,
-    # so the diagnostic below is reachable. pipestatus[1] is the agent's status
-    # (tee is [2]); reading it in the `||` branch is safe — a bare `|| true`
-    # would reset pipestatus and mask the failure as rc=0.
-    rc=0
-    { "$AI_COMMIT_CLAUDE_BIN" "${claude_args[@]}" "$prompt" 2>&1 | tee -a "$log_file" } || rc=${pipestatus[1]}
-  else
-    "$AI_COMMIT_CLAUDE_BIN" "${claude_args[@]}" "$prompt" >>"$log_file" 2>&1 &
-    claude_pid=$!
-
-    spin::wait "$claude_pid" "thinking"
-    # `|| rc=$?` keeps a non-zero agent from tripping errexit at `wait`, which
-    # would abort before the diagnostic below and leave the user with silence.
-    rc=0
-    wait "$claude_pid" || rc=$?
-    claude_pid=""
-  fi
-
-  [[ "$rc" -eq 0 ]] || die "claude failed (see $log_file)"
-fi
-
-if [[ ! -s "$plan_file" ]]; then
-  if [[ "$use_cached_plan" -eq 1 ]]; then
-    log_warn "the cached commit plan disappeared or is empty: $cache_file"
-    log_warn "Regenerate it with:"
-    log_warn "  ai-commit-claude --force-refresh $*"
-  else
-    log_warn "Claude returned a reply but did not create $plan_file."
-    log_warn "Try a stronger model or verbose mode:"
-    log_warn "  ai-commit-claude --model opus --verbose $*"
-  fi
-  die "no plan written (see $log_file)"
-fi
-
-if ! cagent::validate_plan "$plan_file"; then
-  if [[ "$use_cached_plan" -eq 1 ]]; then
-    die "cached commit plan is invalid; rerun with --force-refresh (cache: $cache_file)"
-  fi
-  die "agent produced an invalid plan (see $log_file and $plan_file)"
-fi
-
-total_files=$(jq '[.commits[].files[]] | length' "$plan_file")
-[[ "$total_files" -gt 0 ]] || die "plan groups have no files"
-
-commit_count=$(jq -r '.commits | length' "$plan_file")
-
-# ────────────────────────────────────────────────────────────────────
-# Plan summary
-# ────────────────────────────────────────────────────────────────────
-cagent::print_plan_summary "$plan_file" "$commit_count"
-
-if [[ "$dry_run" -eq 1 || "$no_commit" -eq 1 ]]; then
-  cagent::save_plan_cache
+  cagent::run_agent claude "$AI_COMMIT_CLAUDE_BIN" "${claude_args[@]}" "$prompt"
 fi
 
 # ────────────────────────────────────────────────────────────────────
-# Execute
+# Validate, summarize, cache, and execute the plan (shared).
 # ────────────────────────────────────────────────────────────────────
-if [[ "$dry_run" -eq 1 ]]; then
-  cagent::print_dry_run "$plan_file"
-  exit 0
-fi
-
-cagent::execute_plan "$plan_file" "$commit_count" "$tmpdir" "$no_commit" cagent::save_remaining_plan_cache
+cagent::finish "$*" \
+  "Claude returned a reply but did not create $plan_file." \
+  "Try a stronger model or verbose mode:" \
+  "  ai-commit-claude --model opus --verbose $*"
