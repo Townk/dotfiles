@@ -575,8 +575,16 @@ _mux_rx_capture_open() {
   mkfifo -m 600 "$fifo" 2>/dev/null || return 1
   out=$(mktemp "${TMPDIR:-/tmp}/$1-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
   exec {capture_wfd}<>"$fifo" || { rm -f -- "$fifo" "$out"; return 1; }
-  cat "$fifo" >"$out" 2>/dev/null {capture_wfd}>&- &
+  # The reader is BORN with its end open: we open it here (it cannot block,
+  # ours is open) and hand it over. Were the reader to open the FIFO itself,
+  # a capture ended at once (no layer could be made) could let go of our end
+  # before the reader had got to its open, which would then wait for a writer
+  # that never comes, and the join in _mux_rx_capture_abort with it.
+  local capture_rfd
+  exec {capture_rfd}<"$fifo" || { exec {capture_wfd}>&-; capture_wfd=""; rm -f -- "$fifo" "$out"; return 1; }
+  cat <&$capture_rfd >"$out" 2>/dev/null {capture_wfd}>&- &
   reader_pid=$!
+  exec {capture_rfd}<&-
 }
 
 # _mux_rx_capture_release — close our end of the capture FIFO, once.

@@ -518,6 +518,29 @@ Quit"
     The status should be success
   End
 
+  # The reader must be born with the FIFO open. When it opened the FIFO by
+  # name, a capture that ended at once (no layer) could release the caller's
+  # end before the reader had got to its open: the reader then waited for a
+  # writer for ever, and the caller for the reader. Seen as a hung suite run.
+  It 'starts its reader on an open descriptor, never on the FIFO by name'
+    export STUB_MODE=fail
+    input::confirm() { print -rn -- "inline"; }
+    cat_args() {
+      mkdir -p "$TEST_TMP/catbin"
+      printf '%s\n' '#!/bin/sh' 'echo "cat args=[$*]" >>"$CAT_LOG"' 'exec /bin/cat "$@"' >"$TEST_TMP/catbin/cat"
+      command chmod +x "$TEST_TMP/catbin/cat"
+      export CAT_LOG="$TEST_TMP/cat.log"
+      PATH="$TEST_TMP/catbin:$PATH" _mux_rx_float --type confirm --title Quit -- "Really?"
+      print
+      grep -c 'fifo' "$CAT_LOG" || true
+      head -1 "$CAT_LOG"
+    }
+    When call cat_args
+    The line 1 of output should equal "inline"
+    The line 2 of output should equal "0"
+    The line 3 of output should equal "cat args=[]"
+  End
+
   It '_mux_rx_float closes its float when the caller is interrupted'
     Skip if 'complete-only: a float that polls its layer through the zsh fake rex and the fake clock, poll after poll (100-200 ms)' spec_complete_only
     export STUB_MODE=slow
