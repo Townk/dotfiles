@@ -848,4 +848,88 @@ removed"
       The output should equal ""
     End
   End
+
+  # The exec pool (see spec_helper.sh, "THE EXEC POOL"): a script made
+  # executable inside an example runs from a pooled inode.
+  Describe 'the exec pool'
+    stub() { printf '#!/bin/sh\necho %s\n' "$2" >"$1"; chmod +x "$1"; }
+    links() { zmodload -F zsh/stat b:zstat; zstat +nlink -- "$1"; }
+    inode() { zmodload -F zsh/stat b:zstat; zstat +inode -- "$1"; }
+    pool="$SHELLSPEC_TMPBASE/.exec-pool"
+
+    It 'runs a stub written in an example from a pooled inode, unchanged'
+      run() {
+        stub "$SHELLSPEC_TMPBASE/ep-one" one
+        print -r -- "$("$SHELLSPEC_TMPBASE/ep-one") links=$(links "$SHELLSPEC_TMPBASE/ep-one")"
+        [[ "$SHELLSPEC_TMPBASE/ep-one" -ef "$pool/1" ]] && print "is slot 1"
+        cat "$SHELLSPEC_TMPBASE/ep-one"
+      }
+      When call run
+      The output should equal "one links=2
+is slot 1
+#!/bin/sh
+echo one"
+    End
+
+    It 'removed that stub after the example and gives the next one the same inode'
+      run() {
+        [[ -e "$SHELLSPEC_TMPBASE/ep-one" ]] && print "ep-one survived"
+        local before; before=$(inode "$pool/1")
+        stub "$SHELLSPEC_TMPBASE/ep-two" two
+        print -r -- "$("$SHELLSPEC_TMPBASE/ep-two") same-inode=$(( $(inode "$SHELLSPEC_TMPBASE/ep-two") == before ))"
+      }
+      When call run
+      The output should equal "two same-inode=1"
+    End
+
+    It 'gives every stub of an example its own slot, also from subshells and background jobs'
+      run() {
+        local i
+        stub "$SHELLSPEC_TMPBASE/ep-a" a
+        ( stub "$SHELLSPEC_TMPBASE/ep-b" b )
+        for i in c d e f; do stub "$SHELLSPEC_TMPBASE/ep-$i" $i & done; wait
+        for i in a b c d e f; do "$SHELLSPEC_TMPBASE/ep-$i"; done | tr '\n' ' '
+        print -r -- "slots=$(for i in a b c d e f; do inode "$SHELLSPEC_TMPBASE/ep-$i"; done | sort -u | wc -l | tr -d ' ')"
+      }
+      When call run
+      The output should equal "a b c d e f slots=6"
+    End
+
+    It 'keeps a stub the example replaced with something else'
+      run() {
+        stub "$SHELLSPEC_TMPBASE/ep-kept" first
+        rm "$SHELLSPEC_TMPBASE/ep-kept"; print data >"$SHELLSPEC_TMPBASE/ep-kept"
+        spec_exec_pool_drain
+        cat "$SHELLSPEC_TMPBASE/ep-kept"
+      }
+      When call run
+      The output should equal "data"
+    End
+
+    It 'leaves alone what is not a script: no #! line, a symlink, a file with other names'
+      run() {
+        print 'echo plain' >"$SHELLSPEC_TMPBASE/ep-plain"; chmod +x "$SHELLSPEC_TMPBASE/ep-plain"
+        printf '#!/bin/sh\n' >"$SHELLSPEC_TMPBASE/ep-target"; ln -s ep-target "$SHELLSPEC_TMPBASE/ep-link"; chmod +x "$SHELLSPEC_TMPBASE/ep-link"
+        printf '#!/bin/sh\n' >"$SHELLSPEC_TMPBASE/ep-twin"; ln "$SHELLSPEC_TMPBASE/ep-twin" "$SHELLSPEC_TMPBASE/ep-twin2"; chmod +x "$SHELLSPEC_TMPBASE/ep-twin"
+        printf '#!/bin/sh\n' >"$SHELLSPEC_TMPBASE/ep-ro"; chmod 644 "$SHELLSPEC_TMPBASE/ep-ro"
+        print -r -- "plain=$(links "$SHELLSPEC_TMPBASE/ep-plain") twin=$(links "$SHELLSPEC_TMPBASE/ep-twin") ro=$(links "$SHELLSPEC_TMPBASE/ep-ro") claims=$(ls "$pool" | grep -c claim)"
+        # ep-link: chmod followed it to ep-target, which is a script with one name.
+        rm -f "$SHELLSPEC_TMPBASE"/ep-{plain,target,link,twin,twin2,ro}
+      }
+      When call run
+      The output should equal "plain=1 twin=2 ro=1 claims=0"
+    End
+
+    It 'can be turned off'
+      run() {
+        SPEC_EXEC_POOL=0
+        stub "$SHELLSPEC_TMPBASE/ep-off" off
+        print -r -- "$("$SHELLSPEC_TMPBASE/ep-off") links=$(links "$SHELLSPEC_TMPBASE/ep-off")"
+        rm -f "$SHELLSPEC_TMPBASE/ep-off"
+      }
+      When call run
+      The output should equal "off links=1"
+    End
+  End
+
 End

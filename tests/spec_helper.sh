@@ -67,6 +67,8 @@ spec_helper_configure() {
   after_all spec_helper_drop_tmpbase
   # The stepped clock's deadlock rule: no example ends with a nap held.
   after_each spec_clock_after_each
+  before_each spec_exec_pool_on
+  after_each spec_exec_pool_drain
 }
 spec_helper_own_tmpbase() {
   SPEC_HELPER_TMPBASE=$(mktemp -d "${TMPDIR:-/tmp}/spec.XXXXXX") || return 1
@@ -229,6 +231,91 @@ spec_desktop_unguard() {
   PATH=$(printf '%s' "$PATH" | sed "s|$SPEC_DESKTOP_GUARD:||g")
   unset HS WIDGETS_OSASCRIPT_BIN NOTIFY_TMUX_BIN
   export PATH
+}
+
+# THE EXEC POOL: why `chmod` is a function here.
+#
+# macOS vets a script the first time its inode is exec'd, and charges for it:
+# about 50 ms for a freshly written `#!/bin/sh` stub against 5 ms for one that
+# ran before (measured; 120 ms and more for one that appends to a file). The
+# examples write about 7,900 such stubs per run, each new, each exec'd once
+# or twice. The charge follows the INODE, not the content: a file rewritten
+# in place, or a hard link to one that already ran, pays nothing.
+#
+# So inside an example, a `#!` script that is made executable is moved onto a
+# pooled inode: its bytes are copied over slot <n> under the spec file's
+# tmpbase and the script's name becomes a hard link to that slot. The slots
+# are the same files from one example to the next, so only the first few
+# stubs of a spec FILE pay. After the example the names are removed again
+# (spec_exec_pool_drain), which leaves each slot with one name and free to be
+# rewritten without touching anybody's stub.
+#
+# What a spec can notice: a stub written inside an example is gone when the
+# example ends (write it in BeforeAll, or again, if a later example needs
+# it), and it has two links while the example runs. Scripts made outside an
+# example (file level, BeforeAll) are left alone. Only `chmod` by name goes
+# through here: `command chmod` and /bin/chmod do not. SPEC_EXEC_POOL=0 turns
+# it off.
+#
+# A slot is claimed with an exclusive create, not a counter: stubs are also
+# written from subshells and background jobs, which share no variable.
+spec_exec_pool_on() { _SPEC_IN_EXAMPLE=1; }
+
+chmod() {
+  command chmod "$@" || return
+  [ -n "${_SPEC_IN_EXAMPLE:-}" ] && [ "${SPEC_EXEC_POOL:-1}" != 0 ] && [ -n "${SPEC_HELPER_TMPBASE:-}" ] || return 0
+  _spec_exec_pool "$@"
+  return 0
+}
+
+_spec_exec_pool() {
+  emulate -L zsh
+  # b:zstat only: loading zsh/stat whole also defines a `stat` builtin, which
+  # then answers for /usr/bin/stat in every example that checks a mode.
+  zmodload zsh/system 2>/dev/null && zmodload -F zsh/stat b:zstat 2>/dev/null || return 0
+  zmodload -F zsh/files b:zf_ln b:zf_rm b:zf_chmod b:zf_mkdir 2>/dev/null || return 0
+  local pool=$SPEC_HELPER_TMPBASE/.exec-pool f head slot in out claim
+  local -i n
+  local -a st
+  [[ -d $pool ]] || zf_mkdir -p $pool 2>/dev/null || return 0
+  for f in "$@"; do
+    [[ $f == /* ]] || f=$PWD/$f
+    [[ -f $f && ! -L $f && -x $f && $f != $pool/* ]] || continue
+    zstat -A st +nlink -- $f 2>/dev/null && (( st[1] == 1 )) || continue
+    sysopen -r -u in -- $f 2>/dev/null || continue
+    head=; sysread -i $in -s 2 head 2>/dev/null
+    if [[ $head != '#!' ]]; then exec {in}<&-; continue; fi
+    slot=
+    for (( n = 1; n <= 4096; n++ )); do
+      if sysopen -w -o creat,excl -u claim -- $pool/$n.claim 2>/dev/null; then
+        print -rn -u $claim -- $f; exec {claim}>&-
+        slot=$pool/$n; break
+      fi
+    done
+    if [[ -z $slot ]] || ! sysopen -w -o creat,trunc -u out -- $slot 2>/dev/null; then
+      exec {in}<&-; [[ -n $slot ]] && zf_rm -f $slot.claim; continue
+    fi
+    print -rn -u $out -- $head
+    while sysread -i $in -o $out 2>/dev/null; do :; done
+    exec {in}<&- {out}>&-
+    zf_chmod 755 $slot && zf_ln -f $slot $f || zf_rm -f $slot.claim
+  done
+}
+
+# After every example: remove the names the pool gave out (only while they
+# still are that slot: an example may have replaced its stub), so the slots
+# are free again.
+spec_exec_pool_drain() {
+  [ -d "${SPEC_HELPER_TMPBASE:-/nonexistent}/.exec-pool" ] || return 0
+  emulate -L zsh
+  zmodload -F zsh/files b:zf_rm 2>/dev/null || return 0
+  local c f
+  for c in $SPEC_HELPER_TMPBASE/.exec-pool/*.claim(N); do
+    f=$(<$c)
+    [[ -n $f && $f -ef ${c%.claim} ]] && zf_rm -f -- $f
+    zf_rm -f -- $c
+  done
+  return 0
 }
 
 spec_helper_drop_tmpbase() {
