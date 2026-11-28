@@ -289,7 +289,7 @@ step_mount() {
   fi
 
   # Computer-name capture (VNC companion): Screen Sharing window titles
-  # carry the remote's PRETTY ComputerName ("Thiago'"'"'s Mac Mini"), which
+  # carry the remote's PRETTY ComputerName ("Owner'"'"'s Mac Mini"), which
   # shares no token with the Host names -- capture it over ssh and heal it
   # into the front matter (`# computer-name: ...`) so vnc-companion-resolve
   # can map VNC windows to this fragment. Same fail-soft, backgrounded

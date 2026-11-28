@@ -13,7 +13,7 @@ Describe 'ssh-prepare-connection: mount step'
       echo "# prepare: mount"
       [ -n "$1" ] && echo "# peer-hostname: $1"
       echo "# ---"
-      echo "Host mini thiago-mac-mini"
+      echo "Host mini owner-mac-mini"
       echo "    HostName 192.0.2.10"
       if [ "$2" = 1 ]; then
         echo "    RemoteForward 127.0.0.1:2490 127.0.0.1:2489"
@@ -55,7 +55,7 @@ Describe 'ssh-prepare-connection: mount step'
     cat > "$STUBS/ssh" <<STUB
 #!/bin/sh
 case "\$*" in
-  *ComputerName*) printf "Thiago's Mac Mini" ;;
+  *ComputerName*) printf "Owner's Mac Mini" ;;
   *mount-tokens*)
     cat > "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin.t" &&
       mv "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin.t" "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin" ;;
@@ -85,9 +85,9 @@ STUB
   wait_for_ssh_calls() { run_and_wait; }
 
   It 'ensures the peer mount, keyed by peer-hostname, ssh via the alias'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     When call run_and_wait
-    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure owner-mac-mini mini"
   End
 
   # The mount stub blocks on a FIFO until the example opens it, and records
@@ -118,7 +118,7 @@ STUB
   End
 
   It 'skips when the fragment has no clipboard RemoteForward'
-    write_conf thiago-mac-mini 0
+    write_conf owner-mac-mini 0
     When call run_and_wait
     The path "$SHELLSPEC_TMPBASE/cm-calls" should not be exist
   End
@@ -134,8 +134,8 @@ STUB
   # with the REMOTE's token, so step_mount pulls the remote's accepted-token
   # back into our tunnel-tokens keyed by its identity, mode 600.
   It 'fetches the visited-direction credential back, keyed by peer hostname'
-    write_conf thiago-mac-mini 1
-    fetched="$XDG_STATE_HOME/clipboard/tunnel-tokens/thiago-mac-mini"
+    write_conf owner-mac-mini 1
+    fetched="$XDG_STATE_HOME/clipboard/tunnel-tokens/owner-mac-mini"
     run_and_wait_token() {
       run_and_wait
       cat "$fetched" 2>/dev/null
@@ -149,17 +149,17 @@ STUB
   # Computer-name heal (VNC companion): the pretty name Screen Sharing
   # titles carry, captured over ssh and healed into the front matter.
   It 'heals the captured computer-name into the fragment front matter'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     wait_cn() {
       run_and_wait
       grep '^# computer-name:' "$CONF" || echo MISSING
     }
     When call wait_cn
-    The output should equal "# computer-name: Thiago's Mac Mini"
+    The output should equal "# computer-name: Owner's Mac Mini"
   End
 
   It 'the heal is idempotent — a second run leaves one line'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     twice() {
       run_and_wait
       run_and_wait
@@ -177,7 +177,7 @@ STUB
   # mount answers OUR serve's challenge with this token, so step_mount ships
   # it per-connect, keyed by our identity, mode-600 discipline remote-side.
   It 'pushes the mount-serve token to the visited machine when the serve has minted one'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     printf '%s' "$(printf 'c%.0s' $(seq 64))" > "$XDG_STATE_HOME/clipboard/mount-serve-token"
     wait_mount_token() {
       run_and_wait
@@ -189,7 +189,7 @@ STUB
   End
 
   It 'skips the mount-serve push silently when no serve token exists'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     When call run_and_wait
     The path "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin" should not be exist
   End
@@ -201,10 +201,10 @@ STUB
   End
 
   It 'prepare: all includes the mount step'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     sed -i '' 's/# prepare: mount/# prepare: all/' "$CONF"
     When call run_and_wait
-    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure owner-mac-mini mini"
   End
 
   # R-batch Task A: front-matter `alias:` is now a space-separated list of
@@ -216,14 +216,14 @@ STUB
       echo "# ---"
       echo "# alias: mini backup-mini"
       echo "# prepare: mount"
-      echo "# peer-hostname: thiago-mac-mini"
+      echo "# peer-hostname: owner-mac-mini"
       echo "# ---"
-      echo "Host mini backup-mini thiago-mac-mini thiago-mac-mini.local"
+      echo "Host mini backup-mini owner-mac-mini owner-mac-mini.local"
       echo "    HostName 192.0.2.10"
       echo "    RemoteForward 127.0.0.1:2490 127.0.0.1:2489"
     } > "$CONF"
     When call run_and_wait
-    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure thiago-mac-mini mini"
+    The contents of file "$SHELLSPEC_TMPBASE/cm-calls" should equal "ensure owner-mac-mini mini"
   End
 
   # R-batch Task B amendment: the driven machine may not know its own stable
@@ -234,10 +234,10 @@ STUB
   wait_for_identity() { run_and_wait; }
 
   It 'pushes a stable self-name identity to the peer, keyed by peer-hostname, via ssh to the alias target'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     When call wait_for_identity
     The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "mini"
-    The contents of file "$SHELLSPEC_TMPBASE/ssh-stdin" should equal "thiago-mac-mini"
+    The contents of file "$SHELLSPEC_TMPBASE/ssh-stdin" should equal "owner-mac-mini"
   End
 
   # Nested-mux reality (found live at cutover validation): the remote's
@@ -248,7 +248,7 @@ STUB
   wait_for_peerterm() { run_and_wait; }
 
   It 'pushes the physical terminal for the fullscreen toggle when detectable'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     export TERM_PROGRAM=ghostty
     When call wait_for_peerterm
     The contents of file "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" should equal "ghostty"
@@ -260,7 +260,7 @@ STUB
   wait_for_peerterm_rm() { run_and_wait; }
 
   It 'removes the pushed terminal state when the local terminal is undetectable'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     When call wait_for_peerterm_rm
     The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "peer-term"
     The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should include "rm -f"
@@ -274,7 +274,7 @@ STUB
   wait_for_token_push() { run_and_wait; }
 
   It 'pushes the credential of this machine, keyed by owner, with the mode set before and after the write'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     printf '%s\n' "$(printf 'a%.0s' $(seq 64))" > "$XDG_STATE_HOME/clipboard/accepted-token"
     When call wait_for_token_push
     The contents of file "$SHELLSPEC_TMPBASE/ssh-token-stdin" should include "aaaa"
@@ -285,7 +285,7 @@ STUB
   End
 
   It 'pushes no credential when this machine has none yet'
-    write_conf thiago-mac-mini 1
+    write_conf owner-mac-mini 1
     When call wait_for_ssh_calls
     The path "$SHELLSPEC_TMPBASE/ssh-token-stdin" should not be exist
     The contents of file "$SHELLSPEC_TMPBASE/ssh-calls" should not include "tunnel-tokens"

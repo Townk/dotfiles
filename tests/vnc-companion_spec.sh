@@ -12,7 +12,7 @@ Describe 'vnc-companion-resolve'
 # ---
 # alias: mac-mini
 # ---
-Host mac-mini thiago-mac-mini thiago-mac-mini.local
+Host mac-mini owner-mac-mini owner-mac-mini.local
     HostName mini
 CONF
     cat > "$VNC_COMPANION_CONF_DIR/devbox.conf" <<CONF
@@ -23,13 +23,13 @@ CONF
   BeforeEach 'setup'
 
   It 'maps a peer-hostname title to the canonical alias'
-    When run script "$RESOLVE" "thiago-mac-mini — Screen Sharing"
+    When run script "$RESOLVE" "owner-mac-mini — Screen Sharing"
     The status should eq 0
     The output should equal 'mac-mini'
   End
 
   It 'matches case-insensitively and via the .local form'
-    When run script "$RESOLVE" "Sharing THIAGO-MAC-MINI.LOCAL"
+    When run script "$RESOLVE" "Sharing OWNER-MAC-MINI.LOCAL"
     The status should eq 0
     The output should equal 'mac-mini'
   End
@@ -44,12 +44,12 @@ CONF
     cat > "$VNC_COMPANION_CONF_DIR/mac-mini.conf" <<CONF
 # ---
 # alias: mac-mini
-# computer-name: Thiago's Mac Mini
+# computer-name: Owner's Mac Mini
 # ---
-Host mac-mini thiago-mac-mini thiago-mac-mini.local
+Host mac-mini owner-mac-mini owner-mac-mini.local
     HostName mini
 CONF
-    When run script "$RESOLVE" "Thiago's Mac Mini"
+    When run script "$RESOLVE" "Owner's Mac Mini"
     The status should eq 0
     The output should equal 'mac-mini'
   End

@@ -44,7 +44,7 @@ local function ensureCompanion(alias)
   print("vnc-companion: carrier up for " .. alias)
 end
 
--- Screen Sharing window titles name the machine ("thiago-mac-mini" etc.)
+-- Screen Sharing window titles name the machine ("owner-mac-mini" etc.)
 -- shortly after connecting; resolve each open window against the fragments.
 -- hs.execute blocks the main thread for the resolver's few milliseconds of
 -- grep — acceptable, and it keeps the scan logic trivially sequential.

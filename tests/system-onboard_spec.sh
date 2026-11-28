@@ -44,30 +44,30 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     When call run_write "$conf" mac-mini mac-mini.local 1
     The status should be success
     The contents of file "$conf" should include "Host mac-mini"
-    The contents of file "$conf" should not include "Host mac-mini thiago-mac-mini"
+    The contents of file "$conf" should not include "Host mac-mini owner-mac-mini"
   End
 
   It 'adds the peer LocalHostName as a second Host name the first time a hint is captured'
     conf="$CONFDIR/mac-mini.conf"
     run_write "$conf" mac-mini mac-mini.local 1 >/dev/null   # simulates reconcile_ssh
-    When call run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini
+    When call run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini
     The status should be success
-    The contents of file "$conf" should include "Host mac-mini thiago-mac-mini"
-    The contents of file "$conf" should include "# peer-hostname: thiago-mac-mini"
+    The contents of file "$conf" should include "Host mac-mini owner-mac-mini"
+    The contents of file "$conf" should include "# peer-hostname: owner-mac-mini"
   End
 
   It 'renders the mDNS .local form as a third Host name and a hooked entry point'
     conf="$CONFDIR/mac-mini.conf"
     run_write "$conf" mac-mini mac-mini.local 1 >/dev/null
-    When call run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini
+    When call run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini
     The status should be success
-    The contents of file "$conf" should include "Host mac-mini thiago-mac-mini thiago-mac-mini.local"
+    The contents of file "$conf" should include "Host mac-mini owner-mac-mini owner-mac-mini.local"
     # The hook's originalhost list ends at ' exec', so this single substring
     # pins the ENTIRE list: alias + .local hooked, bare peer hostname (the
     # machine-to-machine pull identity) deliberately absent. The retired
     # clipboard.config scoped its forward to the .local name; quick-launch /
     # human FQDN sessions must keep getting the forwards AND the prep hook.
-    The contents of file "$conf" should include 'Match originalhost mac-mini,thiago-mac-mini.local exec'
+    The contents of file "$conf" should include 'Match originalhost mac-mini,owner-mac-mini.local exec'
     # 6c: the clipboard block carries BOTH directions — the reverse forward
     # (their reads of our clipboard) and the visited-direction LocalForward
     # (our pointer pushes to their bridge at copy time).
@@ -85,22 +85,22 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
     The contents of file "$conf" should not include ".local exec"
   End
 
-  It 'reconciles with the hand-fixed laptop fragment: alias mac-mini + peer thiago-mac-mini both resolve'
+  It 'reconciles with the hand-fixed laptop fragment: alias mac-mini + peer owner-mac-mini both resolve'
     conf="$CONFDIR/mac-mini.conf"
-    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
-    When run command grep -E '^Host mac-mini thiago-mac-mini thiago-mac-mini\.local$' "$conf"
+    run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini >/dev/null
+    When run command grep -E '^Host mac-mini owner-mac-mini owner-mac-mini\.local$' "$conf"
     The status should be success
-    The output should equal "Host mac-mini thiago-mac-mini thiago-mac-mini.local"
+    The output should equal "Host mac-mini owner-mac-mini owner-mac-mini.local"
   End
 
   It 'preserves the extra Host alias on a later re-render with no hint (system-onboard update)'
     conf="$CONFDIR/mac-mini.conf"
-    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
+    run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini >/dev/null
     # `update --clipboard`/`--prepare` never re-derives peer_hint (no rexec) --
     # simulate that by calling write_ssh_conf with the 5th arg omitted.
     When call run_write "$conf" mac-mini mac-mini.local 0
     The status should be success
-    The contents of file "$conf" should include "Host mac-mini thiago-mac-mini"
+    The contents of file "$conf" should include "Host mac-mini owner-mac-mini"
     The contents of file "$conf" should not include "RemoteForward 127.0.0.1:2490 127.0.0.1:2489"
     The contents of file "$conf" should not include "LocalForward 127.0.0.1:2491 127.0.0.1:2489"
     The contents of file "$conf" should not include "RemoteForward 127.0.0.1:2493 127.0.0.1:2492"
@@ -116,17 +116,17 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
 
   It 'hooks the human entry points (alias + .local) but never the bare peer name (pull identity)'
     conf="$CONFDIR/mac-mini.conf"
-    When call run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini
+    When call run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini
     The status should be success
     # The originalhost list ends at ' exec', so this substring pins the whole
-    # list: bare thiago-mac-mini (rsync/GUI pull identity) cannot be in it.
-    The contents of file "$conf" should include 'Match originalhost mac-mini,thiago-mac-mini.local exec'
-    The contents of file "$conf" should not include 'Match originalhost thiago-mac-mini'
+    # list: bare owner-mac-mini (rsync/GUI pull identity) cannot be in it.
+    The contents of file "$conf" should include 'Match originalhost mac-mini,owner-mac-mini.local exec'
+    The contents of file "$conf" should not include 'Match originalhost owner-mac-mini'
   End
 
   It 'hand-edited front matter wins: a later hint never overrides an existing peer-hostname line'
     conf="$CONFDIR/mac-mini.conf"
-    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
+    run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini >/dev/null
     sed -i '' 's/^# peer-hostname:.*/# peer-hostname: hand-edited-name/' "$conf"
     When call run_write "$conf" mac-mini mac-mini.local 1 some-other-hint
     The status should be success
@@ -152,7 +152,7 @@ Describe 'system-onboard: write_ssh_conf (peer-hostname / R2)'
 
   It 'ignores a hand-edited glob peer-hostname in front matter (defense in depth): bare Host line'
     conf="$CONFDIR/mac-mini.conf"
-    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
+    run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini >/dev/null
     sed -i '' 's/^# peer-hostname:.*/# peer-hostname: */' "$conf"
     When call run_write "$conf" mac-mini mac-mini.local 1
     The status should be success
@@ -205,12 +205,12 @@ Describe 'system-onboard: write_ssh_conf (alias lists / R-batch Task A)'
 
   It 'renders every front-matter alias token as a full Host + hook entry point'
     conf="$CONFDIR/mac-mini.conf"
-    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
+    run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini >/dev/null
     sed -i '' 's/^# alias:.*/# alias: mac-mini mini m1/' "$conf"
     When call run_write "$conf" mac-mini mac-mini.local 1
     The status should be success
-    The contents of file "$conf" should include "Host mac-mini mini m1 thiago-mac-mini thiago-mac-mini.local"
-    The contents of file "$conf" should include 'Match originalhost mac-mini,mini,m1,thiago-mac-mini.local exec'
+    The contents of file "$conf" should include "Host mac-mini mini m1 owner-mac-mini owner-mac-mini.local"
+    The contents of file "$conf" should include 'Match originalhost mac-mini,mini,m1,owner-mac-mini.local exec'
   End
 
   It 'drops a glob-unsafe alias token instead of letting it reach the Host/hook lines'
@@ -234,20 +234,20 @@ Describe 'system-onboard: write_ssh_conf (alias lists / R-batch Task A)'
   It 'dedupes a front-matter alias that already names the captured peer hostname'
     conf="$CONFDIR/mac-mini.conf"
     run_write "$conf" mac-mini mac-mini.local 1 >/dev/null
-    sed -i '' 's/^# alias:.*/# alias: mac-mini mini thiago-mac-mini/' "$conf"
-    run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini >/dev/null
-    When run command grep -E '^Host mac-mini mini thiago-mac-mini thiago-mac-mini\.local$' "$conf"
+    sed -i '' 's/^# alias:.*/# alias: mac-mini mini owner-mac-mini/' "$conf"
+    run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini >/dev/null
+    When run command grep -E '^Host mac-mini mini owner-mac-mini owner-mac-mini\.local$' "$conf"
     The status should be success
-    The output should equal "Host mac-mini mini thiago-mac-mini thiago-mac-mini.local"
+    The output should equal "Host mac-mini mini owner-mac-mini owner-mac-mini.local"
   End
 
   It 'hooks a hand-listed alias even when it equals the captured peer hostname (explicit opt-in)'
     conf="$CONFDIR/mac-mini.conf"
     run_write "$conf" mac-mini mac-mini.local 1 >/dev/null
-    sed -i '' 's/^# alias:.*/# alias: mac-mini mini thiago-mac-mini/' "$conf"
-    When call run_write "$conf" mac-mini mac-mini.local 1 thiago-mac-mini
+    sed -i '' 's/^# alias:.*/# alias: mac-mini mini owner-mac-mini/' "$conf"
+    When call run_write "$conf" mac-mini mac-mini.local 1 owner-mac-mini
     The status should be success
-    The contents of file "$conf" should include 'Match originalhost mac-mini,mini,thiago-mac-mini,thiago-mac-mini.local exec'
+    The contents of file "$conf" should include 'Match originalhost mac-mini,mini,owner-mac-mini,owner-mac-mini.local exec'
   End
 End
 
