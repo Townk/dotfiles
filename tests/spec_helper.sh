@@ -59,6 +59,7 @@ spec_helper_own_tmpbase() {
   SPEC_HELPER_TMPBASE=$(mktemp -d "${TMPDIR:-/tmp}/spec.XXXXXX") || return 1
   SHELLSPEC_TMPBASE=$SPEC_HELPER_TMPBASE
   spec_helper_clipboard_guard
+  spec_helper_desktop_guard
   # pick-clipboard reads the alias map while it loads (host::sql_case), so no
   # spec may see the human's real one. Per-file tmpbase; specs that need a map
   # export their own. HOST_SELF_ALIAS_FILE is NOT pinned (it follows HOME).
@@ -84,9 +85,422 @@ spec_helper_clipboard_guard() {
   PATH="$SPEC_HELPER_TMPBASE/.clip-guard:$PATH"
   export PATH
 }
+# Never fails and never writes to stderr: shellspec reports anything an
+# after-all hook prints there as an error ("0 failures, 1 error"). One `rm -rf`
+# is not enough when an example left a background process behind (a disowned
+# `cmd &!` in the code under test) that is still creating files while rm walks
+# the tree: rm then ends with "Directory not empty". Retry for about 2 s, which
+# outlives any such straggler seen so far; a directory that still cannot be
+# removed is left for the OS's own tmp cleanup rather than failing the run.
+# tests/spec_helper_spec.sh pins it.
+
+# No spec may reach the REAL desktop: no notification, sound, dialog, app or
+# Quick Look panel. Before this guard a `make test-all` played sounds and
+# raised toasts on the machine it ran on. The ONE notification a test run may
+# cause is the end-of-run toast of tests/run-shellspec.sh, which fires after
+# shellspec has exited. tests/spec_helper_spec.sh pins the guard.
+#
+# Default deny, for every spec file:
+#   * stubs for hs, osascript, afplay, say, terminal-notifier and open, first
+#     on PATH. Each records its call and succeeds in silence. A spec that
+#     stubs one of them itself prepends its own directory and wins;
+#   * the seams that name such a tool by ABSOLUTE path are pinned to the stubs:
+#     HS (notify::available falls back to /opt/homebrew/bin/hs) and
+#     WIDGETS_OSASCRIPT_BIN (mux-fullscreen-probe: /usr/bin/osascript);
+#   * SPEC_RUN_TOAST=0, so a spec that runs the wrapper raises no toast.
+#
+# To ASSERT on what the code under test asked of the desktop:
+#   spec_desktop_calls [tool]   every recorded call, "tool argv" per line, in
+#                               order; with a tool, only its calls, argv only
+#   spec_notifications          the notifications: hs / terminal-notifier /
+#                               osascript calls
+#   spec_sounds                 the sounds: the sound name of each `notify
+#                               --sound` (it rides the hs call), afplay and
+#                               say calls
+# The log is per spec FILE; an example that counts calls clears it first with
+# spec_desktop_reset.
+#
+# What the guard cannot hold: a spec that replaces PATH wholesale
+# (PATH=/usr/bin:/bin puts /usr/bin/osascript, afplay, say and open back) or
+# drops the environment (`env -i`, `env -u HS`: notify finds the real
+# /opt/homebrew/bin/hs again). Keep the guard in such a spec:
+#   env -i PATH="$SPEC_DESKTOP_GUARD:/usr/bin:/bin" HS="$HS" …
+# A spec that needs the real desktop says so, and is skipped unless the owner
+# opts in, as with the pasteboard:
+#   Skip if 'reaches the REAL desktop (opt in: SPEC_REAL_DESKTOP=1)' spec_real_desktop_off
+#   BeforeEach 'spec_desktop_unguard'
+#
+# SPEC_DESKTOP_AUDIT=<file>, set for a whole run, additionally appends
+# "<spec file><TAB><tool argv>" for every call that reached a guard stub, and
+# adds pass-through loggers for rex, pueue and launchctl (logged, then the
+# real one runs): the measurement behind the leak table in
+# tests/README-scaffolding.md.
+spec_real_desktop_off() { [ "${SPEC_REAL_DESKTOP:-}" != 1 ]; }
+spec_helper_desktop_guard() {
+  SPEC_DESKTOP_GUARD="$SPEC_HELPER_TMPBASE/.desktop-guard"
+  mkdir -p "$SPEC_DESKTOP_GUARD" || return 1
+  _dg_audit=
+  if [ -n "${SPEC_DESKTOP_AUDIT:-}" ]; then
+    _dg_audit="printf '%s\\t%s\\n' '${SHELLSPEC_SPECFILE:-?}' \"\$line\" >>'$SPEC_DESKTOP_AUDIT'"
+  fi
+  for _dg_tool in hs osascript afplay say terminal-notifier open; do
+    printf '%s\n' '#!/bin/sh' \
+      "line=\"$_dg_tool \$(printf '%s' \"\$*\" | tr '\\n' ' ')\"" \
+      "printf '%s\\n' \"\$line\" >>'$SPEC_DESKTOP_GUARD/calls.log'" \
+      "$_dg_audit" \
+      'exit 0' >"$SPEC_DESKTOP_GUARD/$_dg_tool"
+    chmod +x "$SPEC_DESKTOP_GUARD/$_dg_tool"
+  done
+  if [ -n "$_dg_audit" ]; then
+    for _dg_tool in rex pueue launchctl; do
+      _dg_real=$(command -v "$_dg_tool" 2>/dev/null) || continue
+      case $_dg_real in /*) ;; *) continue ;; esac
+      printf '%s\n' '#!/bin/sh' \
+        "line=\"$_dg_tool \$(printf '%s' \"\$*\" | tr '\\n' ' ')\"" \
+        "$_dg_audit" \
+        "exec '$_dg_real' \"\$@\"" >"$SPEC_DESKTOP_GUARD/$_dg_tool"
+      chmod +x "$SPEC_DESKTOP_GUARD/$_dg_tool"
+    done
+  fi
+  PATH="$SPEC_DESKTOP_GUARD:$PATH"
+  HS="$SPEC_DESKTOP_GUARD/hs"
+  WIDGETS_OSASCRIPT_BIN="$SPEC_DESKTOP_GUARD/osascript"
+  SPEC_RUN_TOAST=0
+  export PATH HS WIDGETS_OSASCRIPT_BIN SPEC_RUN_TOAST SPEC_DESKTOP_GUARD
+}
+spec_desktop_calls() {
+  [ -f "$SPEC_DESKTOP_GUARD/calls.log" ] || return 0
+  if [ $# -eq 0 ]; then
+    cat "$SPEC_DESKTOP_GUARD/calls.log"
+  else
+    sed -n "s/^$1 //p" "$SPEC_DESKTOP_GUARD/calls.log"
+  fi
+}
+spec_desktop_reset() { rm -f "$SPEC_DESKTOP_GUARD/calls.log"; }
+spec_notifications() { spec_desktop_calls | grep -E '^(hs|terminal-notifier|osascript) ' || :; }
+spec_sounds() {
+  # notify(icon, text, sound): the sound is the last Lua argument, nil when
+  # the notification is silent.
+  spec_desktop_calls | sed -n -E \
+    -e 's/^hs .*notify(Ansi)?\(.*, "([^"]*)"\)$/\2/p' \
+    -e 's/^(afplay|say) (.*)$/\1 \2/p'
+}
+# Only with the owner's opt-in: take the guard off for this example.
+spec_desktop_unguard() {
+  spec_real_desktop_off && { echo "spec_desktop_unguard: needs SPEC_REAL_DESKTOP=1" >&2; return 1; }
+  PATH=$(printf '%s' "$PATH" | sed "s|$SPEC_DESKTOP_GUARD:||g")
+  unset HS WIDGETS_OSASCRIPT_BIN
+  export PATH
+}
+
 spec_helper_drop_tmpbase() {
-  [ -n "${SPEC_HELPER_TMPBASE:-}" ] && rm -rf "$SPEC_HELPER_TMPBASE"
+  [ -n "${SPEC_HELPER_TMPBASE:-}" ] || return 0
+  _sh_try=0
+  while [ "$_sh_try" -lt 20 ]; do
+    rm -rf "$SPEC_HELPER_TMPBASE" 2>/dev/null
+    [ -e "$SPEC_HELPER_TMPBASE" ] || break
+    sleep 0.1
+    _sh_try=$((_sh_try + 1))
+  done
   return 0
+}
+
+# ---------------------------------------------------------------------------
+# Shared scaffolding: sandbox, stubs, PATH, a fake rex, template rendering.
+# Conversion rules and pitfalls: tests/README-scaffolding.md. Every helper is
+# pinned in tests/spec_helper_spec.sh.
+#
+# Scoping, which all of these rely on: shellspec runs every example in its own
+# subshell, hooks included (BeforeEach, the example body, AfterEach). So what a
+# helper sets or exports from a BeforeEach or an example ($SANDBOX, PATH, any
+# STUB_* knob) is gone when the example ends: no save/restore, no `unset` in an
+# AfterEach. Called at the top of a file or from BeforeAll they last for the
+# rest of the block instead.
+# ---------------------------------------------------------------------------
+
+# spec_sandbox [name] — make a fresh, empty directory under $SHELLSPEC_TMPBASE
+# and set $SANDBOX to it. Unique per call; `name` (default "sb") is only a
+# readable prefix. Nothing to clean up: the per-file tmpbase is removed after
+# the file. It SETS a variable instead of printing the path because a
+# `dir=$(spec_sandbox)` would run it in a subshell; copy it when a spec wants
+# its own name or a second sandbox:
+#
+#   setup() { spec_sandbox; RH_TMP=$SANDBOX; }
+#   BeforeEach 'setup'
+#
+# The path is one component longer than a bare `mktemp -d`; a spec that binds
+# a Unix socket (103-byte cap on macOS) should bind it under $SHELLSPEC_TMPBASE.
+spec_sandbox() {
+  SANDBOX=$(mktemp -d "${SHELLSPEC_TMPBASE:?spec_sandbox: no SHELLSPEC_TMPBASE}/${1:-sb}.XXXXXX") || {
+    echo "spec_sandbox: could not create a directory under $SHELLSPEC_TMPBASE" >&2
+    return 1
+  }
+}
+
+# spec_stub <dir> <name> [body-line...] — write the executable <dir>/<name>, a
+# /bin/sh script that appends its argv as ONE line to <dir>/<name>.log (the
+# arguments joined by spaces, newlines inside them flattened to spaces) and
+# then runs the body, if any. No body: it exits 0. With a body the stub exits
+# with the body's status, as any script does. <dir> is created if missing.
+#
+# The body is given as ARGUMENTS, one or more, each written as its own line(s).
+# Single-quote it: nothing is expanded when the stub is written, and the body
+# reaches its own directory as $STUB_DIR (and its log as $STUB_LOG), so no
+# `\$` escaping and no spec variable baked into the script:
+#
+#   spec_stub "$SANDBOX" croc                        # log argv, exit 0
+#   spec_stub "$SANDBOX" uname 'echo Darwin'
+#   spec_stub "$SANDBOX" ssh \
+#     'case "$*" in *ComputerName*) echo "Mac Mini" ;; esac' \
+#     'cat >"$STUB_DIR/ssh.stdin"'
+#
+# spec_stub_calls <dir> <name> — print that log; nothing, status 0, if the
+# stub was never run.
+spec_stub() {
+  [ $# -ge 2 ] || { echo "usage: spec_stub <dir> <name> [body-line...]" >&2; return 2; }
+  _st_dir=$1
+  _st_name=$2
+  shift 2
+  mkdir -p "$_st_dir" || return 1
+  _st_q=$(printf '%s' "$_st_dir" | sed "s/'/'\\\\''/g")
+  {
+    printf '%s\n' '#!/bin/sh'
+    printf "STUB_DIR='%s'\nSTUB_LOG='%s/%s.log'\n" "$_st_q" "$_st_q" "$_st_name"
+    # printf, not echo: sh's echo expands backslashes on macOS.
+    printf '%s\n' 'printf '"'"'%s\n'"'"' "$(printf '"'"'%s'"'"' "$*" | tr '"'"'\n'"'"' '"'"' '"'"')" >>"$STUB_LOG"'
+    [ $# -eq 0 ] || printf '%s\n' "$@"
+  } >"$_st_dir/$_st_name" || return 1
+  chmod +x "$_st_dir/$_st_name"
+}
+spec_stub_calls() {
+  [ ! -f "$1/$2.log" ] || cat "$1/$2.log"
+}
+
+# spec_path_prepend <dir>... — put the directories first on PATH (the first
+# argument ends up first) and export it. From a BeforeEach or an example there
+# is nothing to undo (see "Scoping" above).
+spec_path_prepend() {
+  _pp_new=
+  for _pp_dir in "$@"; do _pp_new="$_pp_new$_pp_dir:"; done
+  PATH="$_pp_new$PATH"
+  export PATH
+}
+
+# --- a clock the test drives -------------------------------------------------
+# No test may wait, and no test may assert on elapsed real time
+# (tests/README-scaffolding.md). Code whose SUBJECT is time (a poll loop that
+# gives up, a deadline, a TTL, a debounce) runs against a virtual clock:
+#
+#   spec_clock_set <epoch seconds>   start the clock (2000000000 if omitted),
+#                                    export it, and put a fake `sleep` and a
+#                                    fake `date` first on PATH
+#   spec_clock_advance <seconds>     move it forward; fractions allowed (0.2)
+#   spec_clock_now [ms]              print it: whole seconds, or milliseconds
+#   spec_clock_slept                 print every `sleep` asked of the fake,
+#                                    one request per line, in order
+#
+# The fake `sleep N` returns at once, ADVANCES the clock by N and records the
+# request (N may carry the s/m/h/d suffix; several arguments add up). The fake
+# `date` is the real one answering for the virtual now: `date +%s`, `date
+# +%F`, `date -u …`, BSD `date -v-1d …`. A date that is handed a time of its
+# own (-r, -d, -j, -f) passes straight through.
+#
+#   spec_clock_set 1000
+#   poll_until_gone block:x          # code under test: 25 polls, sleep 0.2 each
+#   spec_clock_now ms                # -> 1005000: it believes it waited 5 s
+#   spec_clock_slept | wc -l         # -> 25
+#
+# ACROSS PROCESSES. The clock is a file, named by the exported
+# $SPEC_CLOCK_FILE, so a script run as a child (`When run zsh script`), the
+# helpers it spawns, `$(…)` subshells and background jobs all read and advance
+# the same one; the stubs reach them through the exported PATH. The file is an
+# append-only journal, one short line per event:
+#
+#   = 1000000        the clock was set to this many milliseconds
+#   + 200            it advanced by this many
+#
+# and "now" is the last `=` plus every `+` after it. A line is written with one
+# O_APPEND write far below PIPE_BUF, which the kernel does not interleave: two
+# processes advancing at once cannot lose an update, with no lock and nothing
+# to clean up after a killed process. Milliseconds are integers, so 25 sleeps
+# of 0.2 are exactly 5 s, not 5.000000000000001.
+#
+# WHAT IT DOES NOT REACH: code that reads $EPOCHSECONDS / $EPOCHREALTIME /
+# $SECONDS or waits with `read -t`, `zselect`, `wait`, or a tool's own
+# `--timeout`; a script that resets PATH; a file's real mtime (set it with
+# `touch -t`, relative to the virtual now). Those need the production seam
+# described in tests/README-scaffolding.md, which reads this same journal.
+spec_clock_set() {
+  if [ -z "${SPEC_CLOCK_FILE:-}" ]; then
+    _ck_dir=$(mktemp -d "${SHELLSPEC_TMPBASE:?spec_clock_set: no SHELLSPEC_TMPBASE}/clock.XXXXXX") || return 1
+    _ck_date=$(command -v date)
+    SPEC_CLOCK_FILE="$_ck_dir/journal"
+    SPEC_CLOCK_BIN="$_ck_dir/bin"
+    export SPEC_CLOCK_FILE SPEC_CLOCK_BIN
+    : >"$SPEC_CLOCK_FILE"
+    spec_stub "$SPEC_CLOCK_BIN" sleep \
+      'ms=$(awk '"'"'BEGIN { t = 0; for (i = 1; i < ARGC; i++) { a = ARGV[i]; u = 1
+         if (a ~ /m$/) u = 60; else if (a ~ /h$/) u = 3600; else if (a ~ /d$/) u = 86400
+         sub(/[smhd]$/, "", a); t += a * u }
+         printf "%.0f\n", t * 1000 }'"'"' "$@")' \
+      'echo "+ $ms" >>"$SPEC_CLOCK_FILE"'
+    spec_stub "$SPEC_CLOCK_BIN" date \
+      'for a in "$@"; do case $a in -r | -d | -j | -f | --date*) exec '"'$_ck_date'"' "$@" ;; esac; done' \
+      'now=$(awk '"'"'$1 == "=" { t = $2 } $1 == "+" { t += $2 } END { printf "%.0f\n", int(t / 1000) }'"'"' "$SPEC_CLOCK_FILE")' \
+      'if '"'$_ck_date'"' -r 0 +%s >/dev/null 2>&1; then exec '"'$_ck_date'"' -r "$now" "$@"; fi' \
+      'exec '"'$_ck_date'"' -d "@$now" "$@"'
+    spec_path_prepend "$SPEC_CLOCK_BIN"
+  fi
+  echo "= $(_spec_clock_ms "${1:-2000000000}")" >>"$SPEC_CLOCK_FILE"
+}
+spec_clock_advance() {
+  echo "+ $(_spec_clock_ms "$1")" >>"${SPEC_CLOCK_FILE:?spec_clock_advance: call spec_clock_set first}"
+}
+spec_clock_now() {
+  awk -v unit="${1:-s}" '$1 == "=" { t = $2 } $1 == "+" { t += $2 }
+    END { printf "%.0f\n", (unit == "ms") ? t : int(t / 1000) }' \
+    "${SPEC_CLOCK_FILE:?spec_clock_now: call spec_clock_set first}"
+}
+spec_clock_slept() {
+  spec_stub_calls "${SPEC_CLOCK_BIN:?spec_clock_slept: call spec_clock_set first}" sleep
+}
+_spec_clock_ms() { awk -v s="$1" 'BEGIN { printf "%.0f\n", s * 1000 }'; }
+
+# spec_fake_rex <dir> [arm...] [--offline arm...] — write <dir>/rex, a
+# spec_stub (so: argv logged flat to <dir>/rex.log, read it with
+# `spec_stub_calls <dir> rex`) that answers what most specs ask a Rex CLI.
+# The spec points the code under test at it itself (MUX_REX_BIN, JOB_REX_BIN).
+#
+# Each call is matched against " $* " (argv joined, a space at both ends, so a
+# pattern can ask for whole words: *" client ls "*). First match wins:
+#
+#   1. the --offline arms, which answer even when the server is down;
+#   2. STUB_SERVER=down: every other call exits 4, as rex does with no server;
+#   3. the spec's own arms;
+#   4. the canned answers:
+#        client ls            <dir>/clients.json, else one connected local Mac app
+#        ls --json            <dir>/sessions.json, else one session "Main"
+#        session.view         <dir>/view.json, else session:main with no windows
+#        session.new_layer    saves the request (stdin) to <dir>/req.json, then
+#                             {"block_ids":["block:layer"]}; STUB_LAYER=fail: exit 1
+#        block inspect        the layer's life, below; STUB_INSPECT_RC=N: exit N
+#        block close          ends the layer's life
+#        block call … process a zsh foreground whose cwd is <dir>
+#        window new           {"window_id":"window:new","block_ids":["block:new"]};
+#                             STUB_NEW=fail: exit 1
+#        whoami               <dir>/whoami.json if the spec wrote one; exit 0
+#      and anything else exits 0 in silence.
+#
+# An arm is one complete `case` arm, single-quoted, with $STUB_DIR for <dir>:
+#
+#   spec_fake_rex "$SANDBOX" \
+#     '*" window focus "*) [ "${STUB_FOCUS:-ok}" = ok ] || exit 1 ;;' \
+#     --offline '*" config check "*) [ "${STUB_CHECK:-ok}" = ok ] ;;'
+#
+# The fake exits with the status of the arm that matched. The STUB_* knobs are
+# read when the fake RUNS, so an example sets them with `export STUB_NEW=fail`.
+#
+# A layer that lives for a while, with no time passing. Code that opens a
+# float then polls `block inspect` until the block is gone (exit 3; 0 = alive).
+# The fake counts instead of sleeping: <dir>/layer.life holds how many more
+# inspects find the layer alive. session.new_layer writes
+# ${STUB_LAYER_LIFE:-0} there, each inspect that finds it alive takes one off,
+# `block close` writes 0. The word `open` instead of a number is a layer that
+# stays until it is closed. An example can write the file itself at any point
+# ("the block went away"), and counts the polls afterwards:
+#
+#   export STUB_LAYER_LIFE=3          # alive for three polls, gone on the 4th
+#   spec_stub_calls "$SANDBOX" rex | grep -c ' block inspect '    # -> 4
+#
+# Under spec_clock_set the poll loop's own `sleep 0.2` costs nothing either,
+# and the clock says how long the code believes it waited.
+spec_fake_rex() {
+  [ $# -ge 1 ] || { echo "usage: spec_fake_rex <dir> [arm...] [--offline arm...]" >&2; return 2; }
+  _fr_dir=$1
+  shift
+  _fr_arms=
+  _fr_offline=
+  _fr_mode=arms
+  for _fr_arm in "$@"; do
+    if [ "$_fr_arm" = --offline ]; then
+      _fr_mode=offline
+    elif [ "$_fr_mode" = offline ]; then
+      _fr_offline="$_fr_offline  $_fr_arm
+"
+    else
+      _fr_arms="$_fr_arms      $_fr_arm
+"
+    fi
+  done
+  spec_stub "$_fr_dir" rex \
+    'answer() { if [ -f "$STUB_DIR/$1" ]; then cat "$STUB_DIR/$1"; else printf '"'"'%s\n'"'"' "$2"; fi; }' \
+    'case " $* " in' \
+    "$_fr_offline"'  *)' \
+    '    [ "${STUB_SERVER:-up}" = up ] || exit 4' \
+    '    case " $* " in' \
+    "$_fr_arms"'      *" client ls "*) answer clients.json '"'"'{"clients":[{"client_id":"client:mac","info":{"kind":"app","platform":"macos"},"principal":{"transport":"unix"},"connection_state":"connected","session_ids":["session:main"]}]}'"'"' ;;' \
+    '      *" ls --json "*) answer sessions.json '"'"'{"sessions":[{"session_id":"session:main","label":"Main"}]}'"'"' ;;' \
+    '      *" session.view "*) answer view.json '"'"'{"session_id":"session:main","windows":[]}'"'"' ;;' \
+    '      *" session.new_layer "*)' \
+    '        cat >"$STUB_DIR/req.json"' \
+    '        [ "${STUB_LAYER:-ok}" = ok ] || exit 1' \
+    '        echo "${STUB_LAYER_LIFE:-0}" >"$STUB_DIR/layer.life"' \
+    '        echo '"'"'{"block_ids":["block:layer"]}'"'"' ;;' \
+    '      *" block inspect "*)' \
+    '        [ -z "${STUB_INSPECT_RC:-}" ] || exit "$STUB_INSPECT_RC"' \
+    '        life=$(cat "$STUB_DIR/layer.life" 2>/dev/null)' \
+    '        case ${life:-0} in' \
+    '          0) exit 3 ;;' \
+    '          *[!0-9]*) exit 0 ;;' \
+    '          *) echo $((life - 1)) >"$STUB_DIR/layer.life"; exit 0 ;;' \
+    '        esac ;;' \
+    '      *" block close "*) echo 0 >"$STUB_DIR/layer.life" ;;' \
+    '      *" block call "*" process"*) echo "{\"foreground\":{\"cwd\":\"$STUB_DIR\",\"name\":\"zsh\"}}" ;;' \
+    '      *" window new "*)' \
+    '        [ "${STUB_NEW:-ok}" = ok ] || exit 1' \
+    '        echo '"'"'{"window_id":"window:new","block_ids":["block:new"]}'"'"' ;;' \
+    '      *" whoami "*) [ ! -f "$STUB_DIR/whoami.json" ] || cat "$STUB_DIR/whoami.json" ;;' \
+    '    esac ;;' \
+    'esac'
+}
+
+# spec_render_template <template> [dest] — render a chezmoi template against
+# THIS source tree (never the applied one) and set $SPEC_RENDERED to the file
+# written. <template> is relative to the repository root, or absolute. [dest]
+# defaults to $SANDBOX/<template's basename without .tmpl>.
+#
+# A template that does not render fails loudly: chezmoi's own error stays on
+# stderr, one line naming the template follows it, no file is left at dest, and
+# the status is non-zero. In a BeforeEach that is enough: shellspec fails the
+# example on anything a hook writes to stderr and shows it. Inside a function
+# an example calls, stop there yourself:
+#
+#   spec_render_template home/.chezmoiscripts/run_after_60-x.sh.tmpl || return 1
+#   sh "$SPEC_RENDERED"
+spec_render_template() {
+  [ $# -ge 1 ] || { echo "usage: spec_render_template <template> [dest]" >&2; return 2; }
+  case $1 in
+    /*) _rt_src=$1 ;;
+    *) _rt_src="${SHELLSPEC_PROJECT_ROOT:?spec_render_template: no SHELLSPEC_PROJECT_ROOT}/$1" ;;
+  esac
+  if [ $# -ge 2 ]; then
+    _rt_dest=$2
+  else
+    _rt_dest=${_rt_src##*/}
+    _rt_dest="${SANDBOX:?spec_render_template: no dest and no \$SANDBOX (call spec_sandbox first)}/${_rt_dest%.tmpl}"
+  fi
+  if [ ! -f "$_rt_src" ]; then
+    echo "spec_render_template: no such template: $_rt_src" >&2
+    return 1
+  fi
+  SPEC_RENDERED=
+  if chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template <"$_rt_src" >"$_rt_dest"; then
+    SPEC_RENDERED=$_rt_dest
+    return 0
+  fi
+  echo "spec_render_template: $1 did not render" >&2
+  rm -f "$_rt_dest"
+  return 1
 }
 
 # show_separators CMD [ARGS...] — run CMD and print its stdout with every US

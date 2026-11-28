@@ -5,17 +5,10 @@ Describe 'Rex settings hook'
   HOOK="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_61-rex-settings.sh.tmpl"
 
   setup() {
-    SH_TMP=$(mktemp -d)
-    chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template <"$HOOK" >"$SH_TMP/hook.sh" 2>"$SH_TMP/render.err"
-    cat >"$SH_TMP/rex" <<EOS
-#!/bin/sh
-echo "\$*" >>"$SH_TMP/rex.log"
-case "\$*" in
-  *"client ls"*) [ "\${STUB_SERVER:-up}" = up ] || exit 4; cat "$SH_TMP/clients.json" ;;
-  *settings_apply*) [ "\${STUB_DO:-ok}" = ok ] ;;
-esac
-EOS
-    chmod +x "$SH_TMP/rex"
+    spec_sandbox; SH_TMP=$SANDBOX
+    spec_render_template "$HOOK" "$SH_TMP/hook.sh" 2>"$SH_TMP/render.err"
+    # `client ls` answers from clients.json below, or exits 4 with no server.
+    spec_fake_rex "$SH_TMP" '*settings_apply*) [ "${STUB_DO:-ok}" = ok ] ;;'
     cat >"$SH_TMP/clients.json" <<'EOS'
 {"clients":[
  {"client_id":"client:mac","info":{"kind":"app","platform":"macos"},"principal":{"transport":"unix"},"connection_state":"connected","session_ids":["session:a","session:b"]},
@@ -26,12 +19,10 @@ EOS
  {"client_id":"client:cli","info":{"kind":"cli","platform":"macos"},"principal":{"transport":"unix"},"connection_state":"connected"}]}
 EOS
   }
-  cleanup() { rm -rf "$SH_TMP"; unset STUB_SERVER STUB_DO; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   hook() { env HOME="$SH_TMP/home" MUX_REX_BIN="${1-$SH_TMP/rex}" sh "$SH_TMP/hook.sh"; print -r -- "rc=$?"; }
-  calls() { cat "$SH_TMP/rex.log" 2>/dev/null || true; }
+  calls() { spec_stub_calls "$SH_TMP" rex; }
 
   It 'renders'
     When call cat "$SH_TMP/render.err"

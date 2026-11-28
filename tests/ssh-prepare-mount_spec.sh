@@ -82,6 +82,21 @@ STUB
   }
   BeforeEach 'setup'
 
+  # step_mount disowns its pushes and each example waits only for the one file
+  # it asserts on, so the others are still writing when the example ends: into
+  # the next example's fixtures, and into the tmpbase while the after-all hook
+  # removes it ("rm: Directory not empty", reported as an error of the run).
+  # Every straggler has this file's tmpbase in its command line (the conf it
+  # was given, or a stub under bin/), so wait until none is left. A real,
+  # bounded wait like the polls below; it goes when the step can be told to
+  # run its pushes in the foreground (tests/README-scaffolding.md).
+  settle() {
+    i=0
+    while pgrep -f "$SHELLSPEC_TMPBASE/" >/dev/null 2>&1 && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+    return 0
+  }
+  AfterEach 'settle'
+
   wait_for_ssh_calls() {
     zsh -f "$SPC" "$CONF"
     i=0; while [ ! -e "$SHELLSPEC_TMPBASE/ssh-calls" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done

@@ -11,31 +11,21 @@ Describe 'Rex config hooks'
   RELOAD_HOOK="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_59-reload-rex.sh.tmpl"
 
   setup() {
-    RH_TMP=$(mktemp -d)
+    spec_sandbox; RH_TMP=$SANDBOX
     RH_HOME="$RH_TMP/home"
     mkdir -p "$RH_HOME/.config/rex"
-    chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template <"$BACKUP_HOOK" >"$RH_TMP/backup.sh" 2>/dev/null
-    chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template <"$RELOAD_HOOK" >"$RH_TMP/reload.sh" 2>/dev/null
-    # Stub rex: logs argv; `whoami` answers per $STUB_SERVER, `config check`
-    # per $STUB_CHECK.
-    cat >"$RH_TMP/rex" <<EOS
-#!/bin/sh
-echo "\$*" >>"$RH_TMP/rex.log"
-case "\$*" in
-  *whoami*) [ "\${STUB_SERVER:-up}" = up ] ;;
-  *"config check"*) [ "\${STUB_CHECK:-ok}" = ok ] || { echo "error: syntax error"; exit 1; } ;;
-  *) exit 0 ;;
-esac
-EOS
-    chmod +x "$RH_TMP/rex"
+    spec_render_template "$BACKUP_HOOK" "$RH_TMP/backup.sh"
+    spec_render_template "$RELOAD_HOOK" "$RH_TMP/reload.sh"
+    # Fake rex: logs argv; `whoami` answers per $STUB_SERVER; `config check`
+    # reads a file, so it answers with no server too, per $STUB_CHECK.
+    spec_fake_rex "$RH_TMP" --offline \
+      '*" config check "*) [ "${STUB_CHECK:-ok}" = ok ] || { echo "error: syntax error"; exit 1; } ;;'
   }
-  cleanup() { rm -rf "$RH_TMP"; unset STUB_SERVER STUB_CHECK; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   backup() { env HOME="$RH_HOME" XDG_STATE_HOME="$RH_HOME/.local/state" sh "$RH_TMP/backup.sh"; }
   reload() { env HOME="$RH_HOME" MUX_REX_BIN="${1-$RH_TMP/rex}" PATH=/usr/bin:/bin sh "$RH_TMP/reload.sh"; }
-  calls() { cat "$RH_TMP/rex.log" 2>/dev/null; }
+  calls() { spec_stub_calls "$RH_TMP" rex; }
   kept() { cat "$RH_HOME/.local/state/rex/init.lua.pre-chezmoi" 2>/dev/null; }
 
   Describe 'backup'

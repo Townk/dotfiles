@@ -6,35 +6,32 @@ Describe 'rex-edit-scrollback'
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
   setup() {
-    ES_TMP=$(mktemp -d)
-    cat >"$ES_TMP/rex" <<EOS
-#!/bin/sh
-printf '%s\n' "\$(printf '%s' "\$*" | tr '\n' ' ')" >>"$ES_TMP/rex.log"
-case " \$* " in
-  *" capture "*) [ "\${STUB_CAPTURE:-ok}" = fail ] && exit 1; printf '%s' "\${STUB_TEXT-line one
+    spec_sandbox; ES_TMP=$SANDBOX
+    # Two arms of its own: the capture it plays, and a `window new` that runs
+    # what the tab would run, with a fake editor, so the examples see it. The
+    # pane's process (cwd: the sandbox), `session.view` and `client ls` are
+    # the canned answers, the last two from the fixtures below.
+    spec_fake_rex "$ES_TMP" \
+      '*" capture "*)' \
+      '  [ "${STUB_CAPTURE:-ok}" = fail ] && exit 1' \
+      '  printf "%s" "${STUB_TEXT-line one
 line two
-}"; exit 0 ;;
-  *" block call "*" process"*) echo '{"foreground":{"cwd":"$ES_TMP","name":"zsh"}}'; exit 0 ;;
-  *" window new "*)
-    [ "\${STUB_WINDOW:-ok}" = ok ] || exit 1
-    # Run what the tab would run, with a fake editor, so the examples see it.
-    while [ "\$1" != "--" ]; do shift; done; shift
-    VISUAL= EDITOR="\${STUB_EDITOR:-$ES_TMP/nvim}" "\$@" >/dev/null
-    echo '{"window_id":"window:new","block_ids":["block:new"]}'; exit 0 ;;
-  *" session.view "*) echo '{"session_id":"session:s","windows":[]}'; exit 0 ;;
-  *" client ls "*) echo '{"clients":[{"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","session_ids":["session:s"]}]}'; exit 0 ;;
-esac
-exit 0
-EOS
-    chmod +x "$ES_TMP/rex"
+}" ;;' \
+      '*" window new "*)' \
+      '  [ "${STUB_WINDOW:-ok}" = ok ] || exit 1' \
+      '  while [ "$1" != "--" ]; do shift; done; shift' \
+      '  VISUAL= EDITOR="${STUB_EDITOR:-$STUB_DIR/nvim}" "$@" >/dev/null' \
+      '  cat "$STUB_DIR/window.json" ;;'
+    print -r -- '{"window_id":"window:new","block_ids":["block:new"]}' >"$ES_TMP/window.json"
+    print -r -- '{"session_id":"session:s","windows":[]}' >"$ES_TMP/view.json"
+    print -r -- '{"clients":[{"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","session_ids":["session:s"]}]}' >"$ES_TMP/clients.json"
+    # The editors report their argv and the text of the file they were given.
     for ed in nvim nano; do
-      printf '%s\n' '#!/bin/sh' "{ echo \"args=\$*\"; for a; do f=\$a; done; echo \"text=\$(cat \"\$f\" | tr '\\n' '|')\"; } >\"$ES_TMP/editor.log\"" >"$ES_TMP/$ed"
-      chmod +x "$ES_TMP/$ed"
+      spec_stub "$ES_TMP" "$ed" \
+        '{ echo "args=$*"; for a; do f=$a; done; echo "text=$(cat "$f" | tr "\n" "|")"; } >"$STUB_DIR/editor.log"'
     done
   }
-  cleanup() { rm -rf "$ES_TMP"; unset STUB_CAPTURE STUB_TEXT STUB_WINDOW STUB_EDITOR; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   edit() {
     env -u TMUX REX_SESSION=session:s REX_BLOCK="${ES_BLOCK-block:origin}" TMPDIR="$ES_TMP" \

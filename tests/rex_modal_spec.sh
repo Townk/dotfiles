@@ -7,7 +7,9 @@ Describe 'rex-modal'
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
   setup() {
-    RM_TMP=$(mktemp -d)
+    spec_sandbox; RM_TMP=$SANDBOX
+    # Not spec_stub: an example below needs the newlines of a typed answer
+    # kept in the log, and spec_stub flattens them.
     cat >"$RM_TMP/rex" <<EOS
 #!/bin/sh
 printf '%s\n' "\$*" >>"$RM_TMP/rex.log"
@@ -25,9 +27,7 @@ exit "\${2:-0}"
 EOS
     chmod +x "$RM_TMP/target"
   }
-  cleanup() { rm -rf "$RM_TMP"; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   raw_modal() {
     env -u REX_SESSION REX_BLOCK=block:layer MUX_REX_BIN="$RM_TMP/rex" MUX_LIB="$LIB" TMPDIR="$RM_TMP" \

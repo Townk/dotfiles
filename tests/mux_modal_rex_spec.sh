@@ -5,30 +5,18 @@ Describe 'mux-modal on Rex'
   MODAL="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_mux-modal"
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
+  # No example waits. The fake's layer lives for a number of polls
+  # ($STUB_LAYER_LIFE: none by default, `open` until closed), and the poll
+  # loop's `sleep 0.2` goes to the virtual clock, which says afterwards how
+  # long the script believes it waited.
   setup() {
-    zmodload zsh/datetime
-    MM_TMP=$(mktemp -d)
-    cat >"$MM_TMP/rex" <<EOS
-#!/bin/sh
-printf '%s\n' "\$*" >>"$MM_TMP/rex.log"
-case " \$* " in
-  *" session.new_layer "*)
-    cat >"$MM_TMP/req.json"
-    [ "\${STUB_LAYER:-ok}" = ok ] || exit 1
-    : >"$MM_TMP/alive"
-    # The layer lives for a moment, then closes.
-    ( sleep "\${STUB_LIFE:-0.6}"; rm -f "$MM_TMP/alive" ) >/dev/null 2>&1 &
-    echo '{"block_ids":["block:layer"]}' ;;
-  *" block close "*) rm -f "$MM_TMP/alive" ;;
-  *" block inspect "*) [ -n "\${STUB_INSPECT_RC:-}" ] && exit "\$STUB_INSPECT_RC"; [ -e "$MM_TMP/alive" ] && exit 0; exit 3 ;;
-esac
-exit 0
-EOS
-    chmod +x "$MM_TMP/rex"
+    spec_sandbox; MM_TMP=$SANDBOX
+    spec_fake_rex "$MM_TMP"
+    spec_clock_set 1000
   }
-  cleanup() { rm -rf "$MM_TMP"; unset STUB_LAYER STUB_LIFE STUB_INSPECT_RC; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
+  polls() { spec_stub_calls "$MM_TMP" rex | grep -c ' block inspect ' || true; }
+  waited() { print -r -- "polls=$(polls) slept=$(( $(spec_clock_now ms) - 1000000 ))ms"; }
 
   modal() {
     env -u TMUX HOME=/home/u REX_SESSION=session:s REX_BLOCK=block:origin \
@@ -59,14 +47,11 @@ Jobs"
   End
 
   It 'does not return while the layer is open'
-    export STUB_LIFE=1.2
-    run() {
-      local t0=$EPOCHREALTIME
-      modal -- true
-      (( EPOCHREALTIME - t0 >= 1.0 )) && print waited || print "returned early"
-    }
+    # Alive for three polls: it must come back on the fourth, not before.
+    export STUB_LAYER_LIFE=3
+    run() { modal -- true; waited; }
     When call run
-    The output should equal "waited"
+    The output should equal "polls=4 slept=600ms"
   End
 
   It 'fails when no layer can be opened'
@@ -78,18 +63,18 @@ mux-modal: could not open a floating layer"
   End
 
   It 'returns at once when the server is gone'
-    export STUB_LIFE=6 STUB_INSPECT_RC=4
-    run() { local t0=$EPOCHREALTIME; modal -- true; (( EPOCHREALTIME - t0 < 3 )) && print prompt; }
+    export STUB_LAYER_LIFE=open STUB_INSPECT_RC=4
+    run() { modal -- true; waited; }
     When call run
-    The output should equal "prompt"
+    The output should equal "polls=1 slept=0ms"
   End
 
   It 'gives up after a run of failed checks instead of waiting forever'
-    export STUB_LIFE=6 STUB_INSPECT_RC=1
+    export STUB_LAYER_LIFE=open STUB_INSPECT_RC=1
     MISSES=3
-    run() { local t0=$EPOCHREALTIME; modal -- true; (( EPOCHREALTIME - t0 < 5 )) && print bounded; }
+    run() { modal -- true; waited; }
     When call run
-    The output should equal "bounded"
+    The output should equal "polls=3 slept=400ms"
   End
 
   It 'releases a caller still reading the capture FIFO when the layer closes unanswered'
@@ -98,7 +83,9 @@ mux-modal: could not open a floating layer"
       cat "$MM_TMP/fifo" >"$MM_TMP/out" &
       local reader=$!
       modal --capture "$MM_TMP/fifo" -- true
-      local i; for i in {1..20}; do kill -0 $reader 2>/dev/null || break; sleep 0.1; done
+      # A REAL, bounded wait, the one left in this file: the reader is another
+      # process and learns of its end of file when the kernel schedules it.
+      local i; for i in {1..20}; do kill -0 $reader 2>/dev/null || break; /bin/sleep 0.1; done
       kill -0 $reader 2>/dev/null && { kill $reader; print "reader stuck"; } || print "reader released"
       print -r -- "size=$(wc -c <"$MM_TMP/out" | tr -d ' ')"
     }
@@ -110,27 +97,31 @@ size=0"
   It 'does not hang when the answer was already read'
     run() {
       mkfifo "$MM_TMP/fifo"   # nobody is reading any more
-      local t0=$EPOCHREALTIME
       modal --capture "$MM_TMP/fifo" -- true
-      (( EPOCHREALTIME - t0 < 4 )) && print "no hang"
+      print "no hang"
     }
     When call run
     The output should equal "no hang"
   End
 
   It 'closes its layer when interrupted'
-    export STUB_LIFE=6
+    # A layer that would outlive five polls; the first nap between polls
+    # delivers the signal, so it lands while the script waits on its layer.
+    # Nothing runs in the background and nothing is timed: a script that does
+    # not close its layer dies of the signal, or polls on and closes nothing.
+    export STUB_LAYER_LIFE=5
     run() {
+      spec_stub "$MM_TMP/term" sleep '[ -e "$STUB_DIR/sent" ] || { : >"$STUB_DIR/sent"; kill -TERM "$(cat "$STUB_DIR/pid")"; }'
       # exec: the signal must reach the script itself, not a wrapper shell.
-      ( exec env -u TMUX HOME=/home/u REX_SESSION=session:s REX_BLOCK=block:origin \
-          MUX_REX_BIN="$MM_TMP/rex" MUX_LIB="$LIB" zsh "$MODAL" -- true 2>/dev/null ) &
-      local pid=$!
-      local i; for i in {1..40}; do [[ -e "$MM_TMP/alive" ]] && break; sleep 0.1; done
-      sleep 0.3; kill -TERM $pid; wait $pid 2>/dev/null
+      sh -c 'echo $$ >"$1/pid"; shift; exec "$@"' sh "$MM_TMP/term" \
+        env -u TMUX HOME=/home/u REX_SESSION=session:s REX_BLOCK=block:origin PATH="$MM_TMP/term:$PATH" \
+          MUX_REX_BIN="$MM_TMP/rex" MUX_LIB="$LIB" zsh "$MODAL" -- true 2>/dev/null
       grep -c 'block close .*block:layer' "$MM_TMP/rex.log"
+      print -r -- "polls=$(polls)"
     }
     When call run
-    The output should equal "1"
+    The output should equal "1
+polls=2"
   End
 
   It 'still prefers tmux when both are present'

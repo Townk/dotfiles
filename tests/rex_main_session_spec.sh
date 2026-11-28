@@ -12,24 +12,15 @@ Describe 'Rex Main session hook'
   HOOK_TMPL="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_after_60-rex-main-session.sh.tmpl"
 
   setup() {
-    MS_TMP=$(mktemp -d)
+    spec_sandbox; MS_TMP=$SANDBOX
     HOOK="$MS_TMP/hook.sh"
-    chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template <"$HOOK_TMPL" >"$HOOK" 2>"$MS_TMP/render.err"
+    spec_render_template "$HOOK_TMPL" "$HOOK" 2>"$MS_TMP/render.err"
     MS_HOME="$MS_TMP/home"
     mkdir -p "$MS_HOME/.config/mux/quick-launch"
-    cat >"$MS_TMP/rex" <<EOS
-#!/bin/sh
-echo "\$*" >>"$MS_TMP/rex.log"
-case "\$*" in
-  *"ls --json"*) [ "\${STUB_SERVER:-up}" = up ] || exit 4; cat "$MS_TMP/sessions.json" ;;
-  *) exit 0 ;;
-esac
-EOS
-    chmod +x "$MS_TMP/rex"
+    # `ls --json` answers from sessions.json, or exits 4 with no server.
+    spec_fake_rex "$MS_TMP"
   }
-  cleanup() { rm -rf "$MS_TMP"; unset STUB_SERVER; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   # sessions <label>... — the fixture, in `rex ls` order; ids are s1, s2, …
   sessions() {

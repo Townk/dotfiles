@@ -6,19 +6,11 @@ Describe 'showing a tab in the Rex app'
   Include home/dot_local/lib/mux-bootstrap.zsh
 
   setup() {
-    SW_TMP=$(mktemp -d)
-    cat >"$SW_TMP/rex" <<EOS
-#!/bin/sh
-printf '%s\n' "\$*" >>"$SW_TMP/rex.log"
-case " \$* " in
-  *" client ls "*) cat "$SW_TMP/clients.json" ;;
-  *" session.view "*) echo '{"session_id":"session:main","windows":[{"window_id":"window:one"},{"window_id":"window:two","label":"config"},{"window_id":"window:three","label":"config"}]}' ;;
-  *" window focus "*) [ "\${STUB_FOCUS:-ok}" = ok ] || exit 1 ;;
-  *" window new "*) [ "\${STUB_NEW:-ok}" = ok ] || exit 1; echo '{"window_id":"window:new","block_ids":["block:new"]}' ;;
-esac
-exit 0
-EOS
-    chmod +x "$SW_TMP/rex"
+    spec_sandbox; SW_TMP=$SANDBOX
+    # `client ls` and `session.view` answer from the two fixtures below;
+    # `window new` is the canned one (STUB_NEW=fail makes it fail).
+    spec_fake_rex "$SW_TMP" '*" window focus "*) [ "${STUB_FOCUS:-ok}" = ok ] || exit 1 ;;'
+    print -r -- '{"session_id":"session:main","windows":[{"window_id":"window:one"},{"window_id":"window:two","label":"config"},{"window_id":"window:three","label":"config"}]}' >"$SW_TMP/view.json"
     cat >"$SW_TMP/clients.json" <<'EOS'
 {"clients":[
  {"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","session_ids":["session:main","session:jobs"]},
@@ -30,9 +22,7 @@ EOS
     export MUX_REX_BIN="$SW_TMP/rex" REX_SESSION=session:main REX_BLOCK=block:here
     unset TMUX REX_CLIENT STUB_NEW STUB_FOCUS
   }
-  cleanup() { rm -rf "$SW_TMP"; unset MUX_REX_BIN REX_SESSION REX_BLOCK REX_CLIENT STUB_NEW STUB_FOCUS; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   selects() { grep 'session.select' "$SW_TMP/rex.log" 2>/dev/null | sed 's/^--autostart=false --timeout 3s //' || true; }
 

@@ -7,25 +7,13 @@ Describe 'rex-picker'
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
   setup() {
-    RP_TMP=$(mktemp -d)
-    cat >"$RP_TMP/rex" <<EOS
-#!/bin/sh
-printf '%s\n' "\$*" >>"$RP_TMP/rex.log"
-case " \$* " in
-  *" session.view "*) cat "$RP_TMP/view.json" 2>/dev/null; exit 0 ;;
-  *" block call "*" process"*) echo '{"foreground":{"cwd":"$RP_TMP","name":"zsh"}}'; exit 0 ;;
-  *" session.new_layer "*)
-    cat >"$RP_TMP/req.json"
-    [ "\${STUB_LAYER:-ok}" = ok ] || exit 1
-    echo '{"block_ids":["block:layer"]}' ;;
-esac
-exit 0
-EOS
-    chmod +x "$RP_TMP/rex"
+    spec_sandbox; RP_TMP=$SANDBOX
+    # All canned: `session.view` from view.json when an example writes one,
+    # the pane's process (cwd: the sandbox), and `session.new_layer`, which
+    # records the request in req.json (STUB_LAYER=fail makes it fail).
+    spec_fake_rex "$RP_TMP"
   }
-  cleanup() { rm -rf "$RP_TMP"; unset STUB_LAYER; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   picker() {
     env -u TMUX HOME=/home/u REX_SESSION=session:s REX_BLOCK="${RP_BLOCK-block:origin}" \

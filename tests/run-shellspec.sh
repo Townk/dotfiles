@@ -45,4 +45,31 @@ if [[ $summary =~ '^([0-9]+) examples?, ([0-9]+) failures?' ]]; then
   [[ $summary =~ '([0-9]+) skips?' ]] && skips=$match[1]
 fi
 print -u2 "run-shellspec: $examples examples, $failures failures, $skips skips in $(( elapsed / 60 ))m $(( elapsed % 60 ))s"
+
+# The ONE desktop notification a test run may cause: the run is over. Specs
+# themselves cannot reach the desktop (tests/spec_helper.sh blocks it), and
+# this fires here, after shellspec has exited, so once per run whatever
+# --jobs is. $SPEC_SUITE names the run (the make lanes set it); without it
+# the toast says how many spec files were asked for.
+#
+# SPEC_RUN_TOAST=1 forces it, =0 silences it. Unset, it fires only for a
+# human at this machine: stderr is a terminal, the session is not SSH, and
+# neither CI nor an agent is driving. spec_helper.sh exports SPEC_RUN_TOAST=0,
+# so a spec that runs this wrapper (tests/run-shellspec_spec.sh) stays silent.
+run_toast() {
+  case ${SPEC_RUN_TOAST-} in
+    1) ;;
+    0) return 0 ;;
+    *) [[ -t 2 && -z ${SSH_CONNECTION-}${SSH_TTY-}${CI-}${CLAUDECODE-} ]] || return 0 ;;
+  esac
+  local lib=${ZSH_ARGZERO:A:h:h}/home/dot_local/lib/common.zsh suite=${SPEC_SUITE-}
+  [[ -r $lib ]] || return 0
+  [[ -n $suite ]] || suite="${#${(M)@:#*_spec.sh}} spec files"
+  local text="Tests ($suite): $examples examples, $failures failures, $skips skips in $(( elapsed / 60 ))m $(( elapsed % 60 ))s"
+  local icon=glyph:nf-md-check_circle sound=Glass
+  (( rc == 0 )) || { icon=glyph:nf-md-close_circle sound=Basso text="$text — FAILED (exit $rc)" }
+  ( source $lib && notify --kind test-run --source run-shellspec --icon $icon --sound $sound -- $text ) >/dev/null 2>&1
+  return 0
+}
+run_toast "$@"
 exit $rc

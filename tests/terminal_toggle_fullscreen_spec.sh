@@ -3,7 +3,7 @@ Describe 'terminal-toggle-fullscreen'
   Include tests/recob_helper.sh
 
   setup() {
-    TEST_TMP=$(mktemp -d)
+    spec_sandbox; TEST_TMP=$SANDBOX
     export APPLESCRIPT_LOG="$TEST_TMP/applescript.log"
 
     cat >"$TEST_TMP/osascript" <<'EOF'
@@ -16,20 +16,13 @@ EOF
 print -- Darwin
 EOF
     chmod +x "$TEST_TMP/osascript" "$TEST_TMP/uname"
-    ORIGINAL_PATH="$PATH"
-    export PATH="$TEST_TMP:$PATH"
+    spec_path_prepend "$TEST_TMP"
     # All three of the canonical remote-detection triple: detect_terminal now
     # honors SSH_TTY too (the no-pty `ssh -T` fix), so the local-session cases
     # must clear it as well or an ambient SSH_TTY misreads them as remote.
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY
   }
-  cleanup() {
-    PATH="$ORIGINAL_PATH"
-    rm -rf "$TEST_TMP"
-    unset APPLESCRIPT_LOG TERM_PROGRAM GHOSTTY_RESOURCES_DIR
-  }
   BeforeEach setup
-  AfterEach cleanup
 
   It 'uses Ghostty fullscreen action on the focused terminal'
     export TERM_PROGRAM=ghostty
@@ -45,22 +38,14 @@ EOF
   # asking the server (the script may run under the bridge daemon, in no pane).
   Describe 'in Rex'
     rex_stub() {
-      cat >"$TEST_TMP/rex" <<EOS
-#!/bin/sh
-printf '%s\n' "\$*" >>"$TEST_TMP/rex.log"
-case " \$* " in
-  *" client ls "*) cat "$TEST_TMP/clients.json" ;;
-  *" client.window.fullscreen.toggle "*) [ "\${STUB_REX_DO:-ok}" = ok ] ;;
-esac
-EOS
-      chmod +x "$TEST_TMP/rex"
+      # `client ls` answers from clients.json below.
+      spec_fake_rex "$TEST_TMP" '*" client.window.fullscreen.toggle "*) [ "${STUB_REX_DO:-ok}" = ok ] ;;'
       print -r -- '{"clients":[{"client_id":"client:ipad","info":{"kind":"app"},"connection_state":"connected","principal":{"transport":"tailscale"},"session_ids":["session:a"]},{"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","principal":{"transport":"unix"},"session_ids":["session:a","session:b"]}]}' >"$TEST_TMP/clients.json"
       export MUX_REX_BIN="$TEST_TMP/rex"
       # The Rex arm takes its lookup and its client filter from the shim.
       export MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
     }
     BeforeEach rex_stub
-    AfterEach 'unset MUX_REX_BIN MUX_LIB STUB_REX_DO MUX_TERMINAL'
     toggled() { zsh home/dot_config/mux/scripts/executable_terminal-toggle-fullscreen 2>&1; print -r -- "rc=$?"; grep 'fullscreen' "$TEST_TMP/rex.log" 2>/dev/null || true; }
 
     It 'runs the app action on the local app, never starting a server'
@@ -121,7 +106,7 @@ rc=1"
     TOGGLE_BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_terminal-toggle-fullscreen"
 
     bridge_setup() {
-      BR_TMP=$(mktemp -d)
+      spec_sandbox; BR_TMP=$SANDBOX
       unset CLIPBRIDGE_TIMEOUT_S RECOB_TIMEOUT_S RECOB_ACTION_TIMEOUT_S MUX_BRIDGE_TIMEOUT_S
       # Daemon-side guards, exported BEFORE recob_start: every reply here is
       # scripted, but even a dispatch this file did not foresee must answer
@@ -141,13 +126,8 @@ rc=1"
       export TERM=xterm-ghostty
       unset MUX_TERMINAL MUX_PEER_TERM
     }
-    bridge_cleanup() {
-      recob_stop
-      rm -rf "$BR_TMP"
-      unset MUX_LIB_DIR MUX_FULLSCREEN_PROBE MUX_TOGGLE_FULLSCREEN_BIN SSH_CONNECTION MUX_PEER_TERM
-    }
     BeforeEach 'bridge_setup'
-    AfterEach 'bridge_cleanup'
+    AfterEach 'recob_stop'
 
     # -f: this repo's ~/.zshenv re-exports XDG_STATE_HOME with no ${VAR:-}
     # guard and would clobber recob_start's sandbox — where the credential
@@ -297,7 +277,6 @@ rc=1"
         unset MUX_PEER_TERM
       }
       BeforeEach 'tmux_setup'
-      AfterEach 'unset MUX_TMUX_BIN TMUX STUB_CLIENT_TERM STUB_SESSION_TERM'
 
       It 'asks tmux for the client terminal instead of believing TERM'
         recob_script 'ok'

@@ -13,8 +13,7 @@ Describe 'yazi-quick-look: dispatch'
     STUBS="$SHELLSPEC_TMPBASE/ql-stubs"
     mkdir -p "$STUBS"
     for tool in open pkill tmux term-quick-view; do
-      printf '#!/bin/sh\necho "%s $@"\n' "$tool" >"$STUBS/$tool"
-      chmod +x "$STUBS/$tool"
+      spec_stub "$STUBS" "$tool" "echo \"$tool \$@\""
     done
     TARGET="$SHELLSPEC_TMPBASE/ql-target.txt"
     echo hello >"$TARGET"

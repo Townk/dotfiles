@@ -17,14 +17,14 @@ Describe 'pinentry backend repair'
   Skip if "realpath(1) is needed to compare the links" [ ! -x /bin/realpath ] && [ ! -x /usr/bin/realpath ]
 
   setup() {
-    PB_TMP=$(mktemp -d)
+    spec_sandbox; PB_TMP=$SANDBOX
     PB_BIN="$PB_TMP/bin"
     PB_HOME="$PB_TMP/home"
     mkdir -p "$PB_BIN" "$PB_HOME/.local/libexec" "$PB_TMP/ctl" "$PB_TMP/keg/opt/pinentry/bin"
     export P_MAC="$PB_BIN/pinentry-mac" P_LINK="$PB_TMP/link" P_CTL="$PB_TMP/ctl" P_LOG="$PB_TMP/log" P_KEG="$PB_TMP/keg"
     : >"$P_LOG"
-    printf '#!/bin/sh\nexit 0\n' >"$P_MAC"
-    printf '#!/bin/sh\nexit 0\n' >"$PB_BIN/pinentry-curses"
+    spec_stub "$PB_BIN" pinentry-mac
+    spec_stub "$PB_BIN" pinentry-curses
     ln -s "$PB_BIN/pinentry-curses" "$P_LINK"
     # -fix repairs only when told to, and exits as told to.
     cat >"$PB_BIN/pinentry-touchid" <<'SH'
@@ -41,7 +41,7 @@ SH
 [ -f "$P_CTL/no-gpgconf" ] && exit 1
 printf 'gpg:OpenPGP:/x/gpg\npinentry:Passphrase Entry:%s\n' "$P_LINK"
 SH
-    printf '#!/bin/sh\necho "$P_KEG"\n' >"$PB_BIN/brew"
+    spec_stub "$PB_BIN" brew 'echo "$P_KEG"'
     # Both spellings of timeout: log the limit, then run the command.
     cat >"$PB_BIN/gtimeout" <<'SH'
 #!/bin/sh
@@ -60,9 +60,7 @@ SH
     cp "$HELPER" "$PB_HOME/.local/libexec/pinentry-backend-repair"
     chmod +x "$PB_HOME/.local/libexec/pinentry-backend-repair"
   }
-  cleanup() { rm -rf "$PB_TMP"; unset P_MAC P_LINK P_CTL P_LOG P_KEG; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   helper() {
     env HOME="$PB_HOME" PATH="$PB_BIN:/usr/bin:/bin" sh "$HELPER" "$@"
@@ -160,7 +158,7 @@ pinentry-touchid -fix"
     Skip if "the hook renders to nothing off macOS" [ "$(uname -s)" != Darwin ]
 
     hook() {
-      chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template <"$HOOK_TMPL" >"$PB_TMP/hook.sh" || return 1
+      spec_render_template "$HOOK_TMPL" "$PB_TMP/hook.sh" || return 1
       env HOME="$PB_HOME" PATH="$PB_BIN:/usr/bin:/bin" sh "$PB_TMP/hook.sh"
       print -r -- "rc=$? link=$(target)"
     }

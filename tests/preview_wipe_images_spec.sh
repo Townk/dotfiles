@@ -3,10 +3,8 @@
 Describe 'preview-wipe-images'
   BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_preview-wipe-images"
 
-  setup() { PW_TMP=$(mktemp -d); }
-  cleanup() { rm -rf "$PW_TMP"; }
+  setup() { spec_sandbox; PW_TMP=$SANDBOX; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   wipe() {
     env -u TMUX TMPDIR="$PW_TMP" PREVIEW_TTY="$PW_TMP/tty" PREVIEW_TTY_NAME=/dev/ttys042 "$@" sh "$BIN" ${WIPE_ARG:-}
