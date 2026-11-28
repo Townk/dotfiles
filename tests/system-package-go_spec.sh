@@ -71,3 +71,98 @@ SH
     The contents of file "$STAGE/installed.log" should include "example.com/mod/cmd/tool@latest"
   End
 End
+
+# A failed INSTALL of a declared-but-missing module must fail the sync (the
+# dispatcher then reports it and system-update stops), exactly as the snap
+# worker does — but only after the rest of the sync has run. Upgrade failures
+# keep warning only.
+Describe 'system-package-go: sync exit status'
+  WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-go"
+
+  setup() {
+    STAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pkg-go-sync.XXXXXX")"
+    mkdir -p "$STAGE/home/.local" "$STAGE/shimbin" "$STAGE/goroot/bin" \
+      "$STAGE/packages" "$STAGE/gopath/bin"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/home/.local/lib"
+
+    # Stub `go` (PATH shim AND toolchain binary). `go version -m <file>`
+    # answers from a "<file>.meta" sidecar, so a binary counts as installed
+    # only when the example staged one. `go install` logs every attempt and
+    # fails when $STUB_FAIL_INSTALL is set.
+    cat >"$STAGE/shimbin/go" <<'SH'
+#!/bin/sh
+case "$1 $2" in
+  "env GOBIN")  exit 0 ;;  # empty: worker falls back to GOPATH/bin
+  "env GOROOT") printf '%s\n' "$STUB_GOROOT"; exit 0 ;;
+  "env GOPATH") printf '%s\n' "$STUB_GOPATH"; exit 0 ;;
+esac
+case "$1" in
+  version)
+    [ -f "$3.meta" ] || exit 1
+    cat "$3.meta"
+    exit 0 ;;
+  install)
+    printf '%s\n' "$2" >>"$STUB_INSTALL_LOG"
+    if [ -n "${STUB_FAIL_INSTALL:-}" ]; then
+      echo "go: $2: module lookup failed" >&2
+      exit 1
+    fi
+    exit 0 ;;
+esac
+exit 0
+SH
+    chmod +x "$STAGE/shimbin/go"
+    cp "$STAGE/shimbin/go" "$STAGE/goroot/bin/go"
+
+    print -r -- 'example.com/mod/cmd/tool' >"$STAGE/packages/Gofile"
+  }
+  cleanup() { rm -rf "$STAGE"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  # Stage example.com/mod/cmd/tool as already installed. The .meta sidecar is
+  # not executable, so the worker's scan of $GOBIN skips it.
+  stage_installed() {
+    print -r -- '#!/bin/sh' >"$STAGE/gopath/bin/tool"
+    chmod +x "$STAGE/gopath/bin/tool"
+    printf '%s\n' "$STAGE/gopath/bin/tool: go1.27.0" \
+      "	path	example.com/mod/cmd/tool" \
+      "	mod	example.com/mod	v1.0.0	h1:x=" >"$STAGE/gopath/bin/tool.meta"
+  }
+
+  run_sync() {   # run_sync <non-empty to make every `go install` fail>
+    env -i HOME="$STAGE/home" \
+      PATH="$STAGE/shimbin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      PKG_DIR="$STAGE/packages" \
+      STUB_GOROOT="$STAGE/goroot" STUB_GOPATH="$STAGE/gopath" \
+      STUB_INSTALL_LOG="$STAGE/installed.log" STUB_FAIL_INSTALL="$1" \
+      zsh "$WORKER" sync
+  }
+
+  It 'fails when a declared-but-missing module cannot be installed, after finishing the sync'
+    When call run_sync 1
+    The status should be failure
+    The stdout should include "Syncing go binaries"
+    The stderr should include "failed to install example.com/mod/cmd/tool"
+    # The upgrade pass still ran: a second `go install` attempt was made.
+    The stderr should include "failed to upgrade example.com/mod/cmd/tool"
+    The contents of file "$STAGE/installed.log" should equal "example.com/mod/cmd/tool@latest
+example.com/mod/cmd/tool@latest"
+  End
+
+  It 'succeeds when the missing module installs'
+    When call run_sync ""
+    The status should be success
+    The stdout should include "Syncing go binaries"
+    The stderr should not include "failed to"
+  End
+
+  It 'succeeds when only an upgrade fails'
+    stage_installed
+    When call run_sync 1
+    The status should be success
+    The stdout should include "1 binary already up to date"
+    The stderr should include "failed to upgrade example.com/mod/cmd/tool"
+    The stderr should not include "failed to install"
+  End
+End

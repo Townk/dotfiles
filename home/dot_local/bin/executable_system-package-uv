@@ -83,6 +83,10 @@ do_sync() {
   log_info "Syncing uv tools..."
 
   local declared_full declared installed before_snap after_snap
+  # Set only by a failed install of a declared-but-missing tool: that is what
+  # fails the sync (as in snap). Uninstall, reinstall and upgrade failures just
+  # warn.
+  local install_failed=0
   pkg::tmpset declared_full declared installed before_snap after_snap
 
   uv_snapshot_versions >"$before_snap"
@@ -129,9 +133,12 @@ do_sync() {
     [[ -n "$tool" ]] || continue
     uv tool uninstall "$tool" || log_warn "failed to uninstall $tool"
   done
-  pkg::diff_only_in "$declared" "$installed" | while IFS= read -r tool; do
+  # Fed by process substitution, not a pipe: a piped loop runs in a subshell
+  # and would lose install_failed. `tool`/`line` are declared out here because
+  # a bare `local line` repeated per iteration prints `line=<value>`.
+  local tool line
+  while IFS= read -r tool; do
     [[ -z "$tool" ]] && continue
-    local line
     line=$(awk -v t="$tool" '$1 == t {print; exit}' "$declared_full")
     local -a args=(${(z)line})
     # `--` form: drop the canonical name AND the separator; everything
@@ -140,8 +147,11 @@ do_sync() {
     if pkg::line_has_spec "$line"; then
       args=("${args[@]:2}")
     fi
-    uv tool install "${args[@]}" || log_warn "failed to install $tool"
-  done
+    uv tool install "${args[@]}" || {
+      log_warn "failed to install $tool"
+      install_failed=1
+    }
+  done < <(pkg::diff_only_in "$declared" "$installed")
 
   # Tools with extra args (e.g. `--with extra-pkg`) are reinstalled so changes
   # to those args land — but ONLY when the manifest line actually moved.
@@ -183,7 +193,11 @@ do_sync() {
   ((PKG_VERBOSE)) && uv_quiet=()
   pkg::run_tool "uv: upgrading tools" uv tool upgrade --all "${uv_quiet[@]}" || true
 
-  ((reinstall_failed == 0)) &&
+  # The stamp means "this manifest was fully applied" (see
+  # pkg::write_manifest_stamp), so a failed install withholds it too: stamping
+  # a line that never landed would make a later edit of it look like a flag
+  # change on an installed tool and force a pointless --reinstall.
+  ((reinstall_failed == 0 && install_failed == 0)) &&
     pkg::write_manifest_stamp "$UV_MANIFEST_STAMP" "$declared_full"
 
   uv_write_stamp
@@ -193,7 +207,7 @@ do_sync() {
   uv_snapshot_versions >"$after_snap"
   report::changes "$before_snap" "$after_snap" tool
   pkg::restart_changed "$before_snap" "$after_snap"
-  return 0
+  return $install_failed
 }
 
 usage() {

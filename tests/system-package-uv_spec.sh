@@ -51,3 +51,100 @@ Describe 'system-package-uv: python drift'
     The output should equal yes
   End
 End
+
+# A failed INSTALL of a declared-but-missing tool must fail the sync (the
+# dispatcher then reports it and system-update stops), exactly as the snap
+# worker does — but only after the rest of the sync has run. Upgrade and
+# uninstall failures keep warning only. uv and python are stub binaries on PATH.
+Describe 'system-package-uv: sync exit status'
+  WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-uv"
+
+  setup() {
+    STAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pkg-uv-sync.XXXXXX")"
+    mkdir -p "$STAGE/home/.local" "$STAGE/bin" "$STAGE/packages/.state"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/home/.local/lib"
+
+    # `uv tool list` prints the state file; everything else is logged.
+    # `uv tool install <tool>` fails for $STUB_FAIL_INSTALL, otherwise records
+    # the tool; `uv tool upgrade` / `uv tool uninstall` exit with their knobs.
+    cat >"$STAGE/bin/uv" <<'SH'
+#!/bin/sh
+if [ "$1 $2" = "tool list" ]; then
+  cat "$STUB_STATE" 2>/dev/null
+  exit 0
+fi
+printf '%s\n' "$*" >>"$STUB_LOG"
+case "$1 $2" in
+  "tool install")
+    if [ "$3" = "${STUB_FAIL_INSTALL:-}" ]; then
+      echo "error: failed to resolve $3" >&2
+      exit 1
+    fi
+    printf '%s v1.0.0\n- %s\n' "$3" "$3" >>"$STUB_STATE"
+    ;;
+  "tool upgrade") exit "${STUB_UPGRADE_RC:-0}" ;;
+  "tool uninstall") exit "${STUB_UNINSTALL_RC:-0}" ;;
+esac
+exit 0
+SH
+    printf '#!/bin/sh\necho "Python 3.13.2"\n' >"$STAGE/bin/python"
+    chmod +x "$STAGE/bin/uv" "$STAGE/bin/python"
+    # Stamp matches the interpreter: no drift rebuild in these examples.
+    print -r -- '3.13.2' >"$STAGE/packages/.state/uv.python"
+    printf 'present v1.0.0\n- present\n' >"$STAGE/state"
+    : >"$STAGE/uv.log"
+  }
+  cleanup() { rm -rf "$STAGE"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  run_sync() {   # run_sync <tool whose install fails> <upgrade rc> <uninstall rc>
+    env -i HOME="$STAGE/home" \
+      PATH="$STAGE/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      PKG_DIR="$STAGE/packages" \
+      STUB_STATE="$STAGE/state" STUB_LOG="$STAGE/uv.log" \
+      STUB_FAIL_INSTALL="$1" STUB_UPGRADE_RC="${2:-0}" STUB_UNINSTALL_RC="${3:-0}" \
+      zsh "$WORKER" sync
+  }
+
+  It 'fails when a declared-but-missing tool cannot be installed, after finishing the sync'
+    printf 'missing\npresent\n' >"$STAGE/packages/Uvfile"
+    When call run_sync missing
+    The status should be failure
+    The stderr should include "failed to install missing"
+    # The upgrade step and the changes report still ran.
+    The contents of file "$STAGE/uv.log" should include "tool upgrade --all"
+    The stdout should include "1 tool already up to date"
+  End
+
+  It 'does not stamp the manifest as applied when an install failed'
+    printf 'missing\npresent\n' >"$STAGE/packages/Uvfile"
+    When call run_sync missing
+    The status should be failure
+    The stdout should include "Syncing uv tools"
+    The stderr should include "failed to install missing"
+    The path "$STAGE/packages/.state/uv.manifest" should not be exist
+  End
+
+  It 'succeeds when the missing tools install'
+    printf 'missing\nother --with extra\npresent\n' >"$STAGE/packages/Uvfile"
+    When call run_sync ""
+    The status should be success
+    The stdout should include "missing installed: 1.0.0"
+    The stdout should include "other installed: 1.0.0"
+    The stdout should not include "="
+    The contents of file "$STAGE/uv.log" should include "tool install other --with extra"
+    The path "$STAGE/packages/.state/uv.manifest" should be exist
+  End
+
+  It 'succeeds when only the upgrade and an uninstall fail'
+    printf 'extra v1.0.0\n- extra\n' >>"$STAGE/state"
+    printf 'present\n' >"$STAGE/packages/Uvfile"
+    When call run_sync "" 1 1
+    The status should be success
+    The stdout should include "Syncing uv tools"
+    The stderr should include "failed to uninstall extra"
+    The stderr should not include "failed to install"
+    The contents of file "$STAGE/uv.log" should include "tool upgrade --all"
+  End
+End

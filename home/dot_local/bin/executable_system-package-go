@@ -125,6 +125,9 @@ do_sync() {
   log_info "Syncing go binaries..."
 
   local declared declared_raw vers installed pairs before_snap after_snap package_bin_dir go_executable want
+  # Set only by a failed install of a declared-but-missing module: that is
+  # what fails the sync (as in snap). Removal and upgrade failures just warn.
+  local install_failed=0
   package_bin_dir=$(go_bin_dir)
   export GOBIN="$package_bin_dir"
   go_executable="$(go env GOROOT)/bin/go"
@@ -164,13 +167,19 @@ do_sync() {
     rm -v "$bin_dir/$bin" || log_warn "failed to remove $bin_dir/$bin"
   done
 
-  # Install missing (at the pinned version when one is declared)
-  pkg::diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
+  # Install missing (at the pinned version when one is declared). Fed by
+  # process substitution, not a pipe: a piped loop runs in a subshell and
+  # would lose install_failed.
+  local pkg
+  while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     want=$(awk -F'\t' -v p="$pkg" '$1==p {print $2; exit}' "$vers")
     spin::streamed "go: ${pkg##*/}" \
-      "$go_executable" install "$pkg@${want:-latest}" || log_warn "failed to install $pkg"
-  done
+      "$go_executable" install "$pkg@${want:-latest}" || {
+      log_warn "failed to install $pkg"
+      install_failed=1
+    }
+  done < <(pkg::diff_only_in "$declared" "$installed")
 
   # Upgrade everything still declared (re-running go install fetches the
   # pinned version — a no-op when already on it — or latest when unpinned).
@@ -192,7 +201,7 @@ do_sync() {
   # this sync — installed, upgraded, or downgraded (e.g. regenerate the
   # binary's self-installed man pages/completions).
   pkg::hooks_changed "$before_snap" "$after_snap"
-  return 0
+  return $install_failed
 }
 
 usage() {

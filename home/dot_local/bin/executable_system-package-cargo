@@ -157,7 +157,10 @@ do_sync() {
   pkg::manifest_read "$CARGOFILE" >"$declared_full"
   awk '{print $1}' "$declared_full" >"$declared"
   cargo_installed_crates >"$installed"
-  local had_failures=0
+  # had_failures gates the manifest stamp (any install OR upgrade failure);
+  # install_failed is the sync's exit status — only a declared crate that could
+  # not be installed fails the sync, upgrade failures just warn (as in snap).
+  local had_failures=0 install_failed=0
 
   # Uninstall extras BEFORE installing missing — same swap-collision
   # rationale as the uv/npm workers (two crates that ship a binary of the
@@ -168,7 +171,10 @@ do_sync() {
 
   # Install missing. for_each runs the action per crate and tallies failures.
   for_each "cargo install" _cargo_install_one \
-    < <(pkg::diff_only_in "$declared" "$installed") || had_failures=1
+    < <(pkg::diff_only_in "$declared" "$installed") || {
+    had_failures=1
+    install_failed=1
+  }
 
   # Upgrade everything still declared. cargo_provision is the canonical
   # upgrade path: cargo / binstall short-circuit when a crate is already at
@@ -181,7 +187,7 @@ do_sync() {
   cargo_installed_versions >"$after_snap"
   report::changes "$before_snap" "$after_snap" crate
   pkg::restart_changed "$before_snap" "$after_snap"
-  return 0
+  return $install_failed
 }
 
 usage() {

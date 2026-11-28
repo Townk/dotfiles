@@ -129,7 +129,10 @@ do_sync() {
   pkg::sync_parse_args "$@"
   log_info "Syncing npm globals..."
 
-  local declared_full declared installed before_snap after_snap line
+  local declared_full declared installed before_snap after_snap line pkg
+  # Set only by a failed install of a declared-but-missing package: that is
+  # what fails the sync (as in snap). Uninstall and update failures just warn.
+  local install_failed=0
   pkg::tmpset declared_full declared installed before_snap after_snap
 
   npm_snapshot_versions >"$before_snap"
@@ -147,15 +150,20 @@ do_sync() {
     [[ -n "$pkg" ]] || continue
     npm uninstall -g "$pkg" || log_warn "failed to uninstall $pkg"
   done
-  pkg::diff_only_in "$declared" "$installed" | while IFS= read -r pkg; do
+  # Fed by process substitution, not a pipe: a piped loop runs in a subshell
+  # and would lose install_failed.
+  while IFS= read -r pkg; do
     [[ -z "$pkg" ]] && continue
     while IFS= read -r line; do
       [[ "$(pkg::line_canonical "$line")" == "$pkg" ]] || continue
-      npm install -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_install_spec "$line")" || log_warn "failed to install $pkg"
+      npm install -g "${NPM_SYNC_FLAGS[@]}" "$(npm_line_install_spec "$line")" || {
+        log_warn "failed to install $pkg"
+        install_failed=1
+      }
       npm_build_global_if_needed "$pkg"
       break
     done <"$declared_full"
-  done
+  done < <(pkg::diff_only_in "$declared" "$installed")
 
   # `npm update -g` re-resolves the whole global tree and costs the better part
   # of a minute whether or not anything moved — the same on a routine sync where
@@ -206,7 +214,7 @@ do_sync() {
   npm_snapshot_versions >"$after_snap"
   report::changes "$before_snap" "$after_snap" package
   pkg::restart_changed "$before_snap" "$after_snap"
-  return 0
+  return $install_failed
 }
 
 usage() {

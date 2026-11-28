@@ -45,3 +45,82 @@ Describe 'system-package-cargo: binstall GitHub token'
     The output should equal "token=unset"
   End
 End
+
+# A failed INSTALL of a declared-but-missing crate must fail the sync (the
+# dispatcher then reports it and system-update stops), exactly as the snap
+# worker does — but only after the rest of the sync has run. Upgrade failures
+# keep warning only. cargo is a stub binary on PATH; cargo-binstall is absent,
+# so both the install and the upgrade pass go through `cargo install <crate>`.
+Describe 'system-package-cargo: sync exit status'
+  WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-cargo"
+
+  setup() {
+    STAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pkg-cargo-sync.XXXXXX")"
+    mkdir -p "$STAGE/home/.local" "$STAGE/bin" "$STAGE/packages"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/home/.local/lib"
+
+    # `cargo install --list` prints the state file; `cargo install <crate>`
+    # logs the attempt, fails for $STUB_FAIL, otherwise records the crate.
+    cat >"$STAGE/bin/cargo" <<'SH'
+#!/bin/sh
+if [ "$1 $2" = "install --list" ]; then
+  cat "$STUB_STATE" 2>/dev/null
+  exit 0
+fi
+printf '%s\n' "$*" >>"$STUB_LOG"
+case "$1" in
+  install)
+    if [ "$2" = "${STUB_FAIL:-}" ]; then
+      echo "error: could not compile $2" >&2
+      exit 101
+    fi
+    grep -q "^$2 " "$STUB_STATE" 2>/dev/null ||
+      printf '%s v1.0.0:\n    %s\n' "$2" "$2" >>"$STUB_STATE"
+    ;;
+esac
+exit 0
+SH
+    chmod +x "$STAGE/bin/cargo"
+    printf 'present v1.0.0:\n    present\n' >"$STAGE/state"
+    : >"$STAGE/cargo.log"
+  }
+  cleanup() { rm -rf "$STAGE"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  run_sync() {   # run_sync <crate whose `cargo install` fails, or "">
+    env -i HOME="$STAGE/home" \
+      PATH="$STAGE/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+      PKG_DIR="$STAGE/packages" \
+      STUB_STATE="$STAGE/state" STUB_LOG="$STAGE/cargo.log" STUB_FAIL="$1" \
+      zsh "$WORKER" sync
+  }
+
+  It 'fails when a declared-but-missing crate cannot be installed, after finishing the sync'
+    printf 'missing\npresent\n' >"$STAGE/packages/Cargofile"
+    When call run_sync missing
+    The status should be failure
+    The stderr should include "failed to install missing"
+    # The upgrade pass and the changes report still ran.
+    The contents of file "$STAGE/cargo.log" should include "install present"
+    The stdout should include "1 crate already up to date"
+    The path "$STAGE/packages/.state/cargo.manifest" should not be exist
+  End
+
+  It 'succeeds when the missing crate installs'
+    printf 'missing\npresent\n' >"$STAGE/packages/Cargofile"
+    When call run_sync ""
+    The status should be success
+    The stdout should include "missing installed: 1.0.0"
+    The path "$STAGE/packages/.state/cargo.manifest" should be exist
+  End
+
+  It 'succeeds when only an upgrade fails'
+    printf 'present\n' >"$STAGE/packages/Cargofile"
+    When call run_sync present
+    The status should be success
+    The stdout should include "Syncing cargo crates"
+    The stderr should include "failed to upgrade present"
+    The stderr should not include "failed to install"
+  End
+End
