@@ -1,5 +1,11 @@
 # backup_tm_spec.sh — tm scrub sessions (spec 2026-07-04 §5-6).
 Describe 'backup-tm.zsh'
+  # A pid for a pid file whose process is "gone". The code under test kills
+  # what a pid file names AND its children (pkill -P), for real: a small
+  # number such as 4242 is some process on this machine sooner or later - a
+  # spec shell of this very run, once pids wrap - and its children died with
+  # it. This one is past any pid the kernel hands out.
+  NO_SUCH_PID=99999999
   TAB=$(printf '\t')
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
@@ -295,7 +301,7 @@ EOF
         s=$(bkp::tm::session_new diff "$FIX/anchor")
         bkp::tm::ladder_fill "$s"
         mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
-        print -r -- 4242 > "$s/lens.pid"
+        print -r -- "$NO_SUCH_PID" > "$s/lens.pid"
         # fake viewer whose cmdline matches the session's patch path
         blockers
         { print '#!/bin/sh'; blocker_cmd } > "$FIX/stub/diffnav"
@@ -771,7 +777,7 @@ EOF
       printf 'diff\n' > "$S/lens"
       printf '%s\n' "$FIX/anchor" > "$S/anchor"
       mkdir -p "$FIX/anchor" "$S/mnt/ids/cccc0000$FIX/anchor" "$S/mnt/ids/aaaa0000$FIX/anchor"
-      printf '4242\n' > "$S/lens.pid"
+      printf '%s\n' "$NO_SUCH_PID" > "$S/lens.pid"
       STUB="$FIX/stub"; mkdir -p "$STUB"
       printf '#!/bin/sh\necho "tmux $*" >> "%s/tx.calls"\n' "$FIX" > "$STUB/tmux"
       chmod +x "$STUB/tmux"
@@ -790,7 +796,7 @@ EOF
 
     It 'steps the owning session older on shift+down'
       Skip if 'complete-only: the route verb end to end: the tm binary steps a session and refreshes its lens (~230 ms)' spec_complete_only
-      When run zsh -f "$BIN" route shift+down 4242
+      When run zsh -f "$BIN" route shift+down "$NO_SUCH_PID"
       The status should be success
       The contents of file "$FIX/sessions/s.test/rung" should equal 2
     End
