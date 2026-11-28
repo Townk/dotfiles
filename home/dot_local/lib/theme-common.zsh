@@ -5,7 +5,7 @@
 # family (tmux-modal / rex-modal, input::*, mux::*).
 
 _theme_self="${(%):-%x}"
-source "$(dirname "$_theme_self")/common.zsh"
+source "${_theme_self:h}/common.zsh"
 unset _theme_self
 
 [ -n "${__THEME_COMMON_LOADED:-}" ] && return 0

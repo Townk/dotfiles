@@ -121,11 +121,11 @@
 # Logging (die), help-token dispatch, and require_cmd come from the shared
 # base. Source it relative to THIS file.
 _pick_common_self="${(%):-%x}"
-source "$(dirname "$_pick_common_self")/common.zsh"
+source "${_pick_common_self:h}/common.zsh"
 # theme::sgr_fg (the canonical hex→SGR helper pick::colorize_hints uses).
-source "$(dirname "$_pick_common_self")/theme-common.zsh"
+source "${_pick_common_self:h}/theme-common.zsh"
 # FZF_BIND_*: the bindings shared with the shell's fzf (zsh/completion.sh).
-source "$(dirname "$_pick_common_self")/fzf-bindings.zsh"
+source "${_pick_common_self:h}/fzf-bindings.zsh"
 unset _pick_common_self
 
 require_cmd fzf

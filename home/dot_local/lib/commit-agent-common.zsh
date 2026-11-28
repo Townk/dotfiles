@@ -40,8 +40,8 @@
 
 # Source the base + prompt module relative to THIS file.
 _cagent_self="${(%):-%x}"
-source "$(dirname "$_cagent_self")/common.zsh"
-source "$(dirname "$_cagent_self")/prompt-common.zsh"
+source "${_cagent_self:h}/common.zsh"
+source "${_cagent_self:h}/prompt-common.zsh"
 unset _cagent_self
 
 # cagent::usage_options_head <agent-noun>

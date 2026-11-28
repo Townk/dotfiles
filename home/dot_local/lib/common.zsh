@@ -260,11 +260,22 @@ common::atomic_write() {
 if [[ -z "${_common_tmpdir_trap_armed:-}" ]]; then
   typeset -g _common_tmpdir_trap_armed=1
   _common_trap_prev=""
-  _common_trap_capture=$(mktemp) || _common_trap_capture=""
-  if [[ -n "$_common_trap_capture" ]]; then
-    trap >|"$_common_trap_capture" 2>/dev/null
-    _common_trap_line=$(awk '/ EXIT$/{print; exit}' "$_common_trap_capture")
-    rm -f "$_common_trap_capture"
+  # Without a fork: this runs in every script that sources the file, and
+  # mktemp + awk + rm were two thirds of its load time. The capture file is
+  # made exclusively and private (a trap body is not ours to publish), read
+  # with $(<…) and removed with the zsh/files builtin.
+  _common_trap_capture="${TMPDIR:-/tmp}/.common-trap.$$.$RANDOM$RANDOM"
+  _common_trap_line=""
+  if zmodload zsh/system 2>/dev/null && zmodload -F zsh/files b:zf_rm 2>/dev/null &&
+    sysopen -w -o creat,excl -m 600 -u _common_trap_fd "$_common_trap_capture" 2>/dev/null; then
+    trap >&$_common_trap_fd 2>/dev/null
+    exec {_common_trap_fd}>&-
+    for _common_trap_line in "${(@f)$(<"$_common_trap_capture")}"; do
+      [[ "$_common_trap_line" == *" EXIT" ]] && break
+      _common_trap_line=""
+    done
+    zf_rm -f "$_common_trap_capture"
+    unset _common_trap_fd
     if [[ -n "$_common_trap_line" ]]; then
       _common_trap_line=${_common_trap_line#trap -- }  # -> 'BODY' EXIT
       _common_trap_line=${_common_trap_line% EXIT}     # -> 'BODY'

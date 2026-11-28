@@ -6,7 +6,7 @@
 # relative to THIS file so it resolves both at ~/.local/lib (production) and at
 # the repo path (the ShellSpec suite sources us directly).
 _pkg_common_self="${(%):-%x}"
-source "$(dirname "$_pkg_common_self")/common.zsh"
+source "${_pkg_common_self:h}/common.zsh"
 unset _pkg_common_self
 
 PKG_DIR="${PKG_DIR:-$HOME/.config/packages}"

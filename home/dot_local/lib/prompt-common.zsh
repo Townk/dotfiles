@@ -10,7 +10,7 @@
 
 # Source the base relative to THIS file.
 _prompt_common_self="${(%):-%x}"
-source "$(dirname "$_prompt_common_self")/common.zsh"
+source "${_prompt_common_self:h}/common.zsh"
 unset _prompt_common_self
 
 # prompt::required <varname> <prompt> — loop until non-empty; sets the named var.

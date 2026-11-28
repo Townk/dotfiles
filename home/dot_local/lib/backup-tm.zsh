@@ -4,9 +4,9 @@
 # browse verb; sources backup.zsh itself.
 
 _bkp_tm_self="${(%):-%x}"
-source "$(dirname "$_bkp_tm_self")/backup.zsh"
+source "${_bkp_tm_self:h}/backup.zsh"
 # theme::sgr_fg/theme::sgr_bg — the canonical hex→SGR pair bkp::tm::_sgr delegates to.
-source "$(dirname "$_bkp_tm_self")/theme-common.zsh"
+source "${_bkp_tm_self:h}/theme-common.zsh"
 unset _bkp_tm_self
 
 : ${BKP_TM_SESSIONS:="${BKP_STATE_DIR:-$HOME/.local/state/terminal-backup}/sessions"}

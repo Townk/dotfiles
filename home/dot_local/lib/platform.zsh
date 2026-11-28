@@ -15,7 +15,7 @@
 #       Best-effort: bring the app's window to the foreground. Never fatal.
 
 _platform_self="${(%):-%x}"
-_platform_dir="$(dirname "$_platform_self")"
+_platform_dir="${_platform_self:h}"
 unset _platform_self
 
 source "$_platform_dir/common.zsh"

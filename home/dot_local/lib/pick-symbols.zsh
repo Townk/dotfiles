@@ -11,7 +11,7 @@
 
 # Source pick-common relative to THIS file.
 _pick_symbols_self="${(%):-%x}"
-source "${PICK_COMMON_LIB:-$(dirname "$_pick_symbols_self")/pick-common.zsh}"
+source "${PICK_COMMON_LIB:-${_pick_symbols_self:h}/pick-common.zsh}"
 unset _pick_symbols_self
 
 # pick_symbols::parse_args <arg>...

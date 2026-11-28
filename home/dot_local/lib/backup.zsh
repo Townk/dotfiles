@@ -9,10 +9,10 @@
 # to THIS file so it resolves both at ~/.local/lib (production) and at the
 # repo path (the ShellSpec suite sources us directly).
 _bkp_self="${(%):-%x}"
-source "$(dirname "$_bkp_self")/common.zsh"
+source "${_bkp_self:h}/common.zsh"
 # The freshness heartbeat + prompt banner (bkp::drift::*). Standalone so the
 # prompt can source it alone; here the workers get bkp::drift::stamp.
-source "$(dirname "$_bkp_self")/backup-drift.zsh"
+source "${_bkp_self:h}/backup-drift.zsh"
 unset _bkp_self
 
 zmodload zsh/datetime

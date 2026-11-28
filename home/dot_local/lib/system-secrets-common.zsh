@@ -17,7 +17,7 @@
 # ~/.local/lib (production) and at the repo path.
 # ---------------------------------------------------------------------------
 _sec_common_self="${(%):-%x}"
-source "$(dirname "$_sec_common_self")/common.zsh"
+source "${_sec_common_self:h}/common.zsh"
 unset _sec_common_self
 
 # ---------------------------------------------------------------------------
@@ -259,7 +259,7 @@ sec::profile_is_headless() {
 # ::choice / ::confirm) live in the shared prompt-common.zsh module.
 # ---------------------------------------------------------------------------
 _sec_prompt_self="${(%):-%x}"
-source "$(dirname "$_sec_prompt_self")/prompt-common.zsh"
+source "${_sec_prompt_self:h}/prompt-common.zsh"
 unset _sec_prompt_self
 
 # ---------------------------------------------------------------------------

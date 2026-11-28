@@ -29,11 +29,11 @@
 # Zellij was a third backend until 2026-11-27, when its support was removed.
 
 _mux_self="${(%):-%x}"
-source "$(dirname "$_mux_self")/mux/tmux.zsh"
+source "${_mux_self:h}/mux/tmux.zsh"
 unset _mux_self
 
 _mux_self="${(%):-%x}"
-source "$(dirname "$_mux_self")/mux/rex.zsh"
+source "${_mux_self:h}/mux/rex.zsh"
 unset _mux_self
 
 # Rex server 0.1.0-preview.25 stopped exporting $REX_SESSION into panes; only

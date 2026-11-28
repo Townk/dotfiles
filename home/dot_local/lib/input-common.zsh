@@ -4,8 +4,8 @@
 # mux::* (mux.zsh; zj::* are its aliases) floats these in a pane. Theme + boilerplate live here once.
 
 _input_self="${(%):-%x}"
-source "$(dirname "$_input_self")/theme-common.zsh"
-source "$(dirname "$_input_self")/pick-common.zsh"
+source "${_input_self:h}/theme-common.zsh"
+source "${_input_self:h}/pick-common.zsh"
 unset _input_self
 
 # _input::bin — resolve the widget binary (the input shims invoke its

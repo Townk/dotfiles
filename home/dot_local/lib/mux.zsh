@@ -22,15 +22,15 @@
 # input-common gives the input::* inline widgets.
 
 _mux_self="${(%):-%x}"
-source "$(dirname "$_mux_self")/mux-bootstrap.zsh"
+source "${_mux_self:h}/mux-bootstrap.zsh"
 unset _mux_self
 
 _mux_self="${(%):-%x}"
-source "$(dirname "$_mux_self")/pick-common.zsh"
+source "${_mux_self:h}/pick-common.zsh"
 unset _mux_self
 
 _mux_self="${(%):-%x}"
-source "$(dirname "$_mux_self")/input-common.zsh"
+source "${_mux_self:h}/input-common.zsh"
 unset _mux_self
 
 # _mux::widgets_float — true when the current backend renders widgets as
