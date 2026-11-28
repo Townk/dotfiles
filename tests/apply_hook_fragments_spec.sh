@@ -14,13 +14,11 @@ Describe 'apply-hook fragments'
   HOOKS="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts"
 
   setup() {
-    HF_TMP=$(mktemp -d)
+    spec_sandbox hf; HF_TMP=$SANDBOX
     HF_HOME="$HF_TMP/home"
     mkdir -p "$HF_HOME"
   }
-  cleanup() { rm -rf "$HF_TMP"; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   # render <template text> — through chezmoi, with this repo's fragments.
   render() { print -r -- "$1" | chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template; }
@@ -31,6 +29,10 @@ Describe 'apply-hook fragments'
   Describe 'signature-marker.sh.tmpl'
     SIG_CALL='{{ includeTemplate "signature-marker.sh.tmpl" (dict "reason" "inputs changed" "changed" "[t] change detected." "unchanged" "[t] unchanged.") }}'
     STATE_DIR() { print -r -- "$HF_HOME/.local/state/chezmoi"; }
+    # The three sig examples run the same rendering of the same call, five
+    # times in all: rendered once for the group.
+    sig_once() { SIG_RENDERED=$(render "$SIG_CALL"); }
+    BeforeAll 'sig_once'
 
     # sig <signature> — run the fragment as a hook would, with that fingerprint.
     sig() {
@@ -39,7 +41,7 @@ Describe 'apply-hook fragments'
         print -r -- 'MARKER="${HOME}/.local/state/chezmoi/t-pending"'
         print -r -- 'STATE="${HOME}/.local/state/chezmoi/t.sig"'
         print -r -- "STATIC_SIG=\"$1\""
-        render "$SIG_CALL"
+        print -r -- "$SIG_RENDERED"
       } >"$HF_TMP/sig.sh"
       env HOME="$HF_HOME" bash "$HF_TMP/sig.sh"
       print -r -- "rc=$? marker=$([[ -f "$(STATE_DIR)/t-pending" ]] && cat "$(STATE_DIR)/t-pending")"
@@ -68,6 +70,7 @@ rc=0 marker=inputs changed"
     End
 
     It 'is the tail of the symbols DB hook'
+      Skip if 'complete-only: renders a whole apply hook and its fragment through chezmoi (two execute-template runs), then bash -n' spec_complete_only
       run() {
         render_hook run_onchange_after_60-symbols-db.sh.tmpl || return 1
         hook_has "$(render '{{ includeTemplate "signature-marker.sh.tmpl" (dict "reason" "static DB inputs changed" "changed" "[symbols-db] static input change detected; DB re-probe pending (marker written)." "unchanged" "[symbols-db] static fingerprint initialized/unchanged.") }}')" &&
@@ -78,6 +81,7 @@ rc=0 marker=inputs changed"
     End
 
     It 'is the tail of the symbols font hook'
+      Skip if 'complete-only: renders a whole apply hook and its fragment through chezmoi (two execute-template runs), then bash -n' spec_complete_only
       run() {
         render_hook run_onchange_after_70-symbols-nerd-font.sh.tmpl || return 1
         hook_has "$(render '{{ includeTemplate "signature-marker.sh.tmpl" (dict "reason" "static font inputs changed" "changed" "[symbols-nerd-font] static font input change detected; build pending (marker written)." "unchanged" "[symbols-nerd-font] static font fingerprint initialized/unchanged.") }}')" &&
@@ -118,11 +122,13 @@ rc=7"
     }
 
     It 'is the tail of the zsh build hook'
+      Skip if 'complete-only: renders a whole apply hook and its fragment through chezmoi (two execute-template runs), then bash -n' spec_complete_only
       When call tail_of run_onchange_after_50-custom-build-zsh.sh.tmpl zsh-build custom-builds/zsh/build-zsh.sh
       The output should equal 1
     End
 
     It 'is the tail of the colorscripts build hook'
+      Skip if 'complete-only: renders a whole apply hook and its fragment through chezmoi (two execute-template runs), then bash -n' spec_complete_only
       When call tail_of run_onchange_after_55-custom-build-colorscripts.sh.tmpl colorscripts-build custom-builds/colorscripts/build-colorscripts.sh
       The output should equal 1
     End

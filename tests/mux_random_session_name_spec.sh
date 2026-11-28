@@ -1,6 +1,10 @@
 # Tests for mux-random-session-name: generation is non-mutating by default,
 # while explicit application routes through the shared mux API on both backends.
 Describe 'mux-random-session-name'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   setup() {
     MSN_TMP=$(mktemp -d)
     MSN_SCRIPT="$PWD/home/dot_local/bin/executable_mux-random-session-name"
@@ -62,19 +66,19 @@ ZSH
 
   generate() {
     env MUX_LIB="$MSN_LIB" MUX_BACKEND=tmux MUX_TMUX_BIN="$MSN_TMP/tmux" \
-      zsh "$MSN_SCRIPT"
+      zsh -f "$MSN_SCRIPT"
   }
   apply_tmux_current() {
     env MUX_LIB="$MSN_LIB" MUX_BACKEND=tmux MUX_TMUX_BIN="$MSN_TMP/tmux" \
-      TMUX=/tmp/tmux-test.sock,1,0 zsh "$MSN_SCRIPT" --apply-current
+      TMUX=/tmp/tmux-test.sock,1,0 zsh -f "$MSN_SCRIPT" --apply-current
   }
   apply_tmux_target() {
     env MUX_LIB="$MSN_LIB" MUX_BACKEND=tmux MUX_TMUX_BIN="$MSN_TMP/tmux" \
-      MUX_TMUX_SOCKET="$MSN_TMP/socket" zsh "$MSN_SCRIPT" --apply "$1"
+      MUX_TMUX_SOCKET="$MSN_TMP/socket" zsh -f "$MSN_SCRIPT" --apply "$1"
   }
   rename_calls() { grep -c 'rename-session' "$MSN_LOG" || true; }
   short_help_matches() {
-    [[ "$(zsh "$MSN_SCRIPT" -h)" == "$(zsh "$MSN_SCRIPT" --help)" ]]
+    [[ "$(zsh -f "$MSN_SCRIPT" -h)" == "$(zsh -f "$MSN_SCRIPT" --help)" ]]
   }
   completed_sessions() {
     env MUX_LIB="$MSN_LIB" MUX_BACKEND=tmux MUX_TMUX_BIN="$MSN_TMP/tmux" \
@@ -91,7 +95,7 @@ ZSH
 
   generate_title() {
     env MUX_LIB="$MSN_LIB" MUX_BACKEND=tmux MUX_TMUX_BIN="$MSN_TMP/tmux" \
-      zsh "$MSN_SCRIPT" --title "$@"
+      zsh -f "$MSN_SCRIPT" --title "$@"
   }
   # Every Title Case name the script can produce, one per line, read from the
   # script's own word lists so the two cannot drift.
@@ -150,7 +154,7 @@ ZSH
   # (status 3, no name) rather than print a name it never compared.
   generate_rex() {
     env MUX_LIB="$MSN_LIB" MUX_BACKEND= TMUX= REX_SESSION=session:here \
-      MUX_REX_BIN="$MSN_TMP/rex" zsh "$MSN_SCRIPT" "$@"
+      MUX_REX_BIN="$MSN_TMP/rex" zsh -f "$MSN_SCRIPT" "$@"
   }
   unguarded_rex_calls() { grep -v -c -- '--autostart=false' "$MSN_LOG" || true; }
 
@@ -207,7 +211,7 @@ ZSH
   End
 
   It 'documents the could-not-check status'
-    When call zsh "$MSN_SCRIPT" --help
+    When call zsh -f "$MSN_SCRIPT" --help
     The output should include "3  The sessions could not be listed"
   End
 
@@ -218,13 +222,13 @@ ZSH
   End
 
   It 'documents --title'
-    When call zsh "$MSN_SCRIPT" --help
+    When call zsh -f "$MSN_SCRIPT" --help
     The output should include "--title"
     The output should include "Wandering Glade"
   End
 
   It 'documents generation, mutation, backend selection, output, and failures'
-    When call zsh "$MSN_SCRIPT" --help
+    When call zsh -f "$MSN_SCRIPT" --help
     The status should be success
     The output should include "DESCRIPTION"
     The output should include "MUTATING MODES"
@@ -272,7 +276,7 @@ ZSH
   It 'loads the library when MUX_LIB is the directory it is elsewhere'
     generate_dir_lib() {
       env MUX_LIB="$PWD/home/dot_local/lib" MUX_BACKEND=tmux \
-        MUX_TMUX_BIN="$MSN_TMP/tmux" zsh "$MSN_SCRIPT"
+        MUX_TMUX_BIN="$MSN_TMP/tmux" zsh -f "$MSN_SCRIPT"
     }
     When call generate_dir_lib
     The status should be success
@@ -311,7 +315,7 @@ ZSH
   End
 
   It 'rejects current-session mutation outside a mux'
-    When call env MUX_LIB="$MSN_LIB" zsh "$MSN_SCRIPT" --apply-current
+    When call env MUX_LIB="$MSN_LIB" zsh -f "$MSN_SCRIPT" --apply-current
     The status should be failure
     The error should include "requires a mux session"
   End

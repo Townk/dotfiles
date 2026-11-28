@@ -3,18 +3,25 @@
 # loop on top of it. Data is rendered from the same keymap.yaml that
 # generates keymap.conf, so these also guard panel↔keytable agreement.
 Describe 'mux-whichkey panel'
+  # The panel data is one rendering of one template: rendered once for the
+  # file. Each example still gets a TMPDIR of its own.
+  render_data() {
+    WK_DATA_ONCE="$SHELLSPEC_TMPBASE/wk.data"
+    chezmoi execute-template <home/dot_config/mux/whichkey.data.tmpl >"$WK_DATA_ONCE" 2>/dev/null
+  }
+  # expand() writes a tmux stub per call: its pooled inode is exec'd once here.
+  Include tests/exec_warm_helper.sh
+  render_and_warm() { render_data && spec_exec_pool_warm 1; }
+  BeforeAll 'render_and_warm'
   setup() {
-    WK_TMP=$(mktemp -d)
-    chezmoi execute-template <home/dot_config/mux/whichkey.data.tmpl >"$WK_TMP/wk.data" 2>/dev/null
-    export WK_DATA="$WK_TMP/wk.data" TMPDIR="$WK_TMP"
+    spec_sandbox wk; WK_TMP=$SANDBOX
+    export WK_DATA="$WK_DATA_ONCE" TMPDIR="$WK_TMP"
     W="$PWD/home/dot_config/mux/scripts/executable_mux-whichkey"
   }
-  cleanup() { rm -rf "$WK_TMP"; unset WK_DATA W; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   # strip CSI positioning + SGR so assertions read the visible text
-  plain() { zsh "$W" render "$1" "${2:-0}" "${3:-25}" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '\000'; }
+  plain() { zsh -f "$W" render "$1" "${2:-0}" "${3:-25}" | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '\000'; }
 
   # A popup has no current pane, so tmux expands "where I came from" formats
   # to nothing when the panel source-files a command: `new-window -c
@@ -29,7 +36,7 @@ Describe 'mux-whichkey panel'
       print 'case "$*" in *pane_current_path*) printf "/origin/dir\n" ;; esac'
     } > "$STUB"
     chmod +x "$STUB"
-    ARG="$1" WKBIN="$W" TMUX_STUB="$STUB" zsh -c '
+    ARG="$1" WKBIN="$W" TMUX_STUB="$STUB" zsh -f -c '
       TMUX_BIN="$TMUX_STUB"
       eval "$(sed -n "/^_expand_origin()/,/^}/p" "$WKBIN")"
       _expand_origin "$ARG"
@@ -111,7 +118,7 @@ Describe 'mux-whichkey panel'
 
   # The label colour IS the entry's disposition toward the mode stack:
   # pink ends the mode, blue enters another one, green STAYS in this one.
-  colored() { zsh "$W" render "$1" "${2:-0}" "${3:-25}" | tr -d '\000'; }
+  colored() { zsh -f "$W" render "$1" "${2:-0}" "${3:-25}" | tr -d '\000'; }
   It 'paints a sticky binding green, an ending one pink'
     When call colored scroll
     The output should include $'\e[38;2;166;227;161mscroll down'    # green
@@ -127,12 +134,12 @@ Describe 'mux-whichkey panel'
   # be called as `$(_paint …)`, and the subshell swallowed both — the panel
   # loop read an unset PAGES, so C-d/C-u could never turn a page.
   It 'leaves the page count visible to the caller'
-    When call zsh "$W" pages prefix 6
+    When call zsh -f "$W" pages prefix 6
     The output should equal "0/4"
   End
 
   It 'reports a single page when the table fits'
-    When call zsh "$W" pages scroll 25
+    When call zsh -f "$W" pages scroll 25
     The output should equal "0/1"
   End
 
@@ -154,18 +161,18 @@ Describe 'mux-whichkey panel'
   # unmodified chords, then modified ones (an uppercase letter counts as
   # shift+letter). Groups render contiguously, anchored at their first member.
   It 'sorts mode-switch bindings to the top'
-    When call zsh -c 'zsh "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render prefix 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | tr "\342\224\202" "\n" | grep -n "Locked mode\|copy pwd (abs)" | cut -d: -f1 | tr "\n" " "'
+    When call zsh -f -c 'zsh -f "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render prefix 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | tr "\342\224\202" "\n" | grep -n "Locked mode\|copy pwd (abs)" | cut -d: -f1 | tr "\n" " "'
     # the mode-switch group lands far above the alt-modified chords
     The output should match pattern "* *"
   End
 
   It 'renders a configured group contiguously (the tab numbers)'
-    When call zsh -c 'zsh "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render tab 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | grep -c "go to tab"'
+    When call zsh -f -c 'zsh -f "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render tab 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | grep -c "go to tab"'
     The output should equal "1"
   End
 
   It 'keeps the split-pane variants together as one group'
-    When call zsh -c 'zsh "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render pane 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | grep -o "split pane" | wc -l | tr -d " "'
+    When call zsh -f -c 'zsh -f "$PWD/home/dot_config/mux/scripts/executable_mux-whichkey" render pane 0 30 | sed "s/\x1b\[[0-9;]*[A-Za-z]//g" | tr -d "\000" | grep -o "split pane" | wc -l | tr -d " "'
     The output should equal "4"
   End
 
@@ -184,6 +191,7 @@ End
 
 Describe 'keymap.yaml is the single source'
   It 'generates the same bindings the panel dispatches'
+    Skip if 'complete-only: renders two chezmoi templates and greps the keymap once per binding' spec_complete_only
     # every panel entry with a cmd must exist as a generated bind
     When call zsh -c '
       km=$(chezmoi execute-template <home/dot_config/tmux/keymap.conf.tmpl)
@@ -214,7 +222,7 @@ Describe 'mux-whichkey _fg / _bg (C1)'
 
   # e5bf7b -> 229;191;123
   fg() {
-    ARG="$1" WKBIN="$W" zsh -c '
+    ARG="$1" WKBIN="$W" zsh -f -c '
       source home/dot_local/lib/theme-common.zsh
       typeset -A FG_MEMO
       eval "$(sed -n "/^_fg()/,/^}/p" "$WKBIN")"
@@ -223,7 +231,7 @@ Describe 'mux-whichkey _fg / _bg (C1)'
   bg() {
     # _bg is a single-line function, so lift just that line (a ,/^}/ range
     # would run on past it to the next closing brace).
-    ARG="$1" WKBIN="$W" zsh -c '
+    ARG="$1" WKBIN="$W" zsh -f -c '
       source home/dot_local/lib/theme-common.zsh
       eval "$(sed -n "/^_bg()/p" "$WKBIN")"
       _bg "$ARG"; print -rn -- "$REPLY"'

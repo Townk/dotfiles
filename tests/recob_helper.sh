@@ -356,7 +356,20 @@ recob_endpoint() {
 
 # recob_field <n> <name> — the decoded value of one field of the nth operation.
 # Empty output when the field is absent, which is itself assertable.
+#
+# SPEC_RECOB_DEBUG=<file>: when a field comes back empty, append the whole
+# record log and the daemon's own log to <file>. For an intermittent failure
+# seen a few times in full runs (an expected field read back empty, never
+# reproduced alone): set it for the run and read the file after a failure.
 recob_field() {
+  if [ -n "${SPEC_RECOB_DEBUG:-}" ]; then
+    _rf_v=$(_recob_op_lines | sed -n "${1}p" | _recob_pick_field "$2")
+    [ -n "$_rf_v" ] || {
+      echo "== $(date +%T) ${SHELLSPEC_SPECFILE:-?} field $1 $2 dir=$RECOB_DIR"
+      echo "-- record log"; cat -v "$RECOB_RECORD_LOG"
+      echo "-- daemon log"; cat "$RECOB_DIR/daemon.log"
+    } >>"$SPEC_RECOB_DEBUG" 2>&1
+  fi
   _recob_op_lines | sed -n "${1}p" | _recob_pick_field "$2" | _recob_unhex
 }
 

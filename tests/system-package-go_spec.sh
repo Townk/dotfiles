@@ -9,6 +9,7 @@
 # worker now unsets GOROOT at startup: go derives its root from the resolved
 # executable, always the toolchain actually in use.
 Describe 'system-package-go: sync with a stale inherited GOROOT'
+  Skip if 'complete-only: runs a whole system-package-go sync against stub tools (dozens of forks)' spec_complete_only
   WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-go"
 
   setup() {
@@ -46,20 +47,24 @@ SH
 
     print -r -- 'example.com/mod/cmd/tool' >"$STAGE/packages/Gofile"
   }
-  cleanup() { rm -rf "$STAGE"; }
+  # The worker's spinner naps 0.1 s per tick beside each install
+  # (spin::nap -> common::sleep): on the virtual clock the ticks cost nothing.
+  # The stubs' pooled inodes are exec'd once here, not inside an example.
+  Include tests/exec_warm_helper.sh
+  once() { spec_clock_set && spec_exec_pool_warm 2; }
+  BeforeAll 'once'
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   run_sync() {
     # env -i: the spec process itself runs under a mise-activated shell whose
     # GOROOT/MISE_* must not leak in — GOROOT below is the variable under test.
-    env -i HOME="$STAGE/home" \
+    env -i HOME="$STAGE/home" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
       PATH="$STAGE/shimbin:/usr/bin:/bin:/usr/sbin:/sbin" \
       PKG_DIR="$STAGE/packages" \
       STUB_GOROOT="$STAGE/goroot" STUB_GOPATH="$STAGE/gopath" \
       STUB_INSTALL_LOG="$STAGE/installed.log" \
       GOROOT="$STAGE/pruned/go/1.27.0" \
-      zsh "$WORKER" sync
+      zsh -f "$WORKER" sync
   }
 
   It 'installs declared modules despite the stale GOROOT'
@@ -77,6 +82,7 @@ End
 # worker does — but only after the rest of the sync has run. Upgrade failures
 # keep warning only.
 Describe 'system-package-go: sync exit status'
+  Skip if 'complete-only: runs a whole system-package-go sync against stub tools (dozens of forks)' spec_complete_only
   WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-go"
 
   setup() {
@@ -116,9 +122,13 @@ SH
 
     print -r -- 'example.com/mod/cmd/tool' >"$STAGE/packages/Gofile"
   }
-  cleanup() { rm -rf "$STAGE"; }
+  # The worker's spinner naps 0.1 s per tick beside each install
+  # (spin::nap -> common::sleep): on the virtual clock the ticks cost nothing.
+  # The stubs' pooled inodes are exec'd once here, not inside an example.
+  Include tests/exec_warm_helper.sh
+  once() { spec_clock_set && spec_exec_pool_warm 2; }
+  BeforeAll 'once'
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   # Stage example.com/mod/cmd/tool as already installed. The .meta sidecar is
   # not executable, so the worker's scan of $GOBIN skips it.
@@ -131,12 +141,12 @@ SH
   }
 
   run_sync() {   # run_sync <non-empty to make every `go install` fail>
-    env -i HOME="$STAGE/home" \
+    env -i HOME="$STAGE/home" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
       PATH="$STAGE/shimbin:/usr/bin:/bin:/usr/sbin:/sbin" \
       PKG_DIR="$STAGE/packages" \
       STUB_GOROOT="$STAGE/goroot" STUB_GOPATH="$STAGE/gopath" \
       STUB_INSTALL_LOG="$STAGE/installed.log" STUB_FAIL_INSTALL="$1" \
-      zsh "$WORKER" sync
+      zsh -f "$WORKER" sync
   }
 
   It 'fails when a declared-but-missing module cannot be installed, after finishing the sync'

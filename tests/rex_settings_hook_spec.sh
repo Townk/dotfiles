@@ -4,12 +4,15 @@
 Describe 'Rex settings hook'
   HOOK="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_61-rex-settings.sh.tmpl"
 
-  setup() {
-    spec_sandbox; SH_TMP=$SANDBOX
-    spec_render_template "$HOOK" "$SH_TMP/hook.sh" 2>"$SH_TMP/render.err"
-    # `client ls` answers from clients.json below, or exits 4 with no server.
-    spec_fake_rex "$SH_TMP" '*settings_apply*) [ "${STUB_DO:-ok}" = ok ] ;;'
-    cat >"$SH_TMP/clients.json" <<'EOS'
+  # The template and the client list have no per-example input: rendered and
+  # read once for the file (the hook hard-linked into each sandbox). The
+  # fake rex an example writes runs from a pooled inode, exec'd once here.
+  Include tests/exec_warm_helper.sh
+  once() {
+    SH_FIX="$SHELLSPEC_TMPBASE/sh-fix"; mkdir -p "$SH_FIX"
+    spec_render_template "$HOOK" "$SH_FIX/hook.sh" 2>"$SH_FIX/render.err"
+    SH_RENDER_ERR=$(<"$SH_FIX/render.err")
+    cat >"$SH_FIX/clients.json" <<'EOS'
 {"clients":[
  {"client_id":"client:mac","info":{"kind":"app","platform":"macos"},"principal":{"transport":"unix"},"connection_state":"connected","session_ids":["session:a","session:b"]},
  {"client_id":"client:ipad","info":{"kind":"app","platform":"ios"},"principal":{"transport":"tailscale"},"connection_state":"connected","session_ids":["session:a"]},
@@ -18,6 +21,18 @@ Describe 'Rex settings hook'
  {"client_id":"client:idle","info":{"kind":"app","platform":"macos"},"principal":{"transport":"unix"},"connection_state":"connected"},
  {"client_id":"client:cli","info":{"kind":"cli","platform":"macos"},"principal":{"transport":"unix"},"connection_state":"connected"}]}
 EOS
+    SH_CLIENTS=$(<"$SH_FIX/clients.json")
+    spec_exec_pool_warm 1
+  }
+  BeforeAll 'once'
+  setup() {
+    spec_sandbox; SH_TMP=$SANDBOX
+    ln "$SH_FIX/hook.sh" "$SH_TMP/hook.sh"
+    # A copy, not a link: examples replace the client list in place.
+    print -r -- "$SH_CLIENTS" >"$SH_TMP/clients.json"
+    print -rn -- "$SH_RENDER_ERR" >"$SH_TMP/render.err"
+    # `client ls` answers from clients.json, or exits 4 with no server.
+    spec_fake_rex "$SH_TMP" '*settings_apply*) [ "${STUB_DO:-ok}" = ok ] ;;'
   }
   BeforeEach 'setup'
 

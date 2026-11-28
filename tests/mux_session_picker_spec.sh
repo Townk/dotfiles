@@ -1,18 +1,20 @@
 # Workspace/session picker presentation: live tmux names are rebuilt on every
 # launch, displayed like the status-bar pill, and retain their raw dispatch id.
 Describe 'mux workspace session picker'
-  setup() {
-    MSP_TMP=$(mktemp -d)
-    MSP_PICKER="$PWD/home/dot_config/mux/scripts/executable_quick-launch-pick"
-    mkdir -p "$MSP_TMP/.config/theme" "$MSP_TMP/cache"
+  # The tmux stub, the stand-in pick-common, the mux wrapper and the palette
+  # never change: written once (and the stub run once). An example gets a
+  # copy of the small home template: its own targets.json, config and cache.
+  fixtures() {
+    MSP_FIX="$SHELLSPEC_TMPBASE/msp-fix"
+    mkdir -p "$MSP_FIX/home/.config/theme" "$MSP_FIX/home/cache"
 
-    cat >"$MSP_TMP/targets.json" <<'JSON'
+    cat >"$MSP_FIX/home"/targets.json <<'JSON'
 {"workspaces":[{"id":"awesome-platypus","name":"awesome-platypus"}]}
 JSON
-    cat >"$MSP_TMP/.config/theme/chezmoi-system.json" <<'JSON'
+    cat >"$MSP_FIX/home/.config/theme/chezmoi-system.json" <<'JSON'
 {"palette":{"white":"#ffffff","blue":"#89b4fa","mauve":"#cba6f7","overlay1":"#7f849c","subtext0":"#a6adc8"}}
 JSON
-    cat >"$MSP_TMP/tmux" <<'ZSH'
+    cat >"$MSP_FIX/tmux" <<'ZSH'
 #!/usr/bin/env zsh
 case "$1" in
   display)
@@ -30,8 +32,9 @@ case "$1" in
     ;;
 esac
 ZSH
-    chmod +x "$MSP_TMP/tmux"
-    cat >"$MSP_TMP/pick-common.zsh" <<'ZSH'
+    chmod +x "$MSP_FIX/tmux"
+    "$MSP_FIX/tmux" display session_name >/dev/null 2>&1
+    cat >"$MSP_FIX/pick-common.zsh" <<'ZSH'
 die() { print -ru2 -- "$*"; return 1; }
 require_cmd() { command -v "$1" >/dev/null; }
 pick::cache_stale() { return 0; }
@@ -40,25 +43,27 @@ pick::start() { command cat "${@[-1]}"; }
 ZSH
     # The real pick-common sources theme-common (for theme::json_path); the stub
     # must too, so quick-launch-pick can resolve its palette via the shared order.
-    print -r -- "source \"$PWD/home/dot_local/lib/theme-common.zsh\"" >>"$MSP_TMP/pick-common.zsh"
-    cat >"$MSP_TMP/mux-wrapper.zsh" <<ZSH
+    print -r -- "source \"$PWD/home/dot_local/lib/theme-common.zsh\"" >>"$MSP_FIX/pick-common.zsh"
+    cat >"$MSP_FIX/mux-wrapper.zsh" <<ZSH
 source "$PWD/home/dot_local/lib/mux.zsh"
-source "$MSP_TMP/pick-common.zsh"
+source "$MSP_FIX/pick-common.zsh"
 ZSH
   }
-  cleanup() {
-    rm -rf "$MSP_TMP"
-    unset STUB_SESSION STUB_WINDOWED
+  BeforeAll fixtures
+  setup() {
+    spec_sandbox msp
+    MSP_TMP="$SANDBOX/home"
+    cp -R "$MSP_FIX/home" "$MSP_TMP"
+    MSP_PICKER="$PWD/home/dot_config/mux/scripts/executable_quick-launch-pick"
   }
   BeforeEach setup
-  AfterEach cleanup
 
   raw_lines() {
     env HOME="$MSP_TMP" XDG_CONFIG_HOME="$MSP_TMP/.config" XDG_CACHE_HOME="$MSP_TMP/cache" \
       QUICK_LAUNCH_TARGETS="$MSP_TMP/targets.json" \
-      PICK_LIB_DIR="$PWD/home/dot_local/lib" PICK_COMMON_LIB="$MSP_TMP/pick-common.zsh" \
-      MUX_LIB="$MSP_TMP/mux-wrapper.zsh" MUX_BACKEND=tmux \
-      MUX_TMUX_BIN="$MSP_TMP/tmux" TMUX=/tmp/tmux-test.sock,1,0 \
+      PICK_LIB_DIR="$PWD/home/dot_local/lib" PICK_COMMON_LIB="$MSP_FIX/pick-common.zsh" \
+      MUX_LIB="$MSP_FIX/mux-wrapper.zsh" MUX_BACKEND=tmux \
+      MUX_TMUX_BIN="$MSP_FIX/tmux" TMUX=/tmp/tmux-test.sock,1,0 \
       STUB_SESSION="${STUB_SESSION:-}" STUB_WINDOWED="${STUB_WINDOWED:-}" \
       zsh -f "$MSP_PICKER" workspace
   }
@@ -76,6 +81,8 @@ ZSH
   End
 
   It 'rebuilds from an updated session name on every launch'
+    Skip if 'complete-only: two runs of the whole quick-launch-pick' spec_complete_only
+    spec_complete_only && return 0
     raw_lines >/dev/null
     printf '%s\n' '{"workspaces":[{"id":"wise-zebra","name":"wise-zebra"}]}' >"$MSP_TMP/targets.json"
     When call visible_lines
@@ -109,56 +116,63 @@ End
 # them. The REAL pick-common is used: --emit's whole job is to reproduce
 # pick::feed's wrapping, which a stub would not have.
 Describe 'mux workspace session picker — Ctrl+D kill'
-  setup() {
-    KSP_TMP=$(mktemp -d)
-    KSP_PICKER="$PWD/home/dot_config/mux/scripts/executable_quick-launch-pick"
-    mkdir -p "$KSP_TMP/.config/theme" "$KSP_TMP/cache"
+  # Written once: the palette, the targets and the stub. The stub finds the
+  # example's session list through $KSP_TMP, which picker() hands down.
+  fixtures() {
+    KSP_FIX="$SHELLSPEC_TMPBASE/ksp-fix"
+    mkdir -p "$KSP_FIX/home/.config/theme" "$KSP_FIX/home/cache"
 
     # `id` and `name` DIFFER, as they do in every real entry (`default` /
     # `Main`): the id is the dispatch key, the name is what the session is
     # called. A fixture where they matched let a kill aimed at the id pass here
     # while killing nothing on a real machine.
-    cat >"$KSP_TMP/targets.json" <<'JSON'
+    cat >"$KSP_FIX/home"/targets.json <<'JSON'
 {"workspaces":[{"id":"platypus-ws","name":"awesome-platypus"}]}
 JSON
-    cat >"$KSP_TMP/.config/theme/chezmoi-system.json" <<'JSON'
+    cat >"$KSP_FIX/home/.config/theme/chezmoi-system.json" <<'JSON'
 {"palette":{"white":"#ffffff","blue":"#89b4fa","mauve":"#cba6f7","overlay1":"#7f849c","subtext0":"#a6adc8"}}
 JSON
     # One configured workspace that happens to be live, one purely ad-hoc
     # session — the two rows that must react differently to a kill.
-    printf '%s\n' awesome-platypus stray-mongoose >"$KSP_TMP/sessions"
+    printf '%s\n' awesome-platypus stray-mongoose >"$KSP_FIX/home/sessions"
 
     # A STATEFUL stub: kill-session really removes the name, so the reload
     # sees the world the kill left behind rather than a canned reply.
-    cat >"$KSP_TMP/tmux" <<EOF
+    cat >"$KSP_FIX/tmux" <<'EOF'
 #!/usr/bin/env zsh
-case "\$1" in
+case "$1" in
   display)
-    case "\$*" in
+    case "$*" in
       *session_name*) print -r -- Main ;;
       *window_name*) print -r -- shell ;;
     esac
     ;;
   list-sessions)
-    [[ "\$*" == *session_attached* ]] || cat "$KSP_TMP/sessions"
+    [[ "$*" == *session_attached* ]] || cat "$KSP_TMP/sessions"
     ;;
   kill-session)
-    grep -v -x -- "\${3#=}" "$KSP_TMP/sessions" >"$KSP_TMP/sessions.new" || true
+    grep -v -x -- "${3#=}" "$KSP_TMP/sessions" >"$KSP_TMP/sessions.new" || true
     mv "$KSP_TMP/sessions.new" "$KSP_TMP/sessions"
     ;;
 esac
 EOF
-    chmod +x "$KSP_TMP/tmux"
+    chmod +x "$KSP_FIX/tmux"
+    "$KSP_FIX/tmux" display session_name >/dev/null 2>&1
   }
-  cleanup() { rm -rf "$KSP_TMP"; }
+  BeforeAll fixtures
+  setup() {
+    spec_sandbox ksp
+    KSP_TMP="$SANDBOX/home"
+    cp -R "$KSP_FIX/home" "$KSP_TMP"
+    KSP_PICKER="$PWD/home/dot_config/mux/scripts/executable_quick-launch-pick"
+  }
   BeforeEach setup
-  AfterEach cleanup
 
   picker() {
     env HOME="$KSP_TMP" XDG_CONFIG_HOME="$KSP_TMP/.config" XDG_CACHE_HOME="$KSP_TMP/cache" \
       QUICK_LAUNCH_TARGETS="$KSP_TMP/targets.json" \
       PICK_LIB_DIR="$PWD/home/dot_local/lib" MUX_LIB="$PWD/home/dot_local/lib" \
-      MUX_BACKEND=tmux MUX_TMUX_BIN="$KSP_TMP/tmux" TMUX=/tmp/tmux-test.sock,1,0 \
+      MUX_BACKEND=tmux MUX_TMUX_BIN="$KSP_FIX/tmux" KSP_TMP="$KSP_TMP" TMUX=/tmp/tmux-test.sock,1,0 \
       zsh -f "$KSP_PICKER" workspace "$@"
   }
   rows() { picker --emit | perl -pe 's/\e\[[0-9;]*m//g; s/\x1f.*$//'; }
@@ -175,6 +189,7 @@ EOF
   }
 
   It 'emits the dispatch id first — the field Enter accepts'
+    Skip if 'complete-only: a whole quick-launch-pick --emit run through the real pick-common, plus perl and cut' spec_complete_only
     When call tail_subfield 1
     The line 1 of output should equal "platypus-ws"
   End
@@ -183,6 +198,7 @@ EOF
   # `name`, so a kill aimed at the id half asked tmux to end "platypus-ws" and
   # the row kept its "(detached)" tag forever.
   It 'emits the session name as the field the kill bind reads'
+    Skip if 'complete-only: a whole quick-launch-pick --emit run through the real pick-common, plus perl and cut' spec_complete_only
     When call tail_subfield 3
     The line 1 of output should equal "awesome-platypus"
   End
@@ -190,6 +206,8 @@ EOF
   # Its row survives — it is still a workspace you can launch — but with no
   # parenthesized info suffix at all, since nothing about it is live any more.
   It 'keeps a configured workspace but drops its live tag once killed'
+    Skip if 'complete-only: three runs of the whole quick-launch-pick with the real pick-common (emit, kill, emit)' spec_complete_only
+    spec_complete_only && return 0
     picker --kill "$(tail_for 'Awesome Platypus')"
     When call row_for "Awesome Platypus"
     The lines of output should equal 1
@@ -197,6 +215,8 @@ EOF
   End
 
   It 'drops an ad-hoc session row entirely once killed'
+    Skip if 'complete-only: three runs of the whole quick-launch-pick with the real pick-common (emit, kill, emit)' spec_complete_only
+    spec_complete_only && return 0
     picker --kill "$(tail_for 'Stray Mongoose')"
     When call rows
     The output should not include "Stray Mongoose"

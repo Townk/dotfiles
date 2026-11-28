@@ -9,24 +9,29 @@
 Describe 'tests/test-changed.sh'
   SCRIPT="$PWD/tests/test-changed.sh"
 
-  setup() {
-    ROOT="$(mktemp -d)"
-    mkdir -p "$ROOT/tests" "$ROOT/home/dot_local/lib/mux" "$ROOT/docs"
-    echo "Describe 'a'; End" > "$ROOT/tests/a_spec.sh"
+  # The throwaway tree is the same for every example: built once, copied.
+  tree_template() {
+    TREE_TPL="$SHELLSPEC_TMPBASE/tree-template"
+    mkdir -p "$TREE_TPL/tests" "$TREE_TPL/home/dot_local/lib/mux" "$TREE_TPL/docs"
+    echo "Describe 'a'; End" > "$TREE_TPL/tests/a_spec.sh"
     echo 'Include "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/foo.zsh"' \
-      > "$ROOT/tests/uses-foo_spec.sh"
-    echo 'source ~/.local/lib/mux/bar.zsh' > "$ROOT/tests/uses-bar_spec.sh"
-    echo 'Include tests/helper.sh' > "$ROOT/tests/uses-helper_spec.sh"
-    echo 'echo unrelated' > "$ROOT/tests/unrelated_spec.sh"
+      > "$TREE_TPL/tests/uses-foo_spec.sh"
+    echo 'source ~/.local/lib/mux/bar.zsh' > "$TREE_TPL/tests/uses-bar_spec.sh"
+    echo 'Include tests/helper.sh' > "$TREE_TPL/tests/uses-helper_spec.sh"
+    echo 'echo unrelated' > "$TREE_TPL/tests/unrelated_spec.sh"
     # foo.zsh must not also match the fooXzsh a sloppy regex would allow.
-    echo 'source dot_local/lib/fooXzsh' > "$ROOT/tests/near-miss_spec.sh"
-    : > "$ROOT/tests/helper.sh"
-    : > "$ROOT/home/dot_local/lib/foo.zsh"
-    : > "$ROOT/home/dot_local/lib/mux/bar.zsh"
+    echo 'source dot_local/lib/fooXzsh' > "$TREE_TPL/tests/near-miss_spec.sh"
+    : > "$TREE_TPL/tests/helper.sh"
+    : > "$TREE_TPL/home/dot_local/lib/foo.zsh"
+    : > "$TREE_TPL/home/dot_local/lib/mux/bar.zsh"
   }
-  cleanup() { rm -rf "$ROOT"; }
+  BeforeAll 'tree_template'
+  setup() {
+    spec_sandbox changed
+    ROOT="$SANDBOX/root"
+    cp -R "$TREE_TPL" "$ROOT"
+  }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   inner() { env -i PATH="$PATH" HOME="$HOME" TEST_CHANGED_ROOT="$ROOT" "$@"; }
   pick() { inner "$SCRIPT" select "$@"; }
@@ -94,19 +99,33 @@ Describe 'tests/test-changed.sh'
   End
 
   Describe 'the make lane (no arguments)'
-    git_fixture() {
+    Skip if 'complete-only: real git: the script diffs a scratch repository against master (merge-base, diff, ls-files) on every run' spec_complete_only
+    # The same tree as a git repository (a base commit on master, a topic
+    # branch checked out) and the make stand-in: built once. An example gets
+    # the .git directory copied into its tree and the stand-in hard-linked
+    # (a copy would be a new inode, whose first exec macOS charges for).
+    git_template() {
       export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
-      git -c init.defaultBranch=master init -q "$ROOT"
-      ( cd "$ROOT" && git add -A \
+      GIT_TPL="$SHELLSPEC_TMPBASE/git-template"
+      cp -R "$TREE_TPL" "$GIT_TPL"
+      git -c init.defaultBranch=master init -q "$GIT_TPL"
+      ( cd "$GIT_TPL" && git add -A \
         && git -c user.name=t -c user.email=t@t commit -qm base \
         && git checkout -qb topic )
-      # Stands in for make: records that the full lane was asked for.
+      # Stands in for make: records that the full lane was asked for, in the
+      # tree the script was pointed at.
       { echo '#!/bin/sh'
-        echo "echo \"make \$*\" >> '$ROOT/make.called'"
-      } > "$ROOT/stub-make"
-      chmod +x "$ROOT/stub-make"
-      echo 'stub-make' >> "$ROOT/.git/info/exclude"
-      echo 'make.called' >> "$ROOT/.git/info/exclude"
+        echo 'echo "make $*" >> "$TEST_CHANGED_ROOT/make.called"'
+      } > "$GIT_TPL/stub-make"
+      chmod +x "$GIT_TPL/stub-make"
+      TEST_CHANGED_ROOT="$GIT_TPL" "$GIT_TPL/stub-make" warm && rm -f "$GIT_TPL/make.called"
+      echo 'stub-make' >> "$GIT_TPL/.git/info/exclude"
+      echo 'make.called' >> "$GIT_TPL/.git/info/exclude"
+    }
+    BeforeAll 'git_template'
+    git_fixture() {
+      export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+      cp -R "$GIT_TPL/.git" "$ROOT/.git" && ln "$GIT_TPL/stub-make" "$ROOT/stub-make"
     }
     BeforeEach 'git_fixture'
 

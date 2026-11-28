@@ -9,6 +9,7 @@
 # writes into the repo's assets/ next to the script (not under THEME_DEST), so a
 # copy keeps the test off the real tree. chezmoi is stubbed to echo its input.
 Describe 'generate-theme.sh renders per-consumer themes only where the consumer exists'
+  Skip if 'complete-only: runs the whole theme generator (every consumer template) under bash' spec_complete_only
   SRC="$SHELLSPEC_PROJECT_ROOT/custom-builds/theme"
 
   setup() {

@@ -147,6 +147,10 @@ Describe 'mux.zsh — backend detection & knob'
 End
 
 Describe 'mux.zsh — tmux float backend (Phase 2)'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   Include home/dot_local/lib/mux.zsh
 
   setup() {
@@ -273,6 +277,10 @@ Describe 'mux.zsh — zj:: permanent aliases'
 End
 
 Describe 'mux.zsh — pane/tab/info API (Phase 6.0, tmux backend)'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   Include home/dot_local/lib/mux.zsh
 
   setup() {
@@ -438,6 +446,10 @@ Describe 'mux.zsh — pane/tab API outside any mux'
 End
 
 Describe 'mux.zsh — session resolvers dispatch (tmux)'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   Include home/dot_local/lib/mux.zsh
 
   setup() {
@@ -477,6 +489,10 @@ Describe 'mux.zsh — session resolvers dispatch (tmux)'
 End
 
 Describe 'mux.zsh — dump_screen / send_text targeting (tmux)'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   Include home/dot_local/lib/mux.zsh
 
   # The stub ECHOES its argv, so each example asserts on the command the shim

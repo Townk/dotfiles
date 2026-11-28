@@ -180,15 +180,40 @@ spec_helper_desktop_guard() {
   # notify-tmux is not a tool: it is what NOTIFY_TMUX_BIN is pinned to below.
   # pueue is the one that FAILS (a client with no daemon): succeeding would
   # tell share::jobs_available that jobs can be queued.
+  # The stubs are the same in every spec file (each logs beside its own
+  # name), so they are kept in a cache that outlives the run and hard-linked
+  # from it: macOS charges 80-150 ms the first time a new script inode is
+  # exec'd, and a fresh set per file made the first example to reach one pay
+  # that. A cached stub is written once, by rename, and never changed in
+  # place; a stale one (this text edited) is replaced the same way.
+  _dg_cache="${TMPDIR:-/tmp}/spec-guard-cache.$(id -u)"
+  command mkdir -p "$_dg_cache" 2>/dev/null
   for _dg_tool in hs osascript afplay say terminal-notifier open notify-tmux pueue; do
     _dg_rc=0
     [ "$_dg_tool" != pueue ] || _dg_rc=1
-    printf '%s\n' '#!/bin/sh' \
+    _dg_body=$(printf '%s\n' '#!/bin/sh' \
       "line=\"$_dg_tool \$(printf '%s' \"\$*\" | tr '\\n' ' ')\"" \
-      "printf '%s\\n' \"\$line\" >>'$SPEC_DESKTOP_GUARD/calls.log'" \
-      "$_dg_audit" \
-      "exit $_dg_rc" >"$SPEC_DESKTOP_GUARD/$_dg_tool"
-    chmod +x "$SPEC_DESKTOP_GUARD/$_dg_tool"
+      "printf '%s\\n' \"\$line\" >>\"\${0%/*}/calls.log\"" \
+      "exit $_dg_rc")
+    if [ -n "$_dg_audit" ]; then
+      # The audit names this spec file: its own copy, not the cache.
+      printf '%s\n' '#!/bin/sh' \
+        "line=\"$_dg_tool \$(printf '%s' \"\$*\" | tr '\\n' ' ')\"" \
+        "printf '%s\\n' \"\$line\" >>'$SPEC_DESKTOP_GUARD/calls.log'" \
+        "$_dg_audit" \
+        "exit $_dg_rc" >"$SPEC_DESKTOP_GUARD/$_dg_tool"
+      command chmod +x "$SPEC_DESKTOP_GUARD/$_dg_tool"
+      continue
+    fi
+    if [ "$(cat "$_dg_cache/$_dg_tool" 2>/dev/null)" != "$_dg_body" ]; then
+      printf '%s\n' "$_dg_body" >"$_dg_cache/.$_dg_tool.$$" &&
+        command chmod +x "$_dg_cache/.$_dg_tool.$$" &&
+        command mv -f "$_dg_cache/.$_dg_tool.$$" "$_dg_cache/$_dg_tool"
+    fi
+    command ln "$_dg_cache/$_dg_tool" "$SPEC_DESKTOP_GUARD/$_dg_tool" 2>/dev/null || {
+      printf '%s\n' "$_dg_body" >"$SPEC_DESKTOP_GUARD/$_dg_tool"
+      command chmod +x "$SPEC_DESKTOP_GUARD/$_dg_tool"
+    }
   done
   if [ -n "$_dg_audit" ]; then
     for _dg_tool in rex launchctl; do

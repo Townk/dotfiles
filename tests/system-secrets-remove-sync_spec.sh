@@ -8,25 +8,18 @@
 Describe 'system-secrets remove/sync'
   Include home/dot_local/lib/system-secrets-common.zsh
 
-  setup() {
-    TEST_TMP=$(mktemp -d)
-    REPO_ROOT="$TEST_TMP/repo"
-    mkdir -p "$REPO_ROOT"
-    git -C "$REPO_ROOT" init -q
-    git -C "$REPO_ROOT" config user.email test@example.com
-    git -C "$REPO_ROOT" config user.name Test
-    git -C "$REPO_ROOT" config commit.gpgsign false
-    MANIFEST="$REPO_ROOT/secrets.yaml"
-    FRAGMENT_DIR="$REPO_ROOT/frags"
-    SECRETS_BLOB_DIR="$REPO_ROOT/secrets"
-    SOPS_YAML="$REPO_ROOT/.sops.yaml"
-    LEAK_PATTERNS="$REPO_ROOT/.leak-patterns"
-    GENERATIONS="$SECRETS_BLOB_DIR/generations.yaml"
-    print -r -- '# no patterns' >"$LEAK_PATTERNS"
-    OPERATOR_MAP="$TEST_TMP/onboard-map.yaml"
-    OP_VAULT_FILE="$TEST_TMP/op-vault"
-    mkdir -p "$FRAGMENT_DIR" "$SECRETS_BLOB_DIR"
-    cat >"$MANIFEST" <<'YAML'
+  # The scratch chezmoi source (an empty git repository with its identity, the
+  # manifest, the leak patterns and the two artifact directories) is the same
+  # for every example: built once, copied per example.
+  template() {
+    SEC_TPL="$SHELLSPEC_TMPBASE/sec-template"
+    mkdir -p "$SEC_TPL/repo/frags" "$SEC_TPL/repo/secrets"
+    git -C "$SEC_TPL/repo" init -q
+    git -C "$SEC_TPL/repo" config user.email test@example.com
+    git -C "$SEC_TPL/repo" config user.name Test
+    git -C "$SEC_TPL/repo" config commit.gpgsign false
+    print -r -- '# no patterns' >"$SEC_TPL/repo/.leak-patterns"
+    cat >"$SEC_TPL/repo/secrets.yaml" <<'YAML'
 secrets:
   - name: ALPHA_TOKEN
     prompt: alpha
@@ -39,9 +32,21 @@ secrets:
     requiredFor: [dev-shell]
 YAML
   }
-  cleanup() { rm -rf "$TEST_TMP"; }
+  BeforeAll 'template'
+  setup() {
+    spec_sandbox sec; TEST_TMP=$SANDBOX
+    cp -R "$SEC_TPL/repo" "$TEST_TMP/repo"
+    REPO_ROOT="$TEST_TMP/repo"
+    MANIFEST="$REPO_ROOT/secrets.yaml"
+    FRAGMENT_DIR="$REPO_ROOT/frags"
+    SECRETS_BLOB_DIR="$REPO_ROOT/secrets"
+    SOPS_YAML="$REPO_ROOT/.sops.yaml"
+    LEAK_PATTERNS="$REPO_ROOT/.leak-patterns"
+    GENERATIONS="$SECRETS_BLOB_DIR/generations.yaml"
+    OPERATOR_MAP="$TEST_TMP/onboard-map.yaml"
+    OP_VAULT_FILE="$TEST_TMP/op-vault"
+  }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   # Build a headless slot: blobs (stand-in plaintext files) + fragment.
   make_headless() { # <slot> <name>...
@@ -151,6 +156,8 @@ YAML
 
   Describe 'sec::sync_slot'
     It 'reports an already-synced slot without committing'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal headless ""
       make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
       commit_fixtures
@@ -161,6 +168,8 @@ YAML
     End
 
     It 'heals a previous run whose commit died: in-sync sets, dirty artifacts (human slot)'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal human ""
       make_human slot-aaa111 ALPHA_TOKEN=op://v/ALPHA_TOKEN/x BETA_TOKEN=op://v/BETA_TOKEN/x
       commit_fixtures
@@ -171,6 +180,8 @@ YAML
     End
 
     It 'scrubs stale names and commits (human slot)'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal human ""
       make_human slot-aaa111 ALPHA_TOKEN=op://v/ALPHA_TOKEN/x BETA_TOKEN=op://v/BETA_TOKEN/x GAMMA_TOKEN=op://v/GAMMA_TOKEN/x
       sec::op_scrub_field() { :; }
@@ -184,6 +195,8 @@ YAML
     # signs and pushes only through the operator's forwarded agents. On its own
     # slot, sync reports drift and points at the operator command instead.
     It 'headless: reports stale names, never commits, keeps the blob'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal headless ""
       make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN GAMMA_TOKEN
       commit_fixtures
@@ -196,6 +209,8 @@ YAML
     End
 
     It 'headless: reports dirty artifacts and never commits'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal headless ""
       make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
       commit_fixtures
@@ -218,6 +233,8 @@ YAML
     End
 
     It 'collects missing names through the materialize seam when interactive (human slot)'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal human ""
       make_human slot-aaa111 ALPHA_TOKEN=op://v/ALPHA_TOKEN/x
       sec::sync_can_collect() { return 0; }
@@ -258,6 +275,8 @@ YAML
     End
 
     It 're-collects a name whose generation predates the rotated stamp (human slot)'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal human ""
       make_human slot-aaa111 ALPHA_TOKEN=op://v/ALPHA_TOKEN/x BETA_TOKEN=op://v/BETA_TOKEN/x
       sec::manifest_set_rotated ALPHA_TOKEN 200
@@ -270,6 +289,8 @@ YAML
     End
 
     It 'stays in sync once the generation catches up to the rotation'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal headless ""
       make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
       sec::manifest_set_rotated ALPHA_TOKEN 200
@@ -283,6 +304,8 @@ YAML
 
   Describe 'sec::remove_secret'
     It 'removes everywhere with --all: manifest entry, blobs, both fragments'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       make_headless slot-aaa111 ALPHA_TOKEN GAMMA_TOKEN
       make_human slot-bbb222 "ALPHA_TOKEN=op://V/ALPHA_TOKEN/bbb222" "BETA_TOKEN=op://V/BETA_TOKEN/bbb222"
       sec::remove_secret ALPHA_TOKEN "" 1 1 >/dev/null 2>&1
@@ -293,6 +316,8 @@ YAML
     End
 
     It 'profile-scoped: scrubs only local-map slots of that profile and reports foreign ones'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::map_set slot-aaa111 host-a personal headless ""
       make_headless slot-aaa111 ALPHA_TOKEN BETA_TOKEN
       make_human slot-bbb222 "ALPHA_TOKEN=op://V/ALPHA_TOKEN/bbb222"
@@ -306,6 +331,8 @@ YAML
     End
 
     It 'promotes to full removal when the last profile is removed (with --yes)'
+      Skip if 'complete-only: real git add/commit/status and yq passes over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       make_headless slot-aaa111 BETA_TOKEN
       sec::remove_secret BETA_TOKEN personal 0 1 >/dev/null 2>&1
       When call sec::manifest_has BETA_TOKEN

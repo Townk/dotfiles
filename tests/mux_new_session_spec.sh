@@ -6,6 +6,10 @@
 # new-session took the popup's pty and drew the new session in the panel.
 # Detached-then-switch is the fix, and `-d` is what these fence.
 Describe 'mux-new-session'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_mux-new-session"
 
   setup() {
@@ -23,7 +27,7 @@ Describe 'mux-new-session'
   # ns <command> [client] [cwd] -> the logged call to that tmux command
   ns() {
     MUX_TMUX_BIN="$STUB" MUX_RANDOM_NAME_BIN="$GEN" \
-      zsh "$BIN" "${2-}" "${3-}" >/dev/null 2>&1
+      zsh -f "$BIN" "${2-}" "${3-}" >/dev/null 2>&1
     grep "^$1" "$NS_TMP/calls"
   }
 

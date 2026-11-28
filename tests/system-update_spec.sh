@@ -15,6 +15,7 @@
 # source the file and call publish_yazi_bump directly against a throwaway repo —
 # no brew, mise, chezmoi apply, or push of the real repo.
 Describe 'system-update: publish_yazi_bump push gating (MED-2)'
+  Skip if 'complete-only: real git throughout: a bare origin, a clone, a seeded commit and a push per example, then the commit and push under test' spec_complete_only
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-update"
 
   # A throwaway "chezmoi source" repo (REPO) that tracks a bare upstream
@@ -141,44 +142,52 @@ End
 Describe 'system-update: pinentry reassert verifies the repair'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-update"
 
-  setup_pinentry() {
-    export SCRIPT_PATH="$SCRIPT"
-    PSTAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pinentry.XXXXXX")"
-    mkdir -p "$PSTAGE/home/.local" "$PSTAGE/bin" "$PSTAGE/ctl"
-    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$PSTAGE/home/.local/lib"
+  # The helper's installed copy and the four stubs never change: made once,
+  # each run once (an inode's first exec is charged by macOS), then
+  # hard-linked into the example's own directories. The stubs find the
+  # example's link and switches through the exported P_* variables.
+  fixtures_pinentry() {
+    PFIX="$SHELLSPEC_TMPBASE/pinentry-fix"
+    mkdir -p "$PFIX/bin" "$PFIX/ctl"
     # The check and the bounded -fix are the shared libexec helper.
-    mkdir -p "$PSTAGE/home/.local/libexec"
     cp "$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pinentry-backend-repair" \
-      "$PSTAGE/home/.local/libexec/pinentry-backend-repair"
-    chmod +x "$PSTAGE/home/.local/libexec/pinentry-backend-repair"
-
-    # The "backend" symlink starts pointed at a fake curses binary.
-    export P_MAC="$PSTAGE/bin/pinentry-mac"
-    export P_LINK="$PSTAGE/link"
-    export P_CTL="$PSTAGE/ctl"
-    printf '#!/bin/sh\nexit 0\n' > "$P_MAC"; chmod +x "$P_MAC"
-    printf '#!/bin/sh\nexit 0\n' > "$PSTAGE/bin/pinentry-curses"
-    chmod +x "$PSTAGE/bin/pinentry-curses"
-    ln -sf "$PSTAGE/bin/pinentry-curses" "$P_LINK"
-
+      "$PFIX/pinentry-backend-repair"
+    printf '#!/bin/sh\nexit 0\n' > "$PFIX/bin/pinentry-mac"
+    printf '#!/bin/sh\nexit 0\n' > "$PFIX/bin/pinentry-curses"
     # -fix repairs the symlink only when the control file says so.
-    cat > "$PSTAGE/bin/pinentry-touchid" <<'SH'
+    cat > "$PFIX/bin/pinentry-touchid" <<'SH'
 #!/bin/sh
 [ "$1" = "-fix" ] || exit 0
 [ -f "$P_CTL/repair" ] && ln -sf "$P_MAC" "$P_LINK"
 exit 0
 SH
-    chmod +x "$PSTAGE/bin/pinentry-touchid"
-
-    cat > "$PSTAGE/bin/gpgconf" <<'SH'
+    cat > "$PFIX/bin/gpgconf" <<'SH'
 #!/bin/sh
 printf 'pinentry:Passphrase Entry:%s\n' "$P_LINK"
 SH
-    chmod +x "$PSTAGE/bin/gpgconf"
+    chmod +x "$PFIX/pinentry-backend-repair" "$PFIX/bin"/*
+    ( export P_MAC="$PFIX/bin/pinentry-mac" P_LINK="$PFIX/link" P_CTL="$PFIX/ctl"
+      for stub in "$PFIX/bin"/*; do "$stub"; done
+      PATH="$PFIX/bin:/usr/bin:/bin" "$PFIX/pinentry-backend-repair" check ) >/dev/null 2>&1
+    return 0
   }
-  cleanup_pinentry() { rm -rf "$PSTAGE"; unset P_MAC P_LINK P_CTL PSTAGE; }
+  BeforeAll 'fixtures_pinentry'
+
+  setup_pinentry() {
+    export SCRIPT_PATH="$SCRIPT"
+    PSTAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pinentry.XXXXXX")"
+    mkdir -p "$PSTAGE/home/.local/libexec" "$PSTAGE/bin" "$PSTAGE/ctl"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$PSTAGE/home/.local/lib"
+    ln "$PFIX/pinentry-backend-repair" "$PSTAGE/home/.local/libexec/pinentry-backend-repair"
+    ln "$PFIX/bin"/* "$PSTAGE/bin/"
+
+    # The "backend" symlink starts pointed at a fake curses binary.
+    export P_MAC="$PSTAGE/bin/pinentry-mac"
+    export P_LINK="$PSTAGE/link"
+    export P_CTL="$PSTAGE/ctl"
+    ln -sf "$PSTAGE/bin/pinentry-curses" "$P_LINK"
+  }
   BeforeEach 'setup_pinentry'
-  AfterEach 'cleanup_pinentry'
 
   run_reassert() {
     HOME="$PSTAGE/home" PATH="$PSTAGE/bin:$PATH" \
@@ -191,6 +200,8 @@ SH
   }
 
   It 'reports success when -fix actually re-points the backend'
+    Skip if 'complete-only: sources the whole system-update, then check, -fix under timeout, and check again through the repair helper (some twenty processes)' spec_complete_only
+    spec_complete_only && return 0
     touch "$P_CTL/repair"
     When call run_reassert
     The status should be success
@@ -251,9 +262,9 @@ SH
     export MISE_STUB_NEWROOT="$MSTAGE/go-1.27.1"
     export SCRIPT_PATH="$SCRIPT"
   }
-  cleanup_mise_env() { rm -rf "$MSTAGE"; unset MISE_STUB_NEWROOT MSTAGE; }
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   BeforeEach 'setup_mise_env'
-  AfterEach 'cleanup_mise_env'
 
   run_refresh() {
     HOME="$MSTAGE/home" PATH="$MSTAGE/bin:$PATH" \
@@ -319,9 +330,7 @@ Describe 'system-update: nvim_sync_cmds follows the rendered dev_tooling trait'
     ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/home/.local/lib"
     export SCRIPT_PATH="$SCRIPT" STAGE
   }
-  cleanup() { rm -rf "$STAGE"; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   facts() { printf 'return { traits = { dev_tooling = %s } }\n' "$1" >"$STAGE/home/.config/nvim/lua/config/chezmoi.lua"; }
   sync_cmds() {

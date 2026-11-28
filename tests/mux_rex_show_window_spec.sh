@@ -3,6 +3,10 @@
 # show it. _mux_rx_show_window runs the app's own `session.select`, and the
 # verbs that open or focus a tab call it. Hermetic: `rex` is a stub.
 Describe 'showing a tab in the Rex app'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   Include home/dot_local/lib/mux-bootstrap.zsh
 
   setup() {

@@ -4,8 +4,25 @@
 # dependencies, so setup renders it once and each example runs it in an
 # isolated $HOME with a sandboxed self-name file.
 Describe 'ssh self-identity sender'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   SRC="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_after_09-render-ssh-self-identity.sh.tmpl"
 
+  # The template has no per-example input: rendered once, and run once
+  # against a scratch HOME (an inode's first exec is charged by macOS). Each
+  # example runs a hard link to it from its own directory.
+  render_once() {
+    SELF_ID_FIX="$SHELLSPEC_TMPBASE/self-id-fix"
+    mkdir -p "$SELF_ID_FIX/home"
+    chezmoi execute-template <"$SRC" >"$SELF_ID_FIX/self-identity.sh" || return 1
+    chmod +x "$SELF_ID_FIX/self-identity.sh"
+    HOME="$SELF_ID_FIX/home" XDG_STATE_HOME="$SELF_ID_FIX/home/.local/state" \
+      "$SELF_ID_FIX/self-identity.sh" >/dev/null 2>&1
+    return 0
+  }
+  BeforeAll 'render_once'
   setup() {
     TEST_TMP=$(mktemp -d "$SHELLSPEC_TMPBASE/self-id.XXXXXX")
     export HOME="$TEST_TMP/home"
@@ -14,13 +31,10 @@ Describe 'ssh self-identity sender'
     printf 'peer-key-01\n' >"$XDG_STATE_HOME/clipboard/self-name"
     export SELF_IDENTITY_CORE_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/clipboard-store-core.zsh"
     RENDERED="$TEST_TMP/self-identity.sh"
-    chezmoi execute-template <"$SRC" >"$RENDERED"
-    chmod +x "$RENDERED"
+    ln "$SELF_ID_FIX/self-identity.sh" "$RENDERED"
     FRAG="$HOME/.ssh/config.d/00-self-identity.conf"
   }
-  cleanup() { rm -rf "$TEST_TMP"; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   It 'renders the SetEnv line from the alias file and the clipboard key'
     printf 'peer-laptop\n' >"$HOME/.hostname-alias"

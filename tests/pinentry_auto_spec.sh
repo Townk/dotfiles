@@ -31,6 +31,10 @@
 # then makes with no terminal in hand; that lives in its own suite, as
 # `a_getpin_with_no_terminal_is_handed_to_the_gui`.
 Describe 'pinentry-auto dispatch'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   PA="home/dot_local/libexec/executable_pinentry-auto"
 
   setup() {
@@ -90,6 +94,10 @@ End
 # only way to reach it from Linux would be an override that exists solely for
 # this file — the same reasoning the header gives for the non-Darwin lane.
 Describe 'pinentry-auto presence dispatch'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   PA="home/dot_local/libexec/executable_pinentry-auto"
 
   Skip if "the presence lanes are gated on Darwin" [ "$(uname -s)" != Darwin ]
@@ -185,6 +193,10 @@ End
 # versus GUI to pinentry-ui, which is the only one that can see whether a pane
 # exists.
 Describe 'askpass-auto dispatch'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   PA="home/dot_local/libexec/executable_pinentry-auto"
 
   setup() {

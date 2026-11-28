@@ -17,8 +17,11 @@ EOF
     chmod +x "$BIN/system-package-$1"
   }
 
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 4'
+
   setup() {
-    STAGE=$(mktemp -d)
+    spec_sandbox pkg-sync; STAGE=$SANDBOX
     BIN="$STAGE/.local/bin"
     mkdir -p "$STAGE/.local" "$BIN"
     # Real lib (palette + common.zsh resolve via THEME_PALETTE_FILE from
@@ -31,11 +34,9 @@ EOF
     _mkworker aaa 1
     _mkworker mmm 0
     _mkworker zzz 0
-    OLD_HOME="${HOME:-}"; export HOME="$STAGE"
+    export HOME="$STAGE"
   }
-  cleanup() { export HOME="$OLD_HOME"; rm -rf "$STAGE"; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   It 'runs every later ecosystem even when the first worker fails'
     When run command zsh "$BIN/system-package" sync

@@ -10,21 +10,26 @@
 # Both paths run the real pick::start against a stub fzf, in a subshell so
 # the cancel path's `exit 130` doesn't kill the spec shell.
 Describe 'pick::start — stdin temp-file cleanup'
+  # The fake fzf is written HERE, in the example's shell, where spec_helper's
+  # `chmod` puts it on a pooled inode: written inside the child zsh it was a
+  # new inode every time, and macOS charged its first exec to every example.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   pick_harness() {
-    zsh -c '
+    spec_sandbox pick-start
+    mkdir -p "$SANDBOX/bin" "$SANDBOX/tmp"
+    printf "%s\n" "#!/bin/sh" "$1" > "$SANDBOX/bin/fzf"
+    chmod +x "$SANDBOX/bin/fzf"
+    zsh -f -c '
       set -eu
-      scratch="$(mktemp -d)" || exit 90
-      mkdir -p "$scratch/bin" "$scratch/tmp"
-      printf "%s\n" "#!/bin/sh" "$1" > "$scratch/bin/fzf"
-      chmod +x "$scratch/bin/fzf"
+      scratch=$1
       export TMPDIR="$scratch/tmp"
       export PATH="$scratch/bin:$PATH"
       ( source home/dot_local/lib/pick-common.zsh
         out="$(print -l one two | pick::start)" ) && rc=0 || rc=$?
       leftover=( "$TMPDIR"/pick-start.*(N) )
       print -r -- "rc=$rc leftover=${#leftover}"
-      rm -rf -- "$scratch"
-    ' harness "$1"
+    ' harness "$SANDBOX"
   }
 
   It 'removes the temp source when the picker is cancelled (Esc)'

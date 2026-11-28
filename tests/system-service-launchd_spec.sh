@@ -18,11 +18,14 @@ Describe 'system-service-launchd'
   # suite exercises the code under test (e.g. svc::bootout's poll::until).
   export SYS_PKG_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
-  setup() {
-    TEST_TMP="$(mktemp -d)"
-    STUB_DIR="$TEST_TMP/bin"
-    mkdir -p "$STUB_DIR"
-    cat >"$STUB_DIR/launchctl" <<'STUB'
+  # The default launchctl stub is the same for every example: written and run
+  # once. It sits BEHIND the example's own (empty) stub directory on PATH, so
+  # a group that needs a stateful launchctl writes one there and wins.
+  Include tests/exec_warm_helper.sh
+  shared_stub() {
+    LAUNCHD_SHARED="$SHELLSPEC_TMPBASE/launchd-shared"
+    mkdir -p "$LAUNCHD_SHARED"
+    cat >"$LAUNCHD_SHARED/launchctl" <<'STUB'
 #!/bin/sh
 case "$1" in
   print)
@@ -33,22 +36,25 @@ case "$1" in
 esac
 exit 0
 STUB
-    chmod +x "$STUB_DIR/launchctl"
-    export PATH="$STUB_DIR:$PATH"
+    chmod +x "$LAUNCHD_SHARED/launchctl"
+    "$LAUNCHD_SHARED/launchctl" bootstrap >/dev/null 2>&1
+    spec_exec_pool_warm 1
   }
-  cleanup() {
-    rm -rf "$TEST_TMP"
-    unset STUB_PRINT STUB_RC
+  BeforeAll 'shared_stub'
+  setup() {
+    spec_sandbox launchd; TEST_TMP=$SANDBOX
+    STUB_DIR="$TEST_TMP/bin"
+    mkdir -p "$STUB_DIR"
+    export PATH="$STUB_DIR:$LAUNCHD_SHARED:$PATH"
   }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   Describe 'status'
     It 'reports a never-run on-demand service as stopped, not error'
       # The regression: "(never exited)" must not be read as a nonzero code.
       export STUB_RC=0
       export STUB_PRINT="$(printf '\tstate = not running\n\truns = 0\n\tlast exit code = (never exited)')"
-      When run zsh "$LAUNCHD" status mlx-gemma
+      When run zsh -f "$LAUNCHD" status mlx-gemma
       The output should equal "stopped"
       The status should be success
     End
@@ -56,21 +62,21 @@ STUB
     It 'reports a nonzero last exit code as error'
       export STUB_RC=0
       export STUB_PRINT="$(printf '\tstate = not running\n\truns = 3\n\tlast exit code = 2')"
-      When run zsh "$LAUNCHD" status mlx-gemma
+      When run zsh -f "$LAUNCHD" status mlx-gemma
       The output should equal "error"
     End
 
     It 'reports a signal-style nonzero exit as error'
       export STUB_RC=0
       export STUB_PRINT="$(printf '\tstate = not running\n\tlast exit code = 137')"
-      When run zsh "$LAUNCHD" status mlx-gemma
+      When run zsh -f "$LAUNCHD" status mlx-gemma
       The output should equal "error"
     End
 
     It 'reports a clean (zero) exit as stopped'
       export STUB_RC=0
       export STUB_PRINT="$(printf '\tstate = not running\n\tlast exit code = 0')"
-      When run zsh "$LAUNCHD" status mlx-gemma
+      When run zsh -f "$LAUNCHD" status mlx-gemma
       The output should equal "stopped"
     End
 
@@ -78,13 +84,13 @@ STUB
       # A running service also shows "(never exited)"; the PID check wins.
       export STUB_RC=0
       export STUB_PRINT="$(printf '\tstate = running\n\tpid = 4242\n\tlast exit code = (never exited)')"
-      When run zsh "$LAUNCHD" status mlx-gemma
+      When run zsh -f "$LAUNCHD" status mlx-gemma
       The output should equal "running"
     End
 
     It 'reports an unbootstrapped service as none'
       export STUB_RC=1
-      When run zsh "$LAUNCHD" status mlx-gemma
+      When run zsh -f "$LAUNCHD" status mlx-gemma
       The output should equal "none"
     End
   End
@@ -118,10 +124,12 @@ exit 0
 STUB
       chmod +x "$STUB_DIR/launchctl"
     }
+    # svc::bootout polls with poll::until (0.1 s naps): on the virtual clock.
+    BeforeAll 'spec_clock_set'
     BeforeEach 'setup_stateful'
 
     It 'waits for the unload to drain before returning'
-      When run zsh "$LAUNCHD" stop mlx-gemma
+      When run zsh -f "$LAUNCHD" stop mlx-gemma
       The status should be success
       The output should include "stopped"
       The path "$STUB_STATE/down" should be exist
@@ -158,7 +166,7 @@ EOF
     AfterEach 'unset SVCFILE'
 
     render_json() {  # render <name> -> plist as JSON
-      zsh "$LAUNCHD" render "$1" | plutil -convert json -o - -- -
+      zsh -f "$LAUNCHD" render "$1" | plutil -convert json -o - -- -
     }
 
     It 'renders all six scheduling keys'
@@ -242,7 +250,8 @@ EOF
     AfterEach 'unset SVCFILE STUB_RC STUB_PRINT'
 
     It 'labels timer-driven services idle with their schedule'
-      rows() { zsh "$LAUNCHD" list | cut -f1,2; }
+      Skip if 'complete-only: a whole `list` over five services: TOML queries and a launchctl call per service' spec_complete_only
+      rows() { zsh -f "$LAUNCHD" list | cut -f1,2; }
       When run rows
       The output should include "half-hourly	idle (every 30m)"
       The output should include "nightly	idle (daily 03:17)"
@@ -252,7 +261,7 @@ EOF
     End
 
     It 'keeps the internal status verb vocabulary untouched'
-      When run zsh "$LAUNCHD" status half-hourly
+      When run zsh -f "$LAUNCHD" status half-hourly
       The output should equal "stopped"
     End
   End
@@ -305,11 +314,12 @@ STUB
 
     # sync, then ask the tool its own status — kickstart re-runs the service.
     sync_then_status() {
-      zsh "$LAUNCHD" sync >/dev/null 2>&1
-      zsh "$LAUNCHD" status mlx-gemma
+      zsh -f "$LAUNCHD" sync >/dev/null 2>&1
+      zsh -f "$LAUNCHD" status mlx-gemma
     }
 
     It 'kickstarts a running on-demand service back up after a drift'
+      Skip if 'complete-only: a whole `sync` then `status` run of the worker: plist rendering, plutil and a dozen launchctl calls' spec_complete_only
       : > "$STUB_STATE/up"; : > "$STUB_STATE/pid"   # bootstrapped + running
       When run sync_then_status
       The output should equal "running"
@@ -319,6 +329,7 @@ STUB
     End
 
     It 'leaves an already-stopped service stopped'
+      Skip if 'complete-only: a whole `sync` then `status` run of the worker: plist rendering, plutil and a dozen launchctl calls' spec_complete_only
       : > "$STUB_STATE/up"                           # bootstrapped, idle
       When run sync_then_status
       The output should equal "stopped"

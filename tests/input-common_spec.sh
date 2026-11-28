@@ -1,5 +1,9 @@
 # Tests for input-common.zsh — themed inline widgets.
 Describe 'input-common.zsh'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   Include home/dot_local/lib/input-common.zsh
 
   setup() {

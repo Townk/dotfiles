@@ -9,12 +9,19 @@
 Describe 'yazi-quick-look: dispatch'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_yazi-quick-look"
 
-  setup() {
+  # The four stubs live at a fixed path and never change: written and run
+  # once, not per example.
+  stubs() {
     STUBS="$SHELLSPEC_TMPBASE/ql-stubs"
     mkdir -p "$STUBS"
     for tool in open pkill tmux term-quick-view; do
       spec_stub "$STUBS" "$tool" "echo \"$tool \$@\""
+      "$STUBS/$tool" >/dev/null 2>&1
     done
+    rm -f "$STUBS"/*.log
+  }
+  BeforeAll 'stubs'
+  setup() {
     TARGET="$SHELLSPEC_TMPBASE/ql-target.txt"
     echo hello >"$TARGET"
   }
@@ -22,7 +29,7 @@ Describe 'yazi-quick-look: dispatch'
 
   It 'local macOS session: replaces any open panel, then Quick Looks the TMPDIR-staged hardlink'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
-    When run zsh -c "
+    When run zsh -f -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
       export TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
@@ -36,7 +43,7 @@ Describe 'yazi-quick-look: dispatch'
 
   It 'local macOS session: stages every selected file, deduping basename collisions'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
-    When run zsh -c "
+    When run zsh -f -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
       export TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
@@ -48,7 +55,7 @@ Describe 'yazi-quick-look: dispatch'
 
   It 'staged hardlink shares the source inode (no data copy)'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
-    When run zsh -c "
+    When run zsh -f -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
       export TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
@@ -64,7 +71,7 @@ Describe 'yazi-quick-look: dispatch'
 
   It 'non-regular targets (directories) pass through unstaged'
     [[ $OSTYPE == darwin* ]] || skip "LaunchServices branch is macOS-only"
-    When run zsh -c "
+    When run zsh -f -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY
       export TMPDIR='$SHELLSPEC_TMPBASE/stage-root'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
@@ -79,7 +86,7 @@ Describe 'yazi-quick-look: dispatch'
   # In Rex the terminal viewer wins everywhere — at the desk too, where the
   # macOS panel would otherwise open.
   It 'Rex pane on the local Mac: the terminal viewer, not the macOS panel'
-    When run zsh -c "
+    When run zsh -f -c "
       unset SSH_CONNECTION SSH_CLIENT SSH_TTY TMUX
       export REX_BLOCK=block:here
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
@@ -90,7 +97,7 @@ Describe 'yazi-quick-look: dispatch'
   End
 
   It 'Rex pane over SSH: the terminal viewer too'
-    When run zsh -c "
+    When run zsh -f -c "
       unset TMUX
       export REX_BLOCK=block:here SSH_CONNECTION='1.2.3.4 1 5.6.7.8 22'
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
@@ -100,7 +107,7 @@ Describe 'yazi-quick-look: dispatch'
   End
 
   It 'SSH session inside tmux: hands off to the shared terminal viewer'
-    When run zsh -c "
+    When run zsh -f -c "
       export SSH_TTY=/dev/ttys000 TMUX=/tmp/sock,1,0
       export MUX_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'
       export MUX_TMUX_BIN='$STUBS/tmux'
@@ -113,7 +120,7 @@ Describe 'yazi-quick-look: dispatch'
   End
 
   It 'SSH session outside any mux: quiet no-op'
-    When run zsh -c "
+    When run zsh -f -c "
       export SSH_TTY=/dev/ttys000
       unset TMUX
       export MUX_LIB='$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib'
@@ -125,7 +132,7 @@ Describe 'yazi-quick-look: dispatch'
   End
 
   It 'no arguments: quiet no-op'
-    When run zsh -c "
+    When run zsh -f -c "
       YAZI_QUICK_LOOK_NO_RUN=1 source '$SCRIPT'
       PATH='$STUBS':\$PATH
       main"

@@ -26,23 +26,17 @@ Describe 'ssh-prepare-connection: mount step'
     return 0
   }
 
-  setup() {
-    CONF="$SHELLSPEC_TMPBASE/mini.conf"
-    rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/ssh-calls" \
-      "$SHELLSPEC_TMPBASE/ssh-stdin" "$SHELLSPEC_TMPBASE/ssh-token-stdin" \
-      "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin"
-    # The credential push (RECOB §9.2) fires only when this machine HAS a
-    # token, so every example gets its own empty state dir: without this the
-    # step's behavior here would depend on whether recobd had ever run on the
-    # machine running the suite.
-    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
-    rm -rf "$XDG_STATE_HOME"
-    mkdir -p "$XDG_STATE_HOME/clipboard"
-    STUBS="$SHELLSPEC_TMPBASE/bin"
-    export PATH="$STUBS:$PATH"
-    mkdir -p "$STUBS"
-    export CLIPBOARD_MOUNT_BIN="$STUBS/clipboard-mount"
+  # Every path the stubs use is fixed under the file's tmpbase, so they are
+  # written once and run once here (macOS charges an inode's first exec), not
+  # per example. clipboard-mount alone is rewritten IN PLACE per example (one
+  # example replaces it): same inode, same mode, no fork.
+  mount_stub() {
     printf '#!/bin/sh\necho "$*" >> "%s"\n' "$SHELLSPEC_TMPBASE/cm-calls" > "$STUBS/clipboard-mount"
+  }
+  stubs_once() {
+    STUBS="$SHELLSPEC_TMPBASE/bin"
+    mkdir -p "$STUBS"
+    mount_stub
     # the other prepare steps' externals. `ssh` records every invocation's
     # argv (to ssh-calls) and stdin (to ssh-stdin) -- prepare: mount runs
     # only step_mount, whose sole ssh caller is the new identity push below,
@@ -73,12 +67,32 @@ case "\$*" in
 esac
 echo "\$*" >> "$SHELLSPEC_TMPBASE/ssh-calls"
 STUB
+    printf '#!/bin/sh\nexit 0\n' > "$STUBS/rsync"
+    chmod +x "$STUBS/clipboard-mount" "$STUBS/ssh" "$STUBS/rsync"
+    "$STUBS/clipboard-mount" warm; "$STUBS/rsync"; "$STUBS/ssh" 'rm -f peer-term' </dev/null
+    zmodload -F zsh/files b:zf_rm b:zf_mkdir
+  } >/dev/null 2>&1
+  BeforeAll 'stubs_once'
+
+  setup() {
+    CONF="$SHELLSPEC_TMPBASE/mini.conf"
+    zf_rm -f "$SHELLSPEC_TMPBASE/cm-calls" "$SHELLSPEC_TMPBASE/ssh-calls" \
+      "$SHELLSPEC_TMPBASE/ssh-stdin" "$SHELLSPEC_TMPBASE/ssh-token-stdin" \
+      "$SHELLSPEC_TMPBASE/ssh-peerterm-stdin" "$SHELLSPEC_TMPBASE/ssh-mount-token-stdin"
+    # The credential push (RECOB §9.2) fires only when this machine HAS a
+    # token, so every example gets its own empty state dir: without this the
+    # step's behavior here would depend on whether recobd had ever run on the
+    # machine running the suite.
+    export XDG_STATE_HOME="$SHELLSPEC_TMPBASE/state"
+    zf_rm -rf "$XDG_STATE_HOME"
+    zf_mkdir -p "$XDG_STATE_HOME/clipboard"
+    export PATH="$STUBS:$PATH"
+    export CLIPBOARD_MOUNT_BIN="$STUBS/clipboard-mount"
+    mount_stub
     # The peer-term push reads the REAL terminal's fingerprints; the suite
     # may itself run inside one, so every example starts undetectable and
     # the ones that test detection set exactly what they mean.
     unset TERM_PROGRAM WEZTERM_PANE WEZTERM_EXECUTABLE GHOSTTY_RESOURCES_DIR
-    printf '#!/bin/sh\nexit 0\n' > "$STUBS/rsync"
-    chmod +x "$STUBS/clipboard-mount" "$STUBS/ssh" "$STUBS/rsync"
   }
   BeforeEach 'setup'
 
@@ -201,6 +215,8 @@ STUB
   End
 
   It 'prepare: all includes the mount step'
+    Skip if 'complete-only: `prepare: all` runs every prepare step of the script, not only the mount' spec_complete_only
+    spec_complete_only && return 0
     write_conf owner-mac-mini 1
     sed -i '' 's/# prepare: mount/# prepare: all/' "$CONF"
     When call run_and_wait

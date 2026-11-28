@@ -247,6 +247,7 @@ TOML
 
     It 'start on an unchanged unit skips daemon-reload'
       Skip if 'complete-only: a whole start through the script: manifest parse, render, a handful of systemctl calls (95-260 ms)' spec_complete_only
+      spec_complete_only && return 0
       write_manifest
       zsh -f "$SYSTEMD_BIN" render demo >"$SYSTEMD_USER_DIR/com.system-service.demo.service"
       export STUB_SHOW="$(printf 'LoadState=loaded\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainStatus=0')"

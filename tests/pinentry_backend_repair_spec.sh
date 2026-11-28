@@ -16,18 +16,18 @@ Describe 'pinentry backend repair'
 
   Skip if "realpath(1) is needed to compare the links" [ ! -x /bin/realpath ] && [ ! -x /usr/bin/realpath ]
 
-  setup() {
-    spec_sandbox; PB_TMP=$SANDBOX
-    PB_BIN="$PB_TMP/bin"
-    PB_HOME="$PB_TMP/home"
-    mkdir -p "$PB_BIN" "$PB_HOME/.local/libexec" "$PB_TMP/ctl" "$PB_TMP/keg/opt/pinentry/bin"
-    export P_MAC="$PB_BIN/pinentry-mac" P_LINK="$PB_TMP/link" P_CTL="$PB_TMP/ctl" P_LOG="$PB_TMP/log" P_KEG="$PB_TMP/keg"
-    : >"$P_LOG"
-    spec_stub "$PB_BIN" pinentry-mac
-    spec_stub "$PB_BIN" pinentry-curses
-    ln -s "$PB_BIN/pinentry-curses" "$P_LINK"
+  # The stubs, the helper's installed copy and the rendered hook are the same
+  # for every example: made once, each run once (macOS charges an inode's
+  # first exec), then hard-linked into the example's own directories, where
+  # an example may remove or replace any of them. The stubs find the
+  # example's link, log and switches through the exported P_* variables.
+  fixtures() {
+    PB_FIX="$SHELLSPEC_TMPBASE/pb-fix"
+    mkdir -p "$PB_FIX/bin" "$PB_FIX/ctl"
+    spec_stub "$PB_FIX/bin" pinentry-mac
+    spec_stub "$PB_FIX/bin" pinentry-curses
     # -fix repairs only when told to, and exits as told to.
-    cat >"$PB_BIN/pinentry-touchid" <<'SH'
+    cat >"$PB_FIX/bin/pinentry-touchid" <<'SH'
 #!/bin/sh
 echo "pinentry-touchid $*" >>"$P_LOG"
 [ "$1" = "-fix" ] || exit 0
@@ -36,29 +36,48 @@ echo "pinentry-touchid $*" >>"$P_LOG"
 exit 0
 SH
     # gpgconf names the link unless told it cannot.
-    cat >"$PB_BIN/gpgconf" <<'SH'
+    cat >"$PB_FIX/bin/gpgconf" <<'SH'
 #!/bin/sh
 [ -f "$P_CTL/no-gpgconf" ] && exit 1
 printf 'gpg:OpenPGP:/x/gpg\npinentry:Passphrase Entry:%s\n' "$P_LINK"
 SH
-    spec_stub "$PB_BIN" brew 'echo "$P_KEG"'
+    spec_stub "$PB_FIX/bin" brew 'echo "$P_KEG"'
     # Both spellings of timeout: log the limit, then run the command.
-    cat >"$PB_BIN/gtimeout" <<'SH'
+    cat >"$PB_FIX/bin/gtimeout" <<'SH'
 #!/bin/sh
 echo "${0##*/} $1" >>"$P_LOG"
 shift
 exec "$@"
 SH
-    cp "$PB_BIN/gtimeout" "$PB_BIN/timeout"
-    cat >"$PB_BIN/defaults" <<'SH'
+    cp "$PB_FIX/bin/gtimeout" "$PB_FIX/bin/timeout"
+    cat >"$PB_FIX/bin/defaults" <<'SH'
 #!/bin/sh
 echo "defaults $*" >>"$P_LOG"
 [ "$1" = read ] && { [ -f "$P_CTL/keychain-off" ] && echo 1; exit 0; }
 exit 0
 SH
-    chmod +x "$PB_BIN"/*
-    cp "$HELPER" "$PB_HOME/.local/libexec/pinentry-backend-repair"
-    chmod +x "$PB_HOME/.local/libexec/pinentry-backend-repair"
+    cp "$HELPER" "$PB_FIX/pinentry-backend-repair"
+    chmod +x "$PB_FIX/bin"/* "$PB_FIX/pinentry-backend-repair"
+    ( export P_MAC="$PB_FIX/bin/pinentry-mac" P_LINK="$PB_FIX/link" P_CTL="$PB_FIX/ctl" P_LOG=/dev/null P_KEG="$PB_FIX/keg"
+      for stub in "$PB_FIX/bin"/*; do
+        case ${stub:t} in *.log) ;; *timeout) "$stub" 0 true ;; *) "$stub" ;; esac
+      done
+      PATH="$PB_FIX/bin:/usr/bin:/bin" "$PB_FIX/pinentry-backend-repair" check
+      rm -f "$PB_FIX/link" ) >/dev/null 2>&1
+    [ "$(uname -s)" != Darwin ] || spec_render_template "$HOOK_TMPL" "$PB_FIX/hook.sh"
+  }
+  BeforeAll 'fixtures'
+
+  setup() {
+    spec_sandbox; PB_TMP=$SANDBOX
+    PB_BIN="$PB_TMP/bin"
+    PB_HOME="$PB_TMP/home"
+    mkdir -p "$PB_BIN" "$PB_HOME/.local/libexec" "$PB_TMP/ctl" "$PB_TMP/keg/opt/pinentry/bin"
+    export P_MAC="$PB_BIN/pinentry-mac" P_LINK="$PB_TMP/link" P_CTL="$PB_TMP/ctl" P_LOG="$PB_TMP/log" P_KEG="$PB_TMP/keg"
+    : >"$P_LOG"
+    ln "$PB_FIX/bin"/{pinentry-mac,pinentry-curses,pinentry-touchid,gpgconf,brew,gtimeout,timeout,defaults} "$PB_BIN/"
+    ln -s "$PB_BIN/pinentry-curses" "$P_LINK"
+    ln "$PB_FIX/pinentry-backend-repair" "$PB_HOME/.local/libexec/pinentry-backend-repair"
   }
   BeforeEach 'setup'
 
@@ -158,12 +177,15 @@ pinentry-touchid -fix"
     Skip if "the hook renders to nothing off macOS" [ "$(uname -s)" != Darwin ]
 
     hook() {
-      spec_render_template "$HOOK_TMPL" "$PB_TMP/hook.sh" || return 1
+      # Rendered once, in fixtures: the template has no per-example input.
+      [ -s "$PB_FIX/hook.sh" ] && ln "$PB_FIX/hook.sh" "$PB_TMP/hook.sh" || return 1
       env HOME="$PB_HOME" PATH="$PB_BIN:/usr/bin:/bin" sh "$PB_TMP/hook.sh"
       print -r -- "rc=$? link=$(target)"
     }
 
     It 'repairs a wrong backend and says so'
+      Skip if 'complete-only: the whole apply hook down its repair path: check, -fix under timeout, check again (some twenty-five processes)' spec_complete_only
+      spec_complete_only && return 0
       touch "$P_CTL/repair" "$P_CTL/keychain-off"
       When call hook
       The output should equal "rc=0 link=pinentry-mac"
@@ -172,6 +194,8 @@ pinentry-touchid: backend repaired -> pinentry-mac"
     End
 
     It 'reports a repair that did not take, without failing the apply'
+      Skip if 'complete-only: the whole apply hook down its repair path: check, -fix under timeout, check again (some twenty-five processes)' spec_complete_only
+      spec_complete_only && return 0
       touch "$P_CTL/keychain-off"
       print 1 >"$P_CTL/fix-rc"
       When call hook

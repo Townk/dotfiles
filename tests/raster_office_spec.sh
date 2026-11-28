@@ -18,6 +18,9 @@ Describe 'raster::office'
     spec_path_prepend "$SANDBOX/bin"
     export RASTER_QL_THUMB_BIN="$SANDBOX/libexec/ql-thumb"
   }
+  # Two stubs per example (three in one), on pooled inodes: exec'd once here.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 3'
   BeforeEach 'setup'
 
   office() {

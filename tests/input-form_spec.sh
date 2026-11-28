@@ -2,6 +2,10 @@
 # The shell no longer runs a per-field loop; it delegates to ai-playbook
 # --type form --spec FILE. These tests verify the shim wiring via the aii stub.
 Describe 'input::form'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   Include home/dot_local/lib/input-common.zsh
 
   US=$(printf '\037'); RS=$(printf '\036')

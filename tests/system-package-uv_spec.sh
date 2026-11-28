@@ -13,9 +13,7 @@ Describe 'system-package-uv: python drift'
     mkdir -p "$STAGE/home/.local"
     ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/home/.local/lib"
   }
-  cleanup() { rm -rf "$STAGE"; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   # drifted <stamp value or ""> <snapshot rows or ""> — prints yes|no
   drifted() {
@@ -57,6 +55,7 @@ End
 # worker does — but only after the rest of the sync has run. Upgrade and
 # uninstall failures keep warning only. uv and python are stub binaries on PATH.
 Describe 'system-package-uv: sync exit status'
+  Skip if 'complete-only: runs a whole system-package-uv sync against stub tools (dozens of forks)' spec_complete_only
   WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-uv"
 
   setup() {
@@ -94,17 +93,21 @@ SH
     printf 'present v1.0.0\n- present\n' >"$STAGE/state"
     : >"$STAGE/uv.log"
   }
-  cleanup() { rm -rf "$STAGE"; }
+  # The worker's spinner naps 0.1 s per tick beside each install
+  # (spin::nap -> common::sleep): on the virtual clock the ticks cost nothing.
+  # The stubs' pooled inodes are exec'd once here, not inside an example.
+  Include tests/exec_warm_helper.sh
+  once() { spec_clock_set && spec_exec_pool_warm 2; }
+  BeforeAll 'once'
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   run_sync() {   # run_sync <tool whose install fails> <upgrade rc> <uninstall rc>
-    env -i HOME="$STAGE/home" \
+    env -i HOME="$STAGE/home" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
       PATH="$STAGE/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       PKG_DIR="$STAGE/packages" \
       STUB_STATE="$STAGE/state" STUB_LOG="$STAGE/uv.log" \
       STUB_FAIL_INSTALL="$1" STUB_UPGRADE_RC="${2:-0}" STUB_UNINSTALL_RC="${3:-0}" \
-      zsh "$WORKER" sync
+      zsh -f "$WORKER" sync
   }
 
   It 'fails when a declared-but-missing tool cannot be installed, after finishing the sync'

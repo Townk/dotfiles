@@ -13,15 +13,21 @@ Describe 'nvim → Rex pane navigation and resize'
   nvim_missing() { ! command -v nvim >/dev/null 2>&1; }
   Skip if 'nvim is not installed' nvim_missing
 
-  setup() {
-    NV_TMP=$(mktemp -d)
-    mkdir -p "$NV_TMP/bin"
-    cat >"$NV_TMP/bin/rex" <<EOS
+  # The fake rex and the driver are the same for every example: written once.
+  # The fake logs into the example's own directory, named by $NV_TMP, and
+  # then leaves rex.done beside the log: the driver below waits for THAT, not
+  # for half a second, so "handled" is printed once the detached rex has run.
+  fixtures() {
+    NV_FIX="$SHELLSPEC_TMPBASE/nv-fix"
+    mkdir -p "$NV_FIX"
+    cat >"$NV_FIX/rex" <<'EOS'
 #!/bin/sh
-echo "\$*" >>"$NV_TMP/rex.log"
+echo "$*" >>"$NV_TMP/rex.log"
+: >"$NV_TMP/rex.done"
 EOS
-    chmod +x "$NV_TMP/bin/rex"
-    cat >"$NV_TMP/run.lua" <<'EOS'
+    chmod +x "$NV_FIX/rex"
+    "$NV_FIX/rex" >/dev/null 2>&1   # first exec of the inode, outside the examples
+    cat >"$NV_FIX/run.lua" <<'EOS'
 -- The backend is reached the way smart-splits reaches it: through the opts.
 local opts = dofile(os.getenv("NAV_LUA"))[1].opts
 local backend = opts.mux.backend
@@ -43,20 +49,27 @@ if op == "resize" then
 else
   handled = backend.move(dir, {})
 end
-vim.wait(500, function() return false end)
+-- The rex call is detached and asynchronous: give it up to 500 ms, as
+-- before, but stop as soon as the fake says it has run. An example whose rex
+-- never runs (the missing binary) still sits out the whole window.
+local done = os.getenv("NV_TMP") .. "/rex.done"
+vim.wait(500, function() return (vim.uv or vim.loop).fs_stat(done) ~= nil end, 2)
 io.write(handled == true and "handled" or "declined", "\n")
 EOS
   }
-  cleanup() { rm -rf "$NV_TMP"; }
+  BeforeAll 'fixtures'
+  setup() {
+    spec_sandbox nv; NV_TMP=$SANDBOX
+    mkdir "$NV_TMP/bin" && ln "$NV_FIX/rex" "$NV_TMP/bin/rex"
+  }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   # edge <op> <direction> [VAR=value...] — run the backend in a clean environment.
   edge() {
     local op=$1 dir=$2; shift 2
-    env -i HOME="$NV_TMP" PATH="/usr/bin:/bin:${commands[nvim]:h}" \
+    env -i HOME="$NV_TMP" NV_TMP="$NV_TMP" PATH="/usr/bin:/bin:${commands[nvim]:h}" \
       NAV_LUA="$PWD/home/dot_config/nvim/lua/plugins/nav.lua" NAV_OP="$op" NAV_DIR="$dir" "$@" \
-      nvim --headless -u NONE -l "$NV_TMP/run.lua" 2>&1
+      nvim --headless -u NONE -l "$NV_FIX/run.lua" 2>&1
   }
   plugin_dir() { print -r -- "${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy/smart-splits.nvim"; }
   plugin_missing() { [[ ! -d "$(plugin_dir)" ]]; }
@@ -98,6 +111,7 @@ EOS
   End
 
   It 'does not raise when the rex binary is missing'
+    Skip if 'complete-only: sits out the real 500 ms window in which a failed spawn could still raise' spec_complete_only
     When call edge move left REX_BLOCK=block:b REX_BIN_DIR="$NV_TMP/nowhere"
     The output should equal "handled"
   End

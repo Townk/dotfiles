@@ -168,6 +168,10 @@ Describe 'system-package-common.zsh'
   # real. Payloads live in $TEST_TMP/mas-<subcommand>.out and the exit code in
   # $TEST_TMP/mas-<subcommand>.rc (default 0).
   Describe 'mas 7 JSON parsing'
+    # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+    # their first exec is paid here, once, not inside the first examples.
+    Include tests/exec_warm_helper.sh
+    BeforeAll 'spec_exec_pool_warm 1'
     mas_bin() {
       BINDIR="$TEST_TMP/bin"
       mkdir -p "$BINDIR"

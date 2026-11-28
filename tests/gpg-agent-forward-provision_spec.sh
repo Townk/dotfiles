@@ -7,6 +7,10 @@
 # path comes from the GPG_FORWARD_SSHD_DROPIN seam so the test never touches
 # /etc.
 Describe 'gpg-agent-forward-provision'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 4'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_gpg-agent-forward-provision"
 
   setup() {

@@ -8,10 +8,13 @@
 # pixels are a Mode B judgement.
 Describe 'mux-rename'
   BIN="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_mux-rename"
+  # The stubs each example writes run from pooled inodes: exec'd once per
+  # group before its first example (the BeforeAll lines below).
+  Include tests/exec_warm_helper.sh
 
   Describe 'launch geometry'
     setup() {
-      RN_TMP=$(mktemp -d)
+      spec_sandbox rn; RN_TMP=$SANDBOX
       STUB="$RN_TMP/tmux"
       { print '#!/bin/sh'
         print 'echo "$*" >> '"$RN_TMP/calls"
@@ -23,12 +26,11 @@ Describe 'mux-rename'
       } > "$STUB"
       chmod +x "$STUB"
     }
-    cleanup() { rm -rf "$RN_TMP"; }
+    BeforeAll 'spec_exec_pool_warm 1'
     BeforeEach 'setup'
-    AfterEach 'cleanup'
 
     launch() {
-      MUX_TMUX_BIN="$STUB" TMUX=/tmp/s,1,0 zsh "$BIN" --launch "$1" >/dev/null 2>&1
+      MUX_TMUX_BIN="$STUB" TMUX=/tmp/s,1,0 zsh -f "$BIN" --launch "$1" >/dev/null 2>&1
       cat "$RN_TMP/calls"
     }
 
@@ -49,7 +51,7 @@ Describe 'mux-rename'
 
   Describe 'the dialog body'
     It 'refuses to run outside tmux rather than drawing nothing'
-      When run zsh "$BIN" window
+      When run zsh -f "$BIN" window
       The status should be failure
       The stderr should include "tmux only"
     End
@@ -93,41 +95,53 @@ Describe 'mux-rename'
   # adjective-noun name into the field (mux-random-session-name), so naming a
   # session is a keypress rather than an invention.
   Describe 'session'
-    setup() {
-      RS_TMP=$(mktemp -d)
-      STUB="$RS_TMP/tmux"
+    # The tmux stub logs into the example's own directory through the exported
+    # $RS_CALLS, so it is written (and run) once. The generator stub lives at
+    # one fixed path and is rewritten IN PLACE per example (one example
+    # replaces it): same inode, same mode, so no chmod and no first exec.
+    stubs() {
+      RS_FIX="$SHELLSPEC_TMPBASE/rs-fix"; mkdir -p "$RS_FIX"
+      STUB="$RS_FIX/tmux"
       { print '#!/bin/sh'
-        print 'echo "$*" >> '"$RS_TMP/calls"
+        print 'echo "$*" >> "$RS_CALLS"'
         print 'case "$*" in'
         print '  *session_name*) echo "old-session" ;;'
         print '  *pane_id*)      echo "%1" ;;'
         print 'esac'
       } > "$STUB"; chmod +x "$STUB"
-      RAND="$RS_TMP/rand"
+      RAND="$RS_FIX/rand"
       { print '#!/bin/sh'; print 'echo lucky-otter' } > "$RAND"; chmod +x "$RAND"
-      THEME="$RS_TMP/theme.json"
+      RS_CALLS=/dev/null "$STUB" warm >/dev/null 2>&1
+      "$RAND" >/dev/null 2>&1
+      THEME="$RS_FIX/theme.json"
       print '{"extended":{"tab":{"bg":"#282c41"},"dialog":{"warning":"#e5bf7b","search_accent":"#61afef"}},"roles":{"ui":{"bg":"#1e1e2e","dialog_bg":"#181825","border_inactive":"#45475a"},"action":{"attention":"#f9e2af"}},"palette":{"white":"#ffffff"}}' > "$THEME"
     }
-    cleanup() { rm -rf "$RS_TMP"; }
+    BeforeAll 'stubs'
+    setup() {
+      spec_sandbox rs; RS_TMP=$SANDBOX
+      export RS_CALLS="$RS_TMP/calls"
+      { print '#!/bin/sh'; print 'echo lucky-otter' } > "$RAND"
+    }
     BeforeEach 'setup'
-    AfterEach 'cleanup'
 
     # Feed the dialog raw bytes on stdin, exactly as a terminal would.
     drive() {
       printf '%b' "$1" | MUX_TMUX_BIN="$STUB" TMUX=/tmp/s,1,0 \
         THEME_PALETTE_JSON="$THEME" MUX_RANDOM_NAME_BIN="$RAND" \
         MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-        zsh "$BIN" session >/dev/null 2>&1
+        zsh -f "$BIN" session >/dev/null 2>&1
       cat "$RS_TMP/calls"
     }
 
     It 'prefills with the current session name and renames on Enter'
+      Skip if 'complete-only: drives the whole rename dialog to a rename: palette load, the field drawn, some ten tmux calls' spec_complete_only
       When call drive '\r'
       The output should include "rename-session"
       The output should include "old-session"
     End
 
     It 'replaces the field with a random name on Alt+r'
+      Skip if 'complete-only: drives the whole rename dialog to a rename: palette load, the field drawn, some ten tmux calls' spec_complete_only
       When call drive '\033r\r'
       The output should include "lucky-otter"
     End
@@ -142,13 +156,14 @@ Describe 'mux-rename'
     End
 
     It 'asks the generator for a name, never for a rename'
+      Skip if 'complete-only: drives the whole rename dialog to a rename: palette load, the field drawn, some ten tmux calls' spec_complete_only
       calls() {
         RAND_LOG="$RS_TMP/randargs"
         { print '#!/bin/sh'; print 'echo "[$*]" >> '"$RS_TMP/randargs"; print 'echo lucky-otter' } > "$RAND"
         printf '%b' '\033r\r' | MUX_TMUX_BIN="$STUB" TMUX=/tmp/s,1,0 \
           THEME_PALETTE_JSON="$THEME" MUX_RANDOM_NAME_BIN="$RAND" \
           MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-          zsh "$BIN" session >/dev/null 2>&1
+          zsh -f "$BIN" session >/dev/null 2>&1
         cat "$RS_TMP/randargs"
       }
       When call calls

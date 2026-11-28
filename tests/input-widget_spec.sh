@@ -1,5 +1,9 @@
 # Tests for input-widget — the --type dispatcher (pane process).
 Describe 'input-widget'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_input-widget"
 
   setup() {

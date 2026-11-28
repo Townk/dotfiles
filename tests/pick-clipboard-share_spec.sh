@@ -11,10 +11,14 @@ Describe 'pick-clipboard: Ctrl-S feedback'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_pick-clipboard"
   LIB_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
-  setup() {
-    SB="$SHELLSPEC_TMPBASE/pick-share"; rm -rf "$SB"; mkdir -p "$SB/bin" "$SB/home"
-    DB="$SB/history.db"
-    sqlite3 "$DB" "
+  # The seeded store and the two fakes are the same for every example: built
+  # once (and the fakes run once: a new script's first exec is the expensive
+  # one). The sandbox path is fixed, so the fakes' logs are too; an example
+  # gets a fresh sandbox with a copy of the store.
+  fixtures() {
+    SB="$SHELLSPEC_TMPBASE/pick-share"
+    FIX="$SHELLSPEC_TMPBASE/pick-share-fix"; mkdir -p "$FIX/bin"
+    sqlite3 "$FIX/history.db" "
       CREATE TABLE clips (id INTEGER PRIMARY KEY, type_kind TEXT, text_preview TEXT,
                           source_host TEXT, last_ts REAL);
       CREATE TABLE clip_types (clip_id INTEGER, uti TEXT, blob BLOB);
@@ -23,18 +27,33 @@ Describe 'pick-clipboard: Ctrl-S feedback'
       INSERT INTO clip_types VALUES (2, 'x-resolved-path', CAST('/nowhere/gone.pdf' AS BLOB));
       INSERT INTO clips VALUES (3, 'file', 'gone.pdf', NULL, 3);
       INSERT INTO clip_types VALUES (3, 'x-resolved-path', CAST('/nowhere/gone.pdf' AS BLOB));"
-    NOTIFYLOG="$SB/notifylog"; : >"$NOTIFYLOG"
-    cat >"$SB/bin/notify" <<EOF
+    NOTIFYLOG="$SB/notifylog"
+    cat >"$FIX/bin/notify" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >>"$NOTIFYLOG"
 EOF
-    SHARELOG="$SB/sharelog"; : >"$SHARELOG"
+    SHARELOG="$SB/sharelog"
     # A share that "fell back to stored": success, empty stdout.
-    cat >"$SB/bin/share" <<EOF
+    cat >"$FIX/bin/share" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >>"$SHARELOG"
 EOF
-    chmod +x "$SB/bin/notify" "$SB/bin/share"
+    chmod +x "$FIX/bin/notify" "$FIX/bin/share"
+    mkdir -p "$SB"
+    "$FIX/bin/notify" warm >/dev/null 2>&1
+    "$FIX/bin/share" warm >/dev/null 2>&1
+    return 0
+  }
+  BeforeAll 'fixtures'
+  setup() {
+    # zsh's own file builtins: the only fork left in here is the copy.
+    zmodload -F zsh/files b:zf_rm b:zf_mkdir b:zf_ln
+    zf_rm -rf "$SB"; zf_mkdir -p "$SB/bin" "$SB/home"
+    DB="$SB/history.db"
+    cp "$FIX/history.db" "$DB"
+    zf_ln "$FIX/bin/notify" "$SB/bin/notify"; zf_ln "$FIX/bin/share" "$SB/bin/share"
+    : >"$NOTIFYLOG"
+    : >"$SHARELOG"
     export PICK_CLIPBOARD_NO_RUN=1 PICK_LIB_DIR="$LIB_DIR" PICK_CLIPBOARD_DB="$DB"
     export PICK_CLIPBOARD_NOTIFY="$SB/bin/notify" HOME="$SB/home"
     export SCRIPT_PATH="$SCRIPT" PATH="$SB/bin:$PATH"
@@ -56,6 +75,8 @@ EOF
   }
 
   It 'toasts the refusal for a text row, not just stderr'
+    Skip if 'complete-only: sources the whole picker (its load-time probes alone are ~40 ms) and takes a share decision through sqlite3 and the notify front-end' spec_complete_only
+    spec_complete_only && return 0
     When call run_fn clip::share_by_id 1
     The stdout should equal ''
     The stderr should include 'Ctrl-S shares files — this row is text'
@@ -76,6 +97,8 @@ EOF
   # here (org.chezmoi.clipboard.UntrustedFileURLs), so relaying them onward
   # would cross the boundary the clipboard design enforces.
   It 'refuses a row from another machine, saying where to share it from'
+    Skip if 'complete-only: sources the whole picker (its load-time probes alone are ~40 ms) and takes a share decision through sqlite3 and the notify front-end' spec_complete_only
+    spec_complete_only && return 0
     When call run_fn clip::share_by_id 2
     The stdout should equal ''
     The stderr should include 'gone.pdf is on work-laptop — share it from there'
@@ -87,6 +110,8 @@ EOF
   # path shapes, so a remote row can name a path that ALSO exists here — a
   # different file, which must never be sent in its place.
   It 'refuses a remote row even when the same path exists on this machine'
+    Skip if 'complete-only: sources the whole picker (its load-time probes alone are ~40 ms) and takes a share decision through sqlite3 and the notify front-end' spec_complete_only
+    spec_complete_only && return 0
     : >"$SB/collide.txt"
     sqlite3 "$DB" "INSERT INTO clips VALUES (4, 'file', 'collide.txt', 'work-laptop', 4);
                    INSERT INTO clip_types VALUES (4, 'x-resolved-path', CAST('$SB/collide.txt' AS BLOB));"
@@ -96,6 +121,8 @@ EOF
   End
 
   It 'names the file count for a multi-file remote row'
+    Skip if 'complete-only: sources the whole picker (its load-time probes alone are ~40 ms) and takes a share decision through sqlite3 and the notify front-end' spec_complete_only
+    spec_complete_only && return 0
     # Hex, not '||' concatenation: a NUL inside SQL text is not reliable.
     local hex; hex="$(printf '/x/a.pdf\0/x/b.pdf' | xxd -p | tr -d '\n')"
     sqlite3 "$DB" "INSERT INTO clips VALUES (5, 'files', 'a b', 'work-laptop', 5);
@@ -114,6 +141,8 @@ EOF
 
   # A LOCAL row (NULL host = legacy local) whose file has since gone.
   It 'says a local file is gone, without the old Ctrl-Y advice'
+    Skip if 'complete-only: sources the whole picker (its load-time probes alone are ~40 ms) and takes a share decision through sqlite3 and the notify front-end' spec_complete_only
+    spec_complete_only && return 0
     When call run_fn clip::share_by_id 3
     The stderr should include 'no longer on this machine'
     The stderr should not include 'Ctrl-Y'
@@ -135,6 +164,8 @@ EOF
   End
 
   It 'names the other machine by its learned alias'
+    Skip if 'complete-only: sources the whole picker (its load-time probes alone are ~40 ms) and takes a share decision through sqlite3 and the notify front-end' spec_complete_only
+    spec_complete_only && return 0
     printf 'work-laptop peer-laptop\n' >"$SB/host-aliases"
     export HOST_ALIASES_FILE="$SB/host-aliases"
     When call run_fn clip::share_by_id 2

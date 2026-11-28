@@ -92,41 +92,21 @@ EOF
 EOF
   }
 
-  setup() {
-    STAGE="$(mktemp -d)"
-    # $HOME sandbox so the tool's `source $HOME/.local/lib/...` resolves the
-    # real lib (palette/common.zsh come via THEME_PALETTE_FILE from the helper).
-    mkdir -p "$STAGE/.local/bin"
-    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/.local/lib"
-    cp "$IMAGES" "$STAGE/.local/bin/system-images"
-    chmod +x "$STAGE/.local/bin/system-images"
-    OLD_HOME="${HOME:-}"; export HOME="$STAGE"
-
-    # Manifest + image dir.
-    export IMGFILE="$STAGE/images.toml"
-    export IMG_DIR="$STAGE/images"
-    export MOUNT_PARENT="$STAGE/mnt"
-    mkdir -p "$IMG_DIR" "$MOUNT_PARENT"
-    cat >"$IMGFILE" <<EOF
-[work]
-mountpoint = "$MOUNT_PARENT"
-automount = true
-size = "1g"
-EOF
-    IMG="$IMG_DIR/work.sparseimage"
-    printf 'sparse-bytes' >"$IMG"        # a plausible backing file
-
+  # What never changes is made once: the hdiutil stub (it reads its state,
+  # log and switches from the exported HDIUTIL_* variables, so one copy
+  # serves every example; run once here, where the first exec of its inode
+  # is paid), the empty plist, and the tool's installed copy.
+  once() {
+    IMG_FIX="$SHELLSPEC_TMPBASE/images-fix"
+    STUB_DIR="$IMG_FIX/stub"; mkdir -p "$STUB_DIR"
+    EMPTY_PLIST="$(_empty_plist)"
+    print -r -- "$EMPTY_PLIST" >"$IMG_FIX/empty.plist"
+    cp "$IMAGES" "$IMG_FIX/system-images"
     # hdiutil stub: `info -plist` serves $HDIUTIL_STATE; attach/detach are
     # logged; a non-stubborn detach flips the state to the empty plist. With
     # HDIUTIL_INFO_BROKEN=1, `info` prefixes its plist with a notice on
     # STDOUT (the shape a deprecation banner would take), so the plist no
     # longer parses — the attach state becomes unknowable.
-    STUB_DIR="$STAGE/stub"; mkdir -p "$STUB_DIR"
-    export HDIUTIL_LOG="$STAGE/hdiutil.log"; : >"$HDIUTIL_LOG"
-    export HDIUTIL_STATE="$STAGE/hdiutil.plist"
-    export HDIUTIL_EMPTY="$STAGE/empty.plist"
-    _empty_plist >"$HDIUTIL_EMPTY"
-    _empty_plist >"$HDIUTIL_STATE"       # default: nothing attached
     cat >"$STUB_DIR/hdiutil" <<'STUB'
 #!/bin/sh
 case "$1" in
@@ -139,16 +119,38 @@ case "$1" in
 esac
 exit 0
 STUB
-    chmod +x "$STUB_DIR/hdiutil"
+    chmod +x "$STUB_DIR/hdiutil" "$IMG_FIX/system-images"
+    "$STUB_DIR/hdiutil" warm >/dev/null 2>&1
+  }
+  BeforeAll 'once'
+
+  setup() {
+    spec_sandbox images; STAGE=$SANDBOX
+    # Manifest + image dir.
+    export IMGFILE="$STAGE/images.toml"
+    export IMG_DIR="$STAGE/images"
+    export MOUNT_PARENT="$STAGE/mnt"
+    # $HOME sandbox so the tool's `source $HOME/.local/lib/...` resolves the
+    # real lib (palette/common.zsh come via THEME_PALETTE_FILE from the helper).
+    mkdir -p "$STAGE/.local/bin" "$IMG_DIR" "$MOUNT_PARENT"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/.local/lib"
+    ln "$IMG_FIX/system-images" "$STAGE/.local/bin/system-images"
+    export HOME="$STAGE"
+
+    print -r -- "[work]
+mountpoint = \"$MOUNT_PARENT\"
+automount = true
+size = \"1g\"" >"$IMGFILE"
+    IMG="$IMG_DIR/work.sparseimage"
+    printf 'sparse-bytes' >"$IMG"        # a plausible backing file
+
+    export HDIUTIL_LOG="$STAGE/hdiutil.log"; : >"$HDIUTIL_LOG"
+    export HDIUTIL_STATE="$STAGE/hdiutil.plist"
+    export HDIUTIL_EMPTY="$IMG_FIX/empty.plist"
+    print -r -- "$EMPTY_PLIST" >"$HDIUTIL_STATE"       # default: nothing attached
     export PATH="$STUB_DIR:$PATH"
   }
-  cleanup() {
-    export HOME="$OLD_HOME"
-    rm -rf "$STAGE"
-    unset IMGFILE IMG_DIR MOUNT_PARENT HDIUTIL_LOG HDIUTIL_STATE HDIUTIL_EMPTY HDIUTIL_STUBBORN HDIUTIL_INFO_BROKEN
-  }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   # Attach `work` at the given mount point by swapping the state file.
   attach_at() { _mounted_plist "$IMG" "$1" >"$HDIUTIL_STATE"; }
@@ -165,27 +167,27 @@ STUB
       End
 
       It 'status reports mounted at the actual mount point'
-        When run zsh "$STAGE/.local/bin/system-images" status work
+        When run zsh -f "$STAGE/.local/bin/system-images" status work
         The output should include "yes (at /Volumes/work)"
         The status should be success
       End
 
       It 'list reports mounted and names the actual mount point'
-        When run zsh "$STAGE/.local/bin/system-images" list
+        When run zsh -f "$STAGE/.local/bin/system-images" list
         The output should include "mounted"
         The output should include "/Volumes/work"
         The status should be success
       End
 
       It 'unmount proceeds and detaches the device (not the declared dir)'
-        When run zsh "$STAGE/.local/bin/system-images" unmount work
+        When run zsh -f "$STAGE/.local/bin/system-images" unmount work
         The output should include "unmounted work"
         The status should be success
         The contents of file "$HDIUTIL_LOG" should include "detach /dev/disk4"
       End
 
       It 'mount does NOT re-attach an already-attached image'
-        When run zsh "$STAGE/.local/bin/system-images" mount work
+        When run zsh -f "$STAGE/.local/bin/system-images" mount work
         The output should include "already mounted at /Volumes/work"
         The status should be success
         The contents of file "$HDIUTIL_LOG" should not include "attach"
@@ -203,7 +205,7 @@ STUB
       End
 
       It 'status shows mounted at the declared dir'
-        When run zsh "$STAGE/.local/bin/system-images" status work
+        When run zsh -f "$STAGE/.local/bin/system-images" status work
         The output should include "yes (at $MOUNT_PARENT/work)"
       End
     End
@@ -216,13 +218,13 @@ STUB
       End
 
       It 'list reports unmounted'
-        When run zsh "$STAGE/.local/bin/system-images" list
+        When run zsh -f "$STAGE/.local/bin/system-images" list
         The output should include "unmounted"
         The status should be success
       End
 
       It 'unmount is a no-op that does not detach'
-        When run zsh "$STAGE/.local/bin/system-images" unmount work
+        When run zsh -f "$STAGE/.local/bin/system-images" unmount work
         The output should include "not mounted"
         The contents of file "$HDIUTIL_LOG" should not include "detach"
       End

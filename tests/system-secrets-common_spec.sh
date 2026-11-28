@@ -7,21 +7,17 @@ Describe 'system-secrets-common.zsh'
   Include home/dot_local/lib/system-secrets-common.zsh
 
   setup() {
-    TEST_TMP=$(mktemp -d)
+    spec_sandbox sec; TEST_TMP=$SANDBOX
     OPERATOR_MAP="$TEST_TMP/onboard-map.yaml"
     SECRETS_BLOB_DIR="$TEST_TMP/secrets"
     FRAGMENT_DIR="$TEST_TMP/frags"
     MANIFEST="$TEST_TMP/secrets.yaml"
-    cat >"$MANIFEST" <<'YAML'
-secrets:
+    print -r -- 'secrets:
   - name: EXISTING_ONE
     prompt: an existing secret
-    requiredFor: [personal]
-YAML
+    requiredFor: [personal]' >"$MANIFEST"
   }
-  cleanup() { rm -rf "$TEST_TMP"; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   Describe 'sec::map_set'
     It 'records a managed field for a slot'
@@ -137,12 +133,15 @@ YAML
   Describe 'sec::write_human_fragment (SEC-1: shell-safe interpolation)'
     # op stub: chezmoi's `output "op" ...` resolves via PATH, so a stub that
     # echoes OP_TEST_VALUE (no trailing newline) lets us render a chosen value.
+    # The op stand-in answers from the environment, so one copy serves every
+    # example: written and run once.
     op_stub_setup() {
-      STUB="$TEST_TMP/stub"; mkdir -p "$STUB"
+      STUB="$SHELLSPEC_TMPBASE/op-stub"; mkdir -p "$STUB"
       printf '#!/bin/sh\nprintf %%s "$OP_TEST_VALUE"\n' >"$STUB/op"
       chmod +x "$STUB/op"
+      "$STUB/op" >/dev/null 2>&1
     }
-    BeforeEach 'op_stub_setup'
+    BeforeAll 'op_stub_setup'
 
     It 'emits a single-quoted assignment escaped through replace'
       esc='| replace "'\''" "'\''\"'\''\"'\''"'
@@ -349,15 +348,22 @@ INNER
   # fallback when user.email is unset) would land a hostname in the repo
   # through a field the audit never looked at.
   Describe 'sec::leak_audit (author identity)'
+    # The scratch repository (identity, patterns, one staged file) is the same
+    # for every example: built once, copied per example.
+    audit_template() {
+      AUDIT_TPL="$SHELLSPEC_TMPBASE/audit-template"
+      mkdir -p "$AUDIT_TPL"
+      git -C "$AUDIT_TPL" init -q
+      git -C "$AUDIT_TPL" config user.email safe@example.com
+      git -C "$AUDIT_TPL" config user.name tester
+      printf 'corp[.]internal\n' > "$AUDIT_TPL/.leak-patterns"
+      printf 'clean content\n' > "$AUDIT_TPL/file.txt"
+      git -C "$AUDIT_TPL" add file.txt
+    }
+    BeforeAll 'audit_template'
     setup_audit() {
       AREPO="$TEST_TMP/audit-repo"
-      mkdir -p "$AREPO"
-      git -C "$AREPO" init -q
-      git -C "$AREPO" config user.email safe@example.com
-      git -C "$AREPO" config user.name tester
-      printf 'corp[.]internal\n' > "$AREPO/.leak-patterns"
-      printf 'clean content\n' > "$AREPO/file.txt"
-      git -C "$AREPO" add file.txt
+      cp -R "$AUDIT_TPL" "$AREPO"
       REPO_ROOT="$AREPO"
       LEAK_PATTERNS="$AREPO/.leak-patterns"
     }
@@ -513,6 +519,23 @@ INNER
   # single commit; nothing else in the repo is touched. Exercised against a
   # throwaway git repo (signing off) laid out like the real one.
   Describe 'sec::decommission_slot'
+    # The seeded repository and the loose operator map are the same for every
+    # example: built (and committed) once, copied per example.
+    repo_template() {
+      DECOM_TPL="$SHELLSPEC_TMPBASE/decom-template"
+      local root="$DECOM_TPL/repo"
+      local frags="$root/home/dot_config/zsh/private_secrets.d"
+      mkdir -p "$root/secrets/slot-aaaaaa" "$root/secrets/slot-bbbbbb" "$frags"
+      printf 'blob\n' >"$root/secrets/slot-aaaaaa/NAME.sops.sh"
+      printf 'blob\n' >"$root/secrets/slot-bbbbbb/NAME.sops.sh"
+      printf 'tmpl\n' >"$frags/private_slot-aaaaaa.sh.tmpl"
+      printf 'tmpl\n' >"$frags/private_slot-bbbbbb.sh.tmpl"
+      printf 'creation_rules:\n  - path_regex: secrets/slot-aaaaaa/.*\\.sops\\.sh$\n    age: age1a\n  - path_regex: secrets/slot-bbbbbb/.*\\.sops\\.sh$\n    age: age1b\n' >"$root/.sops.yaml"
+      printf 'slot-aaaaaa:\n  NAME: 1\nslot-bbbbbb:\n  NAME: 2\n' >"$root/secrets/generations.yaml"
+      printf 'slot-aaaaaa:\n  alias: box\n  kind: headless\nslot-bbbbbb:\n  alias: other\n  kind: headless\n' >"$DECOM_TPL/onboard-map.yaml"
+      ( cd "$root" && git init -q && git add -A && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -m seed )
+    }
+    BeforeAll 'repo_template'
     setup_repo() {
       REPO_ROOT="$TEST_TMP/repo"
       SOPS_YAML="$REPO_ROOT/.sops.yaml"
@@ -520,15 +543,7 @@ INNER
       SECRETS_BLOB_DIR="$REPO_ROOT/secrets"
       FRAGMENT_DIR="$REPO_ROOT/home/dot_config/zsh/private_secrets.d"
       OPERATOR_MAP="$TEST_TMP/onboard-map.yaml"
-      mkdir -p "$SECRETS_BLOB_DIR/slot-aaaaaa" "$SECRETS_BLOB_DIR/slot-bbbbbb" "$FRAGMENT_DIR"
-      printf 'blob\n' >"$SECRETS_BLOB_DIR/slot-aaaaaa/NAME.sops.sh"
-      printf 'blob\n' >"$SECRETS_BLOB_DIR/slot-bbbbbb/NAME.sops.sh"
-      printf 'tmpl\n' >"$FRAGMENT_DIR/private_slot-aaaaaa.sh.tmpl"
-      printf 'tmpl\n' >"$FRAGMENT_DIR/private_slot-bbbbbb.sh.tmpl"
-      printf 'creation_rules:\n  - path_regex: secrets/slot-aaaaaa/.*\\.sops\\.sh$\n    age: age1a\n  - path_regex: secrets/slot-bbbbbb/.*\\.sops\\.sh$\n    age: age1b\n' >"$SOPS_YAML"
-      printf 'slot-aaaaaa:\n  NAME: 1\nslot-bbbbbb:\n  NAME: 2\n' >"$GENERATIONS"
-      printf 'slot-aaaaaa:\n  alias: box\n  kind: headless\nslot-bbbbbb:\n  alias: other\n  kind: headless\n' >"$OPERATOR_MAP"
-      ( cd "$REPO_ROOT" && git init -q && git add -A && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q -m seed )
+      cp -R "$DECOM_TPL/." "$TEST_TMP/"
     }
     BeforeEach 'setup_repo'
 
@@ -548,6 +563,8 @@ INNER
     End
 
     It 'is idempotent: a second run over a retired slot changes nothing and succeeds'
+      Skip if 'complete-only: two full decommission sweeps (yq edits and git rm) over a scratch repository' spec_complete_only
+      spec_complete_only && return 0
       sec::decommission_slot slot-aaaaaa
       When call sec::decommission_slot slot-aaaaaa
       The status should be success

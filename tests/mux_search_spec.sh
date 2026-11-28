@@ -6,6 +6,10 @@
 # search_present — and the toggle that caused it must still be there to undo
 # it. Gating on tmux's flag stranded the user with a dead chord (Mode B).
 Describe 'mux-search --toggle'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   setup() {
     MS_TMP=$(mktemp -d)
     LOG="$MS_TMP/calls.log"
@@ -108,6 +112,10 @@ End
 # scrolling the buffer to read it never changes which match comes next
 # (tmux's own search-again looks from wherever the cursor happens to be).
 Describe 'mux-search --next / --prev'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   setup() {
     MS_TMP=$(mktemp -d)
     LOG="$MS_TMP/calls.log"
@@ -205,6 +213,10 @@ End
 # pinning that line pins the escaping — the seam this block closes (the
 # --toggle block above only asserts that search-backward was called at all).
 Describe 'mux-search build_pattern escaping'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   setup() {
     MS_TMP=$(mktemp -d)
     LOG="$MS_TMP/calls.log"
@@ -279,6 +291,10 @@ End
 # option). The sibling rename dialog already guards this; this pins the same
 # guard on search's catch-all.
 Describe 'mux-search dialog input loop'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   setup() {
     MS_TMP=$(mktemp -d)
     LOG="$MS_TMP/calls.log"

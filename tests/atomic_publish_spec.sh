@@ -197,6 +197,10 @@ End
 # generate-theme.sh — render to temp then mv (never truncate the live file)
 # ─────────────────────────────────────────────────────────────────────────────
 Describe 'generate-theme.sh render atomicity (#3b redirect-into-live)'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/custom-builds/theme/generate-theme.sh"
 
   setup() {
@@ -293,6 +297,10 @@ End
 # run_onchange_after_54 — generator failure is now FATAL
 # ─────────────────────────────────────────────────────────────────────────────
 Describe 'run_onchange_after_54 (generator failure propagation)'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   TPL="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_54-generate-theme.sh.tmpl"
 
   setup() {
@@ -323,6 +331,10 @@ End
 # run_onchange_after_56 — bat cache failure / unregistered theme is now FATAL
 # ─────────────────────────────────────────────────────────────────────────────
 Describe 'run_onchange_after_56 (bat cache failure propagation)'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   TPL="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_56-build-bat-cache.sh.tmpl"
 
   setup() {

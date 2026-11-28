@@ -13,6 +13,10 @@
 # rest of the script" — exactly how bash reads a piped script. If the gate's
 # read swallows the stream, those trailing lines never execute.
 Describe '.setup.sh: interactive auth gates (HI-11)'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   SETUP="$SHELLSPEC_PROJECT_ROOT/.setup.sh"
 
   setup() {
@@ -107,6 +111,10 @@ End
 # Blocks are extracted from the real file by their section markers and run
 # under `bash -s`, exactly like `curl | bash`.
 Describe '.setup.sh: --profile and the two-axis structure'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   SETUP="$SHELLSPEC_PROJECT_ROOT/.setup.sh"
 
   setup() {

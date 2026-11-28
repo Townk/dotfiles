@@ -3,6 +3,10 @@
 # result back, either through a capture file or by typing it into the block
 # the layer was opened over. Hermetic: `rex` is a stub that logs its argv.
 Describe 'rex-modal'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 2'
   MODAL="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_rex-modal"
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
@@ -31,7 +35,7 @@ EOS
 
   raw_modal() {
     env -u REX_SESSION REX_BLOCK=block:layer MUX_REX_BIN="$RM_TMP/rex" MUX_LIB="$LIB" TMPDIR="$RM_TMP" \
-      TMUX=/tmp/tmux-sock,1,0 ZELLIJ=0 zsh "$MODAL" "$@" 2>"$RM_TMP/err"
+      TMUX=/tmp/tmux-sock,1,0 ZELLIJ=0 zsh -f "$MODAL" "$@" 2>"$RM_TMP/err"
   }
   # The modal answers only into a FIFO, as its callers give it. `--capture
   # FILE` here stands a FIFO in for FILE and drains it into FILE, so the

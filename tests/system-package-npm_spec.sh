@@ -6,6 +6,7 @@
 # uninstall failures keep warning only. npm is a stub binary on PATH whose
 # global tree is a JSON state file.
 Describe 'system-package-npm: sync exit status'
+  Skip if 'complete-only: runs a whole system-package-npm sync against stub tools (dozens of forks)' spec_complete_only
   WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-npm"
 
   setup() {
@@ -47,17 +48,21 @@ SH
     print -r -- '{"dependencies":{"npm":{"version":"11.0.0"},"present":{"version":"1.0.0"}}}' >"$STAGE/state.json"
     : >"$STAGE/npm.log"
   }
-  cleanup() { rm -rf "$STAGE"; }
+  # The worker's spinner naps 0.1 s per tick beside each install
+  # (spin::nap -> common::sleep): on the virtual clock the ticks cost nothing.
+  # The stubs' pooled inodes are exec'd once here, not inside an example.
+  Include tests/exec_warm_helper.sh
+  once() { spec_clock_set && spec_exec_pool_warm 2; }
+  BeforeAll 'once'
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   run_sync() {   # run_sync <package whose install fails> <update rc> <uninstall rc>
-    env -i HOME="$STAGE/home" \
+    env -i HOME="$STAGE/home" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
       PATH="$STAGE/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       PKG_DIR="$STAGE/packages" \
       STUB_STATE="$STAGE/state.json" STUB_LOG="$STAGE/npm.log" STUB_ROOT="$STAGE/root" \
       STUB_FAIL_INSTALL="$1" STUB_UPDATE_RC="${2:-0}" STUB_UNINSTALL_RC="${3:-0}" \
-      zsh "$WORKER" sync
+      zsh -f "$WORKER" sync
   }
 
   It 'fails when a declared-but-missing package cannot be installed, after finishing the sync'

@@ -6,7 +6,7 @@ Describe 'pick::background_sink — Rex'
   Include home/dot_local/lib/pick-common.zsh
 
   setup() {
-    PI_TMP=$(mktemp -d)
+    spec_sandbox pi; PI_TMP=$SANDBOX
     # The real binary lives under "Application Support": the path has a space.
     mkdir -p "$PI_TMP/Application Support"
     PI_REX="$PI_TMP/Application Support/rex"
@@ -17,9 +17,10 @@ EOS
     chmod +x "$PI_REX"
     unset PICK_INJECT_TMUX
   }
-  cleanup() { rm -rf "$PI_TMP"; unset PICK_INJECT_PANE PICK_INJECT_REX; }
+  # The stub runs from a pooled inode: exec'd once before the first example.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   sent() { cat "$PI_TMP/rex.log" 2>/dev/null || true; }
 
@@ -45,7 +46,7 @@ Describe 'pick::inject'
   Include home/dot_local/lib/pick-common.zsh
 
   setup() {
-    PJ_TMP=$(mktemp -d)
+    spec_sandbox pj; PJ_TMP=$SANDBOX
     mkdir -p "$PJ_TMP/Application Support"
     printf '%s\n' '#!/bin/sh' "printf 'rex|%s\\n' \"\$*\" >>'$PJ_TMP/log'" >"$PJ_TMP/Application Support/rex"
     printf '%s\n' '#!/bin/sh' "printf 'tmux|%s\\n' \"\$*\" >>'$PJ_TMP/log'" >"$PJ_TMP/tmux"
@@ -53,9 +54,10 @@ Describe 'pick::inject'
     chmod +x "$PJ_TMP/Application Support/rex" "$PJ_TMP/tmux" "$PJ_TMP/pbcopy"
     unset PICK_INJECT_PANE PICK_INJECT_REX PICK_INJECT_TMUX
   }
-  cleanup() { rm -rf "$PJ_TMP"; unset PICK_INJECT_PANE PICK_INJECT_REX PICK_INJECT_TMUX; }
+  # Three stubs per example, on pooled inodes: exec'd once before the first.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 3'
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   logged() { cat "$PJ_TMP/log" 2>/dev/null || true; }
 

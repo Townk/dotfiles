@@ -31,16 +31,21 @@ line two
         '{ echo "args=$*"; for a; do f=$a; done; echo "text=$(cat "$f" | tr "\n" "|")"; } >"$STUB_DIR/editor.log"'
     done
   }
+  # Three stubs per example (rex, nvim, nano): their pooled inodes are
+  # exec'd once here, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 3'
   BeforeEach 'setup'
 
   edit() {
     env -u TMUX REX_SESSION=session:s REX_BLOCK="${ES_BLOCK-block:origin}" TMPDIR="$ES_TMP" \
-      MUX_REX_BIN="$ES_TMP/rex" MUX_LIB="$LIB" zsh "$SCRIPT" 2>"$ES_TMP/err"
+      MUX_REX_BIN="$ES_TMP/rex" MUX_LIB="$LIB" zsh -f "$SCRIPT" 2>"$ES_TMP/err"
     print -r -- "rc=$?"
   }
   leftovers() { ls "$ES_TMP" | grep -c '^rex-scrollback\.' || true; }
 
   It 'opens the captured scrollback at its end, in a tab named scrollback'
+    Skip if 'complete-only: a whole rex-edit-scrollback run: capture, new tab, the editor through a zsh -c, the app told to show it (a dozen processes)' spec_complete_only
     run() { edit; sed -e "s|$ES_TMP/rex-scrollback\.[A-Za-z0-9]*|FILE|" "$ES_TMP/editor.log"; grep -c 'window new -s block:origin --json -c .* scrollback -- ' "$ES_TMP/rex.log"; }
     When call run
     The output should equal "rc=0
@@ -50,12 +55,14 @@ text=line one|line two|
   End
 
   It 'makes the app show the new tab'
+    Skip if 'complete-only: a whole rex-edit-scrollback run: capture, new tab, the editor through a zsh -c, the app told to show it (a dozen processes)' spec_complete_only
     run() { edit >/dev/null; grep -c -- '-C client:mac do -s session:s session.select session_id=session:s window_id=window:new' "$ES_TMP/rex.log"; }
     When call run
     The output should equal "1"
   End
 
   It 'captures the calling pane whole: trimmed, soft wraps joined, no server started'
+    Skip if 'complete-only: a whole rex-edit-scrollback run: capture, new tab, the editor through a zsh -c, the app told to show it (a dozen processes)' spec_complete_only
     run() { edit >/dev/null; grep -c -- '--autostart=false capture -s block:origin -b block:origin --trim --unwrap' "$ES_TMP/rex.log"; grep -c -v -- '--autostart=false' "$ES_TMP/rex.log" || true; }
     When call run
     The output should equal "1
@@ -63,12 +70,14 @@ text=line one|line two|
   End
 
   It 'removes the temp file when the editor exits'
+    Skip if 'complete-only: a whole rex-edit-scrollback run: capture, new tab, the editor through a zsh -c, the app told to show it (a dozen processes)' spec_complete_only
     run() { edit >/dev/null; leftovers; }
     When call run
     The output should equal "0"
   End
 
   It 'gives an editor outside the vi family the file alone'
+    Skip if 'complete-only: a whole rex-edit-scrollback run: capture, new tab, the editor through a zsh -c, the app told to show it (a dozen processes)' spec_complete_only
     export STUB_EDITOR="$ES_TMP/nano"
     run() { edit >/dev/null; sed -n 1p "$ES_TMP/editor.log" | sed -e "s|$ES_TMP/rex-scrollback\.[A-Za-z0-9]*|FILE|"; }
     When call run

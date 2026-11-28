@@ -19,21 +19,28 @@
 Describe 'cagent::stage_commit pathspec magic (bug #4b)'
   Include home/dot_local/lib/commit-agent-common.zsh
 
-  setup() {
-    SB="$SHELLSPEC_TMPBASE/pathspec"
-    rm -rf "$SB"; mkdir -p "$SB"
-    git -C "$SB" init -q
-    git -C "$SB" config user.email t@example.com
-    git -C "$SB" config user.name tester
-    git -C "$SB" config commit.gpgsign false
-    printf 'x\n' > "$SB/real.txt"
-    git -C "$SB" add real.txt
-    git -C "$SB" commit -qm init
-    printf 'y\n' >> "$SB/real.txt"
+  # The repository (one commit, one modified file, two decoys) is the same
+  # for every example: built once, copied per example.
+  template() {
+    SB_TPL="$SHELLSPEC_TMPBASE/pathspec-template"
+    mkdir -p "$SB_TPL"
+    git -C "$SB_TPL" init -q
+    git -C "$SB_TPL" config user.email t@example.com
+    git -C "$SB_TPL" config user.name tester
+    git -C "$SB_TPL" config commit.gpgsign false
+    printf 'x\n' > "$SB_TPL/real.txt"
+    git -C "$SB_TPL" add real.txt
+    git -C "$SB_TPL" commit -qm init
+    printf 'y\n' >> "$SB_TPL/real.txt"
     # Decoys a magic pathspec (`:(top,glob)**`) WOULD grab but the literal
     # name never should.
-    printf 'SECRET\n' > "$SB/secret.env"
-    printf 'evil\n'   > "$SB/evil.txt"
+    printf 'SECRET\n' > "$SB_TPL/secret.env"
+    printf 'evil\n'   > "$SB_TPL/evil.txt"
+  }
+  BeforeAll 'template'
+  setup() {
+    SB="$SHELLSPEC_TMPBASE/pathspec"
+    rm -rf "$SB"; cp -R "$SB_TPL" "$SB"
     PLAN="$SB/plan.json"
   }
   BeforeEach 'setup'
@@ -66,17 +73,24 @@ End
 Describe 'cagent::cache_is_fresh cache binding (bug #4a)'
   Include home/dot_local/lib/commit-agent-common.zsh
 
+  # The repository (one commit, one modified file) is the same for every
+  # example: built once, copied per example.
+  template() {
+    SB_TPL="$SHELLSPEC_TMPBASE/fingerprint-template"
+    mkdir -p "$SB_TPL"
+    git -C "$SB_TPL" init -q
+    git -C "$SB_TPL" config user.email t@example.com
+    git -C "$SB_TPL" config user.name tester
+    git -C "$SB_TPL" config commit.gpgsign false
+    printf 'one\n' > "$SB_TPL/file.txt"
+    git -C "$SB_TPL" add file.txt
+    git -C "$SB_TPL" commit -qm init
+    printf 'two\n' >> "$SB_TPL/file.txt"
+  }
+  BeforeAll 'template'
   setup() {
     SB="$SHELLSPEC_TMPBASE/fingerprint"
-    rm -rf "$SB"; mkdir -p "$SB"
-    git -C "$SB" init -q
-    git -C "$SB" config user.email t@example.com
-    git -C "$SB" config user.name tester
-    git -C "$SB" config commit.gpgsign false
-    printf 'one\n' > "$SB/file.txt"
-    git -C "$SB" add file.txt
-    git -C "$SB" commit -qm init
-    printf 'two\n' >> "$SB/file.txt"
+    rm -rf "$SB"; cp -R "$SB_TPL" "$SB"
     CACHE="$SB/plan.json"
   }
   BeforeEach 'setup'
@@ -94,6 +108,7 @@ Describe 'cagent::cache_is_fresh cache binding (bug #4a)'
 
   It 'accepts an unchanged tree (cache fresh)'
     Skip if 'complete-only: a real git repository per example and three git fingerprints through the shared lib (~100-120 ms)' spec_complete_only
+    spec_complete_only && return 0
     build_cache 0
     When call check_fresh 0
     The status should be success
@@ -101,6 +116,7 @@ Describe 'cagent::cache_is_fresh cache binding (bug #4a)'
 
   It 'rejects the cache after a planned file is mutated'
     Skip if 'complete-only: a real git repository per example and three git fingerprints through the shared lib (~100-120 ms)' spec_complete_only
+    spec_complete_only && return 0
     build_cache 0
     printf 'three\n' >> "$SB/file.txt"
     When call check_fresh 0
@@ -109,6 +125,7 @@ Describe 'cagent::cache_is_fresh cache binding (bug #4a)'
 
   It 'rejects the cache when the scope flag changes'
     Skip if 'complete-only: a real git repository per example and three git fingerprints through the shared lib (~100-120 ms)' spec_complete_only
+    spec_complete_only && return 0
     build_cache 0
     When call check_fresh 1
     The status should be failure

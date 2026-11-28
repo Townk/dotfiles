@@ -11,10 +11,22 @@
 Describe 'Rex Main session hook'
   HOOK_TMPL="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_after_60-rex-main-session.sh.tmpl"
 
+  # The template has no per-example input: rendered once for the file (what
+  # the rendering said on stderr is kept, for the first example). The fake
+  # rex an example writes runs from a pooled inode, exec'd once here.
+  Include tests/exec_warm_helper.sh
+  render_once() {
+    MS_FIX="$SHELLSPEC_TMPBASE/ms-fix"; mkdir -p "$MS_FIX"
+    spec_render_template "$HOOK_TMPL" "$MS_FIX/hook.sh" 2>"$MS_FIX/render.err"
+    MS_RENDER_ERR=$(<"$MS_FIX/render.err")
+    spec_exec_pool_warm 1
+  }
+  BeforeAll 'render_once'
   setup() {
     spec_sandbox; MS_TMP=$SANDBOX
     HOOK="$MS_TMP/hook.sh"
-    spec_render_template "$HOOK_TMPL" "$HOOK" 2>"$MS_TMP/render.err"
+    ln "$MS_FIX/hook.sh" "$HOOK"
+    print -rn -- "$MS_RENDER_ERR" >"$MS_TMP/render.err"
     MS_HOME="$MS_TMP/home"
     mkdir -p "$MS_HOME/.config/mux/quick-launch"
     # `ls --json` answers from sessions.json, or exits 4 with no server.

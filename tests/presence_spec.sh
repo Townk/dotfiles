@@ -23,6 +23,7 @@
 # has a case below: the script's header promises it reads no environment, so
 # the probe must be found with $HOME pointing somewhere else entirely.
 Describe 'presence console lane'
+  Skip if 'complete-only: runs the real presence helper, whose earlier lanes read netstat, ioreg and who by absolute path before the console branch under test' spec_complete_only
   PRESENCE_SRC="home/dot_local/libexec/executable_presence"
 
   Skip if "presence must be reachable to know whether this machine is at a console" \

@@ -1,6 +1,10 @@
 # get_terminal_image_protocol — which graphics protocol the terminal that
 # will finally draw the pixels speaks. Hermetic: tmux is a stub.
 Describe 'get_terminal_image_protocol'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   Include home/dot_local/lib/image-protocol-support.zsh
 
   setup() {
@@ -52,6 +56,10 @@ End
 # answer `preview` and term-quick-view render with (the yazi shim carries the
 # tmux-sixel form as a Lua literal, pinned below).
 Describe 'get_chafa_format_args'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   Include home/dot_local/lib/image-protocol-support.zsh
 
   setup() {
@@ -135,6 +143,10 @@ End
 # get_image_max_bytes — the largest single image stream this terminal takes.
 # tmux discards a string sequence past its input buffer; nothing else caps.
 Describe 'get_image_max_bytes'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   Include home/dot_local/lib/image-protocol-support.zsh
 
   setup() {

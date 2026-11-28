@@ -2,18 +2,27 @@
 # platform-<os>.sh implementations). PLATFORM_OS forces the branch, and stub
 # GUI commands on PATH capture what each function would invoke.
 Describe 'platform.zsh'
+  # The seven echoing stubs are the same for every example: written and run
+  # once. They sit BEHIND the example's own (empty) $STUB on PATH, so an
+  # example that needs a recording variant writes it there and wins.
+  Include tests/exec_warm_helper.sh
+  shared_stubs() {
+    PLATFORM_STUBS="$SHELLSPEC_TMPBASE/platform-stubs"
+    mkdir -p "$PLATFORM_STUBS"
+    for cmd in open osascript setsid hyprctl swaymsg wmctrl xdotool; do
+      printf '#!/bin/sh\necho "%s $*"\n' "$cmd" > "$PLATFORM_STUBS/$cmd"
+      chmod +x "$PLATFORM_STUBS/$cmd"
+      "$PLATFORM_STUBS/$cmd" >/dev/null 2>&1
+    done
+    spec_exec_pool_warm 1
+  }
+  BeforeAll 'shared_stubs'
   setup() {
     LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
-    STUB=$(mktemp -d)
-    for cmd in open osascript setsid hyprctl swaymsg wmctrl xdotool; do
-      printf '#!/bin/sh\necho "%s $*"\n' "$cmd" > "$STUB/$cmd"
-      chmod +x "$STUB/$cmd"
-    done
-    PATH="$STUB:$PATH"
+    spec_sandbox platform; STUB=$SANDBOX
+    PATH="$STUB:$PLATFORM_STUBS:$PATH"
   }
-  cleanup() { rm -rf "$STUB"; }
   BeforeEach 'setup'
-  AfterEach 'cleanup'
 
   It 'Darwin branch defines the platform:: interface'
     darwin_iface() {

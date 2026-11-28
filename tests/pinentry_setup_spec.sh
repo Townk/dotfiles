@@ -15,6 +15,10 @@
 # way past it from Linux would be an override that exists solely for this
 # file.
 Describe 'system-pinentry-setup guards'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   SETUP="home/dot_local/bin/executable_system-pinentry-setup"
 
   Skip if "the script is Darwin-only by its first guard" [ "$(uname -s)" != Darwin ]

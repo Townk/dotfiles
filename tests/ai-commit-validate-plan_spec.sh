@@ -40,6 +40,7 @@ Describe 'cagent::validate_plan'
 End
 
 Describe 'ai-commit-pi plan validation & repo-root staging (MED-7)'
+  Skip if 'complete-only: every example is a whole ai-commit-pi worker run, and the setup builds a real git repository for each' spec_complete_only
   BINDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin"
   LIBDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 

@@ -43,6 +43,10 @@ esac
 print -r -- "EXEC: $*"
 EOS
     chmod +x "$AS_TMP/mux"
+    # The first exec of a new script is the one macOS charges for: here, not
+    # in whichever example reaches the stub first.
+    CASE=none "$AS_TMP/mux" has-session -t=Main >/dev/null 2>&1
+    rm -f "$AS_TMP/argv.log"
   }
   cleanup_all() { [ -n "$AS_TMP" ] && rm -rf "$AS_TMP"; }
   BeforeAll setup_all
@@ -52,7 +56,7 @@ EOS
     awk '/^_zsh_should_autoattach_mux\(\)/ { exit } { print }' \
       "$AS_TMP/zshrc" >"$AS_TMP/scripted-launch.zsh"
     MUX_INITIAL_COMMAND='print -r -- launched' \
-      zsh "$AS_TMP/scripted-launch.zsh"
+      zsh -f "$AS_TMP/scripted-launch.zsh"
   }
 
   It 'runs a scripted surface command before rendering a prompt'
@@ -82,7 +86,7 @@ EOS
       awk '/^if _zsh_should_autoattach_mux; then$/,/^unset -f _zsh_should_autoattach_mux/' "$AS_TMP/zshrc" \
         | sed -E "s/mux::default_backend [a-z]+/mux::default_backend $_bk/"
     } >"$AS_TMP/case.zsh"
-    CASE=$_case zsh "$AS_TMP/case.zsh" 2>&1 | grep '^EXEC:'
+    CASE=$_case zsh -f "$AS_TMP/case.zsh" 2>&1 | grep '^EXEC:'
     if [ -s "$AS_TMP/cache/quick-launch/usage-workspace" ]; then
       print -r -- yes >"$AS_TMP/seeded"
     else
@@ -105,7 +109,7 @@ EOS
         print -r -- "source $PWD/home/dot_local/lib/mux-bootstrap.zsh"
         awk '/^if _zsh_should_autoattach_mux; then$/,/^unset -f _zsh_should_autoattach_mux/' "$AS_TMP/zshrc"
       } >"$AS_TMP/wipe-case.zsh"
-      CASE=none zsh "$AS_TMP/wipe-case.zsh" 2>/dev/null | grep -c "$(printf '\033\[H\033\[2J')" || true
+      CASE=none zsh -f "$AS_TMP/wipe-case.zsh" 2>/dev/null | grep -c "$(printf '\033\[H\033\[2J')" || true
     }
     bare_tests() { grep -v '^[[:space:]]*#' "$AS_TMP/zshrc" | grep -c 'SSH_CONNECTION' || true; }
 

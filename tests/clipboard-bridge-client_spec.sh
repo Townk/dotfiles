@@ -10,6 +10,10 @@
 # these examples never touch a real recobd, only the reply shape
 # clipbridge::call decodes (one `name=<hex>` line per field).
 Describe 'clipbridge::peer_snapshot'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   setup() {
     export WORK="$SHELLSPEC_TMPBASE/snap.$$"; mkdir -p "$WORK"
     export SYSTEM_BRIDGE_BIN="$WORK/fake-bridge"
@@ -31,10 +35,17 @@ esac
 FAKE
     chmod +x "$SYSTEM_BRIDGE_BIN"
   }
-  hex() { printf '%s' "$1" | xxd -p | tr -d '\n'; }
+  # The bytes of $1 in hex, as `xxd -p | tr -d '\n'` prints them, without the
+  # three processes per call (an example asks for up to seven).
+  hex() {
+    local LC_ALL=C s=$1 out= c
+    local -i i
+    for (( i = 1; i <= ${#s}; i++ )); do c=$s[i]; out+=${(l:2::0:)$(( [##16] #c ))}; done
+    print -rn -- "${(L)out}"
+  }
 
   run_snapshot() {
-    zsh -c 'source "$1"; clipbridge::peer_snapshot "$2"' zsh \
+    zsh -f -c 'source "$1"; clipbridge::peer_snapshot "$2"' zsh \
       "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/clipboard-bridge-client.zsh" \
       "$TEXT_OUT"
   }

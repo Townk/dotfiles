@@ -2,6 +2,10 @@
 # sender-side JSONL append before dispatch, --kind/--source/--meta tagging,
 # size-capped rotation, and the never-fail-the-toast guarantee.
 Describe 'notify history'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   Include home/dot_local/lib/common.zsh
 
   setup() {

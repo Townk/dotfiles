@@ -112,6 +112,10 @@ End
 # In a Rex pane the viewer opens as a floating layer over what you were
 # looking at, not as a tab. Hermetic: `rex` is a stub that records the layer.
 Describe 'term-quick-view in a Rex pane'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   SCRIPT="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_term-quick-view"
   LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 

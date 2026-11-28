@@ -7,6 +7,7 @@
 # throwaway two-file project in parallel with a copy of the real spec_helper,
 # isolated from this run's own SHELLSPEC_* environment with `env -i`.
 Describe 'spec_helper: a per-file SHELLSPEC_TMPBASE'
+  Skip if 'complete-only: runs a nested shellspec over a throwaway project' spec_complete_only
   HELPER="$PWD/tests/spec_helper.sh"
 
   setup() {

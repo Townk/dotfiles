@@ -4,6 +4,10 @@
 # tab (a job, an agent's pane) may never have been laid out and still reports
 # the 80x24 it was born with.
 Describe '_mux_rx_window_cells'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   Include home/dot_local/lib/mux-bootstrap.zsh
 
   setup() {

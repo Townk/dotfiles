@@ -3,6 +3,7 @@
 # common.zsh defines `die() { …; exit 1 }`; if that ever replaces the
 # interactive helper, a failing `cd` kills the user's shell.
 Describe 'super-cd in zsh -i after the deferred library chain'
+  Skip if 'complete-only: starts a real interactive zsh that sources the whole function library chain' spec_complete_only
   setup_home() {
     T="$(cd "$(mktemp -d)" && pwd -P)"
     mkdir -p "$T/zsh/functions.d" "$T/lib"

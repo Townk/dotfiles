@@ -10,12 +10,22 @@ Describe 'Rex config hooks'
   BACKUP_HOOK="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_before_06-backup-unmanaged-rex-config.sh.tmpl"
   RELOAD_HOOK="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_onchange_after_59-reload-rex.sh.tmpl"
 
+  # Neither template has per-example input: both are rendered once for the
+  # file and hard-linked into each example's sandbox. The fake rex an example
+  # writes runs from a pooled inode, exec'd once here.
+  Include tests/exec_warm_helper.sh
+  render_once() {
+    RH_FIX="$SHELLSPEC_TMPBASE/rh-fix"; mkdir -p "$RH_FIX"
+    spec_render_template "$BACKUP_HOOK" "$RH_FIX/backup.sh"
+    spec_render_template "$RELOAD_HOOK" "$RH_FIX/reload.sh"
+    spec_exec_pool_warm 1
+  }
+  BeforeAll 'render_once'
   setup() {
     spec_sandbox; RH_TMP=$SANDBOX
     RH_HOME="$RH_TMP/home"
     mkdir -p "$RH_HOME/.config/rex"
-    spec_render_template "$BACKUP_HOOK" "$RH_TMP/backup.sh"
-    spec_render_template "$RELOAD_HOOK" "$RH_TMP/reload.sh"
+    ln "$RH_FIX/backup.sh" "$RH_FIX/reload.sh" "$RH_TMP/"
     # Fake rex: logs argv; `whoami` answers per $STUB_SERVER; `config check`
     # reads a file, so it answers with no server too, per $STUB_CHECK.
     spec_fake_rex "$RH_TMP" --offline \

@@ -110,6 +110,10 @@ End
 # The fix folds the RAW scope into the cache IDENTITY so a differing scope
 # forces its own cache.
 Describe 'quick-launch pane-scope cache identity'
+  # Stubs an example makes executable run from pooled inodes (spec_helper.sh):
+  # their first exec is paid here, once, not inside the first examples.
+  Include tests/exec_warm_helper.sh
+  BeforeAll 'spec_exec_pool_warm 1'
   PICKER="$SHELLSPEC_PROJECT_ROOT/home/dot_config/mux/scripts/executable_quick-launch-pick"
   LIBDIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
 
@@ -179,6 +183,8 @@ JSON
   }
 
   It 'does not serve a scope-collision peer the first scope panes'
+    Skip if 'complete-only: two runs of the whole quick-launch-pick with the real pick-common (prime the cache, then read it)' spec_complete_only
+    spec_complete_only && return 0
     # Prime scope `a/b` (sanitizes to a_b), then open the colliding scope
     # `a b` (also a_b): it must show ITS pane, never the primed one.
     run_pane "a/b" "" >/dev/null 2>&1
@@ -189,6 +195,8 @@ JSON
   End
 
   It 'reuses the same-scope cache without a needless rebuild'
+    Skip if 'complete-only: two runs of the whole quick-launch-pick with the real pick-common (prime the cache, then read it)' spec_complete_only
+    spec_complete_only && return 0
     run_pane "a/b" "" >/dev/null 2>&1
     poison_pane_caches
     When call run_pane "a/b" ""
