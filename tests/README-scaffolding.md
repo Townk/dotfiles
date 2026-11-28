@@ -455,3 +455,12 @@ pool's slots, and look slow for no reason of their own.
   needs the clock, set it in `BeforeAll` and reset per example with
   `: >"$SPEC_CLOCK_FILE"; spec_clock_set N`.
 
+## The one accepted bounded poll
+
+`tests/nvim-rex-nav_spec.sh` waits for the fake rex's marker file with
+`vim.wait(500, <marker exists>, 2)`: a 2 ms poll, bounded at 500 ms, inside
+Lua where the no-waits lint cannot see it. The module under test starts rex
+detached and offers nothing to join, and the alternative, a FIFO rendezvous,
+hangs on a regression instead of failing. The owner accepted it on
+2026-11-28 as the single exception to policy 2; it is not a precedent.
+
