@@ -40,56 +40,28 @@ import os
 # viewer anyway.
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ.get("THEME_PYLIB_DIR", os.path.expanduser("~/.local/lib")))
-from theme_palette import palette_type
-
-# Catppuccin Mocha truecolor palette, built from the shared source above.
-CTP = palette_type()
+# CTP (the palette bound from theme_palette), the SGR helpers and the Style
+# tokens are the pieces this viewer shares byte-for-byte with sqlite-view and
+# disk-image-view; they live in the shared card_render module in that same lib
+# dir. The CardRenderer below is this viewer's own and has diverged from the
+# shared one.
+from card_render import CTP, Style as _CardStyle, _ANSI_RE, _bold, _fg, _reset
 
 
 # ── ANSI Helpers ──────────────────────────────────────────────────
-def _fg(r: int, g: int, b: int) -> str:
-    return f"\033[38;2;{r};{g};{b}m"
-
-
-def _bg(r: int, g: int, b: int) -> str:
-    return f"\033[48;2;{r};{g};{b}m"
-
-
-def _bold() -> str:
-    return "\033[1m"
-
-
-def _dim() -> str:
-    return "\033[2m"
-
-
+# _fg / _bold / _reset come from card_render.
 def _italic() -> str:
     return "\033[3m"
 
 
-def _reset() -> str:
-    return "\033[0m"
-
-
 # ── Style System ──────────────────────────────────────────────────
-class Style:
+class Style(_CardStyle):
     """
     Replicable design token system.
-    Extract this class + CTP + ANSI helpers to build .vcf / .vcard previewers.
+    The semantic colors, pill caps and rounded box-drawing glyphs come from
+    card_render.Style (shared with the other viewers); import that module to
+    build .vcf / .vcard previewers.
     """
-
-    # Semantic colors
-    primary = _fg(*CTP.LAVENDER)
-    secondary = _fg(*CTP.BLUE)
-    accent = _fg(*CTP.MAUVE)
-    success = _fg(*CTP.GREEN)
-    warning = _fg(*CTP.YELLOW)
-    danger = _fg(*CTP.RED)
-    info = _fg(*CTP.SKY)
-    muted = _fg(*CTP.OVERLAY1)
-    subtle = _fg(*CTP.SUBTEXT0)
-    text = _fg(*CTP.TEXT)
-    bg_accent = _bg(*CTP.SURFACE0)
 
     # Icons (Nerd Font / Unicode)
     ICON_CALENDAR = "\uf073"      # 
@@ -113,29 +85,18 @@ class Style:
     ICON_CLIPBOARD = "\uf0ea"     # 
     ICON_SPARKLE = "\ue63d"       #  (decorative)
     ICON_RECURRENCE = "\U000f0456"  # 󰑖
-    PILL_LEFT = "\ue0b6"          # 
-    PILL_RIGHT = "\ue0b4"         # 
 
-    # Box drawing (rounded aesthetic)
-    CORNER_TL = "\u256d"  # ╭
-    CORNER_TR = "\u256e"  # ╮
-    CORNER_BL = "\u2570"  # ╰
-    CORNER_BR = "\u256f"  # ╯
-    HORIZ = "\u2500"      # ─
-    VERT = "\u2502"       # │
-    T_LEFT = "\u251c"     # ├
-    T_RIGHT = "\u2524"    # ┤
+    # Box drawing beyond the shared rounded set
     T_TOP = "\u252c"      # ┬
     T_BOTTOM = "\u2534"   # ┴
 
     # Dashes / bullets
     MDASH = "\u2014"      # —
     BULLET = "\u2022"     # •
-    MIDDOT = "\u00b7"     # ·
 
 
 # ── Width Utilities ───────────────────────────────────────────────
-_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+# _ANSI_RE (SGR sequences) comes from card_render.
 _OSC8_RE = re.compile(r"\033]8;;.*?(?:\033\\|\a)")
 
 
