@@ -196,3 +196,17 @@ Checklist, per file:
 - **Background stragglers.** Code that disowns work (`cmd &!`) outlives the
   example and writes into the next one's fixtures. The after-all hook now
   survives it; the example still needs the code to offer a foreground mode.
+
+## The no-waits lint
+
+`tests/no_real_waits_spec.sh` fails the suite when a test file waits on the
+real clock: `sleep`, `timeout`/`gtimeout`, `zselect`, a timed `read`, or a
+read of `EPOCHREALTIME`/`EPOCHSECONDS`/`$SECONDS`. Only commands count (see
+`tests/no-real-waits.sh` for what is and is not one).
+
+Until the old waits are converted, `tests/no-real-waits.baseline` lists
+`<file> <waits> <clock-reads>` for each file that still has some. A file may
+not exceed its line, and when you remove a wait you must lower the line (the
+lint says which). Regenerate with `zsh tests/no-real-waits.sh >
+tests/no-real-waits.baseline` after converting. When the file is empty, delete
+it: the rule is then "none, anywhere".
