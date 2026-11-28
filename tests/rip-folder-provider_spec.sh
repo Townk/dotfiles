@@ -615,4 +615,73 @@ EOF
     The status should equal 0
     The output should not include ".part"
   End
+
+  # --- one ffprobe per book ----------------------------------------------------
+  #
+  # `list` used to run ffprobe three times per book (tags, attached picture,
+  # duration). It runs once now and reads all three out of that one answer.
+  ffprobe_runs() { spec_stub_calls "$RIP_SANDBOX/shim" ffprobe | wc -l | tr -d ' '; }
+  count_ffprobe() {
+    spec_stub "$RIP_SANDBOX/shim" ffprobe 'exec "$REAL_FFPROBE" "$@"'
+    export REAL_FFPROBE="$(command -v ffprobe)"
+    spec_path_prepend "$RIP_SANDBOX/shim"
+  }
+
+  It 'list: one ffprobe run per book, whatever the book turns out to be'
+    Skip if 'complete-only: the provider runs the real ffprobe once per listed book (about 25 ms a run)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
+    Skip if 'ffmpeg is not installed' no_ffmpeg
+    mkdirbook "Ann Leckie" "Ancillary Justice"
+    mkdirbook "Ann Leckie" "Ancillary Sword"
+    mkdir -p "$ROOT/Shelf" && printf 'x\n' > "$ROOT/Shelf/a.m4b" && printf 'x\n' > "$ROOT/Shelf/b.m4b"
+    count_ffprobe
+    When run zsh -f "$FOLDER_BIN" list "$ROOT"
+    The status should equal 0
+    The lines of output should equal 4
+    The result of function ffprobe_runs should equal 4
+  End
+
+  # Real media, each book wrong in its own way: what the three separate reads
+  # answered for it is what the one read must answer.
+  mkoddbooks() {
+    rip_mkdir "$ROOT/Multi/Line" "$ROOT/Video/NotCover" "$ROOT/Artist Only/Some Book" "$ROOT/Long/Dur" "$ROOT/Cut/Short"
+    ffmpeg -v error -y -f lavfi -i anullsrc=r=8000:cl=mono -t 1 -c:a aac \
+      -metadata album_artist=$'First\nTAG:album=Spoof' -metadata album='Real Album' -metadata comment='duration=99' \
+      "$ROOT/Multi/Line/ml.m4b" </dev/null >/dev/null 2>&1
+    ffmpeg -v error -y -f lavfi -i anullsrc=r=8000:cl=mono -f lavfi -i 'color=c=red:s=64x64:d=1' \
+      -map 0:a -map 1:v -c:a aac -c:v mpeg4 -t 1 -f mp4 "$ROOT/Video/NotCover/v.m4b" </dev/null >/dev/null 2>&1
+    ffmpeg -v error -y -f lavfi -i anullsrc=r=8000:cl=mono -t 1 -c:a aac \
+      -metadata artist='Jim Dale' -metadata album='Álbum "Via" Artist' "$ROOT/Artist Only/Some Book/x.m4b" </dev/null >/dev/null 2>&1
+    ffmpeg -v error -y -f lavfi -i anullsrc=r=8000:cl=mono -t 61.7 -c:a aac \
+      -metadata album_artist='L' -metadata album='D' "$ROOT/Long/Dur/long.m4b" </dev/null >/dev/null 2>&1
+    head -c 300 "$ROOT/Long/Dur/long.m4b" > "$ROOT/Cut/Short/cut.m4b"
+  }
+  rows_brief() { jq -c '[.title, .authors, .duration_s, .derived_from, (.cover != null)]'; }
+  It 'list: tags, duration and cover of odd books come out of the one read as they came out of three'
+    Skip if 'complete-only: builds real media with ffmpeg (about 60 ms a file)' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
+    Skip if 'ffmpeg is not installed' no_ffmpeg
+    mkoddbooks
+    mkartbook "Ann Leckie" "Ancillary Justice"
+    count_ffprobe
+    list_brief() { zsh -f "$FOLDER_BIN" list "$ROOT" | rows_brief; }
+    When call list_brief
+    The status should equal 0
+    # an attached picture is a cover; tags win over the path (mkartbook's
+    # audio is under a second long)
+    The line 1 of output should equal '["Ancillary Justice",["Ann Leckie"],0,"tags",true]'
+    # album_artist absent: artist stands in; accents and quotes survive
+    The line 2 of output should equal '["Álbum \"Via\" Artist",["Jim Dale"],1,"tags",false]'
+    # a truncated file: nothing readable, so the path names it and it lasts 0 s
+    The line 3 of output should equal '["Short",["Cut"],0,"path",false]'
+    # 61.7 s is 61 whole seconds
+    The line 4 of output should equal '["D",["L"],61,"tags",false]'
+    # a tag over several lines yields its first line, and the first line that
+    # says "TAG:album=" is the album, as `sed … | head -1` read it; a tag
+    # whose text is "duration=99" is not the duration
+    The line 5 of output should equal '["Spoof",["First"],1,"tags",false]'
+    # a video stream that is not an attached picture is not a cover
+    The line 6 of output should equal '["NotCover",["Video"],1,"path",false]'
+    The result of function ffprobe_runs should equal 6
+  End
 End

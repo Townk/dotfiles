@@ -60,8 +60,76 @@ RIP_MKVPROPEDIT_BIN="${RIP_MKVPROPEDIT_BIN:-mkvpropedit}"
 # tests, never a per-call knob.
 RIP_MAKEMKV_MINLENGTH="${RIP_MAKEMKV_MINLENGTH:-30}"
 
-rip::staging_root() { print -r -- "${RIP_STAGING_ROOT:-$HOME/Depot/Rips}"; }
-rip::remote_base()  { print -r -- "${RIP_REMOTE_BASE:-media@cantina:/srv/media}"; }
+# --- no process where none is needed ----------------------------------------
+#
+# A push used to start about a hundred processes for one book, most of them
+# `$(rip::staging_root)`-style subshells around a function that only reads a
+# variable, and `mkdir -p` / `rm -f` / `mv -f` on this file's own scratch. Each
+# costs 1-2 ms, on every push. Two conventions remove them:
+#
+# 1. A GETTER HAS TWO FORMS. `rip::x_r` sets REPLY (common::now's convention)
+#    and starts nothing; `rip::x` prints it, for the bins, the specs and a
+#    shell prompt. Inside this file use the _r form:
+#
+#        local REPLY                      # once, where the function declares
+#        rip::staging_root_r; local work_dir="$REPLY/.work"
+#
+#    READ REPLY ON THE SAME LINE, into a variable of your own: the next _r
+#    call, a `read` with no name, or a function three calls down overwrites it.
+#    `local REPLY` keeps this function's use out of its caller's.
+#    REPLY is the value as printed, byte for byte. `$(…)` also drops trailing
+#    newlines, so the one _r form whose input is arbitrary text off disk
+#    (rip::_nfc_r) drops them itself and says so.
+#
+# 2. SCRATCH FILE OPERATIONS GO THROUGH zsh's OWN BUILTINS FIRST, the real
+#    tool second: rip::_mkdir_p, rip::_rm_f, rip::_mv_f, rip::_rmdir. The
+#    builtin does the same system call; whenever it does not end in plain
+#    success the real tool runs as it always did, so a failure's status and
+#    message are still mkdir's / rm's / mv's own, and a move that turns out to
+#    cross a volume is still copied by mv.
+#    NOT for trees (`rm -rf` stays `rm -rf`), not for cp/rsync, and not for a
+#    move whose two ends are routinely on different volumes: those say `mv`.
+#    Only the named builtins are loaded: the whole zsh/stat module would
+#    define a `stat` builtin over /usr/bin/stat.
+zmodload -F zsh/files b:zf_mkdir b:zf_rm b:zf_mv b:zf_rmdir 2>/dev/null
+
+# rip::_mkdir_p <dir>... — `mkdir -p --`.
+rip::_mkdir_p() { zf_mkdir -p -- "$@" 2>/dev/null || command mkdir -p -- "$@" }
+
+# rip::_rm_f <file>... — `rm -f --` for plain files and symlinks.
+#
+# zf_rm must be given -f (without it, it asks before removing a write-protected
+# file) and -f makes it silent and always 0, so the OUTCOME is what is judged:
+# a file that is still there afterwards goes to the real rm, which removes it
+# or says why not. A file that was never there is skipped only where that is
+# certain (its directory exists and can be searched); anything murkier is rm's.
+rip::_rm_f() {
+  local f rc=0
+  for f in "$@"; do
+    if [[ -e "$f" || -L "$f" ]]; then
+      zf_rm -f -- "$f" 2>/dev/null
+      [[ -e "$f" || -L "$f" ]] || continue
+    elif [[ -d "${f:h}" && -x "${f:h}" ]]; then
+      continue
+    fi
+    command rm -f -- "$f" || rc=1
+  done
+  return $rc
+}
+
+# rip::_mv_f <from> <to> — `mv -f --` within one volume: rename(2), atomic,
+# the target replaced in one step. Anything rename cannot do (another volume
+# included) is left to the real mv.
+rip::_mv_f() { zf_mv -f -- "$1" "$2" 2>/dev/null || command mv -f -- "$1" "$2" }
+
+# rip::_rmdir <dir> — `rmdir -- <dir> 2>/dev/null`: rc 0 only when the empty
+# directory is gone. Quiet by contract; every caller asks "was it empty?".
+rip::_rmdir() { zf_rmdir -- "$1" 2>/dev/null }
+
+rip::staging_root_r() { REPLY="${RIP_STAGING_ROOT:-$HOME/Depot/Rips}" }
+rip::remote_base_r()  { REPLY="${RIP_REMOTE_BASE:-media@cantina:/srv/media}" }
+rip::staging_root() { local REPLY; rip::staging_root_r; print -r -- "$REPLY" }
+rip::remote_base()  { local REPLY; rip::remote_base_r; print -r -- "$REPLY" }
 
 # rip::staging_for <type> — the staging dir for a media type. All three
 # types are <root>/<type>, no exceptions. audiobooks was briefly believed
@@ -73,12 +141,14 @@ rip::remote_base()  { print -r -- "${RIP_REMOTE_BASE:-media@cantina:/srv/media}"
 # <Author>/<Title> parent, with no directory inserted in between. The
 # server layout is unaffected either way: audiobooks/<Author>/<Title>/,
 # per the fleet spec.
-rip::staging_for() {
+rip::staging_for_r() {
+  rip::staging_root_r
   case "$1" in
-    audiobooks) print -r -- "${RIP_AB_STAGING:-$(rip::staging_root)/audiobooks}" ;;
-    *) print -r -- "$(rip::staging_root)/$1" ;;
+    audiobooks) REPLY="${RIP_AB_STAGING:-$REPLY/audiobooks}" ;;
+    *) REPLY="$REPLY/$1" ;;
   esac
 }
+rip::staging_for() { local REPLY; rip::staging_for_r "$1"; print -r -- "$REPLY" }
 
 rip::_load_jobs() {
   [ -n "${__JOB_ZSH_LOADED:-}" ] && return 0
@@ -112,7 +182,8 @@ rip::_check_type() {
 rip::push_enqueue() {
   local type="$1"
   rip::_check_type "$type" || return 2
-  local src; src="$(rip::staging_for "$type")"
+  local REPLY
+  rip::staging_for_r "$type"; local src="$REPLY"
   local -a files=("$src"/**/*(N.))
   if (( ${#files} == 0 )); then
     print -r -- "rip: nothing to push for $type"
@@ -145,9 +216,11 @@ rip::push_worker() {
   rip::_load_jobs || true
   local type="$1"
   rip::_check_type "$type" || return 2
+  local REPLY
   local src dest rsync_bin="${RIP_RSYNC_BIN:-rsync}"
-  src="$(rip::staging_for "$type")"
-  dest="$(rip::remote_base)/$type/"
+  rip::staging_for_r "$type"; src="$REPLY"
+  rip::remote_base_r; dest="$REPLY/$type/"
+  rip::staging_root_r; local work_dir="$REPLY/.work"
   [ -d "$src" ] || { log_error "rip: no staging dir $src"; return 1 }
 
   # SERIALIZE same-type pushes (live 2026-08-21, Spirit of Africa): the
@@ -163,8 +236,8 @@ rip::push_worker() {
   # gate never reaps a lock file that sees regular use.
   zmodload zsh/system 2>/dev/null
   local push_lock_fd push_lock
-  push_lock="$(rip::staging_root)/.work/push-$type.lock"
-  mkdir -p "${push_lock:h}"
+  push_lock="$work_dir/push-$type.lock"
+  rip::_mkdir_p "$work_dir"
   # touch BEFORE flock: zsystem flock does not create the file (verified
   # live — ENOENT on first use), and the fresh mtime doubles as the
   # sweepWork age-gate protection.
@@ -218,8 +291,8 @@ rip::push_worker() {
   # file (see rip::_verify_and_clean). Removed on every exit path below;
   # a killed process's leftover is swept at Hammerspoon startup along with
   # the rest of .work/.
-  local listfile; listfile="$(rip::staging_root)/.work/push-$type.$$.list"
-  mkdir -p "${listfile:h}"
+  local listfile="$work_dir/push-$type.$$.list"
+  rip::_mkdir_p "$work_dir"
   # NAME-ANCHORED, not a blanket dot-directory exclusion (review finding
   # 2026-08-25, reverting an earlier `-not -path '*/.*/*'` on this same
   # line): a bare "any dot-prefixed path component" pattern also matches a
@@ -233,16 +306,26 @@ rip::push_worker() {
   # local copy is gone. Excluding by NAME instead only ever matches this
   # tool's own scratch temps (.rip-folder.*, .rip-import.*), never
   # anything an operator could plausibly be storing.
+  #
+  # The names come back into an array and lose their "$src/" prefix here
+  # rather than through `| sed "s|^$src/||"`: one process (find) instead of
+  # three, and a staging path is no longer read as a regular expression.
+  local -a found
   if (( age > 0 )); then
-    find "$src" -type f ! -name .DS_Store \
-      ! -path '*/.rip-folder.*/*' ! -path '*/.rip-import.*/*' -mtime +"${age}s" 2>/dev/null
+    found=(${(f)"$(find "$src" -type f ! -name .DS_Store \
+      ! -path '*/.rip-folder.*/*' ! -path '*/.rip-import.*/*' -mtime +"${age}s" 2>/dev/null)"})
   else
-    find "$src" -type f ! -name .DS_Store \
-      ! -path '*/.rip-folder.*/*' ! -path '*/.rip-import.*/*' 2>/dev/null
-  fi | sed "s|^$src/||" > "$listfile"
+    found=(${(f)"$(find "$src" -type f ! -name .DS_Store \
+      ! -path '*/.rip-folder.*/*' ! -path '*/.rip-import.*/*' 2>/dev/null)"})
+  fi
+  if (( ${#found} )); then
+    print -rl -- "${(@)found#"$src"/}" > "$listfile"
+  else
+    : > "$listfile"
+  fi
   if [[ ! -s "$listfile" ]]; then
     print -r -- "rip: nothing settled to push for $type (age gate ${age}s)"
-    rm -f -- "$listfile"
+    rip::_rm_f "$listfile"
     return 0
   fi
 
@@ -261,7 +344,7 @@ rip::push_worker() {
       refused=1
       if [[ ! -s "$listfile" ]]; then
         log_error "rip: every book in this push was refused — nothing left to push, keeping local files"
-        rm -f -- "$listfile"
+        rip::_rm_f "$listfile"
         return 1
       fi
     elif (( erc != 0 )); then
@@ -269,10 +352,10 @@ rip::push_worker() {
     fi
   fi
 
-  local marker; marker="$(rip::staging_root)/.work/push-$type.stamp"
+  local marker="$work_dir/push-$type.stamp"
   touch -- "$marker" || {
     log_error "rip: cannot stamp the push marker at $marker"
-    rm -f -- "$listfile"
+    rip::_rm_f "$listfile"
     return 1
   }
 
@@ -311,7 +394,7 @@ rip::push_worker() {
   local rc=$pipestatus[1]
   if (( rc != 0 )); then
     log_error "rip: rsync failed (rc=$rc) for $type — keeping local files"
-    rm -f -- "$listfile"
+    rip::_rm_f "$listfile"
     return $rc
   fi
   # Snapshot the pushed set before the verify: _verify_and_clean removes
@@ -327,7 +410,7 @@ rip::push_worker() {
   if (( vrc == 0 )) && [[ -n "$hooklist" ]]; then
     rip::_enrich_audiobooks_remote "$hooklist"
   fi
-  [[ -n "$hooklist" ]] && rm -f -- "$hooklist"
+  [[ -n "$hooklist" ]] && rip::_rm_f "$hooklist"
   if (( vrc == 0 && refused )); then
     log_error "rip: at least one book was refused and stays staged — retry $type once its tags can be written"
     return 1
@@ -376,12 +459,12 @@ rip::_verify_and_clean() {
   if ! diffs="$("$rsync_bin" -rcn --iconv=utf-8-mac,utf-8 --exclude=.DS_Store --files-from="$listfile" \
       --out-format='%n' "$src/" "$dest" 2>&1)"; then
     log_error "rip: verify pass failed to run for $type — keeping local files"
-    rm -f -- "$listfile"
+    rip::_rm_f "$listfile"
     return 1
   fi
   if [ -n "$diffs" ]; then
     log_error "rip: verify found differences for $type — files still settling or changed; keeping local, will retry"
-    rm -f -- "$listfile"
+    rip::_rm_f "$listfile"
     return 1
   fi
   print -r -- "rip: $type verified on cantina — cleaning staging"
@@ -392,7 +475,7 @@ rip::_verify_and_clean() {
   # doctrine's answer to "not sure" is always "keep it".
   if [[ ! -f "$marker" ]]; then
     log_error "rip: push marker missing for $type — keeping local files"
-    rm -f -- "$listfile"
+    rip::_rm_f "$listfile"
     return 1
   fi
   # Delete EXACTLY the snapshotted list (∩ not-newer-than-marker,
@@ -403,17 +486,17 @@ rip::_verify_and_clean() {
   for rel in "${listed[@]}"; do
     f="$src/$rel"
     [[ -f "$f" && ! "$f" -nt "$marker" ]] || continue
-    rm -f -- "$f"
+    rip::_rm_f "$f"
     touched_dirs+=("${f:h}")
   done
   local d
   for d in ${(Oau)touched_dirs}; do
     while [[ "$d" != "$src" && -d "$d" ]]; do
-      rmdir -- "$d" 2>/dev/null || break
+      rip::_rmdir "$d" || break
       d="${d:h}"
     done
   done
-  rm -f -- "$listfile"
+  rip::_rm_f "$listfile"
   return 0
 }
 
@@ -458,6 +541,25 @@ rip::_nfc() {
   fi
 }
 
+# rip::_nfc_r <text> — REPLY = exactly what `$(rip::_nfc <text>)` captures,
+# trailing newlines dropped as a command substitution drops them. This is the
+# form the file itself uses: 7-bit text has no decomposed form, so it is its
+# own NFC and no iconv starts for it (most names); anything else takes the
+# same iconv call as above.
+rip::_nfc_r() {
+  REPLY="$1"
+  if [[ "$1" == *[^[:ascii:]]* ]]; then
+    local out
+    if out="$(print -rn -- "$1" | iconv -f utf-8-mac -t utf-8 2>/dev/null)" \
+       && { [[ -n "$out" ]] || [[ -z "$1" ]] }; then
+      REPLY="$out"
+      return 0
+    fi
+  fi
+  while [[ "$REPLY" == *$'\n' ]]; do REPLY="${REPLY%$'\n'}"; done
+  return 0
+}
+
 # rip::_dir_has_audio <dir> — 0 when <dir> holds at least one audio file at
 # any depth, 1 otherwise (including "no such directory").
 #
@@ -496,7 +598,8 @@ rip::_dir_has_audio() {
 # mid-session, so a watcher-triggered push — which never sets the var at
 # all — could never see a session's rich rows). ANY audiobooks push,
 # session-triggered or watcher-triggered, reads from here by default.
-rip::_ab_meta_index_default() { print -r -- "$(rip::staging_root)/.work/ab-meta.jsonl"; }
+rip::_ab_meta_index_default_r() { rip::staging_root_r; REPLY="$REPLY/.work/ab-meta.jsonl" }
+rip::_ab_meta_index_default() { local REPLY; rip::_ab_meta_index_default_r; print -r -- "$REPLY" }
 
 # Provider-fallback cache (fix 3b, review finding 2026-08-22): a push with
 # NO usable index row (the watcher path, or an import provider with none)
@@ -556,21 +659,22 @@ rip::_rekey_book_meta() {
   setopt localoptions noerrexit nopipefail
   local old_author="$1" new_author="$2"
   shift 2
-  local idx="${RIP_AB_META_INDEX:-$(rip::_ab_meta_index_default)}"
+  local REPLY
+  rip::_ab_meta_index_default_r; local idx="${RIP_AB_META_INDEX:-$REPLY}"
   local title old_rel new_rel tmp
   for title in "$@"; do
-    old_rel="$(rip::_nfc "$old_author/$title")"
-    new_rel="$(rip::_nfc "$new_author/$title")"
+    rip::_nfc_r "$old_author/$title"; old_rel="$REPLY"
+    rip::_nfc_r "$new_author/$title"; new_rel="$REPLY"
     [[ "$old_rel" == "$new_rel" ]] && continue
     _RIP_AB_RENAMED_BOOKS[$new_rel]="$old_rel"
     [[ -n "$idx" && -f "$idx" ]] || continue
     tmp="$idx.rekey.$$"
     if jq -c --arg old "$old_rel" --arg new "$new_rel" \
          'if .path == $old then .path = $new else . end' "$idx" > "$tmp" 2>/dev/null \
-       && mv -f -- "$tmp" "$idx"; then
+       && rip::_mv_f "$tmp" "$idx"; then
       :
     else
-      rm -f -- "$tmp"
+      rip::_rm_f "$tmp"
       log_warn "rip: could not re-key the meta index for $old_rel — its sidecar may fall back to minimal identity"
     fi
   done
@@ -589,8 +693,9 @@ rip::_rekey_book_meta() {
 # the only truth available and they are still worth recording.
 rip::_book_meta_for() {
   setopt localoptions noerrexit nopipefail
-  local rel; rel="$(rip::_nfc "$1")"
-  local idx="${RIP_AB_META_INDEX:-$(rip::_ab_meta_index_default)}"
+  local REPLY
+  rip::_nfc_r "$1"; local rel="$REPLY"
+  rip::_ab_meta_index_default_r; local idx="${RIP_AB_META_INDEX:-$REPLY}"
   # A book whose staged author was canonicalized on the way in (see
   # rip::_canonicalize_staged_authors) is looked up under its NEW relpath,
   # while the identity was recorded under the provider's spelling. The index
@@ -600,9 +705,14 @@ rip::_book_meta_for() {
   local prev="${_RIP_AB_RENAMED_BOOKS[$rel]:-}"
   local row=""
   if [[ -n "$idx" && -f "$idx" ]]; then
-    row="$(jq -c --arg p "$rel" 'select((.path // "") == $p)' "$idx" 2>/dev/null | head -1)"
-    [[ -z "$row" && -n "$prev" ]] \
-      && row="$(jq -c --arg p "$prev" 'select((.path // "") == $p)' "$idx" 2>/dev/null | head -1)"
+    # The first matching row: jq -c prints one row a line, so "the first
+    # line" is cut here rather than by a `| head -1` process.
+    row="$(jq -c --arg p "$rel" 'select((.path // "") == $p)' "$idx" 2>/dev/null)"
+    row="${row%%$'\n'*}"
+    if [[ -z "$row" && -n "$prev" ]]; then
+      row="$(jq -c --arg p "$prev" 'select((.path // "") == $p)' "$idx" 2>/dev/null)"
+      row="${row%%$'\n'*}"
+    fi
   fi
   if [[ -z "$row" ]]; then
     # Best-effort, best-once: never let a missing/failing provider slow
@@ -611,14 +721,17 @@ rip::_book_meta_for() {
     if (( ! _RIP_AB_PROVIDER_FETCHED )); then
       _RIP_AB_PROVIDER_FETCHED=1
       local pbin=""
-      pbin="$(rip::ab_provider_bin 2>/dev/null)"
+      rip::ab_provider_bin_r 2>/dev/null && pbin="$REPLY"
       [[ -n "$pbin" ]] && _RIP_AB_PROVIDER_ROWS="$(zsh "$pbin" list 2>/dev/null)"
     fi
-    [[ -n "$_RIP_AB_PROVIDER_ROWS" ]] && row="$(print -r -- "$_RIP_AB_PROVIDER_ROWS" \
-      | jq -c --arg p "$rel" 'select((.path // "") == $p)' 2>/dev/null | head -1)"
-    [[ -z "$row" && -n "$prev" && -n "$_RIP_AB_PROVIDER_ROWS" ]] \
-      && row="$(print -r -- "$_RIP_AB_PROVIDER_ROWS" \
-        | jq -c --arg p "$prev" 'select((.path // "") == $p)' 2>/dev/null | head -1)"
+    if [[ -n "$_RIP_AB_PROVIDER_ROWS" ]]; then
+      row="$(jq -c --arg p "$rel" 'select((.path // "") == $p)' <<< "$_RIP_AB_PROVIDER_ROWS" 2>/dev/null)"
+      row="${row%%$'\n'*}"
+    fi
+    if [[ -z "$row" && -n "$prev" && -n "$_RIP_AB_PROVIDER_ROWS" ]]; then
+      row="$(jq -c --arg p "$prev" 'select((.path // "") == $p)' <<< "$_RIP_AB_PROVIDER_ROWS" 2>/dev/null)"
+      row="${row%%$'\n'*}"
+    fi
   fi
   if [[ -n "$row" ]]; then
     # "Identity at import, not repaired later" (spec). ids["local.sha256"]
@@ -654,17 +767,21 @@ rip::_book_meta_for() {
     # sidecar" warning fire instead, the same path the sibling uuidgen
     # failure in --repair-sidecars Case C already uses to reach the
     # operator.
-    if [[ "$(print -r -- "$row" | jq -r '.provider // ""' 2>/dev/null)" == "folder" ]]; then
-      local sha256; sha256="$(print -r -- "$row" | jq -r '.ids["local.sha256"] // ""' 2>/dev/null)"
-      if [[ -n "$sha256" ]]; then
-        local uid; uid="$(uuidgen 2>/dev/null)"; uid="${(L)uid}"
-        if [[ -n "$uid" ]]; then
-          row="$(print -r -- "$row" | jq -c --arg u "$uid" --arg s "$sha256" \
-            "$_RIP_JQ_IDS_DEF"'.ids = ((.ids | _ids_obj) + {"fleet.uid": $u, "local.sha256": $s})' 2>/dev/null)"
-        else
-          log_warn "rip: uuidgen produced nothing — cannot assign a local identity to $rel"
-          return 1
-        fi
+    # ONE jq for both questions ("is this a folder row?", "what hash was
+    # threaded into it?"): the hash, or nothing for any other provider. A row
+    # that is not an object, or whose ids cannot be subscripted, raises in
+    # either filter and answers "" exactly as the two separate calls did.
+    local sha256
+    sha256="$(jq -r 'if (.provider // "") == "folder" then (.ids["local.sha256"] // "") else empty end' \
+      <<< "$row" 2>/dev/null)"
+    if [[ -n "$sha256" ]]; then
+      local uid; uid="$(uuidgen 2>/dev/null)"; uid="${(L)uid}"
+      if [[ -n "$uid" ]]; then
+        row="$(jq -c --arg u "$uid" --arg s "$sha256" \
+          "$_RIP_JQ_IDS_DEF"'.ids = ((.ids | _ids_obj) + {"fleet.uid": $u, "local.sha256": $s})' <<< "$row" 2>/dev/null)"
+      else
+        log_warn "rip: uuidgen produced nothing — cannot assign a local identity to $rel"
+        return 1
       fi
     fi
     print -r -- "$row"
@@ -678,11 +795,21 @@ rip::_book_meta_for() {
 # rip::_file_bytes <file> — size in bytes. macOS stat and GNU stat disagree on
 # flags, so try GNU first and fall back; print 0 rather than an empty string,
 # because the caller feeds this to jq --argjson.
-rip::_file_bytes() {
+rip::_file_bytes() { local REPLY; rip::_file_bytes_r "$1"; print -r -- "$REPLY" }
+# REPLY = the size, without a process: zsh's own lstat (`zstat -L`, the call
+# both stat spellings below make). Only that one builtin is loaded — the whole
+# module would put a `stat` builtin over /usr/bin/stat. The two stat commands
+# remain for a zsh built without the module.
+rip::_file_bytes_r() {
   setopt localoptions noerrexit nopipefail
-  local n
-  n="$(stat -c %s -- "$1" 2>/dev/null)" || n="$(stat -f %z -- "$1" 2>/dev/null)"
-  [[ "$n" == <-> ]] && print -r -- "$n" || print -r -- 0
+  local n=""
+  local -a _rip_sz
+  if zmodload -F zsh/stat b:zstat 2>/dev/null && zstat -L -A _rip_sz +size -- "$1" 2>/dev/null; then
+    n="${_rip_sz[1]}"
+  else
+    n="$(stat -c %s -- "$1" 2>/dev/null)" || n="$(stat -f %z -- "$1" 2>/dev/null)"
+  fi
+  [[ "$n" == <-> ]] && REPLY="$n" || REPLY=0
 }
 
 # _RIP_COMPANION_KIND_JQ — the companion `kind` mapping, as one jq expression,
@@ -724,27 +851,35 @@ _RIP_COMPANION_KIND_JQ='(ascii_downcase) as $l
 # to exclude — AND fully read end to end by rip::_sha256_of below, which for
 # a retained multi-gigabyte `.aax` is precisely the "hash a large file twice"
 # cost Step 3b exists to avoid.
-rip::_companions_json() {
+rip::_companions_json() { local REPLY; rip::_companions_json_r "$1"; print -r -- "$REPLY" }
+# REPLY = that array ("" if jq could not build it; the caller reads that as []).
+#
+# ONE jq for the whole book, whatever the number of companions: it used to be
+# one per file and one more to gather them. Every value still reaches jq as an
+# argument (--arg / --argjson), never as program text; what is generated is
+# only the list of variable names, $f1 $b1 $s1, $f2 …
+rip::_companions_json_r() {
   setopt localoptions noerrexit nopipefail
   local d="$1" f base
   # The kind comes from the SHARED mapping, not a second copy of it — see
   # _RIP_COMPANION_KIND_JQ above.
-  local prog='{file:$file, kind:($file|'"$_RIP_COMPANION_KIND_JQ"'), bytes:$bytes, sha256:(if $sha=="" then null else $sha end)}'
-  local -a rows=()
+  local -a jargs=() objs=()
+  local -i n=0
   for f in "$d"/*(N.); do
     base="${f:t}"
     [[ "$base" == .fleet-book.json ]] && continue
     case "${(L)base}" in
       *.m4b|*.m4a|*.mp3|*.mp4|*.aac|*.flac|*.ogg|*.opus|*.wav|*.aax|*.aaxc) continue ;;
     esac
-    rows+=("$(jq -nc --arg file "$base" \
-      --argjson bytes "$(rip::_file_bytes "$f")" \
-      --arg sha "$(rip::_sha256_of "$f")" "$prog")")
+    (( ++n ))
+    rip::_file_bytes_r "$f"; jargs+=(--arg "f$n" "$base" --argjson "b$n" "$REPLY")
+    rip::_sha256_of_r "$f"; jargs+=(--arg "s$n" "$REPLY")
+    objs+=('{file:$f'$n', kind:($f'$n'|'"$_RIP_COMPANION_KIND_JQ"'), bytes:$b'$n', sha256:(if $s'$n'=="" then null else $s'$n' end)}')
   done
-  if (( ${#rows} )); then
-    print -rl -- "${rows[@]}" | jq -sc .
+  if (( n )); then
+    REPLY="$(jq -nc "${jargs[@]}" "[${(j:,:)objs}]")"
   else
-    print -r -- "[]"
+    REPLY="[]"
   fi
 }
 
@@ -900,7 +1035,8 @@ rip::_book_sidecar() {
   # unlike ids/work below, this is a live reflection of what's on disk right
   # now, not operator-resolved metadata to protect across pushes, so it must
   # never be frozen at whatever the first push happened to see.
-  companions="$(rip::_companions_json "$dir")"
+  local REPLY
+  rip::_companions_json_r "$dir"; companions="$REPLY"
   [[ -n "$companions" ]] || companions='[]'
   # ONE composer for the whole module (see _RIP_SIDECAR_JQ above): a sidecar
   # repaired by rip::ab_repair_sidecars or adopted by rip::ab_adopt_asin must
@@ -967,7 +1103,7 @@ rip::_book_sidecar() {
   fi
 
   # Unchanged → touch nothing at all.
-  if [[ -f "$sidecar" ]] && [[ "$merged" == "$(cat "$sidecar")" ]]; then
+  if [[ -f "$sidecar" ]] && [[ "$merged" == "$(<"$sidecar")" ]]; then
     return 0
   fi
   # The scratch write lives under .work/, never inside the book dir itself
@@ -978,11 +1114,13 @@ rip::_book_sidecar() {
   # exactly this kind of scratch (book-meta.$$.json, the ab-meta index,
   # push listfiles/locks/markers all live there), and it can never be
   # listed by a push regardless of book dir or push type.
-  local work_dir; work_dir="$(rip::staging_root)/.work"
-  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  rip::staging_root_r; local work_dir="$REPLY/.work"
+  rip::_mkdir_p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
   local tmp="$work_dir/fleet-book.$$.json.tmp"
-  print -r -- "$merged" > "$tmp" || { rm -f -- "$tmp"; return 1 }
-  mv -f -- "$tmp" "$sidecar" || { rm -f -- "$tmp"; return 1 }
+  print -r -- "$merged" > "$tmp" || { rip::_rm_f "$tmp"; return 1 }
+  # The real mv, not rip::_mv_f: .work/ is under the staging ROOT and the book
+  # under RIP_AB_STAGING, which may be another volume.
+  mv -f -- "$tmp" "$sidecar" || { rip::_rm_f "$tmp"; return 1 }
   return 0
 }
 
@@ -1102,9 +1240,8 @@ def _tags_ok($p; $aa; $bn):
 # read it" must never read as "it is already correct".
 rip::_tags_match_json() {
   setopt localoptions noerrexit nopipefail
-  print -r -- "${1:-}" \
-    | jq -e --arg aa "${2:-}" --arg bn "${3:-}" \
-        "$_RIP_JQ_TAGS_OK"'_tags_ok(.; $aa; $bn)' >/dev/null 2>&1
+  jq -e --arg aa "${2:-}" --arg bn "${3:-}" \
+      "$_RIP_JQ_TAGS_OK"'_tags_ok(.; $aa; $bn)' <<< "${1:-}" >/dev/null 2>&1
 }
 
 rip::_tags_match() {
@@ -1245,10 +1382,11 @@ rip::_retag_book() {
   # named .m4b sitting IN the book dir, where a LATER push's age-gated find
   # would pick it up and ship it as part of the book. .work/ is a sibling of
   # the type's staging dir and is never enumerated by a push.
-  local work_dir; work_dir="$(rip::staging_root)/.work"
-  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  local REPLY
+  rip::staging_root_r; local work_dir="$REPLY/.work"
+  rip::_mkdir_p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
   local tmp="$work_dir/retag.$$.${f:t}"
-  rm -f -- "$tmp"
+  rip::_rm_f "$tmp"
 
   # WRITTEN AT BOTH LEVELS, for the same reason rip::_tags_match reads both.
   # `-metadata` alone reaches only the FORMAT level, and the ogg/opus muxers
@@ -1270,12 +1408,30 @@ rip::_retag_book() {
   #
   # An array, not a string: every value here is a person's name and contains
   # spaces, and a command line assembled by concatenation would split them.
-  local tag cur
+  #
+  # ONE jq reads both, each as a JSON string on its own line (a value can hold
+  # a newline, so raw output could not be told apart). A JSON string with no
+  # backslash in it is its own text between the quotes, which is every
+  # ordinary name; anything else (an escape, a non-string) is read again by
+  # the single-tag call this replaced, so no decoding is done here at all.
+  local tag cur tagline
+  local -a taglines
+  taglines=("${(@f)$(jq -c '((.format.tags // {}) + ((.streams[0].tags) // {}))
+    | (.artist // ""), (.composer // "")' <<< "$js" 2>/dev/null)}")
+  local -i ti=0
   for tag in artist composer; do
-    cur="$(print -r -- "$js" | jq -r --arg k "$tag" \
-      '((.format.tags // {}) + ((.streams[0].tags) // {})) | .[$k] // ""' 2>/dev/null)"
+    (( ++ti ))
+    tagline="${taglines[ti]:-}"
+    if [[ "$tagline" == \"*\" && "$tagline" != *\\* ]]; then
+      cur="${${tagline#\"}%\"}"
+    elif [[ -z "$tagline" ]]; then
+      cur=""
+    else
+      cur="$(jq -r --arg k "$tag" \
+        '((.format.tags // {}) + ((.streams[0].tags) // {})) | .[$k] // ""' <<< "$js" 2>/dev/null)"
+    fi
     [[ -n "$cur" ]] || continue
-    cur="$(rip::_author_display "$cur")"
+    rip::_author_display_r "$cur"; cur="$REPLY"
     mdargs+=(-metadata "$tag=$cur" -metadata:s:a:0 "$tag=$cur")
   done
 
@@ -1302,13 +1458,15 @@ rip::_retag_book() {
     else
       log_error "rip: could not write tags to ${f:t} (ffmpeg rc=$wrc) — read back $got"
     fi
-    rm -f -- "$tmp"
+    rip::_rm_f "$tmp"
     return 1
   fi
 
+  # The real mv, for the same reason as rip::_book_sidecar's: .work/ and the
+  # staged book may be on different volumes.
   mv -f -- "$tmp" "$f" || {
     log_error "rip: could not move the retagged ${f:t} into place"
-    rm -f -- "$tmp"
+    rip::_rm_f "$tmp"
     return 1
   }
   return 0
@@ -1375,14 +1533,15 @@ rip::_retag_staged_book() {
 # that is already exactly <Author>/<Title> comes back unchanged, which is how
 # both callers tell a valid book from a too-deep or too-shallow one — `$d`
 # equals its own book rel if and only if it IS the book.
-rip::_book_rel_of() {
+rip::_book_rel_of_r() {
   local d="${1:-}"
   if [[ "$d" == */* ]]; then
-    print -r -- "${d%%/*}/${${d#*/}%%/*}"
+    REPLY="${d%%/*}/${${d#*/}%%/*}"
   else
-    print -r -- "$d"
+    REPLY="$d"
   fi
 }
+rip::_book_rel_of() { local REPLY; rip::_book_rel_of_r "${1:-}"; print -r -- "$REPLY" }
 
 # rip::_listfile_drop <listfile> <reldir> — remove every entry under <reldir>
 # from the push list, so a refused book cannot reach the rsync.
@@ -1417,7 +1576,7 @@ rip::_listfile_drop() {
     fi
     print -r -- "$line" >> "$tmp"
   done < "$lf"
-  mv -f -- "$tmp" "$lf" || { rm -f -- "$tmp"; return 1 }
+  rip::_mv_f "$tmp" "$lf" || { rip::_rm_f "$tmp"; return 1 }
   return 0
 }
 
@@ -1457,8 +1616,22 @@ RIP_AB_REMOTE_HOPS=(rip::_abs_match_authors "${RIP_AB_REMOTE_HOPS[@]}")
 rip::_enrich_add() {
   local rel="$1"
   [[ -n "${RIP_ENRICH_LISTFILE:-}" ]] || return 0
-  grep -qxF -- "$rel" "$RIP_ENRICH_LISTFILE" 2>/dev/null \
+  rip::_listfile_has "$RIP_ENRICH_LISTFILE" "$rel" 2>/dev/null \
     || print -r -- "$rel" >> "$RIP_ENRICH_LISTFILE"
+}
+
+# rip::_listfile_has <listfile> <relpath> — `grep -qxF -- <relpath> <listfile>`
+# without the process: rc 0 when a line of the list is exactly <relpath>. The
+# file is read by the shell itself (`$(<file)` does not fork). An empty
+# <relpath> or an unreadable list is still grep's question to answer.
+rip::_listfile_has() {
+  local lf="$1" rel="$2"
+  if [[ -z "$rel" || "$rel" == *$'\n'* || ! -f "$lf" || ! -r "$lf" ]]; then
+    grep -qxF -- "$rel" "$lf"
+    return $?
+  fi
+  local -a listed=(${(f)"$(<"$lf")"})
+  (( ${listed[(Ie)$rel]} ))
 }
 
 # rip::_enrich_audiobooks <src> <listfile> — per book dir holding listed
@@ -1482,6 +1655,7 @@ rip::_enrich_audiobooks() {
   # in a loop body prints "name=value" onto the stream this runs on, and
   # this file has been bitten by that before.
   local d meta hop failed=0 refused=0 b_author b_book b_rel
+  local REPLY
   local -A refused_book=()
 
   # THE PRE-SCAN, AND IT HAS TO BE A PRE-SCAN (review finding, 2026-08-26).
@@ -1506,7 +1680,7 @@ rip::_enrich_audiobooks() {
   # iteration order irrelevant: nothing under a refused book is meta-read,
   # sidecar-written, tagged, re-added or hopped, in any order.
   for d in "${dirs[@]}"; do
-    b_rel="$(rip::_book_rel_of "$d")"
+    rip::_book_rel_of_r "$d"; b_rel="$REPLY"
     # Refused when the entry is not exactly its own <Author>/<Title>: too
     # deep ("A/B/Disc 1"), or too shallow ("A", or "." for a file staged at
     # the top of the type's tree). No slicing can recover which segment is
@@ -1526,9 +1700,10 @@ rip::_enrich_audiobooks() {
   for d in "${dirs[@]}"; do
     [[ -d "$src/$d" ]] || continue
     # Every member of a refused book, skipped before anything is written.
-    (( ${+refused_book[$(rip::_book_rel_of "$d")]} )) && continue
-    meta="$(rip::staging_root)/.work/book-meta.$$.json"
-    mkdir -p "${meta:h}"
+    rip::_book_rel_of_r "$d"
+    (( ${+refused_book[$REPLY]} )) && continue
+    rip::staging_root_r; meta="$REPLY/.work/book-meta.$$.json"
+    rip::_mkdir_p "${meta:h}"
     if rip::_book_meta_for "$d" > "$meta" 2>/dev/null \
        && rip::_book_sidecar "$src/$d" "$meta"; then
       rip::_enrich_add "$d/.fleet-book.json"
@@ -1536,7 +1711,7 @@ rip::_enrich_audiobooks() {
       log_warn "rip: could not write the identity sidecar for $d"
       failed=1
     fi
-    rm -f -- "$meta"
+    rip::_rm_f "$meta"
     # THE AUTHORITATIVE TAGS (design doc S2). The author and the book name
     # come from the STAGED PATH, not from the provider row, and they are
     # written VERBATIM, because the path is what the library shows and the
@@ -1569,8 +1744,8 @@ rip::_enrich_audiobooks() {
     # non-convergence the verbatim-author rule removes, through another door.
     # Exactly two components by construction now — the pre-scan above refused
     # and skipped anything else, so this is a plain split, not a check.
-    b_author="$(rip::_nfc "${d%%/*}")"
-    b_book="$(rip::_nfc "${d#*/}")"
+    rip::_nfc_r "${d%%/*}"; b_author="$REPLY"
+    rip::_nfc_r "${d#*/}"; b_book="$REPLY"
     if ! rip::_retag_staged_book "$src/$d" "$b_author" "$b_book"; then
       # REFUSED, not warned (design doc S3, the operator's rule verbatim:
       # "not failing on error is a recipe for drift in the long run"). The
@@ -1609,14 +1784,15 @@ rip::_enrich_audiobooks_remote() {
   (( ${#RIP_AB_REMOTE_HOPS} )) || return 0
   [[ -f "$listfile" ]] || return 0
   local -a rels=()
-  local rel hop
+  local rel hop REPLY
   while IFS= read -r rel; do
     [[ -n "$rel" ]] && rels+=("$rel")
   done < "$listfile"
   (( ${#rels} )) || return 0
   for hop in "${RIP_AB_REMOTE_HOPS[@]}"; do
     (( $+functions[$hop] )) || { log_warn "rip: no such remote hop: $hop"; continue }
-    "$hop" "$(rip::remote_base)" "${rels[@]}" \
+    rip::remote_base_r
+    "$hop" "$REPLY" "${rels[@]}" \
       || log_warn "rip: remote enrichment hop failed: $hop (files are on the server regardless)"
   done
   return 0
@@ -1661,19 +1837,26 @@ rip::_abs_match_authors() {
   "$RIP_BIN_DIR/rip-abs-authors" "${authors[@]}"
 }
 
-rip::_track_meta() {
+rip::_track_meta() { local REPLY; rip::_track_meta_r "$1"; printf '%s\n' "$REPLY" }
+# REPLY = that line, without its newline.
+rip::_track_meta_r() {
   local mf="${RIP_METAFLAC_BIN:-metaflac}" f="$1"
   local artist album title date year samples rate dur=0
-  artist="$("$mf" --show-tag=ARTIST "$f" 2>/dev/null | head -1)"; artist="$(rip::_nfc "${artist#*=}")"
-  album="$("$mf" --show-tag=ALBUM "$f" 2>/dev/null | head -1)";  album="$(rip::_nfc "${album#*=}")"
-  title="$("$mf" --show-tag=TITLE "$f" 2>/dev/null | head -1)";  title="$(rip::_nfc "${title#*=}")"
-  date="$("$mf" --show-tag=DATE "$f" 2>/dev/null | head -1)";   date="${date#*=}"
+  # The first line of each answer (a tag can repeat), cut here rather than by
+  # a `| head -1` process per tag.
+  artist="$("$mf" --show-tag=ARTIST "$f" 2>/dev/null)"; artist="${artist%%$'\n'*}"
+  rip::_nfc_r "${artist#*=}"; artist="$REPLY"
+  album="$("$mf" --show-tag=ALBUM "$f" 2>/dev/null)"; album="${album%%$'\n'*}"
+  rip::_nfc_r "${album#*=}"; album="$REPLY"
+  title="$("$mf" --show-tag=TITLE "$f" 2>/dev/null)"; title="${title%%$'\n'*}"
+  rip::_nfc_r "${title#*=}"; title="$REPLY"
+  date="$("$mf" --show-tag=DATE "$f" 2>/dev/null)"; date="${date%%$'\n'*}"; date="${date#*=}"
   year="${date[1,4]}"
   [[ ${#year} == 4 ]] || year=""
   samples="$("$mf" --show-total-samples "$f" 2>/dev/null)"
   rate="$("$mf" --show-sample-rate "$f" 2>/dev/null)"
   [[ "$samples" == <-> && "$rate" == <1-> ]] && dur=$(( samples / rate ))
-  printf '%s\t%s\t%s\t%s\t%s\n' "$artist" "$album" "$title" "$dur" "$year"
+  REPLY="$artist"$'\t'"$album"$'\t'"$title"$'\t'"$dur"$'\t'"$year"
 }
 
 # rip::_mb_call <curl_bin> <jq_filter> <curl args…> — MusicBrainz rate-
@@ -1761,9 +1944,9 @@ rip::_fetch_cover() {
       | jq -r '(.results // [])[0].artworkUrl100 // empty' \
       | sed 's/100x100bb/600x600bb/')"
   fi
-  [[ -n "$art_url" ]] || { rm -f -- "$out"; return 1 }
+  [[ -n "$art_url" ]] || { rip::_rm_f "$out"; return 1 }
   "$curl_bin" -sfL -o "$out" "$art_url" 2>/dev/null && [[ -s "$out" ]] && return 0
-  rm -f -- "$out"; return 1
+  rip::_rm_f "$out"; return 1
 }
 
 # Deezer's empty-image placeholder cover, keyed by MD5 (live-discovered
@@ -1812,9 +1995,9 @@ rip::_remote_test() {
   # whatever form they were created (often NFD). Normalize before asking,
   # or a present NFC file reads "confirmed absent" — and for the cover
   # check that verdict green-lights a refetch over curated art.
-  local flag="$1"
-  local relpath; relpath="$(rip::_nfc "$2")"
-  local base; base="$(rip::remote_base)"
+  local flag="$1" REPLY
+  rip::_nfc_r "$2"; local relpath="$REPLY"
+  rip::remote_base_r; local base="$REPLY"
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
     local host="${base%%:*}" rpath="${base#*:}"
@@ -1896,7 +2079,7 @@ rip::_fetch_artist_image() {
       fi
       print -r -- "rip: Deezer served placeholder art for $artist — trying the fallback chain"
     fi
-    rm -f -- "$out"
+    rip::_rm_f "$out"
   fi
   # Fallback: MusicBrainz artist search → url-rels → Wikidata P18 → Commons.
   local mbid
@@ -1922,7 +2105,7 @@ rip::_fetch_artist_image() {
   local encoded; encoded="$(jq -rn --arg s "$filename" '$s|@uri')"
   "$curl_bin" -sfL -o "$out" "$commons/wiki/Special:FilePath/$encoded?width=1000" 2>/dev/null \
     && [[ -s "$out" ]] && return 0
-  rm -f -- "$out"
+  rip::_rm_f "$out"
   return 1
 }
 
@@ -1952,7 +2135,7 @@ rip::_ensure_artist_image() {
       return 0
     fi
   fi
-  grep -qxF -- "$artist_rel/artist.jpg" "$listfile" || print -r -- "$artist_rel/artist.jpg" >> "$listfile"
+  rip::_listfile_has "$listfile" "$artist_rel/artist.jpg" || print -r -- "$artist_rel/artist.jpg" >> "$listfile"
   return 0
 }
 
@@ -1999,7 +2182,8 @@ rip::_enrich_music() {
   # name=value` (WITH an assignment, e.g. `abs`/`flacs`/`cover` below,
   # still declared per-iteration) is unaffected — the print only fires for
   # a bare re-declaration.
-  local rel2 meta artist album year cover_remote_rc artist_rel f tmeta title dur lyr
+  local rel2 meta artist album year cover_remote_rc artist_rel f tmeta title dur lyr REPLY
+  local -a tfields
   # Group the LISTED flac relpaths by album dir — deliberately NOT a glob of
   # the album directory. A sibling flac can be mid-write (XLD writing a
   # neighboring track while this one already settled): metaflac's
@@ -2032,10 +2216,12 @@ rip::_enrich_music() {
       [[ -n "$rel2" ]] && flacs+=("$src/$rel2")
     done <<< "${album_files[$adir]}"
     (( ${#flacs} )) || continue
-    meta="$(rip::_track_meta "${flacs[1]}")"
+    # The five fields, split at the tabs here (it was a `| cut -fN` each).
+    rip::_track_meta_r "${flacs[1]}"; meta="$REPLY"
+    tfields=("${(@ps:\t:)meta}")
     artist="${meta%%$'\t'*}"
-    album="$(print -r -- "$meta" | cut -f2)"
-    year="$(print -r -- "$meta" | cut -f5)"
+    album="${tfields[2]:-}"
+    year="${tfields[5]:-}"
     # cover: fetch once per album, embed where absent, ship cover.jpg.
     #
     # Server check FIRST (round 4, live case: the hand-corrected "MTV ao
@@ -2088,7 +2274,7 @@ rip::_enrich_music() {
       fi
     fi
     if (( have_cover )); then
-      grep -qxF -- "$adir/cover.jpg" "$listfile" || print -r -- "$adir/cover.jpg" >> "$listfile"
+      rip::_listfile_has "$listfile" "$adir/cover.jpg" || print -r -- "$adir/cover.jpg" >> "$listfile"
       for f in "${flacs[@]}"; do
         [[ -n "$("$mf" --list --block-type=PICTURE "$f" 2>/dev/null)" ]] && continue
         "$mf" --import-picture-from="$cover" "$f" 2>/dev/null || failed=1
@@ -2097,9 +2283,10 @@ rip::_enrich_music() {
     # lyrics: per track
     for f in "${flacs[@]}"; do
       [[ -n "$("$mf" --show-tag=LYRICS "$f" 2>/dev/null)" ]] && continue
-      tmeta="$(rip::_track_meta "$f")"
-      title="$(print -r -- "$tmeta" | cut -f3)"
-      dur="$(print -r -- "$tmeta" | cut -f4)"
+      rip::_track_meta_r "$f"; tmeta="$REPLY"
+      tfields=("${(@ps:\t:)tmeta}")
+      title="${tfields[3]:-}"
+      dur="${tfields[4]:-}"
       [[ -n "$title" ]] || continue
       if lyr="$(rip::_fetch_lyrics "$artist" "$album" "$title" "$dur")"; then
         print -r -- "$lyr" | "$mf" --set-tag-from-file=LYRICS=/dev/stdin "$f" 2>/dev/null || failed=1
@@ -2161,6 +2348,7 @@ rip::_check_title() {
 # removed the verified encode); cancelled or killed mid-encode → nothing
 # under movies/ at all, intermediate kept (see the .work staging note).
 rip::pipeline_worker() {
+  local REPLY
   # See rip::push_worker's identical comment: the real rip-pipeline bin
   # sources this under `set -eu -o pipefail`, and this function's own
   # HandBrakeCLI pipeline needs to own its error handling (rc capture +
@@ -2172,7 +2360,7 @@ rip::pipeline_worker() {
   [ -f "$input" ] || { log_error "rip: no such input: $input"; return 1 }
   local hb_bin="${RIP_HANDBRAKE_BIN:-HandBrakeCLI}"
   local out_dir out work_dir out_tmp
-  out_dir="$(rip::staging_root)/movies/$title"
+  rip::staging_root_r; out_dir="$REPLY/movies/$title"
   out="$out_dir/$title.mkv"
   # Kill-proof by construction. The encoder writes into .work/ and the
   # result is RENAMED into movies/<Title>/ only after it exits 0, so
@@ -2188,10 +2376,10 @@ rip::pipeline_worker() {
   # One deterministic temp name is safe because the pipeline runs in the
   # `heavy` group at parallelism 1: there is never a second encode to
   # collide with. The rm below clears whatever a killed predecessor left.
-  work_dir="$(rip::staging_root)/.work"
+  rip::staging_root_r; work_dir="$REPLY/.work"
   out_tmp="$work_dir/encode.mkv"
-  mkdir -p "$work_dir"
-  rm -f -- "$out_tmp"
+  rip::_mkdir_p "$work_dir"
+  rip::_rm_f "$out_tmp"
 
   # Progress composition: this worker may itself run inside an outer band
   # (rip-disc gives it 40–100). Encode takes the first 85% OF THE BAND,
@@ -2241,7 +2429,7 @@ rip::pipeline_worker() {
       done
   local rc=$pipestatus[1]
   if (( rc != 0 )); then
-    rm -f -- "$out_tmp"
+    rip::_rm_f "$out_tmp"
     log_error "rip: encode failed (rc=$rc) — intermediate kept: $input"
     trap - TERM INT   # $out_tmp goes out of scope with this return
     return $rc
@@ -2253,8 +2441,8 @@ rip::pipeline_worker() {
   # springs into existence already holding a whole file, never a growing
   # one. This is the moment the encode becomes visible to `rip-push movies`.
   if ! rip::_publish_file "$out_tmp" "movies/$title/$title.mkv"; then
-    rm -f -- "$out_tmp"
-    rmdir -- "$out_dir" 2>/dev/null || :
+    rip::_rm_f "$out_tmp"
+    rip::_rmdir "$out_dir" || :
     log_error "rip: could not publish the encode to $out — intermediate kept: $input"
     return 1
   fi
@@ -2264,7 +2452,7 @@ rip::pipeline_worker() {
   RIP_PROGRESS_SPAN=$(( band_span - enc_span )) \
   rip::push_worker movies || return $?
 
-  rm -f -- "$input"
+  rip::_rm_f "$input"
   RIP_PROGRESS_BASE=$band_base RIP_PROGRESS_SPAN=$band_span \
     rip::_progress 100 "done — $title"
   return 0
@@ -2292,11 +2480,12 @@ rip::pipeline_enqueue() {
 # the rip stage ends.
 rip::disc_worker() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
   local title="$1"
   rip::_check_title "$title" || return 2
   local mkc="${RIP_MAKEMKVCON_BIN:-/Applications/MakeMKV.app/Contents/MacOS/makemkvcon}"
-  local rip_dir; rip_dir="$(rip::staging_root)/.work/autorip"
+  rip::staging_root_r; local rip_dir="$REPLY/.work/autorip"
   rm -rf -- "$rip_dir" && mkdir -p "$rip_dir"
 
   # Longest title AND the disc kind, one pass. `-F'[:,"]'` splits the quoted
@@ -2549,6 +2738,7 @@ rip::_check_extra_name() {
 # temp and keeps nothing; a push/verify failure leaves the ALREADY-
 # PUBLISHED extra on disk for a plain `rip-push movies` retry.
 rip::extra_worker() {
+  local REPLY
   # See rip::pipeline_worker's identical comment: the real rip-extra bin
   # sources this under `set -eu -o pipefail`, and this function's own
   # HandBrakeCLI pipeline needs to own its error handling (rc capture +
@@ -2580,10 +2770,10 @@ rip::extra_worker() {
   # exited 0, so a killed worker (plain `pueue kill` sends SIGKILL on pueue
   # 4.x — untrappable) leaves debris only where nothing ships from.
   local work_dir out_tmp
-  work_dir="$(rip::staging_root)/.work"
+  rip::staging_root_r; work_dir="$REPLY/.work"
   out_tmp="$work_dir/.extra-encode.mkv"
-  mkdir -p "$work_dir"
-  rm -f -- "$out_tmp"
+  rip::_mkdir_p "$work_dir"
+  rip::_rm_f "$out_tmp"
 
   rip::_progress 0 "encoding extra — $name"
   trap 'rm -f -- "$out_tmp"
@@ -2609,7 +2799,7 @@ rip::extra_worker() {
       done
   local rc=$pipestatus[1]
   if (( rc != 0 )); then
-    rm -f -- "$out_tmp"
+    rip::_rm_f "$out_tmp"
     log_error "rip: extra encode failed (rc=$rc) — nothing kept: $movie — $name"
     trap - TERM INT   # $out_tmp goes out of scope with this return
     return $rc
@@ -2618,11 +2808,11 @@ rip::extra_worker() {
   trap - TERM INT
 
   local out_dir out
-  out_dir="$(rip::staging_root)/movies/$movie/extras"
+  rip::staging_root_r; out_dir="$REPLY/movies/$movie/extras"
   out="$out_dir/$name.mkv"
   if ! rip::_publish_file "$out_tmp" "$relpath"; then
-    rm -f -- "$out_tmp"
-    rmdir -- "$out_dir" 2>/dev/null || :
+    rip::_rm_f "$out_tmp"
+    rip::_rmdir "$out_dir" || :
     log_error "rip: could not publish the extra to $out"
     return 1
   fi
@@ -2835,7 +3025,9 @@ rip::session_scan() {
       merged="$(print -rl -- "${title_lines[@]}" | jq -c --argjson h "$harvest" \
         '. as $r | ($h.suggest[($r.no|tostring)]) as $s
          | if ($s|type) == "object" then $r + {suggest: $s} else $r end' 2>/dev/null)"
-      if [[ -n "$merged" && "$(print -r -- "$merged" | wc -l | tr -d ' ')" == "${#title_lines}" ]]; then
+      # One merged line per title (counted here; it was `| wc -l | tr`).
+      local -a merged_lines=("${(@f)merged}")
+      if [[ -n "$merged" && "${#merged_lines}" == "${#title_lines}" ]]; then
         local cands
         cands="$(jq -c '.candidates // [] | select(length > 0) | {candidates: .}' <<< "$harvest" 2>/dev/null)"
         [[ -n "$cands" ]] && print -r -- "$cands"
@@ -2888,7 +3080,8 @@ rip::session_have() {
 #         showing an empty picker that looks like an empty library.
 rip::session_library() {
   setopt localoptions noerrexit nopipefail
-  local base; base="$(rip::remote_base)"
+  local REPLY
+  rip::remote_base_r; local base="$REPLY"
   local out rc line
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
@@ -2934,8 +3127,15 @@ rip::_validate_plan() {
   # jq calls below legitimately exit non-zero on a malformed plan — this
   # function owns that, the caller must not die of it (same rule the workers
   # state at length).
+  #
+  # ON SUCCESS the fields it read stay in _RIP_PLAN_KIND, _RIP_PLAN_FEAT_MOVIE,
+  # _RIP_PLAN_FEAT_NO and _RIP_PLAN_EXTRAS (rip::_plan_extras' lines), so
+  # rip::session_worker, which validates and then needs exactly these, does
+  # not start four more jq over the same file. They are cleared on entry: a
+  # rejected plan leaves nothing behind to be mistaken for this one.
   setopt localoptions noerrexit nopipefail
   local plan="$1"
+  typeset -g _RIP_PLAN_KIND="" _RIP_PLAN_FEAT_MOVIE="" _RIP_PLAN_FEAT_NO="" _RIP_PLAN_EXTRAS=""
   jq -e . "$plan" >/dev/null 2>&1 || { log_error "rip: session plan is not valid JSON: $plan"; return 2 }
   # The disc kind decides the policy the worker applies (DVD encodes,
   # Blu-ray remuxes — operator rule, 2026-09-05). The panel is the only
@@ -2965,6 +3165,9 @@ rip::_validate_plan() {
     rip::_check_title_no "$feat_no" || return 2
     composed["movies/$feat_movie/$feat_movie.mkv"]=1
   fi
+  # Read once, into a variable (an empty answer feeds the loop one empty
+  # line, which it skips).
+  local extras; extras="$(rip::_plan_extras "$plan")"
   while IFS=$'\t' read -r no name attach; do
     [[ -n "$no$name$attach" ]] || continue
     rip::_check_title_no "$no" || return 2
@@ -2979,11 +3182,13 @@ rip::_validate_plan() {
     fi
     composed["$rel"]=1
     n=$(( n + 1 ))
-  done < <(rip::_plan_extras "$plan")
+  done <<< "$extras"
   if [[ -z "$feat_movie" ]] && (( n == 0 )); then
     log_error "rip: session plan selects nothing — no feature and no extras"
     return 2
   fi
+  _RIP_PLAN_KIND="$kind" _RIP_PLAN_FEAT_MOVIE="$feat_movie" _RIP_PLAN_FEAT_NO="$feat_no"
+  _RIP_PLAN_EXTRAS="$extras"
   return 0
 }
 
@@ -2993,6 +3198,7 @@ rip::_validate_plan() {
 # volume label for an extras-only session.
 rip::session_enqueue() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local plan="$1"
   [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
   rip::_validate_plan "$plan" || return 2
@@ -3012,8 +3218,8 @@ rip::session_enqueue() {
   # .work/session-plans/ survives a reload; the worker removes its own copy
   # when it has read it (rip::session_worker), which is the only thing that
   # ever reclaims one.
-  local work_dir; work_dir="$(rip::staging_root)/.work/session-plans"
-  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  rip::staging_root_r; local work_dir="$REPLY/.work/session-plans"
+  rip::_mkdir_p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
   local queued="$work_dir/session-$$-$RANDOM.json"
   cp -- "$plan" "$queued" || { log_error "rip: cannot stage the session plan at $queued"; return 1 }
 
@@ -3021,7 +3227,7 @@ rip::session_enqueue() {
   title="$(jq -r '.feature.movie // .volume // empty' "$plan")"
   [[ -n "$title" ]] || title="disc"
 
-  rip::_load_jobs || { log_error "rip: job runner unavailable"; rm -f -- "$queued"; return 1 }
+  rip::_load_jobs || { log_error "rip: job runner unavailable"; rip::_rm_f "$queued"; return 1 }
   job::start --group heavy --title "rip session: $title" --icon "$RIP_JOB_ICON" \
     -- "$RIP_BIN_DIR/rip-disc" --session-worker "$queued"
 }
@@ -3089,13 +3295,15 @@ rip::_set_mkv_title() {
 # the session worker and the auto flow.
 rip::_publish_file() {
   local src="$1" rel="$2" out out_dir
-  out="$(rip::staging_root)/$rel"
+  local REPLY
+  rip::staging_root_r; out="$REPLY/$rel"
   out_dir="${out:h}"
-  mkdir -p -- "$out_dir" && mv -f -- "$src" "$out"
+  rip::_mkdir_p "$out_dir" && rip::_mv_f "$src" "$out"
 }
 
 rip::session_worker() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
   local plan="$1"
   [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
@@ -3106,7 +3314,7 @@ rip::session_worker() {
   # reason in the log (that is the artifact worth keeping), and a plan that
   # parsed has nothing left to say once the arrays below exist.
   if ! rip::_validate_plan "$plan"; then
-    rm -f -- "$plan"
+    rip::_rm_f "$plan"
     return 2
   fi
 
@@ -3114,9 +3322,13 @@ rip::session_worker() {
   # ordered them. Three parallel arrays rather than one array of records —
   # zsh has no struct, and the three are only ever indexed together.
   local -a item_no=() item_rel=() item_label=()
+  #
+  # The fields are the ones rip::_validate_plan just read from this same file
+  # (it leaves them behind on success): the same four jq expressions, run once
+  # instead of twice.
   local feat_movie feat_no no name attach
-  feat_movie="$(jq -r '.feature.movie // empty' "$plan")"
-  feat_no="$(jq -r '(.feature.no // empty) | tostring' "$plan")"
+  feat_movie="$_RIP_PLAN_FEAT_MOVIE"
+  feat_no="$_RIP_PLAN_FEAT_NO"
   if [[ -n "$feat_movie" ]]; then
     item_no+=("$feat_no")
     item_rel+=("movies/$feat_movie/$feat_movie.mkv")
@@ -3127,17 +3339,16 @@ rip::session_worker() {
     item_no+=("$no")
     item_rel+=("movies/$attach/extras/$name.mkv")
     item_label+=("$attach — $name")
-  done < <(rip::_plan_extras "$plan")
-  local kind
-  kind="$(jq -r '.kind' "$plan")"
-  rm -f -- "$plan" # read in full: see the note above rip::_validate_plan's call
+  done <<< "$_RIP_PLAN_EXTRAS"
+  local kind="$_RIP_PLAN_KIND"
+  rip::_rm_f "$plan" # read in full: see the note above rip::_validate_plan's call
   local n=${#item_no}
   (( n > 0 )) || { log_error "rip: session plan selects nothing"; return 2 }
 
   local mkc="${RIP_MAKEMKVCON_BIN:-/Applications/MakeMKV.app/Contents/MacOS/makemkvcon}"
   local hb_bin="${RIP_HANDBRAKE_BIN:-HandBrakeCLI}"
   local work_dir sess_dir out_tmp
-  work_dir="$(rip::staging_root)/.work"
+  rip::staging_root_r; work_dir="$REPLY/.work"
   sess_dir="$work_dir/session"
   # Same kill-proof-by-construction shape as every other encode here: both
   # the ripped titles and the in-flight encode live under .work, which
@@ -3145,9 +3356,9 @@ rip::session_worker() {
   # `pueue kill` on pueue 4.x) can only ever leave debris where debris is
   # harmless. movies/ receives whole files by rename or nothing at all.
   out_tmp="$work_dir/session-encode.mkv"
-  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  rip::_mkdir_p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
   rm -rf -- "$sess_dir"
-  mkdir -p "$sess_dir" || { log_error "rip: cannot create $sess_dir"; return 1 }
+  rip::_mkdir_p "$sess_dir" || { log_error "rip: cannot create $sess_dir"; return 1 }
 
   local -a pty_wrap=(${=RIP_PTY_WRAP-script -q -F /dev/null})
   # Every bare `local` below is declared ONCE, here, outside the loops: zsh
@@ -3206,7 +3417,7 @@ rip::session_worker() {
       log_error "rip: session rip failed on title ${item_no[i]} (rc=$rc) — disc unreadable, nothing kept"
       return $(( rc ? rc : 1 ))
     fi
-    if ! mv -f -- "$produced" "$sess_dir/title-${item_no[i]}.mkv"; then
+    if ! rip::_mv_f "$produced" "$sess_dir/title-${item_no[i]}.mkv"; then
       trap - TERM INT
       rm -rf -- "$sess_dir"
       log_error "rip: could not stage the ripped title ${item_no[i]}"
@@ -3249,7 +3460,7 @@ rip::session_worker() {
         rip::_progress 100 "publishing — ${item_label[i]}"
       continue
     fi
-    rm -f -- "$out_tmp"
+    rip::_rm_f "$out_tmp"
     RIP_PROGRESS_BASE=$base RIP_PROGRESS_SPAN=$span \
       rip::_progress 0 "encoding — ${item_label[i]}"
     # Scoped to THIS item's encode: items already published are complete and
@@ -3272,13 +3483,13 @@ rip::session_worker() {
     rc=$pipestatus[1]
     trap - TERM INT
     if (( rc != 0 )); then
-      rm -f -- "$out_tmp"
+      rip::_rm_f "$out_tmp"
       log_error "rip: session encode failed (rc=$rc) — item dropped, session continues: ${item_label[i]}"
       failed=1
       continue
     fi
     if ! rip::_publish_file "$out_tmp" "$rel"; then
-      rm -f -- "$out_tmp"
+      rip::_rm_f "$out_tmp"
       log_error "rip: could not publish $rel — item dropped, session continues"
       failed=1
       continue
@@ -3325,17 +3536,24 @@ rip::session_worker() {
 # names carry the executable_ prefix; the deployed name does not. Accept
 # either so the suite can run against the source tree without a chezmoi
 # apply.
-rip::ab_provider_bin() {
+rip::ab_provider_bin_r() {
   local name="${1:-${RIP_AB_PROVIDER:-libation}}"
+  REPLY=""
   case "$name" in
     */* | "" | . | ..) log_error "rip: bad provider name: $name"; return 2 ;;
   esac
   local p
   for p in "$RIP_LIBEXEC_DIR/rip-provider-$name" "$RIP_LIBEXEC_DIR/executable_rip-provider-$name"; do
-    [[ -f "$p" ]] && { print -r -- "$p"; return 0 }
+    [[ -f "$p" ]] && { REPLY="$p"; return 0 }
   done
   log_error "rip: no such provider: $name"
   return 2
+}
+# The printing form: the path on stdout, or nothing and rc 2.
+rip::ab_provider_bin() {
+  local REPLY
+  rip::ab_provider_bin_r "$@" || return $?
+  print -r -- "$REPLY"
 }
 
 # rip::ab_library [name] [root] — the provider's JSON lines, passed through
@@ -3345,7 +3563,8 @@ rip::ab_provider_bin() {
 # argv length is part of the contract.
 rip::ab_library() {
   setopt localoptions noerrexit nopipefail
-  local bin; bin="$(rip::ab_provider_bin "${1:-}")" || return 2
+  local REPLY
+  rip::ab_provider_bin_r "${1:-}" || return 2; local bin="$REPLY"
   local root="${2:-}"
   if [[ -n "$root" ]]; then
     zsh "$bin" list "$root"
@@ -3364,8 +3583,19 @@ rip::ab_library() {
 # rip::session_library, and the plain-local-dir fallback the hermetic tests
 # rely on.
 rip::ab_server_library() {
+  local REPLY
+  rip::ab_server_library_r || return $?
+  # "Reachable but empty" prints nothing at all.
+  [[ -z "$REPLY" ]] || print -r -- "$REPLY"
+  return 0
+}
+# REPLY = the same listing, one "<Author>/<Title>" a line, no trailing
+# newline (what `$(rip::ab_server_library)` captured); rc 2 and REPLY empty
+# when the server could not be listed.
+rip::ab_server_library_r() {
   setopt localoptions noerrexit nopipefail
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
+  REPLY=""
   local out rc line
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
@@ -3376,15 +3606,17 @@ rip::ab_server_library() {
     rc=$?
   else
     # No ':' — the hermetic tests' plain local dir.
-    out="$(cd "$base/audiobooks" 2>/dev/null && find . -mindepth 2 -maxdepth 2 -type d | sed 's|^\./||')"
+    # The "./" find prints is dropped below instead of by `| sed`; `true`
+    # keeps what the pipe gave: once the cd succeeded, the status was sed's.
+    out="$(cd "$base/audiobooks" 2>/dev/null && { find . -mindepth 2 -maxdepth 2 -type d; true })"
     rc=$?
+    local -a found=("${(@f)out}")
+    out="${(F)${(@)found#./}}"
   fi
   (( rc == 0 )) || { log_error "rip: could not list the audiobook library on the server"; return 2 }
-  # A here-string over an empty capture still feeds one empty line; drop it,
-  # so "reachable but empty" prints nothing at all.
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && print -r -- "$line"
-  done <<< "$out"
+  # Empty lines are dropped, so "reachable but empty" is nothing at all.
+  local -a lines=(${(f)out})
+  REPLY="${(F)lines}"
   return 0
 }
 
@@ -3435,6 +3667,7 @@ rip::ab_have() {
 # listing rip::_server_sidecars already makes.
 rip::ab_at_risk() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
 
   # Captured as VALUES so their failure PROPAGATES. Read through `< <(...)`
   # an unreachable server is byte-identical to an empty library, and this
@@ -3450,7 +3683,7 @@ rip::ab_at_risk() {
   local rows; rows="$(rip::_server_sidecars)" || return 2
 
   local pname="${RIP_AB_PROVIDER:-libation}"
-  local pbin; pbin="$(rip::ab_provider_bin "$pname")" || return 2
+  rip::ab_provider_bin_r "$pname" || return 2; local pbin="$REPLY"
   local prows; prows="$(zsh "$pbin" list 2>/dev/null)"
   if [[ -z "$prows" ]]; then
     log_error "rip: the $pname library returned no rows — refusing to report an at-risk set derived from an empty library"
@@ -3487,7 +3720,7 @@ rip::ab_at_risk() {
   local ppath pflag pasin ptitle
   while IFS=$'\t' read -r ppath pflag pasin; do
     [[ -n "$ppath" ]] || continue
-    ppath="$(rip::_nfc "$ppath")"
+    rip::_nfc_r "$ppath"; ppath="$REPLY"
     [[ -n "${prisk[$ppath]:-}" ]] || prisk[$ppath]="$pflag"
     ptitle="${ppath##*/}"
     ptitle_risk[$ptitle]+="$pflag"
@@ -3519,7 +3752,7 @@ rip::ab_at_risk() {
         continue
       fi
     else
-      nrel="$(rip::_nfc "$rel")"
+      rip::_nfc_r "$rel"; nrel="$REPLY"
       flags="${prisk[$nrel]:-}"
       [[ -n "$flags" ]] || flags="${ptitle_risk[${nrel##*/}]:-}"
       if [[ -z "$flags" ]]; then
@@ -3593,7 +3826,8 @@ rip::ab_at_risk() {
 # of JSON, and a call per book would be 248 round-trips.
 rip::_server_sidecars() {
   setopt localoptions noerrexit nopipefail
-  local base; base="$(rip::remote_base)"
+  local REPLY
+  rip::remote_base_r; local base="$REPLY"
   # NO `find -printf` here: it is a GNU extension that stock BSD/macOS find
   # rejects outright, and this same script runs BOTH remotely (Linux) and
   # locally (the hermetic tests' plain-directory remote base, on macOS).
@@ -3629,10 +3863,35 @@ rip::_server_sidecars() {
   # finding 2026-08-24). The output CONTRACT is unchanged — still one JSON
   # object per readable sidecar, `_path` attached — only a new stderr
   # warning is added for the ones that don't parse.
+  #
+  # ONE jq FOR THE WHOLE LIBRARY, where it used to be one per book (258 books:
+  # 258 processes, over a second, on every sweep, repair and folder import).
+  # It answers one line per stored line: the finished row, or "!" for any line
+  # it will not vouch for — no TAB, bytes that are not UTF-8, or text that is
+  # not exactly one JSON object. Such a line goes through the one-book call
+  # below exactly as every line used to, so what a damaged sidecar yields (a
+  # row, part of one, or the warning) is still decided by that call alone.
+  # The answers are used only if there is one per line; a jq that is missing
+  # or died sends every line the old way.
   local line rel json out
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
+  local -a lines=(${(f)raw}) batch=()
+  if (( ${#lines} )); then
+    batch=("${(@f)$(jq -Rc "$_RIP_JQ_IDS_DEF"'
+      . as $l | ($l | split("\t")) as $parts
+      | if ($parts | length) < 2 or ($l | contains("\ufffd")) then "!"
+        else (try ($parts[1:] | join("\t") | fromjson) catch null) as $v
+          | if ($v | type) == "object" then ($v | _ids_fix | . + {_path: $parts[0]}) else "!" end
+        end' <<< "${(F)lines}" 2>/dev/null)}")
+    (( ${#batch} == ${#lines} )) || batch=()
+  fi
+  local -i li=0
+  for line in "${lines[@]}"; do
+    (( ++li ))
     rel="${line%%$'\t'*}"; json="${line#*$'\t'}"
+    if [[ "${batch[li]:-}" == \{* ]]; then
+      print -r -- "${batch[li]}"
+      continue
+    fi
     # NORMALIZE `ids` HERE, at the boundary (review finding, 2026-08-25). A
     # sidecar written from a Lua-encoded plan can carry `"ids": []` instead of
     # `{}` (see _RIP_JQ_IDS_DEF), and every downstream reader of these rows
@@ -3643,13 +3902,13 @@ rip::_server_sidecars() {
     # rip::ab_editions, rip::_stored_sha_index and rip::_sidecar_index alike.
     # The two indexes coerce again on their own: they carry their own stdin
     # contracts and must not depend on who fed them.
-    out="$(print -r -- "$json" | jq -c --arg p "$rel" "$_RIP_JQ_IDS_DEF"'_ids_fix | . + {_path:$p}' 2>/dev/null)"
+    out="$(jq -c --arg p "$rel" "$_RIP_JQ_IDS_DEF"'_ids_fix | . + {_path:$p}' <<< "$json" 2>/dev/null)"
     if [[ -n "$out" ]]; then
       print -r -- "$out"
     else
       log_warn "rip: malformed sidecar for $rel — skipped"
     fi
-  done <<< "$raw"
+  done
 }
 
 # rip::_stored_sha_index — "<sha256>\t<Author>/<Title>" for every stored book
@@ -3862,14 +4121,15 @@ rip::ab_backfill_published() {
   [[ "${1:-}" == "--apply" ]] && apply=1
 
   # asin -> published, from the provider's library rows.
-  local provider_bin; provider_bin="$(rip::ab_provider_bin libation)"
+  local REPLY provider_bin=""
+  rip::ab_provider_bin_r libation && provider_bin="$REPLY"
   local map
   map="$("$provider_bin" list 2>/dev/null \
     | jq -s -c 'map(select((.published // "") != "" and (.id // "") != ""))
                 | map({key: .id, value: .published}) | from_entries' 2>/dev/null)"
   [[ -n "$map" ]] || map='{}'
 
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
   # $to_fill holds "<rel>\t<date>" for the dry-run report and the tallies;
   # $to_fill_json holds the SAME books' stored JSON, index for index, because
   # the replacement sidecar is composed HERE (see rip::_sidecars_write
@@ -3891,17 +4151,17 @@ rip::ab_backfill_published() {
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     (( seen++ ))
-    rel="$(print -r -- "$line" | jq -r '._path // ""' 2>/dev/null)"
+    rel="$(jq -r '._path // ""' <<< "$line" 2>/dev/null)"
     [[ -n "$rel" ]] || continue
-    have="$(print -r -- "$line" | jq -r '.published // ""' 2>/dev/null)"
+    have="$(jq -r '.published // ""' <<< "$line" 2>/dev/null)"
     [[ -z "$have" ]] || continue          # already dated — never rewritten
-    asin="$(print -r -- "$line" | jq -r '.ids["audible.asin"] // ""' 2>/dev/null)"
+    asin="$(jq -r '.ids["audible.asin"] // ""' <<< "$line" 2>/dev/null)"
     if [[ -z "$asin" ]]; then
       log_warn "rip: no ASIN in the sidecar for $rel — cannot backfill"
       (( no_asin++ ))
       continue
     fi
-    want="$(print -r -- "$map" | jq -r --arg a "$asin" '.[$a] // ""' 2>/dev/null)"
+    want="$(jq -r --arg a "$asin" '.[$a] // ""' <<< "$map" 2>/dev/null)"
     if [[ -z "$want" ]]; then
       log_warn "rip: no provider row for $rel ($asin) — leaving it undated"
       (( no_row++ ))
@@ -4080,10 +4340,11 @@ rip::ab_backfill_published() {
 # this verb must never make on the operator's real library.
 rip::ab_backfill_work_uid() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local apply=0
   [[ "${1:-}" == "--apply" ]] && apply=1
 
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
   # $to_fill holds the "<rel>" of every null-`work` candidate, for the
   # dry-run report and the tallies; $to_fill_json holds the SAME books'
   # stored JSON, index for index — composing the replacement sidecar needs
@@ -4114,12 +4375,12 @@ rip::ab_backfill_work_uid() {
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     (( seen++ ))
-    rel="$(print -r -- "$line" | jq -r '._path // ""' 2>/dev/null)"
+    rel="$(jq -r '._path // ""' <<< "$line" 2>/dev/null)"
     [[ -n "$rel" ]] || continue
     # `.work` present and non-null — an object with `edition: null` (a bare
     # anchor) is STILL non-null and must be left alone; only genuine absence
     # (missing key or a literal `null`) is a candidate.
-    has_work="$(print -r -- "$line" | jq -r 'if (.work // null) == null then "" else "x" end' 2>/dev/null)"
+    has_work="$(jq -r 'if (.work // null) == null then "" else "x" end' <<< "$line" 2>/dev/null)"
     [[ -z "$has_work" ]] || continue      # already anchors a work — never rewritten
     to_fill+=("$rel")
     to_fill_json+=("$line")
@@ -4526,10 +4787,11 @@ exit 0'
 # rewrites that book will re-key it then.
 rip::ab_retag() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local apply=0
   [[ "${1:-}" == "--apply" ]] && apply=1
 
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
 
   local rows sidecars_rc=0
   rows="$(rip::_server_sidecars)" || sidecars_rc=$?
@@ -4606,7 +4868,8 @@ rip::ab_retag() {
   # a working retag into a failure; what must never happen is a silent gap, and
   # "I could not check" is not silence.
   local lib="" lib_rc=0 librel
-  lib="$(rip::ab_server_library)" || lib_rc=$?
+  rip::ab_server_library_r || lib_rc=$?
+  lib="$REPLY"
   if (( lib_rc != 0 )); then
     log_warn "rip: could not list the stored book directories — cannot say whether a book is missing its sidecar and was skipped for that reason"
   else
@@ -4837,13 +5100,14 @@ rip::ab_retag() {
 # books and this runs per plan item, inside the acquire loop.
 rip::_remote_sidecar_json() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   # NFC, for the same reason rip::_remote_test normalizes: the server is
   # NFC-canonical (the push's --iconv guarantees it) and this relpath is
   # composed from a plan the panel built out of local folder names, which
   # macOS keeps in whatever form they were created.
-  local rel; rel="$(rip::_nfc "${1:-}")"
+  rip::_nfc_r "${1:-}"; local rel="$REPLY"
   [[ -n "$rel" ]] || return 1
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
   local raw rc=0
   if [[ "$base" == *:* ]]; then
     local ssh_bin="${RIP_SSH_BIN:-ssh}"
@@ -4874,7 +5138,7 @@ rip::_remote_sidecar_json() {
     raw="$(cat -- "$lfile" 2>/dev/null)" || return 2
   fi
   [[ -n "$raw" ]] || return 2
-  print -r -- "$raw" | jq -e . >/dev/null 2>&1 || return 2
+  jq -e . <<< "$raw" >/dev/null 2>&1 || return 2
   print -r -- "$raw"
   return 0
 }
@@ -4915,6 +5179,7 @@ rip::_remote_sidecar_json() {
 # attempted, which is this module's recurring defect class.
 rip::_ab_anchor_work_uid() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local rel="${1:-}" stored="${2:-}" uid="${3:-}"
   [[ -n "$rel" && -n "$stored" && -n "$uid" ]] || return 1
   local patched
@@ -4928,7 +5193,7 @@ rip::_ab_anchor_work_uid() {
   local payload; payload="$(rip::_sidecar_payload "$rel" "$patched")"
   # Never ship a half-composed payload: the remote would write it.
   [[ -n "$payload" && "$payload" == *$'\t'* ]] || return 1
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
   local out; out="$(rip::_sidecars_write "$base" "$payload")"
   [[ "$out" == ok$'\t'* ]] || return 1
   return 0
@@ -4989,7 +5254,8 @@ rip::_ab_anchor_work_uid() {
 # compared against the one the remote `cat --` used.
 rip::_ab_work_uid_for() {
   setopt localoptions noerrexit nopipefail
-  local rel; rel="$(rip::_nfc "${1:-}")"
+  local REPLY
+  rip::_nfc_r "${1:-}"; local rel="$REPLY"
   local stored="" rc=1
   if [[ -n "$rel" ]]; then
     stored="$(rip::_remote_sidecar_json "$rel")"; rc=$?
@@ -5313,10 +5579,11 @@ done'
 # cron wrapper cannot read a partial sweep as a finished one.
 rip::ab_repair_sidecars() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local apply=0
   [[ "${1:-}" == "--apply" ]] && apply=1
 
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
 
   # (1) what the server HOLDS and (2) which of those carry a sidecar. Both are
   # captured as VALUES so their failure propagates: read through `< <(...)` an
@@ -5324,7 +5591,8 @@ rip::ab_repair_sidecars() {
   # "nothing to repair" for a server we never reached is the exact failure
   # this verb exists to catch.
   local lib rows
-  lib="$(rip::ab_server_library)" || return 2
+  rip::ab_server_library_r || return 2
+  lib="$REPLY"
   rows="$(rip::_server_sidecars)" || return 2
 
   # (3) the provider's rows — the only place a recoverable identity can come
@@ -5333,7 +5601,7 @@ rip::ab_repair_sidecars() {
   # locally minted uid it can never lose. REFUSE rather than guess.
   local pname="${RIP_AB_PROVIDER:-libation}"
   local pbin prows=""
-  pbin="$(rip::ab_provider_bin "$pname")" || return 2
+  rip::ab_provider_bin_r "$pname" || return 2; pbin="$REPLY"
   prows="$("$pbin" list 2>/dev/null)"
   if [[ -z "$prows" ]]; then
     log_error "rip: the $pname provider returned no rows — refusing to classify book identity against an empty library"
@@ -5357,7 +5625,7 @@ rip::ab_repair_sidecars() {
   local irel istate iprov iasin iuid ijson
   while IFS=$'\t' read -r irel istate iprov iasin iuid ijson; do
     [[ -n "$irel" ]] || continue
-    irel="$(rip::_nfc "$irel")"
+    rip::_nfc_r "$irel"; irel="$REPLY"
     sc_state[$irel]="$istate"; sc_prov[$irel]="$iprov"
     sc_uid[$irel]="$iuid";     sc_json[$irel]="$ijson"
     # "-" is _sidecar_index's NEVER-EMPTY filler, not an identifier: it must
@@ -5376,7 +5644,7 @@ rip::ab_repair_sidecars() {
   local ppath pid prow ptitle
   while IFS=$'\t' read -r ppath pid prow; do
     [[ -n "$ppath" ]] || continue
-    ppath="$(rip::_nfc "$ppath")"
+    rip::_nfc_r "$ppath"; ppath="$REPLY"
     [[ -n "${prow_of[$ppath]:-}" ]] || prow_of[$ppath]="$pid"$'\t'"$prow"
     ptitle="${ppath##*/}"
     if [[ -n "${ptitle_rows[$ptitle]:-}" ]]; then
@@ -5402,7 +5670,7 @@ rip::ab_repair_sidecars() {
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
     (( checked++ ))
-    nrel="$(rip::_nfc "$rel")"
+    rip::_nfc_r "$rel"; nrel="$REPLY"
 
     if [[ -z "${sc_state[$nrel]:-}" ]]; then
       # CASE A — no sidecar at all. EXACT composed-path join only: no fuzzy
@@ -5935,10 +6203,11 @@ done
 # total failure as success.
 rip::ab_repair_companions() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local apply=0
   [[ "${1:-}" == "--apply" ]] && apply=1
 
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
 
   # THE ENUMERATION FIRST, and its failure is fatal. An unreachable server
   # yields an empty list, which without this refusal reads as "every stored
@@ -6010,7 +6279,7 @@ rip::ab_repair_companions() {
            sha256: (if (.[3] // "") == "" then null else .[3] end)} ]
        | sort_by(.file) | tojson)'
   local crc=0
-  comp_lines="$(print -r -- "$listing" | jq -rRs "$comp_prog" 2>/dev/null)" || crc=$?
+  comp_lines="$(jq -rRs "$comp_prog" <<< "$listing" 2>/dev/null)" || crc=$?
   if (( crc != 0 )); then
     log_error "rip: could not read the server file listing — nothing recorded"
     return 2
@@ -6060,7 +6329,7 @@ rip::ab_repair_companions() {
     comp="${computed[$d]}"
     [[ -n "$comp" ]] || comp='[]'
     jrc=0
-    out="$(print -r -- "${json_of[$d]}" | jq -r --argjson c "$comp" "$cmp_prog" 2>/dev/null)" || jrc=$?
+    out="$(jq -r --argjson c "$comp" "$cmp_prog" <<< "${json_of[$d]}" 2>/dev/null)" || jrc=$?
     if (( jrc != 0 )); then
       # NEVER write on a failure: an empty or half-composed payload would
       # replace a good sidecar with nothing.
@@ -6203,14 +6472,15 @@ rip::ab_repair_companions() {
 # fresh ingest.
 rip::ab_adopt_asin() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local rel="${1:-}" asin="${2:-}" apply=0
   [[ "${3:-}" == "--apply" ]] && apply=1
   [[ -n "$rel" ]]  || { log_error "rip: adopt needs \"<Author>/<Title>\""; return 2 }
   [[ -n "$asin" ]] || { log_error "rip: adopt needs an ASIN — typing it IS the confirmation"; return 2 }
 
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
   local pname="${RIP_AB_PROVIDER:-libation}"
-  local pbin; pbin="$(rip::ab_provider_bin "$pname")" || return 2
+  rip::ab_provider_bin_r "$pname" || return 2; local pbin="$REPLY"
   local prows; prows="$("$pbin" list 2>/dev/null)"
 
   # GUARD 1.
@@ -6223,7 +6493,7 @@ rip::ab_adopt_asin() {
   fi
 
   local rows; rows="$(rip::_server_sidecars)" || return 2
-  local nrel; nrel="$(rip::_nfc "$rel")"
+  rip::_nfc_r "$rel"; local nrel="$REPLY"
   # srel is the SERVER's own spelling of the path — what gets written to.
   # dup_rel is GUARD 5's evidence: the index is already in hand, so the same
   # single pass that finds this book also notices any OTHER book already
@@ -6233,7 +6503,8 @@ rip::ab_adopt_asin() {
   local irel istate iprov iasin iuid ijson
   while IFS=$'\t' read -r irel istate iprov iasin iuid ijson; do
     [[ -n "$irel" ]] || continue
-    if [[ -z "$srel" ]] && { [[ "$irel" == "$nrel" ]] || [[ "$(rip::_nfc "$irel")" == "$nrel" ]] }; then
+    rip::_nfc_r "$irel"
+    if [[ -z "$srel" ]] && { [[ "$irel" == "$nrel" ]] || [[ "$REPLY" == "$nrel" ]] }; then
       srel="$irel"; have_asin="$iasin"; oldjson="$ijson"
       continue
     fi
@@ -6305,10 +6576,10 @@ rip::ab_adopt_asin() {
   if (( ! apply )); then
     print -r -- "would adopt: $rel"
     print -r -- "  ASIN         : $asin"
-    print -r -- "  from row     : $(print -r -- "$row" | jq -r '.path // "?"' 2>/dev/null)"
-    print -r -- "  published    : $(print -r -- "$merged" | jq -r '.published // "null"' 2>/dev/null)"
-    print -r -- "  narrators    : $(print -r -- "$merged" | jq -r '(.narrators // []) | join(", ")' 2>/dev/null)"
-    print -r -- "  provider     : $(print -r -- "$merged" | jq -r '.source.provider // "?"' 2>/dev/null)"
+    print -r -- "  from row     : $(jq -r '.path // "?"' <<< "$row" 2>/dev/null)"
+    print -r -- "  published    : $(jq -r '.published // "null"' <<< "$merged" 2>/dev/null)"
+    print -r -- "  narrators    : $(jq -r '(.narrators // []) | join(", ")' <<< "$merged" 2>/dev/null)"
+    print -r -- "  provider     : $(jq -r '.source.provider // "?"' <<< "$merged" 2>/dev/null)"
     print -r -- "(re-run with --apply)"
     return 0
   fi
@@ -6341,10 +6612,11 @@ rip::ab_adopt_asin() {
 # distinct first-authors, and punctuation-and-case normalization catches it.
 #
 # The key is for COMPARISON ONLY. Never name a directory with it.
-rip::_author_norm() {
+rip::_author_norm_r() {
   local n="${(L)1}"
-  print -r -- "${n//[^a-z0-9]/}"
+  REPLY="${n//[^a-z0-9]/}"
 }
+rip::_author_norm() { local REPLY; rip::_author_norm_r "$1"; print -r -- "$REPLY" }
 
 # rip::_author_display <name> — the canonical DISPLAY form: initials get a
 # space after their period. This is a DIFFERENT job from _author_norm above:
@@ -6385,7 +6657,8 @@ rip::_author_norm() {
 # A left-to-right scan that only ever consumes the period never has that
 # problem. Idempotent by construction: once a period is followed by a
 # space, the "immediately another letter" condition no longer holds.
-rip::_author_display() {
+rip::_author_display() { local REPLY; rip::_author_display_r "$1"; print -r -- "$REPLY" }
+rip::_author_display_r() {
   local s="$1"
   local -a chars
   chars=("${(@s::)s}")
@@ -6404,7 +6677,7 @@ rip::_author_display() {
       fi
     fi
   done
-  print -r -- "$out"
+  REPLY="$out"
 }
 
 # rip::_server_authors — the distinct author spellings the server holds.
@@ -6417,7 +6690,13 @@ rip::_server_authors() {
   setopt localoptions noerrexit nopipefail
   if [[ -z "${_RIP_SERVER_AUTHORS_FETCHED:-}" ]]; then
     _RIP_SERVER_AUTHORS_FETCHED=1
-    _RIP_SERVER_AUTHORS="$(rip::ab_server_library 2>/dev/null | sed 's|/.*||' | sort -u)"
+    # Each line cut at its first "/" here (it was `| sed 's|/.*||'`), and the
+    # listing taken without a subshell; the order is still sort's own, because
+    # rip::_canonical_author returns the FIRST matching spelling.
+    local REPLY
+    rip::ab_server_library_r 2>/dev/null
+    local -a lib_lines=("${(@f)REPLY}")
+    _RIP_SERVER_AUTHORS="$(sort -u <<< "${(F)${(@)lib_lines%%/*}}")"
   fi
   print -r -- "$_RIP_SERVER_AUTHORS"
 }
@@ -6431,10 +6710,17 @@ rip::_server_authors() {
 # forms. Never fails — an unreachable server simply yields the input, and the
 # book lands under its original spelling exactly as it does today.
 rip::_canonical_author() {
+  local REPLY
+  rip::_canonical_author_r "$1"
+  [[ -n "$1" ]] || return 0   # an empty name prints nothing at all
+  print -r -- "$REPLY"
+}
+rip::_canonical_author_r() {
   setopt localoptions noerrexit nopipefail
   local name="$1"
+  REPLY=""
   [[ -n "$name" ]] || return 0
-  local want; want="$(rip::_author_norm "$name")"
+  rip::_author_norm_r "$name"; local want="$REPLY"
   # Call as a plain command, not inside `< <(...)` or `$(...)` — either forks
   # a subshell, and the cache assignments rip::_server_authors makes would
   # die with that subshell instead of surviving in THIS shell. Discard its
@@ -6443,7 +6729,8 @@ rip::_canonical_author() {
   local existing
   for existing in ${(f)_RIP_SERVER_AUTHORS}; do
     [[ -n "$existing" ]] || continue
-    if [[ "$existing" != "$name" && "$(rip::_author_norm "$existing")" == "$want" ]]; then
+    rip::_author_norm_r "$existing"
+    if [[ "$existing" != "$name" && "$REPLY" == "$want" ]]; then
       # THE CANONICAL DISPLAY FORM BEATS THE SERVER'S RAW SPELLING (review
       # finding F2, 2026-08-26). "The server wins" converges two arbitrary
       # spellings, which is what this function is for — but rip::_author_norm
@@ -6456,15 +6743,16 @@ rip::_canonical_author() {
       # when it is exactly rip::_author_display of the server's still
       # converges — the sweep moves the server to that same form — and it
       # converges on the RIGHT one, first time, without a remux.
-      if [[ "$(rip::_author_display "$existing")" == "$name" ]]; then
-        print -r -- "$name"
+      rip::_author_display_r "$existing"
+      if [[ "$REPLY" == "$name" ]]; then
+        REPLY="$name"
         return 0
       fi
-      print -r -- "$existing"
+      REPLY="$existing"
       return 0
     fi
   done
-  print -r -- "$name"
+  REPLY="$name"
 }
 
 # rip::_canonicalize_staged_authors <src> — rename each staged author dir to
@@ -6497,11 +6785,16 @@ rip::_canonicalize_staged_authors() {
   # command HERE, ahead of any fork, means every subsequent `$(...)` in
   # the loop inherits an already-populated cache and does no ssh at all.
   rip::_server_authors >/dev/null
+  local REPLY
   local dir name canon book title
   local -a staged_titles=() moved=()
   for dir in "${authors[@]}"; do
     name="${dir:t}"
-    canon="$(rip::_canonical_author "$name")"
+    # As `canon="$(rip::_canonical_author "$name")"` captured it, trailing
+    # newlines dropped, without the subshell (and one more per server author
+    # inside it).
+    rip::_canonical_author_r "$name"; canon="$REPLY"
+    while [[ "$canon" == *$'\n' ]]; do canon="${canon%$'\n'}"; done
     [[ "$canon" == "$name" ]] && continue
     # Snapshot the book names BEFORE the move so the re-key below can tell,
     # per book, which ones actually ended up under $canon. Both branches
@@ -6518,7 +6811,7 @@ rip::_canonicalize_staged_authors() {
             || log_warn "rip: could not move ${book:t} into $canon"
         fi
       done
-      rmdir -- "$dir" 2>/dev/null
+      rip::_rmdir "$dir"
     else
       mv -- "$dir" "$src/$canon" 2>/dev/null \
         || log_warn "rip: could not rename $name to $canon"
@@ -6575,11 +6868,12 @@ rip::_canonicalize_staged_authors() {
 # item present — is worse than one left alone.
 rip::ab_retire() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local rel="$1" apply=0
   [[ "${2:-}" == "--apply" ]] && apply=1
   [[ -n "$rel" ]] || { log_error "rip: retire needs \"<Author>/<Title>\""; return 2 }
 
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
   # Membership in the server's OWN listing, not a guessed filename.
   # rip::_remote_has_file tests one file, and "<Title>/<Title>.m4b" is only
   # Libation's convention — a manual import carries whatever filename it was
@@ -6721,6 +7015,7 @@ rip::ab_retire() {
 # live 2026-08-23). Hence move, then repoint, then delete the emptied author.
 rip::ab_canonicalize_authors() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local apply=0
   [[ "${1:-}" == "--apply" ]] && apply=1
 
@@ -6732,7 +7027,8 @@ rip::ab_canonicalize_authors() {
   # seen==0 branch, and rip::ab_retire already refuses this way. (Review
   # finding 3, 2026-08-24.)
   local lib
-  lib="$(rip::ab_server_library)" || return 2
+  rip::ab_server_library_r || return 2
+  lib="$REPLY"
 
   local -A spelling_count=()
   local rel author
@@ -6752,7 +7048,7 @@ rip::ab_canonicalize_authors() {
   local -A groups=()
   local key
   for author in "${(@k)spelling_count}"; do
-    key="$(rip::_author_norm "$author")"
+    rip::_author_norm_r "$author"; key="$REPLY"
     groups[$key]="${groups[$key]:-}${groups[$key]:+$nl}$author"
   done
 
@@ -6787,14 +7083,14 @@ rip::ab_canonicalize_authors() {
         canon="$a"
       fi
     done
-    target="$(rip::_author_display "$canon")"
+    rip::_author_display_r "$canon"; target="$REPLY"
     for a in "${vlist[@]}"; do
       target_for[$a]="$target"
     done
   done
 
   # PASS 2 — report, and under --apply perform, the directory moves.
-  local base; base="$(rip::remote_base)"
+  rip::remote_base_r; local base="$REPLY"
   local found=0 swept_fail=0
   local -i unpointed=0
   for key in "${group_keys[@]}"; do
@@ -6866,7 +7162,7 @@ rip::ab_canonicalize_authors() {
   local -a idx_lines=()
   [[ -n "$idx" ]] && idx_lines=("${(@f)idx}")
   local -a sc_payloads=()
-  local sline srel sauth sdir seff snew payload
+  local sline srel sauth sdir seff snew payload sauth_key
   local -i sc_seen=0
   for sline in "${idx_lines[@]}"; do
     [[ "$sline" == *$'\t'* ]] || continue
@@ -6890,9 +7186,11 @@ rip::ab_canonicalize_authors() {
     # The narrow guard: same person, different spelling. rip::_author_norm is
     # the module's comparison key and the same one the collision rule uses;
     # anything looser and this sweep would quietly rewrite a pen name.
-    # Reached only by rows that already failed the cheap equality above, so
-    # it forks for the handful that differ, not for all 248.
-    [[ "$(rip::_author_norm "$sauth")" == "$(rip::_author_norm "$seff")" ]] || continue
+    # Reached only by rows that already failed the cheap equality above (and
+    # no longer forks even for those).
+    rip::_author_norm_r "$sauth"; sauth_key="$REPLY"
+    rip::_author_norm_r "$seff"
+    [[ "$sauth_key" == "$REPLY" ]] || continue
     found=1
     (( sc_seen )) || print -r -- "sidecar author spellings to correct:"
     sc_seen=1
@@ -7232,14 +7530,15 @@ rip::_canonicalize_one_author() {
 # rather than the path-derived fallback.
 rip::ab_import() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local src="$1" author="$2" title="$3"
   [[ -n "$src" ]] || { log_error "rip: import needs a source path"; return 2 }
   [[ -e "$src" ]] || { log_error "rip: no such source: $src"; return 2 }
   rip::_check_title "$author" || return 2
   rip::_check_title "$title" || return 2
 
-  local root; root="$(rip::staging_for audiobooks)"
-  local rel; rel="$(rip::_nfc "$author/$title")"
+  rip::staging_for_r audiobooks; local root="$REPLY"
+  rip::_nfc_r "$author/$title"; local rel="$REPLY"
   local dest="$root/$rel"
   # Refuse only when the destination actually holds real files. The glob
   # ("$dest"/*(N)) is deliberately dot-blind — zsh's bare `*` never matches
@@ -7341,8 +7640,8 @@ rip::ab_import() {
   }
 
   # Record identity in the meta index
-  local index; index="$(rip::_ab_meta_index_default)"
-  mkdir -p "${index:h}"
+  rip::_ab_meta_index_default_r; local index="$REPLY"
+  rip::_mkdir_p "${index:h}"
   # Format is operator-supplied and goes through --arg to prevent injection.
   # Omit the key if no format was detected (sidecar writer's default applies).
   if [[ -n "$detected_fmt" ]]; then
@@ -7423,12 +7722,13 @@ rip::_validate_ab_plan() {
 # under a subdir (the disc session's own hard-won rule).
 rip::ab_enqueue() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   local plan="$1"
   [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
   rip::_validate_ab_plan "$plan" || return 2
 
-  local work_dir; work_dir="$(rip::staging_root)/.work/ab-plans"
-  mkdir -p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
+  rip::staging_root_r; local work_dir="$REPLY/.work/ab-plans"
+  rip::_mkdir_p "$work_dir" || { log_error "rip: cannot create $work_dir"; return 1 }
   local queued="$work_dir/ab-$$-$RANDOM.json"
   cp -- "$plan" "$queued" || { log_error "rip: cannot stage the session plan at $queued"; return 1 }
 
@@ -7436,7 +7736,7 @@ rip::ab_enqueue() {
   local title="$n books"
   (( n == 1 )) && title="$(jq -r '.items[0].title // .items[0].path' "$plan")"
 
-  rip::_load_jobs || { log_error "rip: job runner unavailable"; rm -f -- "$queued"; return 1 }
+  rip::_load_jobs || { log_error "rip: job runner unavailable"; rip::_rm_f "$queued"; return 1 }
   job::start --group heavy --title "rip audiobooks: $title" --icon "$RIP_JOB_ICON" \
     -- "$RIP_BIN_DIR/rip-audiobook" --session-worker "$queued"
 }
@@ -7453,15 +7753,23 @@ rip::ab_enqueue() {
 # this file's `[[ ]]` glob matches needs it — `<->` is a separate zsh
 # operator that works unconditionally — so this is the one function that
 # has to ask for it.
-rip::_sha256_of() {
+rip::_sha256_of() { local REPLY; rip::_sha256_of_r "$1" && print -r -- "$REPLY" }
+# REPLY = the digest, or "" with rc 1. The tool's line is "<hex>  <name>"; the
+# first field is cut here instead of by a `| cut` process. A reply of more
+# than one line was never a digest (`cut` gave one field per line, which the
+# hex test below refused), so it is refused here too.
+rip::_sha256_of_r() {
   setopt localoptions noerrexit nopipefail extendedglob
   local f="$1" out=""
+  REPLY=""
   if command -v sha256sum >/dev/null 2>&1; then
-    out="$(sha256sum -- "$f" 2>/dev/null | cut -d' ' -f1)"
+    out="$(sha256sum -- "$f" 2>/dev/null)"
   elif command -v shasum >/dev/null 2>&1; then
-    out="$(shasum -a 256 -- "$f" 2>/dev/null | cut -d' ' -f1)"
+    out="$(shasum -a 256 -- "$f" 2>/dev/null)"
   fi
-  [[ "$out" == [0-9a-f]## ]] && print -r -- "$out"
+  [[ "$out" == *$'\n'* ]] && out=""
+  out="${out%% *}"
+  [[ "$out" == [0-9a-f]## ]] && REPLY="$out"
 }
 
 # rip::ab_worker <plan.json> — the enqueued body, two phases in one capsule:
@@ -7483,13 +7791,14 @@ rip::_sha256_of() {
 #     nothing else ever reclaims it.
 rip::ab_worker() {
   setopt localoptions noerrexit nopipefail
+  local REPLY
   rip::_load_jobs || true # see rip::push_worker: sidecar writes need job.zsh in-process
   local plan="$1"
   [[ -f "$plan" ]] || { log_error "rip: no such session plan: $plan"; return 2 }
   rip::_validate_ab_plan "$plan" || return 2
 
   local provider; provider="$(jq -r '.provider // "libation"' "$plan")"
-  local bin; bin="$(rip::ab_provider_bin "$provider")" || return 2
+  rip::ab_provider_bin_r "$provider" || return 2; local bin="$REPLY"
   # ONE source of truth for both the acquire destination and the push
   # source: rip::staging_for audiobooks (the RIP_AB_STAGING seam) IS the
   # dir rip::push_worker reads from AND the dir the provider is told to
@@ -7502,8 +7811,8 @@ rip::ab_worker() {
   # another, silently losing the session to an empty push (review finding,
   # 2026-08-22). Both roles now share this one variable so that bug class
   # cannot recur.
-  local ab_root; ab_root="$(rip::staging_for audiobooks)"
-  mkdir -p "$ab_root" || { log_error "rip: cannot create $ab_root"; return 1 }
+  rip::staging_for_r audiobooks; local ab_root="$REPLY"
+  rip::_mkdir_p "$ab_root" || { log_error "rip: cannot create $ab_root"; return 1 }
 
   # The meta index the enrichment stage reads: every item's row, keyed by
   # path. STABLE path now (review finding, 2026-08-22), not a $$-suffixed
@@ -7515,8 +7824,8 @@ rip::ab_worker() {
   # rows (heavy-group parallelism is 1, but a prior session's push can
   # still be sitting there having failed verify, kept staged for a manual
   # `rip-push audiobooks` retry per the failure-honesty rule below).
-  local index; index="$(rip::_ab_meta_index_default)"
-  mkdir -p "${index:h}"
+  rip::_ab_meta_index_default_r; local index="$REPLY"
+  rip::_mkdir_p "${index:h}"
   [[ -f "$index" ]] || : > "$index"
   local idx_tmp="$index.tmp.$$"
   # `_ids_fix` on every row: THIS is where a plan enters the meta index, and
@@ -7534,8 +7843,8 @@ rip::ab_worker() {
     | reduce .[] as $r ({}; .[$r.path] = $r)
     | .[]
   ' "$index" <(jq -c '(.items // [])[]' "$plan" 2>/dev/null) > "$idx_tmp" 2>/dev/null \
-    && mv -f -- "$idx_tmp" "$index" \
-    || { log_warn "rip: could not update the meta index at $index — enrichment for this batch may fall back to minimal identity"; rm -f -- "$idx_tmp" }
+    && rip::_mv_f "$idx_tmp" "$index" \
+    || { log_warn "rip: could not update the meta index at $index — enrichment for this batch may fall back to minimal identity"; rip::_rm_f "$idx_tmp" }
 
   local -a items=()
   # NOTE: every local var below is declared HERE, once, including the loop
@@ -7580,6 +7889,7 @@ rip::ab_worker() {
   local -A pre_dirs=()
   local -a landed=()
   local pre_d bdir actual primary sha
+  local -a m4bs
   local ed_suffix base_rel base_raw base_rk work_uid
   # THE RE-KEY LEDGER, declared HERE with the other loop locals for the same
   # reason batch_work_uid is (a `local` re-run in the loop body prints
@@ -7703,10 +8013,12 @@ rip::ab_worker() {
       if [[ -f "$id" ]]; then
         primary="$id"
       else
-        primary="$(print -rl -- "$id"/*.m4b(N) | head -1)"
+        # The first .m4b of the directory (it was `print -rl … | head -1`).
+        m4bs=("$id"/*.m4b(N))
+        primary="${m4bs[1]:-}"
       fi
       if [[ -n "$primary" ]]; then
-        sha="$(rip::_sha256_of "$primary")"
+        rip::_sha256_of_r "$primary"; sha="$REPLY"
         if [[ $sha_idx_rc -eq 0 && -n "$sha" && -n "${stored_sha[$sha]:-}" ]]; then
           log_error "rip: $bpath is already stored as \"${stored_sha[$sha]}\" (identical bytes) — skipping"
           dup=$(( dup + 1 ))
@@ -7722,8 +8034,8 @@ rip::ab_worker() {
           jq -c --arg p "$bpath" --arg s "$sha" \
             "$_RIP_JQ_IDS_DEF"'if .path == $p then .ids = ((.ids | _ids_obj) + {"local.sha256": $s}) else . end' \
             "$index" > "$index.tmp" \
-            && mv -f -- "$index.tmp" "$index" \
-            || { rm -f -- "$index.tmp"; log_warn "rip: could not record the local hash for $bpath in the meta index — its identity will not be assigned this push" }
+            && rip::_mv_f "$index.tmp" "$index" \
+            || { rip::_rm_f "$index.tmp"; log_warn "rip: could not record the local hash for $bpath in the meta index — its identity will not be assigned this push" }
         fi
       fi
     fi
@@ -7769,7 +8081,7 @@ rip::ab_worker() {
       # NFC on the KEY as well, for the same reason rip::_ab_work_uid_for
       # normalizes its argument: two spellings of one directory must be ONE
       # entry in this table, not two.
-      [[ -n "$base_rel" ]] && base_rel="$(rip::_nfc "$base_rel")"
+      if [[ -n "$base_rel" ]]; then rip::_nfc_r "$base_rel"; base_rel="$REPLY"; fi
       # The memo (see batch_work_uid above) is consulted BEFORE the server:
       # a second edition of a base this batch already resolved must reuse
       # that answer whether the base is stored or not.
@@ -7834,8 +8146,8 @@ rip::ab_worker() {
              then .work = {uid: $u, edition: null}
            else . end' \
           "$index" > "$index.tmp" \
-          && mv -f -- "$index.tmp" "$index" \
-          || { rm -f -- "$index.tmp"; log_warn "rip: could not record the work uid for $bpath in the meta index — this edition will ship without one" }
+          && rip::_mv_f "$index.tmp" "$index" \
+          || { rip::_rm_f "$index.tmp"; log_warn "rip: could not record the work uid for $bpath in the meta index — this edition will ship without one" }
       fi
     fi
     rip::_progress "$base" "downloading — ${bpath:t}"
@@ -7927,7 +8239,7 @@ rip::ab_worker() {
         # match, silently falling back to the path-derived minimal identity.
         # Same bug class as 21322287 (NFC-canonical server names) in this
         # same file.
-        actual="${bpath%%/*}/$(rip::_nfc "${landed[1]:t}")"
+        rip::_nfc_r "${landed[1]:t}"; actual="${bpath%%/*}/$REPLY"
         if [[ "$actual" == "$bpath" ]]; then
           # The composed path itself, reached through the fallback (its NFC
           # form equals the plan's). Nothing diverged, so there is nothing to
@@ -7940,7 +8252,7 @@ rip::ab_worker() {
           rekeyed[$bpath]="$actual"
           jq -c --arg old "$bpath" --arg new "$actual" \
             'if .path == $old then .path = $new else . end' "$index" > "$index.tmp" \
-            && mv -f -- "$index.tmp" "$index"
+            && rip::_mv_f "$index.tmp" "$index"
           bdir="${landed[1]}"
         fi
       fi
@@ -7969,7 +8281,7 @@ rip::ab_worker() {
       continue
     fi
   done
-  rm -f -- "$plan"
+  rip::_rm_f "$plan"
   (( refused > 0 )) && log_error "rip: $refused already on cantina — skipped"
   (( dup > 0 )) && log_error "rip: $dup already stored (identical bytes) — skipped"
 
@@ -7998,7 +8310,7 @@ rip::ab_worker() {
   # total download time — still finds it. heavy-group parallelism is
   # pinned to 1 (job::_ensure_group), so no second ab_worker can be
   # mid-write to this same path concurrently.
-  rm -f -- "$index"
+  rip::_rm_f "$index"
   (( prc != 0 )) && return $prc
   return $rc
 }

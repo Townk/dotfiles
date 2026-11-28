@@ -1784,4 +1784,68 @@ EOF
     The stderr should include "resolves to nothing"
     The result of function sidecar_unchanged should equal "byte-identical"
   End
+
+  # --- the stored sidecars: one jq for the library ----------------------------
+  #
+  # rip::_server_sidecars used to start one jq per stored book. It asks one jq
+  # for every line now, and that jq answers only for a line that is exactly
+  # one JSON object; anything else is handed, as before, to the one-book call.
+  # So the two ways must give the same rows and the same warnings, whatever
+  # the library holds, and a healthy library must cost one jq.
+  put_sidecar() { # <Author/Title> <bytes>
+    rip_mkdir "$RIP_SANDBOX/server/audiobooks/$1"
+    printf '%s\n' "$2" > "$RIP_SANDBOX/server/audiobooks/$1/.fleet-book.json"
+  }
+  sidecars_both_ways() {
+    local fast slow
+    fast="$(rip::_server_sidecars 2>&1)"; print -r -- "rc=$?"
+    print -r -- "jq=$(spec_stub_calls "$RIP_SANDBOX/shim" jq | wc -l | tr -d ' ')"
+    # The library-wide jq dies: every line goes the one-book way.
+    jq() { [[ "$1" == -Rc ]] && return 1; command jq "$@" }
+    slow="$(rip::_server_sidecars 2>&1)"
+    if [[ "$fast" == "$slow" ]]; then print same; else print differ; print -r -- "$fast" "--" "$slow"; fi
+    print -r -- "$fast" | sort
+  }
+  It 'sidecars: one jq for a healthy library, and the same rows as one jq per book'
+    mkbook "Ann Leckie" "Ancillary Justice" B00ANC0001 2013-10-01 "Ancillary Justice"
+    mkbook "José Saramago" "Ensaio sobre a Cegueira [1] (ed. *)" B00JOSE001 "" "Ensaio"
+    put_sidecar "Lua Table/Empty Ids" '{"schema":1,"title":"Empty \"Ids\" \\ é","duration_s":220320.0,"ids":[]}'
+    spec_stub "$RIP_SANDBOX/shim" jq 'exec "$REAL_JQ" "$@"'
+    export REAL_JQ="$(command -v jq)"
+    spec_path_prepend "$RIP_SANDBOX/shim"
+    When run rip_zsh "source $RIPLIB && sidecars_both_ways"
+    The line 1 of output should equal "rc=0"
+    The line 2 of output should equal "jq=1"
+    The line 3 of output should equal "same"
+    The line 4 of output should equal '{"schema":1,"kind":"audiobook","title":"Ancillary Justice","authors":["Ann Leckie"],"ids":{"audible.asin":"B00ANC0001"},"published":"2013-10-01","_path":"Ann Leckie/Ancillary Justice"}'
+    The line 5 of output should equal '{"schema":1,"kind":"audiobook","title":"Ensaio","authors":["José Saramago"],"ids":{"audible.asin":"B00JOSE001"},"published":null,"_path":"José Saramago/Ensaio sobre a Cegueira [1] (ed. *)"}'
+    The line 6 of output should equal '{"schema":1,"title":"Empty \"Ids\" \\ é","duration_s":220320.0,"ids":{},"_path":"Lua Table/Empty Ids"}'
+    The lines of output should equal 6
+  End
+
+  It 'sidecars: a damaged sidecar is still judged by the one-book read — same rows, same warnings'
+    Skip if 'complete-only: reads the library twice, the second time with one jq per book' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
+    mkbook "Ann Leckie" "Ancillary Justice" B00ANC0001 2013-10-01 "Ancillary Justice"
+    mkbook_malformed "Hand Edited/Broken"
+    put_sidecar "Odd/Null" 'null'
+    put_sidecar "Odd/Twice" '{"title":"one"}{"title":"two"}'
+    put_sidecar "Odd/Text" '"just a string"'
+    put_sidecar "Odd/Half" '{"title":"kept"} trailing garbage'
+    put_sidecar "Odd/Empty" ''
+    spec_stub "$RIP_SANDBOX/shim" jq 'exec "$REAL_JQ" "$@"'
+    export REAL_JQ="$(command -v jq)"
+    spec_path_prepend "$RIP_SANDBOX/shim"
+    When run rip_zsh "source $RIPLIB && sidecars_both_ways"
+    The line 1 of output should equal "rc=0"
+    The line 3 of output should equal "same"
+    The output should include '"_path":"Ann Leckie/Ancillary Justice"'
+    The output should include '{"_path":"Odd/Null"}'
+    The output should include '{"title":"one","_path":"Odd/Twice"}'
+    The output should include '{"title":"two","_path":"Odd/Twice"}'
+    The output should include '{"title":"kept","_path":"Odd/Half"}'
+    The output should include "malformed sidecar for Hand Edited/Broken"
+    The output should include "malformed sidecar for Odd/Text"
+    The output should include "malformed sidecar for Odd/Empty"
+  End
 End

@@ -872,4 +872,61 @@ EOF
     The output should not equal ""
     The result of function titles should include "rip session: ELVIS_TTWII"
   End
+
+  # rip::_validate_plan leaves what it read for rip::session_worker, which
+  # used to read the same four fields again with four more jq.
+  plan_fields() {
+    rip::_validate_plan "$RIP_SANDBOX/plan.json"; print -r -- "rc=$?"
+    print -r -- "kind=$_RIP_PLAN_KIND movie=$_RIP_PLAN_FEAT_MOVIE no=$_RIP_PLAN_FEAT_NO"
+    print -r -- "extras=${_RIP_PLAN_EXTRAS//$'\n'/ | }"
+  }
+  It 'plan: the fields of a valid plan are left for the worker as jq read them'
+    write_plan <<'EOF'
+{"volume":"V","kind":"Blu-ray","feature":{"no":"3","movie":"Amélie [1] (2001) & \"Co\""},
+ "extras":[{"no":2,"name":"Making Of: 100% *","attachTo":"Amélie [1] (2001) & \"Co\""},{"no":0,"name":"Trailer","attachTo":"Other (1999)"}],"skipped":[]}
+EOF
+    When run rip_zsh "source $RIPLIB && plan_fields"
+    The line 1 of output should equal "rc=0"
+    The line 2 of output should equal 'kind=Blu-ray movie=Amélie [1] (2001) & "Co" no=3'
+    The line 3 of output should equal 'extras=2	Making Of: 100% *	Amélie [1] (2001) & "Co" | 0	Trailer	Other (1999)'
+  End
+
+  plan_then_bad() {
+    rip::_validate_plan "$RIP_SANDBOX/plan.json" || return 9
+    rip::_validate_plan "$RIP_SANDBOX/bad.json"
+    print -r -- "rc=$? [$_RIP_PLAN_KIND|$_RIP_PLAN_FEAT_MOVIE|$_RIP_PLAN_FEAT_NO|$_RIP_PLAN_EXTRAS]"
+  }
+  It 'plan: a rejected plan leaves no fields behind, not even those of the plan before it'
+    write_plan <<'EOF'
+{"volume":"V","kind":"DVD","feature":{"no":1,"movie":"Good (2001)"},"extras":[],"skipped":[]}
+EOF
+    printf '%s\n' '{"volume":"V","kind":"DVD","feature":{"no":1,"movie":"Bad/Slash"},"extras":[],"skipped":[]}' > "$RIP_SANDBOX/bad.json"
+    When run rip_zsh "source $RIPLIB && plan_then_bad"
+    The output should equal "rc=2 [|||]"
+    The stderr should include "slash"
+  End
+
+  rips() { sed -n 's/.* mkv disc:0 \([0-9]*\) .*/\1/p' "$RIP_FAKE_MKC_LOG" | tr '\n' ' '; }
+  jq_runs() { spec_stub_calls "$RIP_SANDBOX/shim" jq | wc -l | tr -d ' '; }
+  It 'session worker: rips the feature and the extras the plan names, in plan order, from one read of it'
+    Skip if 'complete-only: three rips, three encodes and a push through stubs, and jq behind a counting shim' spec_complete_only
+    spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
+    export JOB_ID="job-session-order"; mkdir -p "$JOB_STATE_ROOT/$JOB_ID"
+    export RIP_FAKE_MKC_LOG="$RIP_SANDBOX/mkc.log"; : > "$RIP_FAKE_MKC_LOG"
+    spec_stub "$RIP_SANDBOX/shim" jq 'exec "$REAL_JQ" "$@"'
+    export REAL_JQ="$(command -v jq)"
+    spec_path_prepend "$RIP_SANDBOX/shim"
+    write_plan <<'EOF'
+{"volume":"U2","kind":"DVD","feature":{"no":1,"movie":"U2 (2010)"},
+ "extras":[{"no":2,"name":"Squaring the Circle","attachTo":"U2 (2010)"},{"no":0,"name":"Trailer","attachTo":"U2 (2010)"}],"skipped":[]}
+EOF
+    When run rip_zsh "source $JOBLIB; source $RIPLIB && rip::session_worker '$RIP_SANDBOX/plan.json'"
+    The status should equal 0
+    The output should include "verified"
+    The result of function rips should equal "1 2 0 "
+    The path "$RIP_SANDBOX/server/movies/U2 (2010)/U2 (2010).mkv" should be exist
+    The path "$RIP_SANDBOX/server/movies/U2 (2010)/extras/Squaring the Circle.mkv" should be exist
+    The path "$RIP_SANDBOX/server/movies/U2 (2010)/extras/Trailer.mkv" should be exist
+    The result of function jq_runs should equal 5
+  End
 End

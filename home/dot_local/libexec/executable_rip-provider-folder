@@ -41,15 +41,96 @@ _dir_is_collection() {
 # directory-level file counts only when the directory holds exactly one book:
 # on a shelf a lone cover.jpg belongs to no one book, and attaching it to all
 # of them would be a guess wearing the costume of a fact.
+#
+# The answer is left in REPLY (empty for "none"), not printed: `list` asks this
+# two or three times per book, and a "$(...)" around it plus a `| head -1`
+# inside it was three processes each time.
 _sibling_of() {
-  local f="$1" pat="$2" d="${f:h}" stem="${f:t:r}" hit
-  hit="$(print -rl -- "$d/$stem."${~pat}(N-.) | head -1)"
-  if [[ -n "$hit" ]]; then
-    print -r -- "$hit"
+  local f="$1" pat="$2" d="${f:h}" stem="${f:t:r}"
+  local -a hits
+  REPLY=""
+  hits=("$d/$stem."${~pat}(N-.))
+  if (( ${#hits} )); then
+    REPLY="${hits[1]}"
     return 0
   fi
   _dir_is_collection "$d" && return 0
-  print -rl -- "$d"/*.${~pat}(N-.) | head -1
+  hits=("$d"/*.${~pat}(N-.))
+  REPLY="${hits[1]:-}"
+  return 0
+}
+
+# _probe <m4b> — everything `list` asks ffprobe about one book, in ONE run:
+#
+#   _PROBE_ALBUM_ARTIST / _PROBE_ARTIST / _PROBE_ALBUM   the format tags
+#   _PROBE_DURATION     format duration as ffprobe prints it ("61.700000", "N/A")
+#   _PROBE_COVER_CODEC  codec of the first ATTACHED PICTURE video stream
+#
+# all empty for a file ffprobe cannot read. It used to be three runs per book
+# (tags, cover stream, duration) at about 23 ms each; a browse lists a whole
+# tree.
+#
+# The output is ffprobe's `default` writer WITH its section wrappers, read
+# here line by line, so nothing has to parse JSON and no other process starts:
+#
+#   [STREAM]            one per video stream (-select_streams v)
+#   codec_name=mjpeg
+#   DISPOSITION:attached_pic=1
+#   [/STREAM]
+#   [FORMAT]
+#   duration=1.021000
+#   TAG:album_artist=Ann Leckie
+#   [/FORMAT]
+#
+# Each rule below is the one the three separate reads applied:
+#   * a tag is the FIRST line that starts "TAG:<name>=" (it was
+#     `sed -n 's/^TAG:<name>=//p' | head -1`), so a value that runs over
+#     several lines still yields its first line only;
+#   * the duration is taken before any tag line, so a tag's text can never be
+#     read as one;
+#   * the cover is the first video stream whose attached_pic is 1 and that has
+#     a codec name (it was `awk -F, '$2 == 1 { print $1; exit }'` over
+#     "codec,attached_pic" rows).
+_probe() {
+  setopt localoptions noerrexit nopipefail
+  typeset -g _PROBE_ALBUM_ARTIST="" _PROBE_ARTIST="" _PROBE_ALBUM=""
+  typeset -g _PROBE_DURATION="" _PROBE_COVER_CODEC=""
+  local out line sect="" codec="" pic=""
+  local -i have_aa=0 have_ar=0 have_al=0 have_dur=0 in_tags=0
+  out="$(ffprobe -v error -select_streams v \
+    -show_entries stream=codec_name:stream_disposition=attached_pic:format=duration:format_tags=album_artist,artist,album,title \
+    -of default=noprint_wrappers=0:nokey=0 -- "$1" 2>/dev/null)"
+  for line in "${(@f)out}"; do
+    case "$sect" in
+      stream)
+        case "$line" in
+          '[/STREAM]')
+            [[ -z "$_PROBE_COVER_CODEC" && "$pic" == 1 && -n "$codec" ]] && _PROBE_COVER_CODEC="$codec"
+            sect="" ;;
+          codec_name=*) codec="${line#codec_name=}" ;;
+          DISPOSITION:attached_pic=*) pic="${line#DISPOSITION:attached_pic=}" ;;
+        esac ;;
+      format)
+        case "$line" in
+          '[/FORMAT]') sect="" ;;
+          duration=*)
+            (( have_dur || in_tags )) || { _PROBE_DURATION="${line#duration=}"; have_dur=1 } ;;
+          TAG:*)
+            in_tags=1
+            case "$line" in
+              TAG:album_artist=*) (( have_aa )) || { _PROBE_ALBUM_ARTIST="${line#TAG:album_artist=}"; have_aa=1 } ;;
+              TAG:artist=*) (( have_ar )) || { _PROBE_ARTIST="${line#TAG:artist=}"; have_ar=1 } ;;
+              TAG:album=*) (( have_al )) || { _PROBE_ALBUM="${line#TAG:album=}"; have_al=1 } ;;
+            esac ;;
+        esac ;;
+      *)
+        case "$line" in
+          '[STREAM]') sect=stream; codec=""; pic="" ;;
+          '[FORMAT]') sect=format ;;
+        esac ;;
+    esac
+  done
+  return 0
 }
 
 # _embedded_cover <m4b> — the book's own cover art, extracted from the file
@@ -68,17 +149,21 @@ _sibling_of() {
 # RIP_COVER_CACHE exists so tests can point this somewhere disposable. Like
 # every other RIP_* seam it falls back to the PRODUCTION path, so a test that
 # forgets to export it writes to the real cache rather than failing loudly.
+#
+# The path is left in REPLY (empty for "no art"), and the question "does this
+# file carry an attached picture?" is answered by the caller's _probe of the
+# SAME file — this function must be called right after it.
 _embedded_cover() {
   setopt localoptions noerrexit nopipefail
   local f="$1" codec ext key out
+  REPLY=""
   command -v ffmpeg >/dev/null 2>&1 || return 0
   command -v ffprobe >/dev/null 2>&1 || return 0
 
   # Only an ATTACHED PICTURE is cover art. A stray video stream in an audio
   # container is not, and copying one out would hand the panel a frame of
   # video to render as a book cover.
-  codec="$(ffprobe -v error -select_streams v -show_entries stream=codec_name:stream_disposition=attached_pic \
-             -of csv=p=0 -- "$f" 2>/dev/null | awk -F, '$2 == 1 { print $1; exit }')"
+  codec="$_PROBE_COVER_CODEC"
   [[ -n "$codec" ]] || return 0
   # Always JPEG, whatever the source codec is, because we re-encode anyway
   # (see the scale below) — which also means no codec-to-extension mapping to
@@ -87,12 +172,18 @@ _embedded_cover() {
   ext=jpg
 
   local cache="${RIP_COVER_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/rip/folder-covers}"
-  key="$(print -r -- "$f"$'\x1f'"$(_file_stamp "$f")" | shasum -a 256 2>/dev/null | cut -d' ' -f1)"
+  # The same bytes into shasum as ever (the path, \x1f, "mtime size", a
+  # newline) and the same first field out of it, so every cached cover keeps
+  # its name; only the `print |` and `| cut` around it are gone.
+  _file_stamp "$f"
+  key="$(shasum -a 256 <<< "$f"$'\x1f'"$REPLY" 2>/dev/null)"
+  key="${key%% *}"
   [[ -n "$key" ]] || return 0
   out="$cache/$key.$ext"
-  [[ -f "$out" ]] && { print -r -- "$out"; return 0; }
+  [[ -f "$out" ]] && { REPLY="$out"; return 0; }
+  REPLY=""
 
-  mkdir -p -- "$cache" 2>/dev/null || return 0
+  [[ -d "$cache" ]] || mkdir -p -- "$cache" 2>/dev/null || return 0
   # Extract to a temp and rename: a browse interrupted mid-extraction must
   # not leave a truncated image in the cache that every later browse then
   # serves from, forever, without ever re-extracting it.
@@ -111,7 +202,7 @@ _embedded_cover() {
   # headroom for a 2x display and lands each cover around 6KB.
   if ffmpeg -v error -y -i "$f" -an -vframes 1 -vf 'scale=128:-1' -c:v mjpeg -q:v 4 -- "$tmp" </dev/null >/dev/null 2>&1 \
      && [[ -s "$tmp" ]] && mv -f -- "$tmp" "$out"; then
-    print -r -- "$out"
+    REPLY="$out"
     return 0
   fi
   rm -f -- "$tmp"
@@ -121,8 +212,18 @@ _embedded_cover() {
 # _file_stamp <file> — mtime and size, the cheap identity of a file's contents
 # for cache purposes. Separate from rip::_file_bytes in the library: this
 # binary is standalone and does not source it.
+#
+# REPLY = "<mtime> <size>" of the path itself (lstat, as both stat spellings
+# below read it), from zsh's own zstat where the module is there. Only that
+# builtin is loaded: the whole module would shadow /usr/bin/stat.
 _file_stamp() {
-  stat -f '%m %z' -- "$1" 2>/dev/null || stat -c '%Y %s' -- "$1" 2>/dev/null
+  local -A _st
+  if zmodload -F zsh/stat b:zstat 2>/dev/null && zstat -L -H _st -- "$1" 2>/dev/null \
+     && [[ -n "${_st[mtime]:-}" && -n "${_st[size]:-}" ]]; then
+    REPLY="${_st[mtime]} ${_st[size]}"
+    return 0
+  fi
+  REPLY="$(stat -f '%m %z' -- "$1" 2>/dev/null || stat -c '%Y %s' -- "$1" 2>/dev/null)"
 }
 
 # _book_files <m4b> — everything that must travel with this book, published
@@ -144,19 +245,19 @@ _book_files() {
   done
 }
 
+#
+# The record is left in REPLY, and the tags come from the caller's _probe of
+# the SAME file (see there): `_probe "$f"` first, then `_derive "$f" "$root"`.
 _derive() {
   setopt localoptions noerrexit nopipefail
   local f="$1" root="$2" d="${1:h}" author title
 
   if [[ -f "$f" ]] && command -v ffprobe >/dev/null 2>&1; then
-    local tags
-    tags="$(ffprobe -v error -show_entries format_tags=album_artist,artist,album,title \
-              -of default=noprint_wrappers=1:nokey=0 -- "$f" 2>/dev/null)"
-    author="$(print -r -- "$tags" | sed -n 's/^TAG:album_artist=//p' | head -1)"
-    [[ -n "$author" ]] || author="$(print -r -- "$tags" | sed -n 's/^TAG:artist=//p' | head -1)"
-    title="$(print -r -- "$tags" | sed -n 's/^TAG:album=//p' | head -1)"
+    author="$_PROBE_ALBUM_ARTIST"
+    [[ -n "$author" ]] || author="$_PROBE_ARTIST"
+    title="$_PROBE_ALBUM"
     if [[ -n "$author" && -n "$title" ]]; then
-      print -r -- "$author"$'\x1f'"$title"$'\x1f'"tags"
+      REPLY="$author"$'\x1f'"$title"$'\x1f'"tags"
       return 0
     fi
   fi
@@ -173,7 +274,7 @@ _derive() {
   # every book on that shelf the same author and title.
   local rel="${d#$root/}"
   if [[ "$d" != "$root" && "$rel" == */* ]] && ! _dir_is_collection "$d"; then
-    print -r -- "${rel:h:t}"$'\x1f'"${rel:t}"$'\x1f'"path"
+    REPLY="${rel:h:t}"$'\x1f'"${rel:t}"$'\x1f'"path"
     return 0
   fi
 
@@ -198,7 +299,7 @@ _derive() {
   else
     base="${f:t:r}"
   fi
-  print -r -- ""$'\x1f'"$base"$'\x1f'"filename"
+  REPLY=""$'\x1f'"$base"$'\x1f'"filename"
 }
 
 cmd_list() {
@@ -236,23 +337,36 @@ cmd_list() {
   # to STDOUT for that variable (reproduced in isolation; not documented
   # behavior we could find, but 100% repeatable) — corrupting the JSON
   # stream with bare `one=...` / `n=...` lines between rows.
-  local author title src cover dur has_pdf n
+  local author title src cover dur has_pdf n REPLY
+  local -i have_ffprobe=0
+  command -v ffprobe >/dev/null 2>&1 && have_ffprobe=1
   for f in "${(@o)books}"; do
-    IFS=$'\x1f' read -r author title src <<< "$(_derive "$f" "$root")"
+    # ONE ffprobe per book answers the three questions below (tags, attached
+    # picture, duration); without ffprobe every answer is "nothing".
+    if (( have_ffprobe )); then
+      _probe "$f"
+    else
+      _PROBE_ALBUM_ARTIST="" _PROBE_ARTIST="" _PROBE_ALBUM="" _PROBE_DURATION="" _PROBE_COVER_CODEC=""
+    fi
+    # The record goes through `read` exactly as it did when _derive printed it
+    # (first line only, split at \x1f), without the subshell.
+    _derive "$f" "$root"
+    IFS=$'\x1f' read -r author title src <<< "$REPLY"
     # A sidecar image wins: it is what the operator put there deliberately.
     # Embedded art is the fallback, not the other way round.
-    cover="$(_sibling_of "$f" '(jpg|jpeg|png)')"
-    [[ -n "$cover" ]] || cover="$(_embedded_cover "$f")"
+    _sibling_of "$f" '(jpg|jpeg|png)'; cover="$REPLY"
+    if [[ -z "$cover" ]]; then _embedded_cover "$f"; cover="$REPLY"; fi
     dur=0
-    if command -v ffprobe >/dev/null 2>&1; then
-      n="$(ffprobe -v error -show_entries format=duration -of csv=p=0 -- "$f" 2>/dev/null)"
+    if (( have_ffprobe )); then
+      n="$_PROBE_DURATION"
       [[ "$n" == <->* ]] && dur=${n%%.*}
     fi
     # A sibling PDF is a real, local, checkable signal — unlike everything
     # else Audible-shaped in this row, this one costs nothing to establish
     # honestly, so it is not left null/false by default.
     has_pdf=false
-    [[ -n "$(_sibling_of "$f" 'pdf')" ]] && has_pdf=true
+    _sibling_of "$f" 'pdf'
+    [[ -n "$REPLY" ]] && has_pdf=true
     jq -nc \
       --arg id "$f" --arg title "$title" --arg author "$author" \
       --arg src "$src" --arg cover "$cover" --argjson dur "$dur" \

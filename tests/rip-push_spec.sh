@@ -2236,4 +2236,271 @@ EOF
     The stderr should include "hop_boom"
     The output should include 'rip: audiobooks verified on cantina — cleaning staging'
   End
+
+  # --- no process where none is needed ---------------------------------------
+  #
+  # rip.zsh's getters have a REPLY form (rip::x_r) beside the printing one, and
+  # its scratch-file operations go through zsh's builtins before the real
+  # tools. What these pin: the two forms of a getter cannot drift apart, and a
+  # builtin that does not end in plain success always hands over to the tool.
+  Describe 'fork-free forms'
+    ODD=('' ' ' 'A/B' 'a b/c d/e f' 'J.K. Rowling' 'J.R.R. Tolkien' 'Dr.Smith' 'e.e. cummings'
+         'José/Título' '日本語/タイトル' 'q"uo'"'"'te $HOME `x`' '*?[glob]/(x)' '-n' '%s\n' 'a//b' '/a' 'a/' 'x/y/z/w')
+
+    # <printing function> <args...>: REPLY and the status against what the
+    # printing form prints and returns.
+    same_as_printed() {
+      local fn=$1 want got wrc grc REPLY=untouched
+      shift
+      want="$($fn "$@" 2>/dev/null)"; wrc=$?
+      ${fn}_r "$@" 2>/dev/null; grc=$?
+      (( checked++ ))
+      [[ "$want" == "$REPLY" && $wrc == $grc ]] && return 0
+      (( differ++ ))
+      print -r -- "$fn ${(q+)@}: printed ${(q+)want} rc=$wrc, REPLY ${(q+)REPLY} rc=$grc"
+    }
+    getters_agree() {
+      local -i checked=0 differ=0
+      local s
+      for s in "${ODD[@]}"; do
+        same_as_printed rip::_book_rel_of "$s"
+        same_as_printed rip::_author_norm "$s"
+        same_as_printed rip::_author_display "$s"
+        same_as_printed rip::_nfc "$s"
+        same_as_printed rip::staging_for "$s"
+      done
+      for s in movies music audiobooks; do same_as_printed rip::staging_for $s; done
+      same_as_printed rip::staging_root
+      same_as_printed rip::remote_base
+      same_as_printed rip::_ab_meta_index_default
+      RIP_STAGING_ROOT="$RIP_SANDBOX/Ri ps [1] é \$x" RIP_REMOTE_BASE='media@host:/srv/me dia' RIP_AB_STAGING='/else where/ab'
+      for s in movies music audiobooks; do same_as_printed rip::staging_for $s; done
+      same_as_printed rip::staging_root
+      same_as_printed rip::remote_base
+      same_as_printed rip::_ab_meta_index_default
+      for s in libation folder nosuch a/b . .. ''; do same_as_printed rip::ab_provider_bin "$s"; done
+      same_as_printed rip::_canonical_author 'J.R.R. Tolkien'
+      same_as_printed rip::_canonical_author 'Martha Wells'
+      same_as_printed rip::_canonical_author ''
+      same_as_printed rip::ab_server_library
+      same_as_printed rip::_file_bytes "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/h.m4b"
+      same_as_printed rip::_file_bytes "$RIP_SANDBOX/nosuch"
+      same_as_printed rip::_sha256_of "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/h.m4b"
+      same_as_printed rip::_sha256_of "$RIP_SANDBOX/nosuch"
+      same_as_printed rip::_companions_json "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit"
+      print -r -- "checked=$checked differ=$differ"
+    }
+    It 'every getter leaves in REPLY exactly what its printing form prints, with the same status'
+      Skip if 'complete-only: 118 command substitutions, one per printing form it compares against' spec_complete_only
+      spec_complete_only && return 0   # a Skip stops the assertions, not the fixture lines below
+      export RIP_LIBEXEC_DIR="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec"
+      mkdir -p "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit"
+      printf 'audio\n' > "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/h.m4b"
+      printf 'cover\n' > "$RIP_SANDBOX/server/audiobooks/J. R. R. Tolkien/The Hobbit/cover.jpg"
+      When run rip_zsh "source $RIPLIB && getters_agree"
+      The status should equal 0
+      The output should equal "checked=118 differ=0"
+    End
+
+    # rip::_nfc_r is the one REPLY form that is NOT "the bytes as printed": it
+    # is what "$(rip::_nfc …)" captured at every call site it replaced, so it
+    # drops trailing newlines as a command substitution does.
+    nfc_agrees() {
+      local -i checked=0 differ=0
+      local s
+      for s in 'plain' $'José Saramago' 'José Saramago' $'Café/Livrõ (1)' $'é\n' \
+               $'trail\n\n' $'\n' $'mid\nline' $'not utf-8 \xff\xfe' $'cut \xc3' $'ctl \x01\x1f\x7f' ''; do
+        same_as_printed rip::_nfc "$s"
+      done
+      rip::_nfc_r $'José'
+      print -r -- "checked=$checked differ=$differ composed=$(( ${#REPLY} == 4 ))"
+    }
+    It 'nfc: the REPLY form is what "$(rip::_nfc …)" captured — composed, decomposed, newlines, bytes that are not UTF-8'
+      When run rip_zsh "source $RIPLIB && nfc_agrees"
+      The status should equal 0
+      The output should equal "checked=12 differ=0 composed=1"
+    End
+
+    nfc_iconv_runs() {
+      local REPLY s
+      for s in 'Brandon Sanderson' 'Steelheart: The Reckoners, Book 1' 'a/b (c) [d]' ''; do rip::_nfc_r "$s"; done
+      print -r -- "plain=$(spec_stub_calls "$RIP_SANDBOX/shim" iconv | wc -l | tr -d ' ')"
+      rip::_nfc_r $'José'
+      print -r -- "accented=$(spec_stub_calls "$RIP_SANDBOX/shim" iconv | wc -l | tr -d ' ') ${#REPLY}"
+    }
+    It 'nfc: 7-bit text starts no iconv; anything else still goes through it'
+      spec_stub "$RIP_SANDBOX/shim" iconv 'exec /usr/bin/iconv "$@"'
+      spec_path_prepend "$RIP_SANDBOX/shim"
+      When run rip_zsh "source $RIPLIB && nfc_iconv_runs"
+      The line 1 of output should equal "plain=0"
+      The line 2 of output should equal "accented=1 4"
+    End
+
+    reply_kept() {
+      local REPLY=mine
+      rip::staging_root >/dev/null; rip::staging_for audiobooks >/dev/null
+      rip::_nfc 'x' >/dev/null; rip::_author_display 'J.K. Rowling' >/dev/null
+      rip::_book_rel_of 'A/B/c' >/dev/null; rip::ab_provider_bin nosuch >/dev/null 2>&1
+      rip::_companions_json "$RIP_SANDBOX" >/dev/null; rip::_canonical_author 'X' >/dev/null
+      print -r -- "$REPLY"
+    }
+    It 'a printing form leaves its caller'"'"'s REPLY alone'
+      When run rip_zsh "source $RIPLIB && reply_kept"
+      The output should equal "mine"
+    End
+
+    # One case = the same starting tree twice: the real tool on one, the
+    # helper on the other. Status, what is left on disk and the message must
+    # all be the tool's own.
+    tree_of() { ( cd "$1" && print -rl -- **/*(DNoN) | while IFS= read -r p; do
+      [[ -n $p ]] || continue
+      if [[ -L $p ]]; then print -r -- "L $p"; elif [[ -d $p ]]; then print -r -- "D $p"; else print -r -- "F $p $(<$p)"; fi; done ) }
+    like_the_tool() { # <name> <setup> <tool words...> ::: <helper words...>
+      local name=$1 setup=$2 w seen=0 trc hrc
+      local -a tool=() helper=()
+      shift 2
+      for w; do
+        if [[ $w == ::: ]]; then seen=1; elif (( seen )); then helper+=("$w"); else tool+=("$w"); fi
+      done
+      local t="$RIP_SANDBOX/like/$name.tool" h="$RIP_SANDBOX/like/$name.helper"
+      rip_mkdir "$t" "$h"
+      ( cd "$t" && eval "$setup" && "${tool[@]}" ) 2>"$t.err"; trc=$?
+      ( cd "$h" && eval "$setup" && "${helper[@]}" ) 2>"$h.err"; hrc=$?
+      (( checked++ ))
+      [[ $trc == $hrc && "$(tree_of "$t")" == "$(tree_of "$h")" && "$(<$t.err)" == "$(<$h.err)" ]] && return 0
+      (( differ++ ))
+      print -r -- "$name: tool rc=$trc [$(<$t.err)], helper rc=$hrc [$(<$h.err)]"
+    }
+    helpers_agree() {
+      local -i checked=0 differ=0
+      like_the_tool rm-file 'echo x > f' rm -f -- f ::: rip::_rm_f f
+      like_the_tool rm-absent ':' rm -f -- nosuch no/such ::: rip::_rm_f nosuch no/such
+      like_the_tool rm-dir 'mkdir d' rm -f -- d ::: rip::_rm_f d
+      like_the_tool rm-symlink 'echo x > t; ln -s t l; ln -s gone g' rm -f -- l g ::: rip::_rm_f l g
+      like_the_tool rm-protected 'mkdir d; echo x > d/f; chmod 555 d' rm -f -- d/f ::: rip::_rm_f d/f
+      like_the_tool rm-odd 'echo a > "sp ace é"; echo b > ./-dash' rm -f -- 'sp ace é' -dash nosuch ::: rip::_rm_f 'sp ace é' -dash nosuch
+      like_the_tool mkdir-new ':' mkdir -p -- 'a b/é/-c' ::: rip::_mkdir_p 'a b/é/-c'
+      like_the_tool mkdir-there 'mkdir -p a/b' mkdir -p -- a/b ::: rip::_mkdir_p a/b
+      like_the_tool mkdir-file 'echo x > f' mkdir -p -- f/x ::: rip::_mkdir_p f/x
+      like_the_tool mkdir-denied 'mkdir d; chmod 555 d' mkdir -p -- d/x ::: rip::_mkdir_p d/x
+      like_the_tool mv-over 'echo a > a; echo b > b; chmod 444 b' mv -f -- a b ::: rip::_mv_f a b
+      like_the_tool mv-absent 'echo b > b' mv -f -- a b ::: rip::_mv_f a b
+      like_the_tool mv-nodir 'echo a > a' mv -f -- a no/such/b ::: rip::_mv_f a no/such/b
+      like_the_tool mv-odd 'echo a > "sp ace é"' mv -f -- 'sp ace é' '-new [1]' ::: rip::_mv_f 'sp ace é' '-new [1]'
+      like_the_tool rmdir-empty 'mkdir d' eval 'rmdir -- d 2>/dev/null' ::: rip::_rmdir d
+      like_the_tool rmdir-full 'mkdir d; echo x > d/f' eval 'rmdir -- d 2>/dev/null' ::: rip::_rmdir d
+      like_the_tool rmdir-absent ':' eval 'rmdir -- d 2>/dev/null' ::: rip::_rmdir d
+      chmod -R u+w "$RIP_SANDBOX/like"
+      print -r -- "checked=$checked differ=$differ"
+    }
+    It 'scratch helpers: same status, same tree and same message as rm -f, mkdir -p, mv -f and rmdir'
+      Skip if 'complete-only: runs the real rm, mkdir, mv and rmdir 17 times to compare against' spec_complete_only
+      When run rip_zsh "source $RIPLIB && helpers_agree"
+      The status should equal 0
+      The output should equal "checked=17 differ=0"
+    End
+
+    # A rename across volumes fails with EXDEV in the builtin. There is no
+    # second volume in a sandbox, so the builtin is made to refuse here.
+    mv_handover() {
+      print moved > "$RIP_SANDBOX/a file"
+      rip::_mv_f "$RIP_SANDBOX/a file" "$RIP_SANDBOX/b file"
+      print -r -- "rc=$? $(<"$RIP_SANDBOX/b file") mv=$(spec_stub_calls "$RIP_SANDBOX/shim" mv | wc -l | tr -d ' ')"
+      zf_mv() { return 1 }
+      rip::_mv_f "$RIP_SANDBOX/b file" "$RIP_SANDBOX/c file"
+      print -r -- "rc=$? $(<"$RIP_SANDBOX/c file")"
+      spec_stub_calls "$RIP_SANDBOX/shim" mv
+    }
+    It 'a move the builtin cannot do (another volume) is done by the real mv; one it can do starts no mv'
+      spec_stub "$RIP_SANDBOX/shim" mv 'exec /bin/mv "$@"'
+      spec_path_prepend "$RIP_SANDBOX/shim"
+      When run rip_zsh "source $RIPLIB && mv_handover"
+      The line 1 of output should equal "rc=0 moved mv=0"
+      The line 2 of output should equal "rc=0 moved"
+      The line 3 of output should equal "-f -- $RIP_SANDBOX/b file $RIP_SANDBOX/c file"
+    End
+
+    rm_runs() {
+      print x > "$RIP_SANDBOX/f"; rip_mkdir "$RIP_SANDBOX/d"
+      rip::_rm_f "$RIP_SANDBOX/f" "$RIP_SANDBOX/never-there"
+      print -r -- "rc=$? left=$([[ -e $RIP_SANDBOX/f ]] && print yes || print no) rm=$(spec_stub_calls "$RIP_SANDBOX/shim" rm | wc -l | tr -d ' ')"
+      rip::_rm_f "$RIP_SANDBOX/d"
+      print -r -- "rc=$? rm=$(spec_stub_calls "$RIP_SANDBOX/shim" rm | wc -l | tr -d ' ')"
+    }
+    It 'rm_f: no rm process for a file it removes or one that is not there; a refusal is rm'"'"'s to report'
+      spec_stub "$RIP_SANDBOX/shim" rm 'exec /bin/rm "$@"'
+      spec_path_prepend "$RIP_SANDBOX/shim"
+      When run rip_zsh "source $RIPLIB && rm_runs"
+      The line 1 of output should equal "rc=0 left=no rm=0"
+      The line 2 of output should equal "rc=1 rm=1"
+      The stderr should include "is a directory"
+    End
+
+    # .work/ sits under the staging ROOT, the book under RIP_AB_STAGING, which
+    # may be another volume: these two moves stay the real mv (the sidecar's
+    # is pinned by 'sidecar: the scratch write goes to a tmp path under .work/').
+    retag_move() {
+      mv() { local -a a=("$@"); print -r -- "MV_SRC:${a[3]}"; command mv "$@" }
+      rip::_retag_book "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b" 'A' 'B'; print -r -- "rc=$?"
+    }
+    It 'retag: the retagged file is moved into the book by the real mv, from .work/'
+      mkdir -p "$RIP_STAGING_ROOT/audiobooks/A/B"
+      printf 'audio\n' > "$RIP_STAGING_ROOT/audiobooks/A/B/B.m4b"
+      When run rip_zsh "source $RIPLIB && retag_move"
+      The line 1 of output should start with "MV_SRC:$RIP_STAGING_ROOT/.work/retag."
+      The line 2 of output should equal "rc=0"
+    End
+
+    # The push list used to be cut with `sed "s|^$src/||"`, the staging path
+    # read as a regular expression; it is cut by the shell now.
+    It 'push: names with spaces, accents and pattern characters ship and are cleaned, under a staging root that has them too'
+      export RIP_STAGING_ROOT="$RIP_SANDBOX/Ri ps [1].+ é"
+      mkdir -p "$RIP_STAGING_ROOT/movies/Amélie [1] (2001) *"
+      printf 'film\n' > "$RIP_STAGING_ROOT/movies/Amélie [1] (2001) */Amélie [1] (2001) *.mkv"
+      printf 'more\n' > "$RIP_STAGING_ROOT/movies/Amélie [1] (2001) */a b.srt"
+      When run rip_zsh "source $RIPLIB && rip::push_worker movies"
+      The status should equal 0
+      The output should include 'rip: movies verified on cantina — cleaning staging'
+      The contents of file "$RIP_SANDBOX/server/movies/Amélie [1] (2001) */Amélie [1] (2001) *.mkv" should equal "film"
+      The contents of file "$RIP_SANDBOX/server/movies/Amélie [1] (2001) */a b.srt" should equal "more"
+      The path "$RIP_STAGING_ROOT/movies/Amélie [1] (2001) *" should not be exist
+      The result of function stray_listfiles should equal 0
+    End
+
+    listfile_answers() {
+      local lf="$RIP_SANDBOX/list" q
+      print -rl -- 'A/B/b.m4b' 'A/B (Full Cast)/x.m4b' 'A/[1] *?/y.m4b' ' lead' > "$lf"
+      for q in 'A/B/b.m4b' 'A/B' 'A/B (Full Cast)/x.m4b' 'A/[1] *?/y.m4b' 'A/?1? *?/y.m4b' 'lead' ' lead' ''; do
+        rip::_listfile_has "$lf" "$q" && print -rn -- 1 || print -rn -- 0
+      done
+      rip::_listfile_has "$RIP_SANDBOX/no-list" 'x' 2>/dev/null; print -r -- " missing=$?"
+    }
+    It 'listfile_has: a whole line or nothing, pattern characters literal, as grep -qxF answered'
+      When run rip_zsh "source $RIPLIB && listfile_answers"
+      The output should equal "10110010 missing=2"
+    End
+
+    companions_of_odd_names() {
+      local d="$RIP_SANDBOX/bk" REPLY
+      rip_mkdir "$d"
+      printf 'aud' > "$d/book.m4b"; printf 'x' > "$d/.fleet-book.json"
+      printf 'cover' > "$d/Cover \"1\".JPG"; printf 'pdf-bytes' > "$d/-notes é.pdf"; : > "$d/empty.txt"
+      rip::_companions_json_r "$d"
+      jq -c --arg s1 "$(shasum -a 256 < "$d/Cover \"1\".JPG" | cut -d' ' -f1)" \
+            --arg s2 "$(shasum -a 256 < "$d/-notes é.pdf" | cut -d' ' -f1)" \
+            --arg s3 "$(shasum -a 256 < "$d/empty.txt" | cut -d' ' -f1)" '
+        . == [{file:"-notes é.pdf",kind:"pdf",bytes:9,sha256:$s2},
+              {file:"Cover \"1\".JPG",kind:"cover",bytes:5,sha256:$s1},
+              {file:"empty.txt",kind:"txt",bytes:0,sha256:$s3}]' <<< "$REPLY"
+      print -r -- "jq=$(spec_stub_calls "$RIP_SANDBOX/shim" jq | wc -l | tr -d ' ')"
+    }
+    It 'companions: every non-audio file with its size, hash and kind, from one jq whatever their number'
+      spec_stub "$RIP_SANDBOX/shim" jq 'exec "$REAL_JQ" "$@"'
+      export REAL_JQ="$(command -v jq)"
+      spec_path_prepend "$RIP_SANDBOX/shim"
+      When run rip_zsh "source $RIPLIB && companions_of_odd_names"
+      The line 1 of output should equal "true"
+      The line 2 of output should equal "jq=2"
+    End
+  End
 End
