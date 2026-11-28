@@ -4,12 +4,22 @@
 # hands binstall the token mise already carries (MISE_GITHUB_TOKEN) unless an
 # explicit GITHUB_TOKEN is set. cargo is a stub that prints what it received.
 Describe 'system-package-cargo: binstall GitHub token'
-  setup() { export WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-cargo"; }
+  # The worker sources its lib from $HOME/.local/lib, so HOME points at a stage
+  # that links the WORKTREE lib: the deployed copy may predate the worker.
+  setup() {
+    export WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-cargo"
+    STAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pkg-cargo.XXXXXX")"
+    export STAGE
+    mkdir -p "$STAGE/home/.local"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/home/.local/lib"
+  }
+  cleanup() { rm -rf "$STAGE"; }
   BeforeEach 'setup'
+  AfterEach 'cleanup'
 
   provision() {   # provision <GITHUB_TOKEN> <MISE_GITHUB_TOKEN>
     zsh -f -c '
-      export SYSTEM_PACKAGE_CARGO_NO_RUN=1
+      export SYSTEM_PACKAGE_CARGO_NO_RUN=1 HOME="$STAGE/home"
       unset GITHUB_TOKEN MISE_GITHUB_TOKEN   # the ambient shell may carry either
       source "$WORKER"
       HAVE_BINSTALL=1

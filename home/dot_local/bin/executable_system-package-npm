@@ -86,18 +86,8 @@ npm_list_rows() {
 }
 
 do_list() {
-  local outdated=false
-  while (($# > 0)); do
-    case "$1" in
-      -u | --update)
-        outdated=true
-        shift
-        ;;
-      -a | --all) shift ;; # no-op: npm has no transient-dep concept here
-      *) die "unknown flag for list: $1" ;;
-    esac
-  done
-  npm_list_rows "$outdated"
+  pkg::list_flags "$@" # -a is accepted and ignored: npm has no transient-dep concept
+  npm_list_rows "$PKG_LIST_OUTDATED"
 }
 
 # npm_line_install_spec <manifest-line>
@@ -239,8 +229,7 @@ list flags:
   -u, --update   annotate packages with available updates
   -a, --all      no-op (npm has no transient-dep concept here)
 
-sync flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes
+${PKG_HELP_SYNC_FLAGS}
 
 After sync, services whose backing global package changed version and are
 currently running are restarted.
@@ -267,9 +256,7 @@ usage_sync() {
 Usage:
   system-package-npm sync [-v|--verbose]
 
-Flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
-                 sync keeps quiet
+${PKG_HELP_SYNC_VERBOSE}
 
 Reconciles ~/.config/packages/Npmfile against \`npm ls -g\`:
 
@@ -286,33 +273,5 @@ are currently running are restarted.
 EOF
 }
 
-main() {
-  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage
-    exit 0
-  fi
-  local cmd="$1"
-  shift
-  case "$cmd" in
-    list)
-      args_contain_help "$@" && {
-        usage_list
-        exit 0
-      }
-      do_list "$@"
-      ;;
-    sync)
-      args_contain_help "$@" && {
-        usage_sync
-        exit 0
-      }
-      do_sync "$@"
-      ;;
-    *)
-      usage >&2
-      die "unknown subcommand: $cmd"
-      ;;
-  esac
-}
-
-main "$@"
+# SYSTEM_PACKAGE_NPM_NO_RUN=1 lets a spec source this file without running it.
+pkg::run npm "$@"

@@ -237,4 +237,159 @@ STUB
       End
     End
   End
+
+  # The CLI shell every worker shares. The worker-supplied functions are
+  # stubbed to print which one ran; `When run` gives pkg::main its own subshell
+  # because the help and error paths exit.
+  Describe 'pkg::main'
+    usage()      { echo "USAGE"; }
+    usage_list() { echo "USAGE_LIST"; }
+    usage_sync() { echo "USAGE_SYNC"; }
+    do_list()    { echo "LIST[$*]"; }
+    do_sync()    { echo "SYNC[$*]"; }
+
+    Parameters
+      "no arguments" ""
+      "--help"       "--help"
+      "-h"           "-h"
+      "help"         "help"
+    End
+    It "prints usage and exits 0 for $1"
+      main_with() { if [[ -n "$1" ]]; then pkg::main "$1"; else pkg::main; fi; }
+      When run main_with "$2"
+      The status should be success
+      The output should equal "USAGE"
+    End
+
+    It 'forwards list arguments to do_list'
+      When run pkg::main list -u -a
+      The output should equal "LIST[-u -a]"
+    End
+
+    It 'forwards sync arguments to do_sync'
+      When run pkg::main sync --verbose
+      The output should equal "SYNC[--verbose]"
+    End
+
+    It 'prints the list help for a help flag anywhere in the list arguments'
+      When run pkg::main list -u --help
+      The status should be success
+      The output should equal "USAGE_LIST"
+    End
+
+    It 'prints the sync help for a help flag in the sync arguments'
+      When run pkg::main sync -h
+      The status should be success
+      The output should equal "USAGE_SYNC"
+    End
+
+    It 'returns the status of the subcommand it ran'
+      do_sync() { return 3; }
+      When run pkg::main sync
+      The status should equal 3
+    End
+
+    It 'prints usage on stderr and fails for an unknown subcommand'
+      When run pkg::main bogus
+      The status should be failure
+      The output should equal ""
+      The line 1 of stderr should equal "USAGE"
+      The stderr should include "unknown subcommand: bogus"
+    End
+  End
+
+  Describe 'pkg::run'
+    usage()   { echo "USAGE"; }
+    do_list() { echo "LIST[$*]"; }
+
+    It 'runs the CLI when the guard variable is unset'
+      When run pkg::run demo list -u
+      The output should equal "LIST[-u]"
+    End
+
+    It 'does nothing when SYSTEM_PACKAGE_<ECO>_NO_RUN is set'
+      guarded() { SYSTEM_PACKAGE_DEMO_NO_RUN=1 pkg::run demo list -u; }
+      When run guarded
+      The status should be success
+      The output should equal ""
+    End
+
+    It 'ignores another ecosystem guard'
+      other_guard() { SYSTEM_PACKAGE_OTHER_NO_RUN=1 pkg::run demo list; }
+      When run other_guard
+      The output should equal "LIST[]"
+    End
+
+    # Each worker ends in pkg::run, so each one can be sourced by a spec. HOME
+    # is a stage linking the worktree lib, which is where a worker looks for it.
+    Parameters
+      brew
+      cargo
+      go
+      npm
+      snap
+      uv
+    End
+    It "lets a spec source the $1 worker without running it"
+      source_worker() {
+        mkdir -p "$TEST_TMP/home/.local"
+        ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$TEST_TMP/home/.local/lib"
+        HOME="$TEST_TMP/home" zsh -f -c '
+          export "SYSTEM_PACKAGE_${(U)1}_NO_RUN=1"
+          source "$2/home/dot_local/bin/executable_system-package-$1"
+          typeset -f do_list do_sync usage usage_list usage_sync >/dev/null && print sourced
+        ' _ "$1" "$SHELLSPEC_PROJECT_ROOT"
+      }
+      When call source_worker "$1"
+      The output should equal "sourced"
+    End
+  End
+
+  Describe 'pkg::list_flags'
+    flags() { pkg::list_flags "$@" && echo "$PKG_LIST_OUTDATED $PKG_LIST_ALL"; }
+
+    Parameters
+      "false false"
+      "true false"  -u
+      "true false"  --update
+      "false true"  -a
+      "false true"  --all
+      "true true"   -a -u
+    End
+    It "sets outdated/all to '$1' for: ${2:-} ${3:-}"
+      expected="$1"
+      shift
+      When call flags "$@"
+      The output should equal "$expected"
+    End
+
+    It 'resets both flags on every call'
+      twice() { pkg::list_flags -u -a; flags; }
+      When call twice
+      The output should equal "false false"
+    End
+
+    It 'dies on an unknown flag'
+      When run pkg::list_flags -u --bogus
+      The status should be failure
+      The stderr should include "unknown flag for list: --bogus"
+    End
+  End
+
+  Describe 'sync help fragments'
+    It 'PKG_HELP_SYNC_FLAGS is the two-line block of the top-level help'
+      When call printf '%s\n' "$PKG_HELP_SYNC_FLAGS"
+      The line 1 of output should equal "sync flags:"
+      The line 2 of output should equal "  -v, --verbose  also report expected, nothing-to-do outcomes"
+      The lines of output should equal 2
+    End
+
+    It 'PKG_HELP_SYNC_VERBOSE is the three-line block of the sync help'
+      When call printf '%s\n' "$PKG_HELP_SYNC_VERBOSE"
+      The line 1 of output should equal "Flags:"
+      The line 2 of output should equal "  -v, --verbose  also report expected, nothing-to-do outcomes that a routine"
+      The line 3 of output should equal "                 sync keeps quiet"
+      The lines of output should equal 3
+    End
+  End
 End

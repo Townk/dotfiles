@@ -33,6 +33,13 @@ svc::declared() {
   svc::toml_json | jq -e --arg n "$1" 'has($n)' >/dev/null 2>&1
 }
 
+# svc::require_declared <name>
+# Die unless <name> is a section of services.toml. Every per-name verb guards
+# with this so a typo fails with the same message on both platforms.
+svc::require_declared() {
+  svc::declared "$1" || die "no such service in $SVCFILE: $1"
+}
+
 # svc::resolve_cmd0 <cmd0_token>
 # Resolve the first cmd token (typically a bare binary name like "omlx") to
 # an absolute path. Neither launchd (ProgramArguments[0]) nor a systemd unit
@@ -83,4 +90,36 @@ svc::matching() {
         or ((.value.cmd[0] // "") | split("/") | .[length-1] == $p)
       )
     | .key'
+}
+
+# do_matching <pkg>
+# The `matching` verb, identical on both platforms. Internal: lets
+# `system-service restart-for` query a worker without sourcing it.
+do_matching() {
+  [[ $# -eq 1 ]] || die "usage: matching <pkg>"
+  svc::matching "$1"
+}
+
+# svc::print_manifest_entry <name>
+# The "manifest entry" block of `info`: the entry's JSON, indented.
+svc::print_manifest_entry() {
+  printf '  manifest entry:\n'
+  svc::toml_json | jq --arg n "$1" '.[$n]' | sed 's/^/    /'
+}
+
+# svc::orphans <dir> <suffix> [declared_name...]
+# Print, one per line, the service names that have a generated artifact
+# <dir>/com.system-service.<name><suffix> but are not among the declared names.
+# Scoped to LABEL_PREFIX on purpose: a file the worker did not generate (an
+# adopted unit, another tool's plist) can never be reported, so the sweep that
+# deletes orphans cannot touch it.
+svc::orphans() {
+  local dir="$1" suffix="$2"
+  shift 2
+  local file="" name=""
+  for file in "$dir"/${LABEL_PREFIX}.*${suffix}(N); do
+    name="${${file:t}#${LABEL_PREFIX}.}"
+    name="${name%${suffix}}"
+    ((${@[(Ie)$name]})) || print -r -- "$name"
+  done
 }

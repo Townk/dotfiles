@@ -387,15 +387,8 @@ brew_list_rows() {
 }
 
 do_list() {
-  local outdated=false show_all=false
-  while (( $# > 0 )); do
-    case "$1" in
-      -u|--update) outdated=true; shift ;;
-      -a|--all)    show_all=true; shift ;;
-      *) die "unknown flag for list: $1" ;;
-    esac
-  done
-  brew_list_rows "$outdated" "$show_all"
+  pkg::list_flags "$@"
+  brew_list_rows "$PKG_LIST_OUTDATED" "$PKG_LIST_ALL"
 }
 
 # brew_snapshot_versions — TSV "name\tversion" rows for installed formulas.
@@ -456,8 +449,7 @@ list flags:
   -u, --update   annotate packages with available updates
   -a, --all      include transient (non-direct) dependencies
 
-sync flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes
+${PKG_HELP_SYNC_FLAGS}
 
 After sync, any brew service whose formula version changed and is currently
 running is restarted.
@@ -483,9 +475,7 @@ usage_sync() {
 Usage:
   system-package-brew sync [-v|--verbose]
 
-Flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
-                 sync keeps quiet
+${PKG_HELP_SYNC_VERBOSE}
 
 Runs \`brew bundle install --upgrade\` against the concatenation of
 ~/.config/packages/Brewfile.bootstrap and ~/.config/packages/Brewfile, cleans
@@ -498,22 +488,5 @@ restart formula-provided services on its own).
 EOF
 }
 
-main() {
-  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage; exit 0
-  fi
-  local cmd="$1"; shift
-  case "$cmd" in
-    list)
-      args_contain_help "$@" && { usage_list; exit 0; }
-      do_list "$@"
-      ;;
-    sync)
-      args_contain_help "$@" && { usage_sync; exit 0; }
-      do_sync "$@"
-      ;;
-    *) usage >&2; die "unknown subcommand: $cmd" ;;
-  esac
-}
-
-main "$@"
+# SYSTEM_PACKAGE_BREW_NO_RUN=1 lets a spec source this file without running it.
+pkg::run brew "$@"

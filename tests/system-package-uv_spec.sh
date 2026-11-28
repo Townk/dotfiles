@@ -8,6 +8,10 @@ Describe 'system-package-uv: python drift'
     export WORKER="$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_system-package-uv"
     STAGE="$(mktemp -d "$SHELLSPEC_TMPBASE/pkg-uv.XXXXXX")"
     export STAGE
+    # The worker sources its lib from $HOME/.local/lib, so HOME points at a
+    # stage that links the WORKTREE lib: the deployed copy may predate the worker.
+    mkdir -p "$STAGE/home/.local"
+    ln -s "$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "$STAGE/home/.local/lib"
   }
   cleanup() { rm -rf "$STAGE"; }
   BeforeEach 'setup'
@@ -16,7 +20,7 @@ Describe 'system-package-uv: python drift'
   # drifted <stamp value or ""> <snapshot rows or ""> — prints yes|no
   drifted() {
     zsh -f -c '
-      export SYSTEM_PACKAGE_UV_NO_RUN=1
+      export SYSTEM_PACKAGE_UV_NO_RUN=1 HOME="$STAGE/home"
       source "$WORKER"
       PYTHON_STAMP="$STAGE/uv.python"
       uv_current_python() { print -r -- "3.13.2" }

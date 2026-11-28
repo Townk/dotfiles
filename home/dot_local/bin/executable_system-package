@@ -46,8 +46,7 @@ list flags:
   -u, --update   show available updates
   -a, --all      include brew transient dependencies (no-op for other tools)
 
-sync flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes
+${PKG_HELP_SYNC_FLAGS}
 
 Per-form help:
   system-package <subcommand>  --help    aggregated subcommand help

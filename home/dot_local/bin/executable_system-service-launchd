@@ -209,14 +209,14 @@ svc::kickstart() {
 
 do_render() {
   [[ $# -eq 1 ]] || die "usage: render <name>"
-  svc::declared "$1" || die "no such service in $SVCFILE: $1"
+  svc::require_declared "$1"
   svc::render_plist "$1"
 }
 
 do_start() {
   [[ $# -eq 1 ]] || die "usage: start <name>"
   local name="$1"
-  svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  svc::require_declared "$name"
   svc::ensure_dirs "$name"
   local changed
   changed=$(svc::write_plist "$name")
@@ -245,12 +245,11 @@ do_restart() {
 do_info() {
   [[ $# -eq 1 ]] || die "usage: info <name>"
   local name="$1"
-  svc::declared "$name" || die "no such service in $SVCFILE: $name"
+  svc::require_declared "$name"
   printf '%s%s%s\n' "$C_BWH" "$(svc::label "$name")" "$C_RES"
   printf '  status:   %s\n' "$(svc::status "$name")"
   printf '  plist:    %s\n' "$(svc::plist_path "$name")"
-  printf '  manifest entry:\n'
-  svc::toml_json | jq --arg n "$name" '.[$n]' | sed 's/^/    /'
+  svc::print_manifest_entry "$name"
   if svc::is_bootstrapped "$name"; then
     printf '\n  launchctl print:\n'
     launchctl print "$DOMAIN/$(svc::label "$name")" 2>/dev/null | sed 's/^/    /'
@@ -341,29 +340,11 @@ do_sync() {
   done
 
   # Remove orphans: any com.system-service.*.plist no longer in TOML.
-  local existing="" base="" plist=""
-  for plist in "$LAUNCH_AGENTS"/${LABEL_PREFIX}.*.plist(N); do
-    base="${plist:t:r}"             # com.system-service.foo
-    name="${base#${LABEL_PREFIX}.}" # foo
-    local found=0 d=""
-    for d in "${declared[@]}"; do [[ "$d" == "$name" ]] && {
-      found=1
-      break
-    }; done
-    ((found)) && continue
+  for name in ${(f)"$(svc::orphans "$LAUNCH_AGENTS" .plist "${declared[@]}")"}; do
     log_info "removing orphan $(svc::label "$name")"
     svc::bootout "$name"
-    rm -f "$plist"
+    rm -f "$(svc::plist_path "$name")"
   done
-}
-
-# do_matching <pkg>
-# Internal: print declared service names whose top-level key OR cmd[0]
-# basename matches <pkg>. Used by `system-service restart-for` to map an
-# upgraded package name back to the services it owns.
-do_matching() {
-  [[ $# -eq 1 ]] || die "usage: matching <pkg>"
-  svc::matching "$1"
 }
 
 # do_status <name>

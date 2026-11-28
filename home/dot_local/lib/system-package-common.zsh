@@ -59,6 +59,88 @@ pkg::run_tool() {
   fi
 }
 
+# --- worker CLI shell -------------------------------------------------------
+# Every system-package-<eco> worker exposes the same CLI — `list`, `sync`, and
+# help at each level — because the dispatcher drives them all identically. The
+# shell lives here once; a worker supplies only do_list, do_sync, usage,
+# usage_list and usage_sync.
+
+# pkg::main [args...]
+# Dispatch a worker's command line to its do_list / do_sync, or print the
+# matching usage. An unknown subcommand prints usage on stderr and dies.
+pkg::main() {
+  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
+    usage
+    exit 0
+  fi
+  local cmd="$1"
+  shift
+  case "$cmd" in
+    list)
+      args_contain_help "$@" && {
+        usage_list
+        exit 0
+      }
+      do_list "$@"
+      ;;
+    sync)
+      args_contain_help "$@" && {
+        usage_sync
+        exit 0
+      }
+      do_sync "$@"
+      ;;
+    *)
+      usage >&2
+      die "unknown subcommand: $cmd"
+      ;;
+  esac
+}
+
+# pkg::run <eco> [args...]
+# The last line of every worker: run pkg::main unless
+# SYSTEM_PACKAGE_<ECO>_NO_RUN is set. That variable is a test-only escape hatch
+# (same convention as SYSTEM_ONBOARD_NO_RUN): a spec sources the worker with it
+# set to call one of its functions against stubs, without main running.
+pkg::run() {
+  local eco="$1"
+  shift
+  local guard="SYSTEM_PACKAGE_${(U)eco}_NO_RUN"
+  [[ -n "${(P)guard:-}" ]] && return 0
+  pkg::main "$@"
+}
+
+# pkg::list_flags [args...]
+# Shared `list` flag parsing, the counterpart of pkg::sync_parse_args. Sets
+# PKG_LIST_OUTDATED (-u) and PKG_LIST_ALL (-a) to true|false. Every worker
+# accepts -a because the dispatcher forwards list flags to all of them
+# verbatim; only brew acts on it.
+pkg::list_flags() {
+  PKG_LIST_OUTDATED=false
+  PKG_LIST_ALL=false
+  while (($# > 0)); do
+    case "$1" in
+      -u | --update)
+        PKG_LIST_OUTDATED=true
+        shift
+        ;;
+      -a | --all)
+        PKG_LIST_ALL=true
+        shift
+        ;;
+      *) die "unknown flag for list: $1" ;;
+    esac
+  done
+}
+
+# Help text for `sync --verbose`, printed verbatim by every worker (and the
+# short form by the dispatcher). Expanded inside their usage heredocs.
+PKG_HELP_SYNC_FLAGS='sync flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes'
+PKG_HELP_SYNC_VERBOSE='Flags:
+  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
+                 sync keeps quiet'
+
 # --- scratch temp files -----------------------------------------------------
 # Every sync worker needs a handful of temp files (declared/installed snapshots,
 # before/after version maps) that must be cleaned up when the process exits.

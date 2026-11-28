@@ -116,18 +116,8 @@ go_list_rows() {
 }
 
 do_list() {
-  local outdated=false
-  while (($# > 0)); do
-    case "$1" in
-      -u | --update)
-        outdated=true
-        shift
-        ;;
-      -a | --all) shift ;; # no-op: go has no transient-dep concept here
-      *) die "unknown flag for list: $1" ;;
-    esac
-  done
-  go_list_rows "$outdated"
+  pkg::list_flags "$@" # -a is accepted and ignored: go has no transient-dep concept
+  go_list_rows "$PKG_LIST_OUTDATED"
 }
 
 do_sync() {
@@ -226,8 +216,7 @@ list flags:
   -u, --update   annotate packages with available updates (queries the module proxy)
   -a, --all      no-op (go has no transient-dep concept here)
 
-sync flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes
+${PKG_HELP_SYNC_FLAGS}
 
 After sync, services whose backing binary changed version and are currently
 running are restarted. Matching is by binary basename, since that is what
@@ -255,9 +244,7 @@ usage_sync() {
 Usage:
   system-package-go sync [-v|--verbose]
 
-Flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
-                 sync keeps quiet
+${PKG_HELP_SYNC_VERBOSE}
 
 Reconciles ~/.config/packages/Gofile against the installed binaries in
 \$GOBIN. Every declared module is re-installed at \`@latest\`; any binary
@@ -268,33 +255,5 @@ currently running are restarted.
 EOF
 }
 
-main() {
-  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage
-    exit 0
-  fi
-  local cmd="$1"
-  shift
-  case "$cmd" in
-    list)
-      args_contain_help "$@" && {
-        usage_list
-        exit 0
-      }
-      do_list "$@"
-      ;;
-    sync)
-      args_contain_help "$@" && {
-        usage_sync
-        exit 0
-      }
-      do_sync "$@"
-      ;;
-    *)
-      usage >&2
-      die "unknown subcommand: $cmd"
-      ;;
-  esac
-}
-
-main "$@"
+# SYSTEM_PACKAGE_GO_NO_RUN=1 lets a spec source this file without running it.
+pkg::run go "$@"

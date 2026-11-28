@@ -68,18 +68,8 @@ cargo_list_rows() {
 }
 
 do_list() {
-  local outdated=false
-  while (($# > 0)); do
-    case "$1" in
-      -u | --update)
-        outdated=true
-        shift
-        ;;
-      -a | --all) shift ;; # no-op: cargo has no transient-dep concept here
-      *) die "unknown flag for list: $1" ;;
-    esac
-  done
-  cargo_list_rows "$outdated"
+  pkg::list_flags "$@" # -a is accepted and ignored: cargo has no transient-dep concept
+  cargo_list_rows "$PKG_LIST_OUTDATED"
 }
 
 # cargo_provision <cargofile-line>
@@ -207,8 +197,7 @@ list flags:
   -u, --update   annotate packages with available updates (queries crates.io)
   -a, --all      no-op (cargo has no transient-dep concept here)
 
-sync flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes
+${PKG_HELP_SYNC_FLAGS}
 
 After sync, any system service whose backing crate changed version and is
 currently running is restarted.
@@ -235,9 +224,7 @@ usage_sync() {
 Usage:
   system-package-cargo sync [-v|--verbose]
 
-Flags:
-  -v, --verbose  also report expected, nothing-to-do outcomes that a routine
-                 sync keeps quiet
+${PKG_HELP_SYNC_VERBOSE}
 
 Reconciles ~/.config/packages/Cargofile against \`cargo install --list\`:
 
@@ -257,40 +244,5 @@ restarted.
 EOF
 }
 
-main() {
-  if [[ $# -eq 0 ]] || is_help "${1:-}"; then
-    usage
-    exit 0
-  fi
-  local cmd="$1"
-  shift
-  case "$cmd" in
-    list)
-      args_contain_help "$@" && {
-        usage_list
-        exit 0
-      }
-      do_list "$@"
-      ;;
-    sync)
-      args_contain_help "$@" && {
-        usage_sync
-        exit 0
-      }
-      do_sync "$@"
-      ;;
-    *)
-      usage >&2
-      die "unknown subcommand: $cmd"
-      ;;
-  esac
-}
-
-# SYSTEM_PACKAGE_CARGO_NO_RUN (test-only escape hatch, same convention as
-# SYSTEM_ONBOARD_NO_RUN): a spec sources this file with it set to call
-# cargo_provision directly against a stub cargo, without main() running.
-if [[ -n "${SYSTEM_PACKAGE_CARGO_NO_RUN:-}" ]]; then
-  return 0 2>/dev/null || exit 0
-fi
-
-main "$@"
+# SYSTEM_PACKAGE_CARGO_NO_RUN=1 lets a spec source this file without running it.
+pkg::run cargo "$@"
