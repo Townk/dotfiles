@@ -55,6 +55,51 @@ Describe 'clipboard-mount: map + host validation'
   End
 End
 
+# No example here waits on the clock (tests/README-scaffolding.md, policy 2).
+# Two joins the examples below need, neither of which is a poll:
+#
+# with_lock_held <lockfile> <cmd…> — run cmd while ANOTHER process holds the
+# per-host flock, and return cmd's status. The holder says `held` on a FIFO
+# once it has the lock (so cmd cannot start before it) and keeps it until the
+# example lets it go on a second FIFO; then it is joined with `wait`.
+with_lock_held() {
+  _wl_lock=$1
+  shift
+  spec_sandbox lock
+  _wl_ev=$SANDBOX
+  mkfifo "$_wl_ev/held" "$_wl_ev/release" || return 97
+  zsh -fc 'zmodload zsh/system; : >> "$1"
+    if zsystem flock "$1"; then echo held; else echo failed; fi > "$2/held"
+    read -r go < "$2/release"' _ "$_wl_lock" "$_wl_ev" &
+  _wl_pid=$!
+  read -r _wl_state < "$_wl_ev/held"
+  _wl_rc=97
+  if [ "$_wl_state" = held ]; then
+    "$@"
+    _wl_rc=$?
+  fi
+  : > "$_wl_ev/release"
+  wait "$_wl_pid"
+  return "$_wl_rc"
+}
+
+# run_joined <cmd…> — run cmd and return its status only once every process
+# it LEFT BEHIND has ended too. `check` kicks its sweep disowned (`( cm::sweep )
+# </dev/null >/dev/null 2>&1 &!`): there is no pid to `wait` for. But the
+# sweep inherits every other descriptor of its parent, so cmd is started with
+# the write end of a FIFO on fd 9, and the reader's EOF arrives exactly when
+# the last holder (cmd, then the sweep) has exited — however it ends.
+run_joined() {
+  _rj_fifo=$(mktemp -u "$SHELLSPEC_TMPBASE/joined.XXXXXX") && mkfifo "$_rj_fifo" || return 97
+  cat "$_rj_fifo" >/dev/null &
+  _rj_reader=$!
+  "$@" 9>"$_rj_fifo"
+  _rj_rc=$?
+  wait "$_rj_reader"
+  rm -f "$_rj_fifo"
+  return "$_rj_rc"
+}
+
 Describe 'clipboard-mount: unmount + sweep'
   CM="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_clipboard-mount"
 
@@ -138,13 +183,20 @@ Describe 'clipboard-mount: unmount + sweep'
   It 'sweep reaps a mounted-but-hung volume (probe timeout) with force escalation'
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
-    # stat hangs -> probe must time out (bounded), then teardown runs.
-    printf '#!/bin/sh\nsleep 20\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
+    # stat hangs -> probe must time out (bounded), then teardown runs. The
+    # stat blocks for good (opening a FIFO nobody writes; the probe's kill -9
+    # ends it), and the probe's budget runs on the virtual clock: it gives up
+    # after its 20 naps of 0.05 s, which cost nothing.
+    spec_clock_set
+    spec_sandbox hung
+    mkfifo "$SANDBOX/never"
+    printf '#!/bin/sh\nread -r x <"%s"\n' "$SANDBOX/never" > "$STUBS/stat"; chmod +x "$STUBS/stat"
     # first umount "fails" so the diskutil force escalation is exercised
     printf '#!/bin/sh\necho "umount $*" >> "%s"\nexit 1\n' "$SHELLSPEC_TMPBASE/calls" > "$STUBS/umount"
     When run command zsh -f "$CM" sweep
     The status should be success
     The contents of file "$SHELLSPEC_TMPBASE/calls" should include "diskutil unmount force $MNT_ROOT/peer-mini"
+    The value "$(spec_clock_slept | grep -cx 0.05)" should equal 20
   End
 
   It 'teardown (via unmount) skips when another process holds the per-host lock'
@@ -152,11 +204,11 @@ Describe 'clipboard-mount: unmount + sweep'
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     # Same pattern as the ensure-side busy-lock example (Describe 'ensure'
     # below): a background zsh takes the SAME per-host flock cm::teardown now
-    # acquires, drops a ready-sentinel, and this example's teardown (via
+    # acquires, says so on a FIFO (with_lock_held), and this example's teardown (via
     # `unmount`, teardown's only CLI-reachable caller) must see it busy and
     # bail WITHOUT ever calling umount -- an in-flight `ensure` owns settling
     # this mount's health, teardown must never fight it.
-    When run command sh -c 'zsh -fc "zmodload zsh/system; : >> \"$1\"; zsystem flock \"$1\"; : > \"$2\"; sleep 5" & h=$!; i=0; while [ ! -f "$2" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; zsh -f "$3" unmount peer-mini; rc=$?; kill $h 2>/dev/null; exit $rc' _ "$MNT_ROOT/.peer-mini.lock" "$SHELLSPEC_TMPBASE/lock-held" "$CM"
+    When call with_lock_held "$MNT_ROOT/.peer-mini.lock" zsh -f "$CM" unmount peer-mini
     The status should be success
     The path "$SHELLSPEC_TMPBASE/calls" should not be exist
     The path "$MNT_ROOT/peer-mini" should be directory
@@ -204,13 +256,13 @@ STUB
   BeforeEach 'setup'
 
   It 'matches only the exact mountpoint word, not a prefix-sharing sibling'
-    When run command zsh -c 'source "$1" sweep >/dev/null 2>&1; cm::rclone_pids_for "$2"' _ "$CM" "$MNT_ROOT/peer"
+    When run command zsh -f -c 'source "$1" sweep >/dev/null 2>&1; cm::rclone_pids_for "$2"' _ "$CM" "$MNT_ROOT/peer"
     The status should be success
     The output should equal "111"
   End
 
   It 'the sibling mountpoint only ever matches its own pid'
-    When run command zsh -c 'source "$1" sweep >/dev/null 2>&1; cm::rclone_pids_for "$2"' _ "$CM" "$MNT_ROOT/peer-mini"
+    When run command zsh -f -c 'source "$1" sweep >/dev/null 2>&1; cm::rclone_pids_for "$2"' _ "$CM" "$MNT_ROOT/peer-mini"
     The status should be success
     The output should equal "222"
   End
@@ -275,8 +327,8 @@ STUB
     mkdir -p "$MNT_ROOT/peer-mini"
     printf '%s\n' "mini-clip on $MNT_ROOT/peer-mini (macfuse, nodev)" > "$SHELLSPEC_TMPBASE/mount-table"
     printf '#!/bin/sh\necho "stat: x: stat: Device not configured" >&2\nexit 1\n' > "$STUBS/stat"; chmod +x "$STUBS/stat"
-    # the async sweep must reap the corpse; poll briefly for it
-    When run command sh -c 'zsh -f "$1" check peer-mini; rc=$?; i=0; while [ -d "$2" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done; exit $rc' _ "$CM" "$MNT_ROOT/peer-mini"
+    # the async sweep must reap the corpse; run_joined returns when it has ended
+    When call run_joined zsh -f "$CM" check peer-mini
     The status should be failure
     The output should equal ""
     The path "$MNT_ROOT/peer-mini" should not be exist
@@ -290,8 +342,8 @@ STUB
 
   It 'fails and sweeps when the dir exists but nothing is mounted'
     mkdir -p "$MNT_ROOT/peer-mini"
-    # the async sweep must reap the orphan dir; poll briefly for it
-    When run command sh -c 'zsh -f "$1" check peer-mini; rc=$?; i=0; while [ -d "$2" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done; exit $rc' _ "$CM" "$MNT_ROOT/peer-mini"
+    # the async sweep must reap the orphan dir; run_joined returns when it has ended
+    When call run_joined zsh -f "$CM" check peer-mini
     The status should be failure
     The path "$MNT_ROOT/peer-mini" should not be exist
   End
@@ -453,10 +505,13 @@ STUB
     # `builtin zsystem "$@"`, so every call except the one under test
     # behaves identically. The wrapper recognizes ONLY teardown's exact
     # non-blocking reacquire call (`flock -t 0 ...`) and, right before
-    # delegating to it, drops a ready sentinel and sleeps 1s -- giving a
-    # contender (already parked, polling every 20ms, woken by the sentinel)
-    # a wide, deterministic window to grab the lock IF (and only if) the
-    # preceding line actually dropped it.
+    # delegating to it, hands the turn to a contender parked on a FIFO: the
+    # contender tries the lock ONCE (`flock -t 0`), answers `grabbed` or
+    # `busy` on a second FIFO, and the wrapper goes on only when it has that
+    # answer. So the contender's attempt lands exactly inside the gap, with
+    # this process standing still, and it gets the lock IF (and only if) the
+    # preceding line actually dropped it. A contender that grabbed keeps the
+    # lock until teardown has made its own attempt. No window, no clock.
     #
     # Discrimination evidence (see task report): reverting this fix line
     # locally and re-running this example reproduces the bug every time --
@@ -467,34 +522,41 @@ STUB
     printf '#!/bin/sh\nexit 0\n' > "$STUBS/rclone"; chmod +x "$STUBS/rclone"
     printf '#!/bin/sh\necho "umount $*" >> "%s"\nexit 0\n' "$SHELLSPEC_TMPBASE/calls" > "$STUBS/umount"
     chmod +x "$STUBS/umount"
-    rm -f "$SHELLSPEC_TMPBASE/ready" "$SHELLSPEC_TMPBASE/grabbed"
+    spec_sandbox race
+    mkfifo "$SANDBOX/turn" "$SANDBOX/answer" "$SANDBOX/release"
     When run command zsh -f -c '
       source "$1" sweep >/dev/null 2>&1
       lock="$2/.peer-mini.lock"
       : > "$lock"
-      ready="$3"; grabbed="$4"
+      ev="$3"
       zsh -fc "
         zmodload zsh/system
-        while [ ! -f \"$ready\" ]; do sleep 0.01; done
-        if zsystem flock -t 3 -i 0.02 \"$lock\" 2>/dev/null; then
-          : > \"$grabbed\"
-          sleep 2
+        read -r go < \"$ev/turn\"
+        if zsystem flock -t 0 \"$lock\" 2>/dev/null; then
+          echo grabbed > \"$ev/answer\"
+          read -r go < \"$ev/release\"
+        else
+          echo busy > \"$ev/answer\"
         fi
       " &
       contender=$!
+      answer=
       zsystem() {
-        if [[ "$1" == "flock" && "$2" == "-t" && "$3" == "0" ]]; then
-          : > "$ready"
-          sleep 1
+        if [[ "$1" == "flock" && "$2" == "-t" && "$3" == "0" && -z "$answer" ]]; then
+          : > "$ev/turn"
+          read -r answer < "$ev/answer"
         fi
         builtin zsystem "$@"
       }
       cm::ensure peer-mini
       rc=$?
-      kill $contender 2>/dev/null
+      case "$answer" in
+        grabbed) : > "$ev/release" ;;
+        "") kill $contender 2>/dev/null ;;
+      esac
       wait $contender 2>/dev/null
       exit $rc
-    ' _ "$CM" "$MNT_ROOT" "$SHELLSPEC_TMPBASE/ready" "$SHELLSPEC_TMPBASE/grabbed"
+    ' _ "$CM" "$MNT_ROOT" "$SANDBOX"
     The status should be failure
     The stderr should include "unhealthy"
     The contents of file "$SHELLSPEC_TMPBASE/calls" should include "umount $MNT_ROOT/peer-mini"
@@ -508,11 +570,13 @@ STUB
   End
 
   It 'fails busy when another process holds the per-host lock (rclone never invoked)'
-    # A background zsh takes the flock, then drops a ready-sentinel; the test
-    # waits for the sentinel (no acquire race), runs ensure with the lock
-    # timeout dialed to 1s (test seam; default stays 10s), and reaps the
-    # holder before exiting so nothing leaks past the example.
-    When run command sh -c 'zsh -fc "zmodload zsh/system; : >> \"$1\"; zsystem flock \"$1\"; : > \"$2\"; sleep 5" & h=$!; i=0; while [ ! -f "$2" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; CLIPBOARD_MOUNT_LOCK_TIMEOUT_S=1 zsh -f "$3" ensure peer-mini; rc=$?; kill $h 2>/dev/null; exit $rc' _ "$MNT_ROOT/.peer-mini.lock" "$SHELLSPEC_TMPBASE/lock-held" "$CM"
+    # A background zsh takes the flock and says so on a FIFO (with_lock_held:
+    # no acquire race); ensure then runs with the lock wait dialed to 0 (test
+    # seam; default stays 10s): `zsystem flock -t 0` tries once and gives up,
+    # the same call teardown makes, so "busy" is decided without a second of
+    # real waiting inside zsh's own flock timeout, which no clock reaches. The
+    # holder is released and joined before the example ends.
+    When call with_lock_held "$MNT_ROOT/.peer-mini.lock" env CLIPBOARD_MOUNT_LOCK_TIMEOUT_S=0 zsh -f "$CM" ensure peer-mini
     The status should be failure
     The stderr should include "busy"
     The path "$SHELLSPEC_TMPBASE/rclone-argv" should not be exist

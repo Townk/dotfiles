@@ -2,3 +2,4 @@
 --default-path tests
 --helperdir tests
 --require spec_helper
+--require spec_suite

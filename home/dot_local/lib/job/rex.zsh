@@ -43,8 +43,16 @@ job::_rex_log() {
 # job::_rex_lock — take $JOB_STATE_ROOT/.rex.lock, the one lock over the
 # Jobs session, for the life of the calling (sub)shell. Waits up to 15 s:
 # an opener holds it through two rex calls of up to 5 s each, and a waiter
-# that gave up sooner would leave its job without a tab.
+# that gave up sooner would leave its job without a tab. The wait is in the
+# kernel (zsystem flock), where a test's clock cannot see it: on a test
+# clock ($COMMON_CLOCK_FILE) a taken lock is first tried without waiting,
+# and the wait announced (common::blocking), so a test can know an opener
+# has reached a held lock. Off it, one string test.
 job::_rex_lock() {
+  if [[ -n "${COMMON_CLOCK_FILE:-}" ]]; then
+    lock::hold "$JOB_STATE_ROOT/.rex.lock" 0 && return 0
+    common::blocking rex.lock
+  fi
   lock::hold "$JOB_STATE_ROOT/.rex.lock" 15
 }
 

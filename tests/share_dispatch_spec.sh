@@ -340,27 +340,27 @@ SH
   # still the same flag and `while (( $# ))` never terminated — a
   # CPU-spinning hang from an ordinary typo, with no test to catch it.
   #
-  # A `timeout` alone is NOT enough to keep a regression here from wedging
-  # the whole suite. shellspec's own output capture (shellspec_readfile in
-  # lib/general.sh) rebuilds its buffer line-by-line — O(n^2) in output
-  # size — and the pre-fix spin emits on the order of 270K lines/second.
-  # Even after `timeout` kills the child, shellspec is left trying to slurp
-  # everything the spin already wrote to the pipe before it died: at 5s that
-  # is >1M lines / tens of MB, and the capture itself hangs on THAT, not on
-  # the child. Verified against the pre-fix commit (c5365a08) — see the
-  # fix-round report for the exact number; it did not return in under a
-  # few minutes, let alone the suite's normal few seconds.
+  # No watchdog bounds this (a spec's own `timeout` is a wait on the real
+  # clock: tests/README-scaffolding.md). The spin is bounded by its own
+  # OUTPUT instead: the pre-fix loop emits on the order of 270K lines/second
+  # on stderr, so the child's stderr goes through a pipe to `head -c 300`.
+  # head leaves after 300 bytes, the next write of a spinning child raises
+  # SIGPIPE, and the child is gone within milliseconds — however fast the
+  # machine is, with no clock involved. Checked against the pre-fix commit
+  # (c5365a08): the helper returns in about 20 ms with status 141 and 300
+  # bytes of "shift count must be <= $#", so both examples' assertions fail
+  # as they should.
   #
-  # So this helper bounds BOTH dimensions: `timeout` bounds wall-clock time,
-  # and redirecting the child's stderr to a FILE (never a pipe shellspec
-  # reads directly) plus `head -c` on the way back out bounds the volume
-  # shellspec's capture ever sees — regardless of how much the child wrote
-  # before `timeout` caught it.
+  # The same 300 bytes bound the VOLUME shellspec's capture ever sees, which
+  # matters as much: its output capture (shellspec_readfile in
+  # lib/general.sh) rebuilds its buffer line-by-line — O(n^2) in output size
+  # — and hangs on tens of MB by itself.
   run_bare_flag() {
-    local errf="$SB/spin.err"
-    timeout 5 zsh -c "source home/dot_local/lib/share.zsh; share::send $1" 2>"$errf"
-    local rc=$?
-    head -c 300 "$errf" >&2
+    local rc
+    {
+      zsh -c "source home/dot_local/lib/share.zsh; share::send $1" 2>&1 >&3 3>&- | head -c 300 >&2
+      rc=${pipestatus[1]}
+    } 3>&1
     return $rc
   }
 

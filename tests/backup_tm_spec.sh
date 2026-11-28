@@ -35,6 +35,35 @@ EOF
       }
     }
 
+    # A stand-in process that the code under test may or may not kill, and
+    # that never waits on time (so no `sleep` child is left behind either).
+    #   blockers      once per example: the two FIFOs, and this shell's
+    #                 read-write end of "release" ($BLOCK_FD)
+    #   blocker_cmd   prints the /bin/sh lines of a stand-in: say "up", then
+    #                 block reading "release". Start it with {BLOCK_FD}>&-
+    #                 so this shell holds the only write end: a stand-in
+    #                 that outlives the example reads EOF and goes away by
+    #                 itself (a leaked process would hang the whole file).
+    #   fate <pid>    REPLY=killed|alive for such a child of this shell. It
+    #                 writes the line the stand-in is blocked on and joins it
+    #                 with `wait`: one that was signalled dies of the signal
+    #                 (posted before the line, so it wins), one that was left
+    #                 alone reads the line and exits 7. Exact either way, and
+    #                 nothing is polled.
+    blockers() { mkfifo "$FIX/up" "$FIX/release" && exec {BLOCK_FD}<>"$FIX/release"; }
+    blocker_cmd() { printf 'echo up > "%s/up"\nread -r _ < "%s/release" && exit 7\nexit 8\n' "$FIX" "$FIX"; }
+    fate() {
+      local rc line
+      print -u $BLOCK_FD go
+      wait "$1"; rc=$?
+      if (( rc > 128 )); then
+        read -r -u $BLOCK_FD line   # nobody read the line: take it back
+        REPLY=killed
+      else
+        REPLY=alive
+      fi
+    }
+
     It 'creates a session with ladder, lens, anchor and rung=1'
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
@@ -250,41 +279,33 @@ EOF
     End
 
     It 'kills the viewer into the spinner on builds; cache hits reload in place'
-      wait_dead() {
-        local pid="$1" i
-        for i in {1..50}; do
-          kill -0 "$pid" 2>/dev/null || { print yes; return 0 }
-          sleep 0.02
-        done
-        kill "$pid" 2>/dev/null
-        print no
-      }
       run_it() {
         source "$LIB/backup-tm.zsh"; stub_restic
-        local s
+        local s up REPLY
         s=$(bkp::tm::session_new diff "$FIX/anchor")
         bkp::tm::ladder_fill "$s"
         mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
         print -r -- 4242 > "$s/lens.pid"
         # fake viewer whose cmdline matches the session's patch path
-        printf '#!/bin/sh\nsleep 30\n' > "$FIX/stub/diffnav"
+        blockers
+        { print '#!/bin/sh'; blocker_cmd } > "$FIX/stub/diffnav"
         chmod +x "$FIX/stub/diffnav"
         # UNCACHED rung: the viewer dies at build start (spinner phase
         # takes over) and the building flag clears once the patch lands.
-        "$FIX/stub/diffnav" --watch --watch-cmd "cat $s/current.patch" & local a=$!
-        sleep 0.2
+        "$FIX/stub/diffnav" --watch --watch-cmd "cat $s/current.patch" {BLOCK_FD}>&- & local a=$!
+        read -r up <"$FIX/up"
         bkp::tm::step "$s" older || { echo "step rc=$?"; return 1 }
-        print -r -- "build-kill=$(wait_dead "$a")"
+        fate "$a"
+        [[ "$REPLY" == killed ]] && print build-kill=yes || print build-kill=no
         [[ -e "$s/building" ]] && print building-left || print building-cleared
         bkp::tm::step "$s" newer   # rung 1 built too (for the cache below)
         # CACHED rung: no spinner, no kill — diffnav's own watch re-reads
         # the patch in place.
-        "$FIX/stub/diffnav" --watch --watch-cmd "cat $s/current.patch" & local c=$!
-        sleep 0.2
+        "$FIX/stub/diffnav" --watch --watch-cmd "cat $s/current.patch" {BLOCK_FD}>&- & local c=$!
+        read -r up <"$FIX/up"
         bkp::tm::step "$s" older || { echo "step rc=$?"; return 1 }
-        sleep 0.3
-        if kill -0 "$c" 2>/dev/null; then print viewer-alive; else print viewer-killed; fi
-        kill "$c" 2>/dev/null
+        fate "$c"
+        print -r -- "viewer-$REPLY"
         [[ -e "$s/respawn" ]] && print respawn-flagged || print no-respawn
       }
       When run run_it
@@ -347,15 +368,15 @@ EOF
         bkp::tm::ladder_fill "$s"
         mkdir -p "$s/mnt/ids/cccc0000$FIX/anchor" "$s/mnt/ids/aaaa0000$FIX/anchor"
         # fake in-flight synthesis from a previous scrub step
-        sleep 30 & local prev=$!
+        blockers
+        sh -c "$(blocker_cmd)" {BLOCK_FD}>&- & local prev=$!
+        local up REPLY
+        read -r up <"$FIX/up"
         print -r -- "$prev" > "$s/refresh.pid"
         bkp::tm::step "$s" older || { echo "step rc=$?"; return 1 }
-        local i dead=no
-        for i in {1..50}; do
-          kill -0 "$prev" 2>/dev/null || { dead=yes; break }
-          sleep 0.02
-        done
-        kill "$prev" 2>/dev/null
+        local dead=no
+        fate "$prev"
+        [[ "$REPLY" == killed ]] && dead=yes
         print -r -- "prev-dead=$dead"
         [[ -f "$s/refresh.pid" ]] && print pid-file-left || print pid-file-reaped
       }
@@ -490,27 +511,41 @@ EOF
     It 'kills the wrapper and its child UI process'
       run_it() {
         source "$LIB/backup-tm.zsh"
+        # No process here waits on time, and nothing is polled. The child
+        # UI blocks on a FIFO nobody writes, holding the only write end of
+        # another ("alive"): the example sees EOF there when the child is
+        # gone. After kill_lens the example writes the line the child is
+        # blocked on: a child that was signalled still dies of the signal
+        # (EOF, no word), one that was left alone says "survived". The
+        # wrapper does not end with its child: it blocks on a FIFO of its
+        # own, so it too is gone by a signal (status > 128) or, left alone,
+        # by reading its line (status 7).
+        mkfifo "$S/up" "$S/release" "$S/alive" "$S/release-wrapper"
         cat > "$S/wrapper.zsh" <<'EOS'
-sleep 100 &
+( exec 3>"$1/alive"; read -r _ <"$1/release" && print -u3 survived ) &
 print -r -- $! > "$1/child.pid"
 print -r -- $$ > "$1/lens.pid"
+print up > "$1/up"
 wait
+read -r _ <"$1/release-wrapper"
+exit 7
 EOS
-        zsh "$S/wrapper.zsh" "$S" &
-        local i
-        for i in {1..50}; do
-          [[ -s "$S/child.pid" && -s "$S/lens.pid" ]] && break
-          sleep 0.02
-        done
+        zsh "$S/wrapper.zsh" "$S" & local wpid=$!
+        local up afd rfd wfd word=""
+        read -r up <"$S/up"
         [[ -s "$S/child.pid" && -s "$S/lens.pid" ]] || { echo "setup failed"; return 1 }
+        exec {afd}<"$S/alive"   # returns once the child holds the other end
         bkp::tm::kill_lens "$S" || { echo "kill_lens rc=$?"; return 1 }
-        local child=$(<"$S/child.pid") wrapper=$(<"$S/lens.pid") cdead=no wdead=no
-        for i in {1..50}; do
-          kill -0 "$child" 2>/dev/null || cdead=yes
-          kill -0 "$wrapper" 2>/dev/null || wdead=yes
-          [[ "$cdead" == yes && "$wdead" == yes ]] && break
-          sleep 0.02
-        done
+        local cdead=no wdead=no
+        exec {rfd}<>"$S/release"
+        print -u $rfd go
+        read -r word <&$afd
+        [[ -z "$word" ]] && cdead=yes
+        exec {wfd}<>"$S/release-wrapper"
+        print -u $wfd go
+        wait "$wpid"
+        (( $? > 128 )) && wdead=yes
+        exec {rfd}>&- {wfd}>&- {afd}<&-
         print -r -- "child-dead=$cdead wrapper-dead=$wdead"
       }
       When run run_it

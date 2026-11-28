@@ -1,78 +1,71 @@
-.PHONY: test test-mux test-all test-one test-changed lint recob
+.PHONY: test test-all test-one test-changed test-profile lint recob
 
-# Three lanes, because one lane cannot be both complete and quick here — plus
-# test-one, which runs a single spec, and test-changed, which runs only the
-# specs the branch's diff against master can reach (see below).
+# Two suites, and membership is decided PER EXAMPLE, not per file:
+#
+#   make test      FAST: every example except the ones marked complete-only.
+#                  Budget: 60 s for the run, 0.1 s for any one example.
+#   make test-all  COMPLETE: every example. Budget: 180 s. The gate, before a
+#                  push and in CI.
+#
+# Both run every spec file. An example that needs a real scratch server, a
+# real daemon, real restic/git work or other heavy tooling says so itself:
+#     Skip if 'complete-only: <why>' spec_complete_only
+# in the It, or in a Describe/Context to cover the group and its hooks
+# (tests/spec_suite.sh). There is no list of slow files to keep honest: the
+# wrapper measures every example on every run and names the ones over budget
+# (tests/run-shellspec.sh; tests/spec-profile.sh for the whole table).
+#
+# SPEC_BUDGET says what a blown budget does: `warn` reports it, `fail` fails
+# the run (exit 103). It is `warn` until the examples over 0.1 s have been
+# marked; flip the default here then. `make test SPEC_BUDGET=fail` tries it.
+#
+# Plus test-one, which runs a single spec, and test-changed, which runs only
+# the specs the branch's diff against master can reach (see below). Neither
+# has a budget, and both run every example of the specs they pick.
 #
 # Every lane runs its spec files in parallel (shellspec --jobs), one job per
-# performance core. The framework itself is cheap (~4.5ms per example, ~8ms per
-# file, measured 2026-09-25); the time is what the examples do, ~10 minutes of
-# it for the whole suite, so parallel files are the lever. shellspec schedules
-# whole FILES, so a run cannot end before its longest file: HEAVY lists the
-# longest ones, measured, and every lane starts them first. Keep it honest when
-# a spec grows or shrinks. (The old warning that --jobs "corrupts its own IPC"
-# was raw US/RS bytes in two specs corrupting shellspec's report stream, fixed
-# in 96d6a0da; it holds under --jobs too.) JOBS=1 runs one file at a time.
-JOBS       ?= $(shell sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+# performance core, in alphabetical order. shellspec schedules whole FILES, so
+# a run cannot end before its longest file — but the longest is ~30 s of a
+# ~120 s run, so the order hardly matters: starting the measured-heaviest
+# files first took 118 s against 119 s (--jobs 6, 2026-11-27), and the old
+# hand-kept HEAVY list was worth nothing at all. It is gone; `tests/spec-profile.sh
+# files` shows each file's weight if one ever dominates again. (The old
+# warning that --jobs "corrupts its own IPC" was raw US/RS bytes in two specs
+# corrupting shellspec's report stream, fixed in 96d6a0da; it holds under
+# --jobs too.) JOBS=1 runs one file at a time.
+JOBS        ?= $(shell sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 export JOBS
-HEAVY      := tests/backup_tm_spec.sh tests/rip-push_spec.sh \
-              tests/rip-audiobook-panel_spec.sh tests/rip-audiobook-library_spec.sh \
-              tests/backup_spec.sh tests/pbpaste-files_spec.sh \
-              tests/pick-clipboard-files_spec.sh tests/rip-audiobook-sweep_spec.sh \
-              tests/rip-audiobook_spec.sh tests/clipboard-mount_spec.sh \
-              tests/preview_spec.sh tests/ssh-prepare-mount_spec.sh \
-              tests/mux_spec.sh tests/job_spec.sh tests/rip-extra_spec.sh \
-              tests/mux_stack_spec.sh
-# $(call heavy_first,LIST): LIST with its HEAVY files first, longest first.
-heavy_first = $(foreach h,$(HEAVY),$(filter $(h),$(1))) $(filter-out $(HEAVY),$(1))
-SPECS      := $(wildcard tests/*_spec.sh)
+SPEC_BUDGET ?= warn
+export SPEC_BUDGET
+SPECS       := $(wildcard tests/*_spec.sh)
 
 # shellspec 0.28.1 exits 0 on an aborted run, even one with failures; the
-# wrapper fails it instead. See tests/run-shellspec.sh.
-SHELLSPEC  := tests/run-shellspec.sh
+# wrapper fails it instead, and enforces the budgets. See tests/run-shellspec.sh.
+SHELLSPEC   := tests/run-shellspec.sh
+# Where each lane leaves its per-example times (tests/spec-profile.sh reads them).
+PROFILE_DIR := $(patsubst %/,%,$(or $(TMPDIR),/tmp))
 
-# Specs that cost more than ~5s each, measured. They are the ones that drive
-# real filesystems, mounts, restic, or tmux servers — worth running, not
-# worth running on every save. Keep this list honest: if a spec grows past a
-# few seconds it belongs here, and if one gets cheaper it should come out.
-SLOW_SPECS := tests/backup_spec.sh tests/backup_changes_spec.sh \
-              tests/backup_tm_spec.sh tests/chezmoi-reverse_spec.sh \
-              tests/clipboard-files-ops_spec.sh \
-              tests/clipboard-mount_spec.sh \
-              tests/input-common_spec.sh tests/mux_search_spec.sh \
-              tests/mux_spec.sh tests/mux_stack_spec.sh \
-              tests/mux_whichkey_dispatch_spec.sh tests/mux_whichkey_spec.sh \
-              tests/pbcopy-files_spec.sh tests/pbpaste-files_spec.sh \
-              tests/pinentry_float_spec.sh \
-              tests/pick-clipboard-feedback_spec.sh tests/pick-clipboard-files_spec.sh \
-              tests/platform_spec.sh tests/preview_spec.sh \
-              tests/quick_launch_tmux_spec.sh tests/ssh-prepare-mount_spec.sh \
-              tests/system-onboard_spec.sh tests/system-service-launchd_spec.sh \
-              tests/theme_apply_tmux_spec.sh tests/tmux_socket_isolation_spec.sh \
-              tests/tmux_status_right_spec.sh
-
-FAST_SPECS := $(filter-out $(SLOW_SPECS),$(SPECS))
-# tests/mux_spec.sh is named explicitly: `mux_*_spec.sh` needs a middle
-# segment, so the shim's OWN spec was missing from this lane.
-MUX_SPECS  := tests/mux_spec.sh \
-              $(wildcard tests/mux_*_spec.sh) $(wildcard tests/tmux_*_spec.sh) \
-              tests/quick_launch_tmux_spec.sh tests/theme_apply_tmux_spec.sh \
-              tests/quick_launch_rex_spec.sh $(wildcard tests/rex_*_spec.sh)
-
-# Everything that does not need a daemon. test-changed is the quicker inner
-# loop; this is the lane to trust before landing.
+# The fast suite: the inner loop, and what test-changed falls back to. The
+# complete-only examples are skipped, and those skips are not listed one by
+# one (--skip-message quiet); the summary still counts them.
 test: lint recob
-	$(SHELLSPEC) --jobs $(JOBS) $(call heavy_first,$(FAST_SPECS))
-
-# The mux/tmux surface (~135s) — the lane the migration work lives in. Not
-# diff-driven: test-changed only picks a mux spec if the diff reaches it.
-test-mux: lint recob
-	$(SHELLSPEC) --jobs $(JOBS) $(call heavy_first,$(MUX_SPECS))
+	SPEC_SUITE=fast SPEC_PROFILE_KEEP=$(PROFILE_DIR)/spec-profile.fast.tsv \
+	  $(SHELLSPEC) --jobs $(JOBS) --skip-message quiet $(SPECS)
 
 # The gate: everything, before a push and in CI. Neither test-one nor
 # test-changed stands in for it.
 test-all: lint recob
-	$(SHELLSPEC) --jobs $(JOBS) $(call heavy_first,$(SPECS))
+	SPEC_SUITE=complete SPEC_PROFILE_KEEP=$(PROFILE_DIR)/spec-profile.complete.tsv \
+	  $(SHELLSPEC) --jobs $(JOBS) $(SPECS)
+
+# What the last `make test-all` (or SUITE=fast: `make test`) measured: the
+# totals, the 30 slowest examples, and how to list every example over 0.1 s.
+SUITE ?= complete
+test-profile:
+	@tests/spec-profile.sh summary $(PROFILE_DIR)/spec-profile.$(SUITE).tsv
+	@tests/spec-profile.sh top $(PROFILE_DIR)/spec-profile.$(SUITE).tsv
+	@echo 'every example over 0.1 s:  tests/spec-profile.sh over $(PROFILE_DIR)/spec-profile.$(SUITE).tsv'
+	@echo 'each file, heaviest first: tests/spec-profile.sh files $(PROFILE_DIR)/spec-profile.$(SUITE).tsv'
 
 # One spec, seconds instead of minutes: make test-one SPEC=tests/<name>_spec.sh.
 # Builds recob first only when the spec pulls in tests/recob_helper.sh, and

@@ -50,6 +50,11 @@ Describe 'no real waits in the tests'
       The output should equal ""
     End
 
+    It 'does not count lines of a multi-line expected output'
+      When call count 'The output should equal "rc=0' 'gtimeout 20' 'timeout 20"' '  sleep 1'
+      The output should equal "x_spec.sh 1 0"
+    End
+
     It 'counts reads of the real clock'
       When call count 'local t0=$EPOCHREALTIME' '(( EPOCHREALTIME - t0 < 3 ))' 'print $SECONDS'
       The output should equal "x_spec.sh 0 3"

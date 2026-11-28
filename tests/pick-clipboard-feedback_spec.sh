@@ -445,17 +445,18 @@ for arg in "\$@"; do
 done
 mkdir -p "\$partial"
 printf partial > "\$partial/chunk"
-sleep 1
+kill -TERM "\$(cat "$BINDIR/restore.pid")"
 exit 0
 EOF
       chmod +x "$BINDIR/rsync-slow"
       export PICK_CLIPBOARD_RSYNC="$BINDIR/rsync-slow"
+      # The TERM comes from the fake rsync itself, once its partial chunk is on
+      # disk: it lands while the pull is running, at one exact point, and
+      # nothing sleeps to aim it. The picker is exec'd under a pid the fake can
+      # read (written before the script starts) and runs in the foreground.
       run_cancelled_restore() {
-        zsh -f "$SCRIPT" --restore-id "$1" &
-        _pid=$!
-        sleep 0.4
-        kill -TERM "$_pid" 2>/dev/null
-        wait "$_pid"
+        sh -c 'echo $$ > "$1"; shift; exec "$@"' _ "$BINDIR/restore.pid" \
+          zsh -f "$SCRIPT" --restore-id "$1"
       }
       When call run_cancelled_restore "$id"
       The status should equal 130

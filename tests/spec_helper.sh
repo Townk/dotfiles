@@ -65,6 +65,8 @@ fi
 spec_helper_configure() {
   before_all spec_helper_own_tmpbase
   after_all spec_helper_drop_tmpbase
+  # The stepped clock's deadlock rule: no example ends with a nap held.
+  after_each spec_clock_after_each
 }
 spec_helper_own_tmpbase() {
   SPEC_HELPER_TMPBASE=$(mktemp -d "${TMPDIR:-/tmp}/spec.XXXXXX") || return 1
@@ -231,6 +233,9 @@ spec_desktop_unguard() {
 
 spec_helper_drop_tmpbase() {
   [ -n "${SPEC_HELPER_TMPBASE:-}" ] || return 0
+  # A stepped clock's gate that is still closed holds a process at a nap
+  # (an example that was killed): let it go before its gate is removed.
+  _spec_clock_open_gates_under "$SPEC_HELPER_TMPBASE"
   _sh_try=0
   while [ "$_sh_try" -lt 20 ]; do
     rm -rf "$SPEC_HELPER_TMPBASE" 2>/dev/null
@@ -372,6 +377,10 @@ spec_path_prepend() {
 # two readers, the awk below and the read loop in common.zsh;
 # tests/common_spec.sh feeds both the same journal and compares.
 #
+# STEPPED. All of the above is the FREE-RUNNING clock: every nap is instant.
+# spec_clock_stepped (further down) makes each nap stop until the test lets
+# it through, for an example that has to act WHILE the code is asleep.
+#
 # WHAT IT DOES NOT REACH: code that still reads $EPOCHSECONDS /
 # $EPOCHREALTIME / $SECONDS directly or waits with `read -t`, a bare
 # `zselect`, `wait`, or a tool's own `--timeout`; a script that resets PATH
@@ -393,7 +402,26 @@ spec_clock_set() {
          if (a ~ /m$/) u = 60; else if (a ~ /h$/) u = 3600; else if (a ~ /d$/) u = 86400
          sub(/[smhd]$/, "", a); t += a * u }
          printf "%.0f\n", t * 1000 }'"'"' "$@")' \
+      'if [ -p "$SPEC_CLOCK_FILE.gate/go" ]; then exec zsh -f "$STUB_DIR/spec-clock-gate" "$ms" "$*"; fi' \
       'echo "+ $ms $*" >>"$SPEC_CLOCK_FILE"'
+    # The stepped clock's gate, for the fake sleep (sh has no lock to queue
+    # on). The same steps as _common_clock_gate in common.zsh;
+    # tests/spec_helper_spec.sh holds one sleeper of each kind.
+    printf '%s\n' \
+      'zmodload zsh/system zsh/datetime; gate=$SPEC_CLOCK_FILE.gate tok= fd=' \
+      'integer t0=$EPOCHSECONDS bound=${COMMON_CLOCK_STEP_BOUND:-300} cut=0' \
+      '{ zsystem flock -f fd "$gate/lock" || fd=' \
+      '  while [[ -p "$gate/go" ]]; do' \
+      '    print -r -- "$$ $1 $2" >| "$gate/at"' \
+      '    read -r -t "$bound" tok <> "$gate/go" && break' \
+      '    tok=' \
+      '    (( EPOCHSECONDS - t0 < bound && ++cut < 100 )) && continue' \
+      '    command rm -f -- "$gate/go"; break' \
+      '  done' \
+      '  [[ -z "$fd" ]] || zsystem flock -u "$fd"' \
+      '} 2>/dev/null' \
+      '[[ "$tok" == go || ! -f "$SPEC_CLOCK_FILE" ]] || print -r -- "+ $1 $2" >> "$SPEC_CLOCK_FILE"' \
+      >"$SPEC_CLOCK_BIN/spec-clock-gate"
     spec_stub "$SPEC_CLOCK_BIN" date \
       'for a in "$@"; do case $a in -r | -d | -j | -f | --date*) exec '"'$_ck_date'"' "$@" ;; esac; done' \
       'now=$(awk '"'"'$1 == "=" { t = $2 } $1 == "+" { t += $2 } END { printf "%.0f\n", int(t / 1000) }'"'"' "$SPEC_CLOCK_FILE")' \
@@ -444,7 +472,7 @@ _spec_clock_ms() { awk -v s="$1" 'BEGIN { printf "%.0f\n", s * 1000 }'; }
 # they cannot do is hold the code still: between two of its naps nothing can
 # be slipped in from outside. An event that must land at one exact point
 # needs a fake the code calls at that point (a counter, a FIFO the fake
-# blocks on), not the clock.
+# blocks on) or, when that point is a nap, the stepped clock below.
 spec_clock_await() {
   _ca_fifo=$(mktemp -u "${SHELLSPEC_TMPBASE:?}/await.XXXXXX") && mkfifo "$_ca_fifo" || return 1
   tail -n +1 -f "${SPEC_CLOCK_FILE:?spec_clock_await: call spec_clock_set first}" >"$_ca_fifo" 2>/dev/null &
@@ -458,20 +486,151 @@ spec_clock_await() {
 }
 spec_clock_guard() {
   _cg_fifo=$(mktemp -u "${SHELLSPEC_TMPBASE:?}/guard.XXXXXX") && mkfifo "$_cg_fifo" || return 1
-  tail -n +1 -f "${SPEC_CLOCK_FILE:?spec_clock_guard: call spec_clock_set first}" >"$_cg_fifo" 2>/dev/null &
-  SPEC_CLOCK_GUARD=$!
+  : "${SPEC_CLOCK_FILE:?spec_clock_guard: call spec_clock_set first}"
   # awk ends at the bound (then the kill) or at EOF, when the guard is stood
   # down by killing its tail (then nothing).
   ( awk -v d="$(_spec_clock_ms "${2:-7200}")" '$1 == "=" { base = $2; t = $2 } $1 == "+" { t += $2 }
       t - base >= d { hit = 1; exit } END { exit !hit }' <"$_cg_fifo" && kill -9 "$1" 2>/dev/null
     rm -f "$_cg_fifo" ) >/dev/null 2>&1 &
   SPEC_CLOCK_GUARD_SUB=$!
+  # The write end is opened HERE, which blocks until awk is reading, and the
+  # tail inherits it instead of opening the FIFO itself. So the tail is the
+  # only writer from its first instant, and killing it at any moment - even
+  # before it has exec'd - gives awk its EOF. (When each side opened the FIFO
+  # on its own, a guard stood down at once could kill the tail before its
+  # open: awk then waited for a writer for ever, and the FIFO stayed behind.)
+  exec 8>"$_cg_fifo"
+  tail -n +1 -f "$SPEC_CLOCK_FILE" >&8 2>/dev/null &
+  SPEC_CLOCK_GUARD=$!
+  exec 8>&-
 }
 spec_clock_guard_off() {
   [ -n "${SPEC_CLOCK_GUARD:-}" ] || return 0
   kill "$SPEC_CLOCK_GUARD" 2>/dev/null
   wait "$SPEC_CLOCK_GUARD" "$SPEC_CLOCK_GUARD_SUB" 2>/dev/null
   SPEC_CLOCK_GUARD=
+  return 0
+}
+
+# THE STEPPED CLOCK: hold the code at a nap, act, then let it go on. For an
+# example where something must happen WHILE the code under test is asleep (a
+# signal inside a bounded wait, another process ending inside it), or whose
+# point is that the code is STILL napping after so many naps. Call after
+# spec_clock_set:
+#
+#   spec_clock_stepped       from now on every nap stops at a gate: of
+#                            common::sleep (so spin::nap, poll::until,
+#                            job::_follow_nap), of the fake `sleep`, in any
+#                            process that inherits the environment
+#   spec_clock_held          BLOCK until a sleeper is at the gate, and leave it
+#                            there. Sets $SPEC_CLOCK_HELD to `<pid> <ms>
+#                            <request>` (`<pid> - <what>` for code that said
+#                            common::blocking <what>: about to wait in the
+#                            kernel, on a lock)
+#   spec_clock_step [n]      n times (once if omitted): BLOCK until a sleeper
+#                            is at the gate, advance the clock by what it
+#                            asked for, let it through. When this returns the
+#                            clock has moved by the sum of those naps
+#   spec_clock_release       back to free-running: the sleeper at the gate and
+#                            those queued behind it go on, each advancing the
+#                            clock itself. Never blocks, with or without a
+#                            sleeper. spec_clock_stepped may be called again
+#
+#   spec_clock_set 1000; spec_clock_stepped
+#   follower &                 # naps 0.1 s in a loop until its tab is closed
+#   spec_clock_step 5          # five naps later …
+#   spec_clock_held            # … it is at a sixth: it stays
+#   kill -HUP $!; wait $!      # the hangup lands inside that nap
+#
+# HOW. The gate is the directory $SPEC_CLOCK_FILE.gate: `go`, a FIFO; `lock`;
+# `at`. A sleeper takes the lock, writes `at`, and reads a line from `go`,
+# which it has opened read-write (that never blocks). The test opens `go`
+# write-only, and THAT blocks until the FIFO has a reader: until a sleeper is
+# there. No side sleeps or polls. spec_clock_step then appends the nap to
+# the journal and writes `go`; first it puts a NEW FIFO at the path, so the
+# next rendezvous can only be with the next sleeper, not with this one on
+# its way out. spec_clock_release puts a plain file holding `free` at the
+# path and writes `free` into the old FIFO: whoever is there, or arrives a
+# moment later with the path already open, reads it and runs on.
+#
+# SEVERAL SLEEPERS. One is at the gate at a time; the others queue on the
+# lock, unseen, and come to the gate in no promised order (the first to
+# arrive at an empty gate is the first there). A step lets exactly one
+# through. A sleeper killed at the gate drops the lock with its life: the
+# next step meets the next sleeper.
+#
+# DEADLOCK RULE. A held sleeper must never outlive its example. Four things
+# see to that, so an example needs no cleanup of its own:
+#   1. after EVERY example of the suite, spec_clock_after_each releases the
+#      gate the example set up (spec_helper_configure registers it);
+#   2. before the tmpbase is removed, spec_helper_drop_tmpbase releases every
+#      gate still closed under it (an example that was killed);
+#   3. a sleeper that arrives and finds no FIFO at the gate (released, or
+#      removed with the tmpbase) does not stop;
+#   4. a sleeper nobody came for gives up after COMMON_CLOCK_STEP_BOUND real
+#      seconds (300) and takes the FIFO away: the one real timer here, a dead
+#      man's switch for a run that was killed outright. No passing example
+#      can meet it.
+# What an example must still do itself: `wait` for what it started. And it
+# must not step for a nap that will never be asked for: spec_clock_step and
+# spec_clock_held block until a sleeper comes, so a regression that removes
+# the nap shows as a hung example.
+#
+# NOT STEPPED: what the free-running clock does not reach either, and the two
+# local stand-ins for common::sleep (mux-bootstrap.zsh's _mux_sleep when
+# common.zsh is not loaded, backup-drift.zsh), which run free.
+spec_clock_stepped() {
+  SPEC_CLOCK_GATE="${SPEC_CLOCK_FILE:?spec_clock_stepped: call spec_clock_set first}.gate"
+  mkdir -p "$SPEC_CLOCK_GATE" && : >>"$SPEC_CLOCK_GATE/lock" || return 1
+  rm -f "$SPEC_CLOCK_GATE/go.next"
+  mkfifo "$SPEC_CLOCK_GATE/go.next" && mv -f "$SPEC_CLOCK_GATE/go.next" "$SPEC_CLOCK_GATE/go"
+}
+spec_clock_held() {
+  [ -p "${SPEC_CLOCK_GATE:?spec_clock_held: call spec_clock_stepped first}/go" ] || return 1
+  : >"$SPEC_CLOCK_GATE/go" || return 1
+  SPEC_CLOCK_HELD=$(cat "$SPEC_CLOCK_GATE/at")
+}
+spec_clock_step() {
+  _cs_n=${1:-1}
+  while [ "$_cs_n" -gt 0 ]; do
+    [ -p "${SPEC_CLOCK_GATE:?spec_clock_step: call spec_clock_stepped first}/go" ] || return 1
+    rm -f "$SPEC_CLOCK_GATE/go.next"
+    mkfifo "$SPEC_CLOCK_GATE/go.next" || return 1
+    # The redirection is the rendezvous. Inside, fd 1 is the FIFO the
+    # sleeper holds, whatever is at the path by then. A sleeper killed
+    # between the two leaves a write to nobody: ignored, not fatal.
+    ( trap '' PIPE
+      read -r _cs_pid _cs_ms _cs_req <"$SPEC_CLOCK_GATE/at"
+      [ "$_cs_ms" = - ] || echo "+ $_cs_ms $_cs_req" >>"$SPEC_CLOCK_FILE"
+      mv -f "$SPEC_CLOCK_GATE/go.next" "$SPEC_CLOCK_GATE/go"
+      echo go ) >"$SPEC_CLOCK_GATE/go" 2>/dev/null
+    _cs_n=$((_cs_n - 1))
+  done
+}
+spec_clock_release() {
+  [ -n "${SPEC_CLOCK_FILE:-}" ] || return 0
+  _spec_clock_open_gate "$SPEC_CLOCK_FILE.gate"
+}
+# The suite-wide AfterEach (rule 1). Silent, and nothing at all for an
+# example that set no clock.
+spec_clock_after_each() {
+  [ -z "${SPEC_CLOCK_GATE:-}" ] || _spec_clock_open_gate "$SPEC_CLOCK_GATE"
+  return 0
+}
+# _spec_clock_open_gate <gate dir> — stop stepping at that gate; never blocks.
+_spec_clock_open_gate() {
+  [ -p "$1/go" ] || return 0
+  # Read-write: opening does not wait for a sleeper, and wakes a
+  # spec_clock_held that is waiting for one.
+  echo free >"$1/go.free" || return 0
+  { mv -f "$1/go.free" "$1/go" && echo free >&7; } 7<>"$1/go" 2>/dev/null
+  return 0
+}
+# Rule 2, for spec_helper_drop_tmpbase.
+_spec_clock_open_gates_under() {
+  find "$1" -type p -name go -path '*.gate/go' 2>/dev/null | while IFS= read -r _og; do
+    _spec_clock_open_gate "${_og%/go}"
+  done
   return 0
 }
 

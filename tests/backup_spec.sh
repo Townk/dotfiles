@@ -15,6 +15,12 @@ Describe 'backup.zsh'
   setup() { export TZ=UTC; }
   BeforeEach 'setup'
 
+  # "Now" for the examples that hand-write a stamp or a snapshot some time in
+  # the past. They start the virtual clock there (production reads it through
+  # common::now) and count back from it; no example reads the real clock.
+  #   1795780800 = 2026-11-27 Fri 12:00:00Z
+  CLOCK_NOW=1795780800
+
   Describe 'bkp::thin::cell'
     cell() {  # cell <grid> <epoch> — print the computed grid cell
       source "$LIB/backup.zsh"
@@ -837,26 +843,43 @@ EOF
   End
 
   Describe 'bkp::project — git history sidecar'
+    # The fixture is the same for every example: a repo with a pushed and an
+    # unpushed commit and a stash, and its bare origin, one commit behind.
+    # Building it takes ten git calls, so it is built ONCE per file (real git,
+    # as before) and every example gets its own copy, each side re-pointed at
+    # the copy of the other: examples rewrite and delete theirs freely.
+    build_template() {
+      TPL="$SHELLSPEC_TMPBASE/sidecar-template"
+      mkdir -p "$TPL/proj" || return 1
+      printf '[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n' > "$TPL/gitconfig"
+      (
+        export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$TPL/gitconfig"
+        REPO="$TPL/proj"
+        git -C "$REPO" init -q &&
+          print pushed > "$REPO/pushed.txt" &&
+          git -C "$REPO" add pushed.txt &&
+          git -C "$REPO" commit -qm pushed &&
+          git clone -q --bare "$REPO" "$TPL/origin.git" &&
+          git -C "$REPO" remote add origin "$TPL/origin.git" &&
+          git -C "$REPO" fetch -q origin &&
+          print unpushed > "$REPO/unpushed.txt" &&
+          git -C "$REPO" add unpushed.txt &&
+          git -C "$REPO" commit -qm unpushed &&
+          print stashme > "$REPO/stash.txt" &&
+          git -C "$REPO" add stash.txt &&
+          git -C "$REPO" stash -q
+      )
+    }
+    BeforeAll 'build_template'
     setup_fix() {
       FIX=$(mktemp -d)
       export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$FIX/gitconfig"
-      printf '[user]\n\tname = t\n\temail = t@t\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n' > "$FIX/gitconfig"
+      cp "$TPL/gitconfig" "$FIX/gitconfig"
       export BKP_STATE_DIR="$FIX/state" BKP_WIP_DIR="$FIX/state/wip"
       REPO="$FIX/proj"
-      mkdir -p "$REPO"
-      git -C "$REPO" init -q
-      print pushed > "$REPO/pushed.txt"
-      git -C "$REPO" add pushed.txt
-      git -C "$REPO" commit -qm pushed
-      git clone -q --bare "$REPO" "$FIX/origin.git"
-      git -C "$REPO" remote add origin "$FIX/origin.git"
-      git -C "$REPO" fetch -q origin
-      print unpushed > "$REPO/unpushed.txt"
-      git -C "$REPO" add unpushed.txt
-      git -C "$REPO" commit -qm unpushed
-      print stashme > "$REPO/stash.txt"
-      git -C "$REPO" add stash.txt
-      git -C "$REPO" stash -q
+      cp -Rp "$TPL/proj" "$TPL/origin.git" "$FIX/" &&
+        git -C "$REPO" remote set-url origin "$FIX/origin.git" &&
+        git -C "$FIX/origin.git" remote set-url origin "$REPO"
     }
     cleanup_fix() { rm -rf "$FIX"; unset GIT_CONFIG_NOSYSTEM GIT_CONFIG_GLOBAL BKP_STATE_DIR BKP_WIP_DIR; }
     BeforeEach 'setup_fix'
@@ -1291,8 +1314,9 @@ EOF
       scheduled_tick() {
         source "$LIB/backup.zsh"
         stub_restic
+        spec_clock_set "$CLOCK_NOW"
         mkdir -p "$BKP_STATE_DIR"
-        print -r -- "capture $(( EPOCHSECONDS - (BKP_CAPTURE_CADENCE - 30) )) 0" \
+        print -r -- "capture $(( CLOCK_NOW - (BKP_CAPTURE_CADENCE - 30) )) 0" \
           > "$BKP_STATE_DIR/heartbeat"
         bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
         [[ -s "$FIX/calls" ]] && print ran || print skipped
@@ -1305,8 +1329,9 @@ EOF
       recent_skip() {
         source "$LIB/backup.zsh"
         stub_restic
+        spec_clock_set "$CLOCK_NOW"
         mkdir -p "$BKP_STATE_DIR"
-        print -r -- "capture $(( EPOCHSECONDS - 60 )) 0" > "$BKP_STATE_DIR/heartbeat"
+        print -r -- "capture $(( CLOCK_NOW - 60 )) 0" > "$BKP_STATE_DIR/heartbeat"
         bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
         [[ -s "$FIX/calls" ]] && print ran || print skipped
       }
@@ -1318,8 +1343,9 @@ EOF
       forced_recent() {
         source "$LIB/backup.zsh"
         stub_restic
+        spec_clock_set "$CLOCK_NOW"
         mkdir -p "$BKP_STATE_DIR"
-        print -r -- "capture $(( EPOCHSECONDS - 60 )) 0" > "$BKP_STATE_DIR/heartbeat"
+        print -r -- "capture $(( CLOCK_NOW - 60 )) 0" > "$BKP_STATE_DIR/heartbeat"
         BKP_CAPTURE_FORCE=1 bkp::capture::run "$FIX/m.toml" "$FIX/c.toml" >/dev/null || return 1
         [[ -s "$FIX/calls" ]] && print ran || print skipped
       }
@@ -1330,8 +1356,9 @@ EOF
     It 'stamps catchup while overdue work runs, then clears it on success'
       catchup_ok() {
         source "$LIB/backup.zsh"
+        spec_clock_set "$CLOCK_NOW"
         mkdir -p "$BKP_STATE_DIR"
-        print -r -- "capture $(( EPOCHSECONDS - 7200 )) 0" > "$BKP_STATE_DIR/heartbeat"
+        print -r -- "capture $(( CLOCK_NOW - 7200 )) 0" > "$BKP_STATE_DIR/heartbeat"
         bkp::restic() {
           local repo="$1"; shift
           print -r -- "$repo $*" >> "$FIX/calls"
@@ -1359,8 +1386,9 @@ EOF
     It 'clears catchup when an overdue capture fails'
       catchup_fail() {
         source "$LIB/backup.zsh"
+        spec_clock_set "$CLOCK_NOW"
         mkdir -p "$BKP_STATE_DIR"
-        print -r -- "capture $(( EPOCHSECONDS - 7200 )) 0" > "$BKP_STATE_DIR/heartbeat"
+        print -r -- "capture $(( CLOCK_NOW - 7200 )) 0" > "$BKP_STATE_DIR/heartbeat"
         bkp::restic() {
           local repo="$1"; shift
           case "$1 ${2:-}" in
@@ -1547,6 +1575,59 @@ EOF
       }
     }
 
+    # A live "capture": a process holding capture.lock ($HOLDER, its pid).
+    # It says "held" on a FIFO once it has the lock, then blocks reading
+    # "release" until the example writes a line there, or until the example
+    # is gone (EOF: this shell keeps the only write end, $RELEASE_FD), so it
+    # cannot outlive the example. Nothing here waits on time.
+    hold_capture_lock() {
+      local line
+      mkdir -p "$BKP_STATE_DIR"
+      mkfifo "$FIX/held" "$FIX/release" && exec {RELEASE_FD}<>"$FIX/release" || return 1
+      zsh -c '
+        zmodload zsh/system
+        : >> "$1/capture.lock"
+        zsystem flock -t 0 "$1/capture.lock" || { print failed > "$2/held"; exit 1 }
+        print held > "$2/held"
+        read -r line < "$2/release"
+      ' -- "$BKP_STATE_DIR" "$FIX" {RELEASE_FD}>&- &
+      HOLDER=$!
+      read -r line < "$FIX/held"
+      [[ "$line" == held ]]
+    }
+    # `zsystem flock -t N` is zsh's own wait: it retries once a second on the
+    # REAL clock and knows no seam. flock_wait stands in for that wait at the
+    # one point bkp::lock reaches it, for capture.lock only (the lock itself
+    # stays real: the holder above has it, and the real flock takes it):
+    #   flock_wait finishes   the holder finishes while a timed acquire is
+    #                         waiting: release it, join it, then let the real
+    #                         flock take the lock, now free
+    #   flock_wait outlasts   the holder outlasts the wait: the acquire is
+    #                         tried once, without blocking, and fails
+    # An acquire that asks for no timeout is never waited for, so a prune
+    # that stopped asking for one fails to get the lock in both cases. Each
+    # request is logged to $FIX/flock.calls as "<timeout> <lock file>".
+    flock_wait() {
+      FLOCK_HOLDER=$1
+      zsystem() {
+        if [[ "$1" != flock || "${@[-1]}" != */capture.lock ]]; then
+          builtin zsystem "$@"
+          return
+        fi
+        local -i i=${@[(i)-t]}
+        local t=${@[i+1]}
+        print -r -- "$t ${${@[-1]}:t}" >> "$FIX/flock.calls"
+        if [[ "$FLOCK_HOLDER" == finishes && -n "$HOLDER" ]] && (( t > 0 )); then
+          print -u $RELEASE_FD go
+          wait "$HOLDER"
+          HOLDER=
+          builtin zsystem "$@"
+          return
+        fi
+        builtin zsystem flock -t 0 "${@[-1]}"
+      }
+    }
+
     It 'converges a fresh mirror target and applies retention'
       mirror() {
         source "$LIB/backup.zsh"
@@ -1639,7 +1720,8 @@ EOF
         source "$LIB/backup.zsh"
         stub_restic
         local fresh_ts
-        TZ=UTC strftime -s fresh_ts '%Y-%m-%dT%H:%M:%SZ' $(( EPOCHSECONDS - 600 ))
+        spec_clock_set "$CLOCK_NOW"
+        TZ=UTC strftime -s fresh_ts '%Y-%m-%dT%H:%M:%SZ' $(( CLOCK_NOW - 600 ))
         printf '[]' > "$FIX/stg.json"
         printf '[{"id":"fresh","time":"%s"}]' "$fresh_ts" > "$FIX/tgt.json"
         bkp::reconcile::one "$FIX/stg" tgt "$FIX/tgt" mirror "$FIX/m.toml" >/dev/null || return 1
@@ -1762,47 +1844,37 @@ EOF
         source "$LIB/backup.zsh"
         stub_restic
         : > "$FIX/has-tgt"
-        # a "capture" holds its lock for a moment, as a live tick would
-        mkdir -p "$BKP_STATE_DIR"
-        zsh -c '
-          zmodload zsh/system
-          : >> "$1/capture.lock"
-          zsystem flock -t 0 "$1/capture.lock" || exit 1
-          sleep 0.4
-        ' -- "$BKP_STATE_DIR" &
-        local holder=$!
-        sleep 0.1   # let the holder take the lock first
+        # a "capture" holds its lock, as a live tick would, and finishes
+        # while prune is waiting for it
+        hold_capture_lock || return 1
+        flock_wait finishes
         BKP_PRUNE_LOCK_WAIT=3 bkp::reconcile::prune "$FIX/c.toml" >/dev/null || return 1
-        wait "$holder"
         grep -c "prune" "$FIX/calls"
       }
       When run prune_waits
       The status should be success
       The output should equal 1
       The stderr should equal ""
+      # It asked to wait BKP_PRUNE_LOCK_WAIT for the capture lock.
+      The contents of file "$FIX/flock.calls" should equal "3 capture.lock"
     End
 
     It 'prune aborts loudly when the lock wait expires'
       prune_expires() {
         source "$LIB/backup.zsh"
         stub_restic
-        mkdir -p "$BKP_STATE_DIR"
-        zsh -c '
-          zmodload zsh/system
-          : >> "$1/capture.lock"
-          zsystem flock -t 0 "$1/capture.lock" || exit 1
-          sleep 2
-        ' -- "$BKP_STATE_DIR" &
-        local holder=$!
-        sleep 0.1
+        # the "capture" outlasts the wait
+        hold_capture_lock || return 2
+        flock_wait outlasts
         BKP_PRUNE_LOCK_WAIT=0.3 bkp::reconcile::prune "$FIX/c.toml"
         local rc=$?
-        kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+        kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
         return $rc
       }
       When run prune_expires
       The status should equal 1
       The stderr should include "prune aborted"
+      The contents of file "$FIX/flock.calls" should equal "0.3 capture.lock"
     End
 
     It 'reclaim rewrites + prunes staging and every present repo, master included'
@@ -2261,7 +2333,8 @@ EOF
         source "$LIB/backup.zsh"
         stub_restic
         local fresh_ts
-        TZ=UTC strftime -s fresh_ts '%Y-%m-%dT%H:%M:%SZ' $(( EPOCHSECONDS - 3600 ))
+        spec_clock_set "$CLOCK_NOW"
+        TZ=UTC strftime -s fresh_ts '%Y-%m-%dT%H:%M:%SZ' $(( CLOCK_NOW - 3600 ))
         cat > "$FIX/stg.json" <<EOF
 [{"id":"old1","time":"2026-01-02T10:01:00Z"},
  {"id":"new1","time":"2026-01-02T10:14:00Z"},
@@ -2336,16 +2409,33 @@ EOF
     BeforeEach 'setup_fix'
     AfterEach 'cleanup_fix'
 
+    # A process that stays until it is killed, without waiting on time:
+    #   holding   in the example, first: the FIFO, and this shell's
+    #             read-write end of it ($HOLD_FD)
+    #   hold      in the process that is to stay (a subshell of the example,
+    #             as bkp::mount's wrapper is): block reading the FIFO. A line
+    #             from the example ends it with status 7; so does the example
+    #             going away, with status 8 (EOF: the example keeps the only
+    #             write end), so nothing is left behind to hang the file.
+    holding() { mkfifo "$FIX/hold" && exec {HOLD_FD}<>"$FIX/hold"; }
+    hold() {
+      local line
+      exec {HOLD_FD}>&-
+      read -r line < "$FIX/hold" && return 7
+      return 8
+    }
+
     It 'mount waits for the FUSE tree and reports the pid'
       mounts() {
         source "$LIB/backup.zsh"
         bkp::restic() {
           local repo="$1"; shift
           case "$1" in
-            mount) mkdir -p "$2/snapshots"; sleep 3 ;;
+            mount) mkdir -p "$2/snapshots"; hold ;;
             *) return 0 ;;
           esac
         }
+        holding
         local REPLY
         bkp::mount "$FIX/stg" "$FIX/mp" || return 1
         [ -d "$FIX/mp/snapshots" ] && print mounted
@@ -2360,6 +2450,9 @@ EOF
     It 'mount fails cleanly when restic dies'
       badmount() {
         source "$LIB/backup.zsh"
+        # The poll for the tree naps on the virtual clock: no real nap while
+        # bkp::mount notices that restic is gone.
+        spec_clock_set "$CLOCK_NOW"
         bkp::restic() { return 1 }
         bkp::mount "$FIX/stg" "$FIX/mp"
       }
@@ -2374,18 +2467,22 @@ EOF
         bkp::restic() {
           local repo="$1"; shift
           case "$1" in
-            mount) mkdir -p "$2/snapshots"; sleep 5 ;;
+            mount) mkdir -p "$2/snapshots"; hold ;;
             *) return 0 ;;
           esac
         }
+        holding
         local REPLY
         bkp::mount "$FIX/stg" "$FIX/mp" || return 1
         local pid="$REPLY"
         kill -HUP "$pid" 2>/dev/null
-        sleep 0.3
-        if kill -0 "$pid" 2>/dev/null; then print survives-hup; else print died; fi
-        pkill -P "$pid" 2>/dev/null
-        kill "$pid" 2>/dev/null
+        # No waiting to see whether it dies: tell the wrapper to finish and
+        # join it. One that the HUP killed has status 129 (the signal was
+        # posted before the line, so it wins); one that ignored it reads the
+        # line and ends with hold's 7.
+        print -u $HOLD_FD go
+        wait "$pid"
+        if (( $? == 7 )); then print survives-hup; else print died; fi
       }
       When run hupmount
       The output should equal "survives-hup"
@@ -2415,17 +2512,25 @@ EOF
         chmod +x "$STUB/mount" "$STUB/umount" "$STUB/diskutil"
         PATH="$STUB:$PATH"
         touch "$FIX/mounted"
-        sleep 30 & local dummy=$!
+        # On the virtual clock: every "wait a little, look again" of
+        # bkp::umount costs nothing, and is counted below.
+        spec_clock_set "$CLOCK_NOW"
+        holding
+        ( hold ) & local dummy=$!
         bkp::umount "$dummy" "$FIX/mp"; local rc=$?
         kill "$dummy" 2>/dev/null
         print -r -- "rc=$rc"
         grep -c 'diskutil unmount force' "$FIX/calls"
         [ -e "$FIX/mounted" ] && print still-wedged || print cleared
+        print -r -- "naps=$(spec_clock_slept | sort | uniq -c | tr -s ' ')"
       }
       When run wedge
       The line 1 should equal "rc=0"
       The line 2 should equal 1
       The line 3 should equal "cleared"
+      # 2 s for the clean unmount, 2 s more after the kill, then the force,
+      # which clears the entry at once.
+      The line 4 should equal "naps= 40 0.1"
     End
 
     It 'umount returns fast on a clean detach without touching diskutil'
@@ -2447,15 +2552,20 @@ EOF
         chmod +x "$STUB/mount" "$STUB/umount" "$STUB/diskutil"
         PATH="$STUB:$PATH"
         touch "$FIX/mounted"
-        sleep 30 & local dummy=$!
+        spec_clock_set "$CLOCK_NOW"
+        holding
+        ( hold ) & local dummy=$!
         bkp::umount "$dummy" "$FIX/mp"; local rc=$?
         kill "$dummy" 2>/dev/null
         print -r -- "rc=$rc"
         [ -f "$FIX/calls" ] && print diskutil-called || print no-force
+        print -r -- "naps=$(spec_clock_slept | wc -l | tr -d ' ')"
       }
       When run cleanun
       The line 1 should equal "rc=0"
       The line 2 should equal "no-force"
+      # "fast": gone at the first look, before any nap.
+      The line 3 should equal "naps=0"
     End
 
     It 'diff dumps both snapshots and pipes them to the viewer'
@@ -2597,16 +2707,25 @@ EOF
         cat > "$FIX/snaps.json" <<'JSON'
 [{"id":"cccc000000000000000000000000000000000000000000000000000000000000","time":"2026-07-03T10:00:00Z"}]
 JSON
-        printf '#!/bin/sh\ncase "$1 $2" in\n  "snapshots --json") cat "%s/snaps.json" ;;\n  mount*) mkdir -p "$2/snapshots"; sleep 3 ;;\n  *) exit 0 ;;\nesac\n' "$FIX" > "$STUB/restic"
+        # `restic mount` serves until it is told to stop: the stub leaves
+        # its pid and blocks on a FIFO nobody writes. The session's teardown
+        # finds nothing in the mount table and so never ends it; the example
+        # does, on every way out (a leftover would hang the file).
+        mkfifo "$FIX/never"
+        printf '#!/bin/sh\ncase "$1 $2" in\n  "snapshots --json") cat "%s/snaps.json" ;;\n  mount*) mkdir -p "$2/snapshots"; echo $$ > "%s/restic.pid"; read -r _ < "%s/never" ;;\n  *) exit 0 ;;\nesac\n' "$FIX" "$FIX" "$FIX" > "$STUB/restic"
         chmod +x "$STUB/restic"
         printf 'roots = []\n' > "$FIX/m.toml"
         mkdir -p "$FIX/anchor"
         printf '#!/bin/sh\necho "tm $*" >> "%s/tm.calls"\n' "$FIX" > "$STUB/system-backup-tm"
         chmod +x "$STUB/system-backup-tm"
-        PATH="$STUB:$PATH" BKP_HAS_FUSE=1 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
-          BKP_TM_BIN="$STUB/system-backup-tm" TMUX=/tmp/sock,1,0 MUX_TMUX_BIN="$STUB/tmux" \
-          MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
-          zsh "$DISPATCH" browse "$FIX/anchor"
+        {
+          PATH="$STUB:$PATH" BKP_HAS_FUSE=1 BKP_TM_SESSIONS="$FIX/sessions" BKP_MANIFEST="$FIX/m.toml" \
+            BKP_TM_BIN="$STUB/system-backup-tm" TMUX=/tmp/sock,1,0 MUX_TMUX_BIN="$STUB/tmux" \
+            MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
+            zsh "$DISPATCH" browse "$FIX/anchor"
+        } always {
+          [ ! -s "$FIX/restic.pid" ] || kill "$(<"$FIX/restic.pid")" 2>/dev/null
+        }
         cat "$FIX/tm.calls"
         grep -q 'split-window' "$FIX/tx.calls" 2>/dev/null && echo split || echo no-split
       }
@@ -2800,16 +2919,42 @@ EOF
       FIX=$(mktemp -d)
       STUB="$FIX/stub"; mkdir -p "$STUB"
       PATH="$STUB:$PATH"
+      spec_clock_set "$CLOCK_NOW"
     }
     cleanup_guard() { rm -rf "$FIX"; }
     BeforeEach 'setup_guard'
     AfterEach 'cleanup_guard'
 
     # A restic that ignores SIGTERM and never exits — the real wedge we saw.
+    # It blocks on a FIFO nobody writes, so only a SIGKILL ends it; run with
+    # nothing to end it (no guard in front of it) it exits 99 at once instead.
+    #
+    # And the timeout(1) that guards it, as a stand-in on the virtual clock:
+    # the real one would make the example wait BKP_RESTIC_TIMEOUT +
+    # BKP_RESTIC_KILL_AFTER real seconds. It does what coreutils' does to a
+    # command that never ends: SIGTERM after the limit (124), and with `-k N`
+    # SIGKILL N seconds later (137); the "seconds" are steps of the clock. Its
+    # argv is logged ($STUB/timeout.log): that, and the status the seam hands
+    # back, are what the example asserts about bkp::restic.
     stub_wedged_restic() {
-      printf '#!/bin/sh\ntrap "" TERM\nsleep 30\n' > "$STUB/restic"
+      mkfifo "$FIX/never"
+      printf '#!/bin/sh\n[ -n "$UNDER_TIMEOUT" ] || exit 99\ntrap "" TERM\nread -r _ < "%s/never"\n' "$FIX" > "$STUB/restic"
       chmod +x "$STUB/restic"
+      spec_stub "$STUB" timeout \
+        'kill_after=' \
+        'if [ "$1" = -k ]; then kill_after=$2; shift 2; fi' \
+        'limit=$1; shift' \
+        'UNDER_TIMEOUT=1 "$@" &' \
+        'pid=$!' \
+        'spec-clock-advance "$limit"' \
+        'kill -TERM "$pid"' \
+        'rc=124' \
+        'if [ -n "$kill_after" ]; then spec-clock-advance "$kill_after"; rc=137; fi' \
+        'kill -KILL "$pid" 2>/dev/null' \
+        'wait "$pid" 2>/dev/null' \
+        'exit "$rc"'
     }
+    guard_waited() { echo "$(($(spec_clock_now) - CLOCK_NOW))s"; }
 
     It 'SIGKILLs a wedged restic past BKP_RESTIC_TIMEOUT (137, not a hang)'
       run_guarded() {
@@ -2823,6 +2968,8 @@ EOF
       # coreutils `timeout` reports 137 (128+SIGKILL) once -k escalation fires,
       # which is exactly the TERM-ignoring path a wedged restic takes.
       The status should equal 137
+      The contents of file "$STUB/timeout.log" should equal "-k 1 1 restic backup"
+      The result of function guard_waited should equal "2s"
     End
 
     It 'is a transparent passthrough when BKP_RESTIC_TIMEOUT is unset'

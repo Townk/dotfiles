@@ -835,15 +835,19 @@ EOF
   # wedge the GUI picker's restore call forever. --restore-id already exits
   # (at the top of the script, long before the interactive tail) on both
   # success and failure, so this is really a structural guarantee -- this
-  # timeout-guarded example is the regression net: if a future change ever
-  # routed --restore-id through the interactive tail, this would hang and
-  # timeout instead of silently passing.
+  # example is the regression net: it runs the headless verb in the
+  # FOREGROUND with stdin at /dev/null, so if a future change ever routed
+  # --restore-id through the interactive tail it would not come back, and the
+  # run stops here instead of silently passing. (It used to sit under a 5 s
+  # watchdog and assert "not 124"; a spec's own watchdog is a wait on the real
+  # clock, tests/README-scaffolding.md, so the bound is gone and the 124
+  # assertion stays as the record of what a kill would have looked like.)
   It '--restore-id failure exits promptly (never holds) even though the same reason reaches stderr (spec R4 + W2)'
     id=$(sqlite3 "$DB" "INSERT INTO clips (type_kind, source_host, last_ts) VALUES ('file','mac-mini',503); SELECT last_insert_rowid();")
     seed_file_url_blob "$id" /tmp/a.txt
     bridge_down_restore_prompt() {
       recob_stop
-      timeout 5 zsh -f "$SCRIPT" --restore-id "$1" < /dev/null
+      zsh -f "$SCRIPT" --restore-id "$1" < /dev/null
     }
 
     When call bridge_down_restore_prompt "$id"

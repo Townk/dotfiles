@@ -130,16 +130,12 @@ recob_start() {
     _attempt=$((_attempt + 1))
     export CLIPBOARD_BRIDGE_PORT="$(_recob_pick_port)"
     rm -f "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" "$RECOB_DIR/daemon.log"
-    # fds 3-9 are ShellSpec's executor/reporter pipes. Closed here, a daemon
-    # that outlives its example (a failed BeforeEach skips the AfterEach that
-    # stops it) is only a stray process; holding them, it hangs the whole run
-    # with the reporter waiting for EOF.
-    "$(recob_bin)" --record \
+    _recob_spawn "$RECOB_DIR/daemon.log" "$(recob_bin)" --record \
       --port "$CLIPBOARD_BRIDGE_PORT" \
-      --socket "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" \
-      >"$RECOB_DIR/daemon.log" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
-    RECOB_PID=$!
-    _recob_await_ready && return 0
+      --socket "$CLIPBOARD_BRIDGE_LOCAL_SOCKET"
+    _recob_up=$?
+    RECOB_PID=$RECOB_SPAWN_PID
+    [ "$_recob_up" -ne 0 ] || return 0
     kill "$RECOB_PID" 2>/dev/null
     wait "$RECOB_PID" 2>/dev/null
     RECOB_PID=""
@@ -150,20 +146,48 @@ recob_start() {
   return 1
 }
 
+# _recob_spawn <log> <daemon> [arg…] — start a recobd in the background and
+# return once it is READY (status 0) or has EXITED without getting there
+# (status 1). RECOB_SPAWN_PID is the daemon's own pid either way; everything it
+# prints ends up in <log>. Nothing here polls and nothing waits on a clock.
+#
 # The daemon logs `wire <v> proto <n> impl <id> host <h>` only after both
 # listeners are bound AND the §11.1 credential fixture is on disk, so it is the
 # one readiness signal that covers the whole handshake a client needs. Waiting
 # on the socket file alone races the fixture: the socket exists from bind, the
 # token is written later, and a client that dials in between is refused.
-_recob_await_ready() {
-  _i=0
-  while [ "$_i" -lt 200 ]; do
-    grep -q '^recobd: wire ' "$RECOB_DIR/daemon.log" 2>/dev/null && return 0
-    kill -0 "$RECOB_PID" 2>/dev/null || return 1
-    sleep 0.02
-    _i=$((_i + 1))
-  done
-  return 1
+#
+# So that line is what the helper blocks on. The daemon's stdout and stderr go
+# to a FIFO; one awk reads it for as long as the daemon lives, copies every
+# line to <log>, and answers ONCE on a second FIFO: `ready` at the wire line,
+# or `exited` when the output ends first (a bind failure: the daemon is gone,
+# and the caller retries on another port). The caller blocks on that answer.
+#
+# fds 3-9 are ShellSpec's executor/reporter pipes. Closed here, for the daemon
+# and for the awk that lives as long as it does, a daemon that outlives its
+# example (a failed BeforeEach skips the AfterEach that stops it) is only a
+# stray process; holding them, it hangs the whole run with the reporter waiting
+# for EOF. (The daemon's own two FIFO descriptors are not pipes of ShellSpec's:
+# tests/recob_helper_spec.sh.)
+_recob_spawn() {
+  _rs_log=$1
+  shift
+  RECOB_SPAWN_PID=""
+  _rs_ev=$(mktemp -d "${SHELLSPEC_TMPBASE:-${TMPDIR:-/tmp}}/recob-ev.XXXXXX") || return 1
+  mkfifo "$_rs_ev/out" "$_rs_ev/state" || return 1
+  : >"$_rs_log"
+  awk -v out="$_rs_log" -v state="$_rs_ev/state" '
+    { print >>out; fflush(out) }
+    !up && /^recobd: wire / { up = 1; print "ready" >state; close(state) }
+    END { if (!up) { print "exited" >state; close(state) } }
+  ' <"$_rs_ev/out" >/dev/null 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
+  "$@" >"$_rs_ev/out" 2>&1 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- &
+  RECOB_SPAWN_PID=$!
+  _rs_state=
+  read -r _rs_state <"$_rs_ev/state"
+  # Both ends are open by now (or closed for good): the names can go.
+  rm -rf "$_rs_ev"
+  [ "$_rs_state" = ready ]
 }
 
 # Two bytes of /dev/urandom rather than $RANDOM, which is not POSIX and which a
@@ -186,13 +210,9 @@ recob_stop() {
   wait "$RECOB_PID" 2>/dev/null
   RECOB_PID=""
   # The port must be *refused*, not silent, for §5.2's fallback to be the thing
-  # under test, so wait for the listener to actually be gone before returning.
-  _i=0
-  while [ -S "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" ] && [ "$_i" -lt 100 ]; do
-    rm -f "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" 2>/dev/null
-    sleep 0.02
-    _i=$((_i + 1))
-  done
+  # under test. The `wait` above is that guarantee: it returns when the daemon
+  # process is gone, and its listeners with it. Only the socket's name is left.
+  rm -f "$CLIPBOARD_BRIDGE_LOCAL_SOCKET" 2>/dev/null
   return 0
 }
 
@@ -326,17 +346,23 @@ recob_raw() {
   return 0
 }
 
-# recob_wait_op <op> [tries] — block until an operation is recorded, for the
-# exchanges a client does not wait on itself. Returns non-zero on timeout, so a
-# spec asserts on the status rather than on a sleep that might be too short.
+# recob_wait_op <op> — block until an operation is recorded, for the exchanges
+# a client does not wait on itself (an orphan that reaches the wire on its own
+# schedule). It follows the record log as it grows (`tail -f`, which the kernel
+# wakes: no polling, no clock) and returns 0 at the first line naming <op>.
+# There is no "gave up" status any more: an operation that never arrives blocks
+# the example, as any rendezvous does. Status 1 only when nothing records.
 recob_wait_op() {
-  _i=0
-  while [ "$_i" -lt "${2:-150}" ]; do
-    recob_ops | grep -qx "$1" && return 0
-    sleep 0.02
-    _i=$((_i + 1))
-  done
-  return 1
+  [ -f "${RECOB_RECORD_LOG:-}" ] || return 1
+  _rw_fifo=$(mktemp -u "${SHELLSPEC_TMPBASE:-${TMPDIR:-/tmp}}/recob-op.XXXXXX") && mkfifo "$_rw_fifo" || return 1
+  tail -n +1 -f "$RECOB_RECORD_LOG" >"$_rw_fifo" 2>/dev/null &
+  _rw_tail=$!
+  awk -F'\t' -v op="$1" '$2 == op { found = 1; exit } END { exit !found }' <"$_rw_fifo"
+  _rw_rc=$?
+  kill "$_rw_tail" 2>/dev/null
+  wait "$_rw_tail" 2>/dev/null
+  rm -f "$_rw_fifo"
+  return "$_rw_rc"
 }
 
 _recob_pick_field() {

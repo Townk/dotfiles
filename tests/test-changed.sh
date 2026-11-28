@@ -30,7 +30,7 @@ select_specs() {
   local -A picked
   for file in "$@"; do
     case $file in
-      Makefile|.shellspec|tests/spec_helper.sh)
+      Makefile|.shellspec|tests/spec_helper.sh|tests/spec_suite.sh)
         print -r -- "$file changed; every spec depends on it"
         return 3 ;;
     esac

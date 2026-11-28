@@ -310,8 +310,9 @@ new"
     # The in-process twin of the `wait-until` bin: run a shell command/function
     # until it succeeds or the wall-clock budget elapses. Checked once before
     # the first sleep; wall-clock bounded; a non-positive interval collapses to
-    # one check.
-    setup_poll() { PDIR=$(mktemp -d "$SHELLSPEC_TMPBASE/poll.XXXXXX"); }
+    # one check. On the virtual clock: the budget is the code's own, and each
+    # example says how long poll::until believes it waited.
+    setup_poll() { PDIR=$(mktemp -d "$SHELLSPEC_TMPBASE/poll.XXXXXX"); spec_clock_set 1000; }
     BeforeEach 'setup_poll'
 
     It 'returns 0 as soon as the condition becomes true within budget'
@@ -327,15 +328,14 @@ new"
     End
 
     It 'returns non-zero when the condition never holds, bounded by the wall clock'
-      # 0.2s budget on an always-false condition returns promptly (not hung);
-      # the guard turns a runaway wait into a distinct failure instead of a hang.
+      # 0.2s budget on an always-false condition: it gives up when ITS clock
+      # says 0.2 s have gone, to the millisecond; a wait that ran past the
+      # budget is a distinct failure.
       never() { false; }
       drive() {
-        zmodload zsh/datetime
-        local -F t0=$EPOCHREALTIME
         poll::until 0.2 0.01 never
         local rc=$?
-        (( (EPOCHREALTIME - t0) < 2 )) || return 3
+        [ "$(spec_clock_now ms)" = 1000200 ] || return 3
         return $rc
       }
       When call drive
@@ -355,8 +355,8 @@ new"
       probe_count() {
         poll::until 0.3 0.1 bump
         local n; n=$(wc -c <"$PDIR/probes" | tr -d ' ')
-        # ~3-4 probes at 0.1s over 0.3s; a 0.01s poll would be ~30.
-        [ "$n" -ge 1 ] && [ "$n" -le 6 ]
+        # Probes at 0, 0.1, 0.2 and 0.3 s; a 0.01s poll would be 31.
+        [ "$n" -eq 4 ]
       }
       When call probe_count
       The status should be success
@@ -370,6 +370,11 @@ new"
     LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh"
 
     Describe 'on the real clock'
+      # THE REAL-CLOCK CHECK OF THE SEAM. These examples are the suite's one
+      # deliberate exception to "no test waits": they prove that, with no
+      # journal, common::now IS the system clock and common::sleep really
+      # naps without forking. Two of them nap for real, 0.01 s each (marked
+      # REAL below); nothing else in this file may.
       # With nothing on PATH there is no external clock or wait to fork: had
       # the seam reached for one, the call would fail with "command not found".
       no_fork() { local PATH=/var/empty; "$@"; }
@@ -394,6 +399,7 @@ new"
       End
 
       It 'sleeps without a child process, fractions included'
+        # REAL: one nap of 0.01 s.
         run() { common::sleep 0.01 && common::sleep 0 && print ok; }
         When call no_fork run
         The output should equal "ok"
@@ -404,6 +410,7 @@ new"
           local REPLY
           COMMON_CLOCK_FILE= common::now; (( REPLY > 1700000000 )) || return 1
           COMMON_CLOCK_FILE="$SHELLSPEC_TMPBASE/no-such-journal" common::now; (( REPLY > 1700000000 )) || return 1
+          # REAL: one nap of 0.01 s.
           COMMON_CLOCK_FILE="$SHELLSPEC_TMPBASE/no-such-journal" common::sleep 0.01 || return 1
           [ ! -e "$SHELLSPEC_TMPBASE/no-such-journal" ] && print ok
         }
@@ -551,17 +558,25 @@ new"
     End
 
     It 'a positive timeout waits for the holder to finish, then acquires'
+      # STAYS ON THE REAL CLOCK (about 1 s): the wait is `zsystem flock -t`,
+      # which retries inside zsh once a second and knows no clock seam. The
+      # example itself no longer naps: the holder says "held" on a FIFO once
+      # it has the lock and keeps it until told to release; a non-blocking
+      # acquire then fails (the lock IS held), and the release is sent from
+      # the background while the 3s-timeout acquire is under way.
       waits() {
-        # A background holder releases after ~0.3s; a 3s-timeout acquire must
-        # succeed once it lets go (a non-blocking acquire would fail here).
-        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"; sleep 0.3' &
+        mkfifo "$LKDIR/held" "$LKDIR/release"
+        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"; echo held >"'"$LKDIR"'/held"; read -r _ <"'"$LKDIR"'/release"' &
         local bg=$!
-        sleep 0.1   # let the holder take it first
+        read -r _ <"$LKDIR/held"
+        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"' && print not-held || print held
+        ( echo release >"$LKDIR/release" ) &
         lock::hold "$LKDIR/a.lock" 3 && print acquired || print timedout
         wait "$bg" 2>/dev/null
       }
       When run waits
-      The output should equal "acquired"
+      The output should equal "held
+acquired"
     End
 
     # fcntl record locks are owned by the PROCESS: closing ANY fd on the file

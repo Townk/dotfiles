@@ -83,10 +83,9 @@ mux-modal: could not open a floating layer"
       cat "$MM_TMP/fifo" >"$MM_TMP/out" &
       local reader=$!
       modal --capture "$MM_TMP/fifo" -- true
-      # A REAL, bounded wait, the one left in this file: the reader is another
-      # process and learns of its end of file when the kernel schedules it.
-      local i; for i in {1..20}; do kill -0 $reader 2>/dev/null || break; /bin/sleep 0.1; done
-      kill -0 $reader 2>/dev/null && { kill $reader; print "reader stuck"; } || print "reader released"
+      # The reader is our own child: join it. It ends when the script lets
+      # go of the FIFO; a script that leaves it blocked hangs the example here.
+      wait $reader && print "reader released"
       print -r -- "size=$(wc -c <"$MM_TMP/out" | tr -d ' ')"
     }
     When call run

@@ -529,8 +529,10 @@ Describe 'preview: raster temp cleanup on kill (MED-16)'
   setup() {
     T=$(mktemp -d); mkdir -p "$T/bin" "$T/tmp"
     # chafa stub: emits a small raster to stdout (redirected to the temp by
-    # preview-raster), then blocks so the test can kill it mid-render.
-    printf '#!/bin/sh\necho raster-bytes\nsleep 10\n' > "$T/bin/chafa"
+    # preview-raster), says so on a FIFO, then blocks (a read on a FIFO that
+    # nobody writes) so the test can kill it mid-render.
+    mkfifo "$T/rendering" "$T/never"
+    printf '#!/bin/sh\necho raster-bytes\necho rendering > "%s/rendering"\nread -r _ < "%s/never"\n' "$T" "$T" > "$T/bin/chafa"
     chmod +x "$T/bin/chafa"
     printf 'x' > "$T/img.png"
   }
@@ -543,13 +545,13 @@ Describe 'preview: raster temp cleanup on kill (MED-16)'
       TMPDIR="$T/tmp" PATH="$T/bin:$PATH" \
         zsh -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
         "$SCRIPT" "$T/img.png" >/dev/null 2>&1 &
-      local pid=$! n=0
+      local pid=$!
       local -a f
-      while (( n < 60 )); do
-        f=("$T"/tmp/pvraster.*(N))
-        (( ${#f} )) && break
-        sleep 0.05; (( n++ ))
-      done
+      # Rendezvous with the stub: it is running, so the temp it writes to
+      # exists (asserted, or "clean" below would prove nothing).
+      read -r _ <"$T/rendering"
+      f=("$T"/tmp/pvraster.*(N))
+      (( ${#f} )) || { echo "no temp file while rendering"; return 1; }
       # Kill the preview (pending TERM), then the blocked stub so the shell's
       # wait returns and it acts on the signal — mirrors fzf tearing the pane.
       kill -TERM "$pid" 2>/dev/null

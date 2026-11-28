@@ -254,6 +254,213 @@ guard=off left=0"
 1970"
     End
 
+    # The free-running clock cannot hold code still. Stepped, every nap stops
+    # at a gate until the test lets it through: nothing here waits or polls,
+    # each "it is at its nap now" is a blocking open of the gate's FIFO.
+    Describe 'stepped'
+      COMMON="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib/common.zsh"
+      BeforeEach 'spec_clock_stepped'
+      # napper <out> <seconds>… — in the background: nap each, then leave a
+      # line in <out>. $! is the napper.
+      napper() {
+        zsh -fc 'source "$1"; out=$2; shift 2
+          for s; do common::sleep "$s"; done; print -r -- "done $*" >> "$out"' \
+          zsh "$COMMON" "$@" &
+      }
+
+      It 'holds a sleeper at its nap until the test lets it through'
+        run() {
+          local out="$SHELLSPEC_TMPBASE/held.$$" pid
+          rm -f "$out"
+          napper "$out" 0.2; pid=$!
+          spec_clock_held
+          print -r -- "held: ${SPEC_CLOCK_HELD#* } own-pid=$(( ${SPEC_CLOCK_HELD%% *} == pid ))"
+          print -r -- "meanwhile: now=$(spec_clock_now ms) slept=$(spec_clock_slept | wc -l | tr -d ' ') done=$(cat "$out" 2>/dev/null)"
+          spec_clock_step
+          wait "$pid"; print -r -- "rc=$? now=$(spec_clock_now ms) $(cat "$out")"
+        }
+        When call run
+        The output should equal "held: 200 0.2 own-pid=1
+meanwhile: now=1000000 slept=0 done=
+rc=0 now=1000200 done 0.2"
+      End
+
+      It 'lets exactly as many naps through as it is told, and the clock moves by their sum'
+        run() {
+          local out="$SHELLSPEC_TMPBASE/two.$$" pid
+          rm -f "$out"
+          napper "$out" 0.1 0.25 3; pid=$!
+          spec_clock_step 2
+          # The third nap is asked for, and not granted.
+          spec_clock_held
+          print -r -- "after two: now=$(spec_clock_now ms) slept=$(spec_clock_slept | tr '\n' ' ')held=${SPEC_CLOCK_HELD#* } done=$(cat "$out" 2>/dev/null)"
+          spec_clock_release
+          wait "$pid"; print -r -- "rc=$? now=$(spec_clock_now ms) slept=$(spec_clock_slept | tr '\n' ' ')"
+        }
+        When call run
+        The output should equal "after two: now=1000350 slept=0.1 0.25 held=3000 3 done=
+rc=0 now=1003350 slept=0.1 0.25 3 "
+      End
+
+      # One sleeper is at the gate at a time; the others queue behind it,
+      # unseen, in no promised order. A step lets ONE through.
+      It 'lets two concurrent sleepers through one at a time'
+        run() {
+          local out="$SHELLSPEC_TMPBASE/conc.$$" a b first second
+          rm -f "$out"
+          napper "$out" 0.1; a=$!
+          napper "$out" 0.2; b=$!
+          spec_clock_held; first=${SPEC_CLOCK_HELD%% *}
+          spec_clock_step
+          spec_clock_held; second=${SPEC_CLOCK_HELD%% *}
+          [[ "$first" != "$second" && " $a $b " == *" $first "* && " $a $b " == *" $second "* ]] \
+            && print "each in turn"
+          # The second is at the gate: only the first can have finished.
+          wait "$first"
+          print -r -- "one through: slept=$(spec_clock_slept | wc -l | tr -d ' ') done=$(wc -l < "$out" | tr -d ' ')"
+          spec_clock_step
+          wait "$second"
+          print -r -- "both: now=$(spec_clock_now ms) slept=$(spec_clock_slept | sort | tr '\n' ' ')done=$(wc -l < "$out" | tr -d ' ')"
+        }
+        When call run
+        The output should equal "each in turn
+one through: slept=1 done=1
+both: now=1000300 slept=0.1 0.2 done=2"
+      End
+
+      It 'holds a sleeper in a subshell, in a child process, and one that calls the sleep command'
+        run() {
+          zsh -fc 'source "$1"
+            ( common::sleep 0.5 )
+            zsh -fc "source \"\$1\"; common::sleep 1" zsh "$1"
+            sh -c "sleep 2 1m"
+            common::now -m; print -r -- "child sees $REPLY"' zsh "$COMMON" &
+          local pid=$! held=
+          local i; for i in 1 2 3; do spec_clock_held; held+="${SPEC_CLOCK_HELD#* }|"; spec_clock_step; done
+          wait "$pid"
+          print -r -- "held=$held now=$(spec_clock_now ms) slept=$(spec_clock_slept | tr '\n' ',')"
+        }
+        When call run
+        The output should equal "child sees 1063500
+held=500 0.5|1000 1|62000 2 1m| now=1063500 slept=0.5,1,2 1m,"
+      End
+
+      It 'does not block when it releases with no sleeper waiting, and the clock then runs free'
+        run() {
+          spec_clock_release
+          spec_clock_release
+          sleep 1
+          zsh -fc 'source "$1"; common::sleep 0.5' zsh "$COMMON"
+          print -r -- "now=$(spec_clock_now ms) slept=$(spec_clock_slept | tr '\n' ' ')"
+        }
+        When call run
+        The output should equal "now=1001500 slept=1 0.5 "
+      End
+
+      It 'can be stepped again after a release'
+        run() {
+          local out="$SHELLSPEC_TMPBASE/again.$$" pid
+          rm -f "$out"
+          spec_clock_release
+          spec_clock_stepped
+          napper "$out" 4; pid=$!
+          spec_clock_held; print -r -- "held=${SPEC_CLOCK_HELD#* }"
+          spec_clock_step; wait "$pid"; print -r -- "now=$(spec_clock_now ms)"
+        }
+        When call run
+        The output should equal "held=4000 4
+now=1004000"
+      End
+
+      # The gate lives beside the journal, in the tmpbase. A sleeper that
+      # arrives when it is gone does not stop.
+      It 'does not stop a sleeper whose gate has disappeared'
+        run() {
+          rm -rf "$SPEC_CLOCK_FILE.gate"
+          zsh -fc 'source "$1"; common::sleep 0.3' zsh "$COMMON"
+          sleep 2
+          print -r -- "rc=$? slept=$(spec_clock_slept | tr '\n' ' ')"
+        }
+        When call run
+        The output should equal "rc=0 slept=0.3 2 "
+      End
+
+      It 'is not upset by a sleeper that dies at the gate'
+        run() {
+          local out="$SHELLSPEC_TMPBASE/dies.$$" a b
+          rm -f "$out"
+          napper "$out" 7; a=$!
+          spec_clock_held
+          kill -9 "$a"; wait "$a" 2>/dev/null
+          napper "$out" 0.4; b=$!
+          spec_clock_step
+          wait "$b"; print -r -- "rc=$? now=$(spec_clock_now ms) $(cat "$out")"
+        }
+        When call run
+        The output should equal "rc=0 now=1000400 done 0.4"
+      End
+
+      # A wait the clock cannot see (a blocking lock): the code says it is
+      # about to block. It stops at the gate like a nap; it moves no clock.
+      It 'holds code that announces a wait in the kernel, and moves no clock for it'
+        run() {
+          zsh -fc 'source "$1"; common::blocking some.lock; print announced' zsh "$COMMON" &
+          local pid=$!
+          spec_clock_held; print -r -- "held=${SPEC_CLOCK_HELD#* }"
+          spec_clock_step; wait "$pid"
+          print -r -- "now=$(spec_clock_now ms) slept=$(spec_clock_slept | wc -l | tr -d ' ')"
+          spec_clock_release
+          zsh -fc 'source "$1"; common::blocking some.lock; print free' zsh "$COMMON"
+          env -u COMMON_CLOCK_FILE zsh -fc 'source "$1"; common::blocking some.lock; print real' zsh "$COMMON"
+          print -r -- "journal lines=$(wc -l < "$SPEC_CLOCK_FILE" | tr -d ' ')"
+        }
+        When call run
+        The output should equal "held=- some.lock
+announced
+now=1000000 slept=0
+free
+real
+journal lines=1"
+      End
+
+      # Deadlock safety. An example that ends with a sleeper still held does
+      # not leave it there: the suite-wide AfterEach releases the gate …
+      It 'frees a held sleeper from the suite-wide after-each hook'
+        run() {
+          local out="$SHELLSPEC_TMPBASE/hook.$$" pid
+          rm -f "$out"
+          napper "$out" 9; pid=$!
+          spec_clock_held
+          spec_clock_after_each
+          wait "$pid"; print -r -- "rc=$? $(cat "$out") slept=$(spec_clock_slept)"
+        }
+        When call run
+        The output should equal "rc=0 done 9 slept=9"
+      End
+
+      # … and so does the hook that removes the tmpbase, for a gate whose
+      # example never got that far.
+      It 'frees a held sleeper before the tmpbase is removed'
+        run() {
+          spec_sandbox || return 1
+          local dir=$SANDBOX pid
+          (
+            SHELLSPEC_TMPBASE=$dir; unset SPEC_CLOCK_FILE
+            spec_clock_set 5; spec_clock_stepped
+            zsh -fc 'source "$1"; common::sleep 9' zsh "$COMMON" &
+            pid=$!
+            spec_clock_held
+            SPEC_HELPER_TMPBASE=$dir spec_helper_drop_tmpbase
+            wait "$pid"; print -r -- "rc=$?"
+          )
+          [[ -e "$dir" ]] && print "still there" || print removed
+        }
+        When call run
+        The output should equal "rc=0
+removed"
+        The error should equal ""
+      End
+    End
   End
 
   It 'leaves no clock, and no fake sleep, behind for the next example'

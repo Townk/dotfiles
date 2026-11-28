@@ -12,43 +12,36 @@
 # spawn fails, while the happy path (a real selection over the capture FIFO) is
 # unchanged.
 #
-# Each example runs the float under a watchdog (run_and_report) so a regression
-# cannot hang the suite: the float's stdout is relayed on stdout, its exit status
-# is preserved, and any leftover float temp file in TMPDIR is reported on stderr
-# as "LEAK:<name>". Guarding this way lets one `When call` assert the selection,
-# the prompt return, and the absence of leaks together.
+# Each example runs the float through run_and_report: the float's stdout is
+# relayed on stdout, its exit status is preserved, and any leftover float temp
+# file in TMPDIR is reported on stderr as "LEAK:<name>". That lets one `When
+# call` assert the selection, the return, and the absence of leaks together.
+#
+# No example waits (tests/README-scaffolding.md, policy 2), so there is no
+# watchdog either: a float that blocks on its FIFO again hangs its example
+# instead of failing it after N seconds. "Promptly" is asserted as a count
+# where the code polls (the Rex half: so many `block inspect` calls, so much
+# time on the virtual clock), and is the example returning at all where it
+# does not (the tmux half, whose float blocks on nothing once the popup fails).
 
 # run_and_report <secs> <fn> [args...]   (picker rows, if any, on stdin)
-#   Run <fn args> in a subshell with a hard <secs> watchdog. Relay its stdout,
-#   preserve its status, and print LEAK:<name> on stderr for every float temp
-#   still present in TEST_TMP afterwards.
+#   Run <fn args> in a subshell. Relay its stdout, preserve its status, and
+#   print LEAK:<name> on stderr for every float temp still present in TEST_TMP
+#   afterwards. <secs> was the watchdog's bound and is ignored: it is kept so
+#   that every `When call run_and_report N …` line reads as it always did.
 run_and_report() {
-  local secs="$1"; shift
-  local tmpin outf
+  shift
+  local tmpin rc=0
   tmpin=$(mktemp "$TEST_TMP/guardin.XXXXXX")
-  # Stage stdin (async jobs default to /dev/null) — but never from a TERMINAL:
-  # an example with no piped rows then waited on the tty forever, hanging the
-  # whole suite whenever it ran with one attached (e.g. under `script`).
+  # Stage stdin — but never from a TERMINAL: an example with no piped rows
+  # then waited on the tty forever, hanging the whole suite whenever it ran
+  # with one attached (e.g. under `script`).
   if [ -t 0 ]; then : >"$tmpin"; else cat >"$tmpin"; fi
-  outf=$(mktemp "$TEST_TMP/guardout.XXXXXX")
 
-  # stderr -> /dev/null so that if a regression hangs the float, the reader it
-  # orphans cannot hold shellspec's error pipe open and drag the run out.
-  ( "$@" <"$tmpin" >"$outf" 2>/dev/null ) &
-  local p=$!
-  # kill -$p can't reach the float's descendants (monitor/process-groups are
-  # unavailable in shellspec's non-interactive context), so after killing the
-  # subshell also reap anything still referencing this example's unique sandbox
-  # (an orphaned `cat "$fifo"` reader) — otherwise it stalls shellspec forever.
-  ( sleep "$secs"; kill -TERM "$p" 2>/dev/null; sleep 0.3
-    kill -KILL "$p" 2>/dev/null
-    pkill -KILL -f "$TEST_TMP" 2>/dev/null ) &
-  local w=$!
-  wait "$p"; local rc=$?
-  kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
-
-  cat "$outf"
-  rm -f -- "$tmpin" "$outf"
+  # The float's own stderr is not part of what an example asserts: only the
+  # LEAK lines below are.
+  ( "$@" <"$tmpin" 2>/dev/null ) || rc=$?
+  rm -f -- "$tmpin"
 
   local f
   for f in "$TEST_TMP"/*fifo*(N) "$TEST_TMP"/txpick.*(N) \
@@ -295,43 +288,80 @@ Describe 'mux/rex.zsh — float launch guard'
     unset TMUX MUX_BACKEND
     export REX_SESSION=session:s1 REX_BLOCK=block:origin
     stub="$TEST_TMP/rex"
-    {
-      echo '#!/usr/bin/env zsh'
-      echo 'print -r -- "$*" >> "$STUB_ARGV_LOG"'
-      echo 'case " $* " in'
-      echo '  *" session.new_layer "*)'
-      echo '    req=$(cat); print -r -- "$req" > "$STUB_REQ"'
-      echo '    [[ "${STUB_MODE:-ok}" == fail ]] && exit 1'
-      echo '    : > "$STUB_ALIVE"'
-      echo '    fifo=$(print -r -- "$req" | jq -r ".layout.block.options.command as \$c | \$c[(\$c | index(\"--capture\")) + 1]")'
-      echo '    if [[ "${STUB_MODE:-ok}" == closed ]]; then'
-      echo '      # The layer is closed by hand: it goes away and nobody writes.'
-      echo '      { sleep 0.4; rm -f "$STUB_ALIVE" } &!'
-      echo '    elif [[ "${STUB_MODE:-ok}" == slow ]]; then'
-      echo '      # Alive and silent: the example writes the answer itself, later.'
-      echo '      :'
-      echo '    else'
-      echo '      { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER-picked}" >&3; exec 3>&-; rm -f "$STUB_ALIVE" } &!'
-      echo '    fi'
-      echo '    print -r -- "{\"block_ids\":[\"block:layer\"]}"'
-      echo '    exit 0 ;;'
-      echo '  *" block close "*) rm -f "$STUB_ALIVE"; exit 0 ;;'
-      echo '  *" block inspect "*) [[ -n "${STUB_INSPECT_RC:-}" ]] && exit "$STUB_INSPECT_RC"; [[ -e "$STUB_ALIVE" ]] && exit 0; exit 3 ;;'
-      echo 'esac'
-      echo 'exit 1'
-    } > "$stub"
+    # The layer lives for a COUNT of `block inspect` polls, not for a time
+    # ($STUB_LIFE: a number, or `open` until it is closed), and what happens
+    # to it mid-wait happens during an exact poll (at_poll). STUB_MODE:
+    #   ok      the modal answers $STUB_ANSWER on the capture FIFO before the
+    #           call returns (the open blocks until the float's reader is
+    #           there: a rendezvous), and the layer stays until closed;
+    #   fail    the layer cannot be created;
+    #   closed  nobody answers, and the layer is closed by hand: it is alive
+    #           for ${STUB_LAYER_LIFE:-2} polls and gone at the next;
+    #   slow    alive and silent, until an at_poll snippet says otherwise.
+    # In `ok` the layer does NOT go away once it has answered, as a real one
+    # does: the float allows a reader 0.3 s to finish reading after its layer
+    # is gone, and on the virtual clock that grace is no time at all — a
+    # reader that had the answer but had not exited yet would be abandoned.
+    cat >"$stub" <<'STUB'
+#!/usr/bin/env zsh
+print -r -- "$*" >> "$STUB_ARGV_LOG"
+case " $* " in
+  *" session.new_layer "*)
+    req=$(cat); print -r -- "$req" > "$STUB_REQ"
+    [[ "${STUB_MODE:-ok}" == fail ]] && exit 1
+    fifo=$(print -r -- "$req" | jq -r '.layout.block.options.command as $c | $c[($c | index("--capture")) + 1]')
+    print -r -- "$fifo" > "$STUB_EV/fifo"
+    case "${STUB_MODE:-ok}" in
+      closed) print -r -- "${STUB_LAYER_LIFE:-2}" > "$STUB_LIFE" ;;
+      slow) print open > "$STUB_LIFE" ;;
+      *)
+        print open > "$STUB_LIFE"
+        { exec 3>"$fifo"; printf "%s" "${STUB_ANSWER-picked}" >&3; exec 3>&-; } ;;
+    esac
+    print -r -- '{"block_ids":["block:layer"]}'
+    exit 0 ;;
+  *" block close "*) print 0 > "$STUB_LIFE"; exit 0 ;;
+  *" block inspect "*)
+    n=$(( $(cat "$STUB_EV/polls" 2>/dev/null) + 1 )); print $n > "$STUB_EV/polls"
+    [[ -f "$STUB_EV/at-poll-$n" ]] && source "$STUB_EV/at-poll-$n"
+    [[ -n "${STUB_INSPECT_RC:-}" ]] && exit "$STUB_INSPECT_RC"
+    life=$(cat "$STUB_LIFE" 2>/dev/null)
+    case "${life:-0}" in
+      0) exit 3 ;;
+      open) exit 0 ;;
+      *) print $(( life - 1 )) > "$STUB_LIFE"; exit 0 ;;
+    esac ;;
+esac
+exit 1
+STUB
     chmod +x "$stub"
+    mkdir -p "$TEST_TMP/ev"
     export MUX_REX_BIN="$stub" STUB_ARGV_LOG="$TEST_TMP/argv.log" STUB_REQ="$TEST_TMP/req.json" \
-      STUB_ALIVE="$TEST_TMP/alive" STUB_MODE=ok STUB_ANSWER=picked
+      STUB_LIFE="$TEST_TMP/layer.life" STUB_EV="$TEST_TMP/ev" STUB_MODE=ok STUB_ANSWER=picked
+    # The floats nap between polls (`sleep 0.2`) and before giving a reader
+    # up (`sleep 0.3`): on the virtual clock, which says afterwards how long
+    # they believe they waited.
+    spec_clock_set 1000
   }
   cleanup() {
     rm -rf "$TEST_TMP"
-    unset MUX_REX_BIN STUB_ARGV_LOG STUB_REQ STUB_ALIVE STUB_MODE STUB_ANSWER TMPDIR REX_SESSION REX_BLOCK STUB_INSPECT_RC _MUX_RX_AWAIT_MISSES
+    unset MUX_REX_BIN STUB_ARGV_LOG STUB_REQ STUB_LIFE STUB_EV STUB_MODE STUB_ANSWER STUB_LAYER_LIFE TMPDIR REX_SESSION REX_BLOCK STUB_INSPECT_RC _MUX_RX_AWAIT_MISSES
   }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
   layer_cmd() { jq -r '.layout.block.options.command | join(" ")' "$STUB_REQ"; }
+  # at_poll <n> <zsh snippet> — what happens during the float's nth poll of
+  # its layer. The stub runs it, so it lands at that exact point of the wait.
+  at_poll() { print -r -- "$2" > "$STUB_EV/at-poll-$1"; }
+  # waited — how the float waited: polls made, time it believes went by.
+  waited() { print -r -- "polls=$(cat "$STUB_EV/polls" 2>/dev/null || print 0) slept=$(( $(spec_clock_now ms) - 1000000 ))ms"; }
+  # A float running beside the example writes its pid here first, and the
+  # stub signals it during the first poll: while the float waits on its
+  # layer, which is where a Ctrl+C finds it. (Signalled from outside it would
+  # be caught anywhere, and on the virtual clock mostly inside a nap.)
+  own_pid() { sh -c 'echo $PPID' > "$STUB_EV/pid"; }
+  term_at_first_poll() { at_poll 1 'kill -TERM "$(cat "$STUB_EV/pid")"'; }
 
   It '_mux_rx_pick_float returns the selection and leaves no temp files (happy path)'
     export STUB_ANSWER=claude
@@ -393,12 +423,9 @@ Describe 'mux/rex.zsh — float launch guard'
   It 'closes its float when the caller is interrupted'
     export STUB_MODE=slow
     interrupted() {
-      ( print -r -- 'a  A' | _mux_rx_pick_float 70% 60% Pick --output field:1 ) &
-      local pid=$!
-      local i; for i in {1..40}; do [[ -e "$STUB_ALIVE" ]] && break; sleep 0.1; done
-      sleep 0.3
-      kill -TERM "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
+      term_at_first_poll
+      ( own_pid; print -r -- 'a  A' | _mux_rx_pick_float 70% 60% Pick --output field:1 ) &
+      wait $! 2>/dev/null
       print -r -- "rc=$?"
       grep -c 'block close .*block:layer' "$STUB_ARGV_LOG"
       ls "$TEST_TMP" | grep -c -E 'rxpick|rxinput' || true
@@ -467,12 +494,9 @@ Quit"
   It '_mux_rx_float closes its float when the caller is interrupted'
     export STUB_MODE=slow
     interrupted() {
-      ( _mux_rx_float --type confirm --title Quit -- "Really?" ) &
-      local pid=$!
-      local i; for i in {1..40}; do [[ -e "$STUB_ALIVE" ]] && break; sleep 0.1; done
-      sleep 0.3
-      kill -TERM "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
+      term_at_first_poll
+      ( own_pid; _mux_rx_float --type confirm --title Quit -- "Really?" ) &
+      wait $! 2>/dev/null
       print -r -- "rc=$?"
       grep -c 'block close .*block:layer' "$STUB_ARGV_LOG"
     }
@@ -505,30 +529,32 @@ Quit"
   # (3) PROVES the layer is gone, but a server that has stopped (4), or one
   # that keeps failing for any other reason, will never say it — and nobody
   # will ever write the answer either.
+  # Both on a layer that never goes away by itself and never answers, so only
+  # the bound under test can end the wait. `slept` is the naps between polls
+  # (0.2 s each) plus the 0.3 s the float allows a reader before giving it up.
   It 'returns 130 at once when the server is gone mid-wait'
-    export STUB_MODE=closed STUB_INSPECT_RC=4
-    When call run_and_report 4 _mux_rx_float --type confirm --title Quit -- "Really?"
-    The output should equal ""
+    export STUB_MODE=slow STUB_INSPECT_RC=4
+    gone() { run_and_report 4 _mux_rx_float --type confirm --title Quit -- "Really?"; print -r -- "rc=$? $(waited)"; }
+    When call gone
+    The output should equal "rc=130 polls=1 slept=300ms"
     The error should equal ""
-    The status should equal 130
   End
 
   It 'gives up after a run of failed checks instead of waiting forever'
-    export STUB_MODE=closed STUB_INSPECT_RC=1 _MUX_RX_AWAIT_MISSES=3
-    When call run_and_report 6 _mux_rx_float --type confirm --title Quit -- "Really?"
-    The output should equal ""
+    export STUB_MODE=slow STUB_INSPECT_RC=1 _MUX_RX_AWAIT_MISSES=3
+    failing() { run_and_report 6 _mux_rx_float --type confirm --title Quit -- "Really?"; print -r -- "rc=$? $(waited)"; }
+    When call failing
+    The output should equal "rc=130 polls=3 slept=700ms"
     The error should equal ""
-    The status should equal 130
   End
 
   It 'does not give up on a float that is simply taking its time'
     slow() {
-      # The layer stays alive (inspect exits 0) and answers after many more
-      # polls than the miss limit: successful checks must not count as misses.
+      # The layer stays alive (inspect exits 0) and answers during the 7th
+      # poll, many more than the miss limit: successful checks must not count
+      # as misses. A float that gave up at the limit never gets to that poll.
       export _MUX_RX_AWAIT_MISSES=2 STUB_MODE=slow
-      ( sleep 1.5
-        fifo=$(jq -r '.layout.block.options.command as $c | $c[($c | index("--capture")) + 1]' "$STUB_REQ")
-        print -rn -- late >"$fifo" ) &
+      at_poll 7 'print -rn -- late > "$(cat "$STUB_EV/fifo")"'
       _mux_rx_float --type confirm --title Quit -- "Really?"
     }
     When call run_and_report 8 slow

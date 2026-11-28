@@ -367,9 +367,10 @@ SH
     do_it() {
       share::rclone_send onedrive "$SB/Report.pdf" >/dev/null
       local expires; expires="$(share::ledger_list | jq -r '.[0].expires')"
-      (( expires > EPOCHSECONDS ))
+      # On the virtual clock the deadline is exact: now plus the default.
+      (( expires == $(spec_clock_now) + $(share::_duration_seconds "$SHARE_DEFAULT_EXPIRATION") ))
     }
-    zmodload zsh/datetime 2>/dev/null
+    spec_clock_set 1700000000
     When call do_it
     The status should be success
   End
@@ -387,13 +388,11 @@ SH
     do_it() {
       share::rclone_send --expiration 90m onedrive "$SB/Report.pdf" >/dev/null
       local expires; expires="$(share::ledger_list | jq -r '.[0].expires')"
-      local -i want=$(( EPOCHSECONDS + 5400 ))
-      # Within a few seconds of the expected 90-minute deadline — not exact,
-      # since a little wall-clock time passes between the two EPOCHSECONDS
-      # reads (this test's and share::rclone_send's own).
-      (( expires >= want - 5 && expires <= want + 5 ))
+      # Exactly the 90-minute deadline: share::rclone_send reads the virtual
+      # clock (common::now), which does not move between its read and this one.
+      (( expires == $(spec_clock_now) + 5400 ))
     }
-    zmodload zsh/datetime 2>/dev/null
+    spec_clock_set 1700000000
     When call do_it
     The status should be success
   End

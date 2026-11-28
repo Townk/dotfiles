@@ -152,6 +152,28 @@ Describe 'mux shim — Rex backend'
 
     rx() { command rex --autostart=false -S "$RX_SERVER" "$@"; }
 
+    # serve_ready <log> <command…> — start a scratch server in the background
+    # and return when it is listening. No poll and no clock: the server's own log
+    # says "Rex server ready" once its socket accepts, so the log goes through a
+    # FIFO to a reader that keeps <log> as a file and reports that line (or the
+    # server ending before it) on a second FIFO, which this blocks on. Sets
+    # SERVE_PID; fails, showing the log, for a server that never got there.
+    # (rex has no readiness flag, and its --timeout does not wait for a socket
+    # that is not there yet: it fails at once.)
+    serve_ready() {
+      local log="$1" state=""
+      shift
+      mkfifo "$log.fifo" "$log.ready" || return 1
+      awk -v log_file="$log" -v ready="$log.ready" '
+        { print >> log_file; fflush(log_file) }
+        /Rex server ready/ && !up { up = 1; print "ready" > ready; close(ready) }
+        END { if (!up) { print "ended" > ready; close(ready) } }' <"$log.fifo" >/dev/null 2>&1 &
+      "$@" >"$log.fifo" 2>&1 &
+      SERVE_PID=$!
+      read -r state <"$log.ready"
+      rm -f "$log.fifo" "$log.ready"
+      [[ "$state" == ready ]] || { cat "$log" >&2; return 1; }
+    }
     start_server() {
       RX_STATE=$(mktemp -d)
       RX_SOCK="/tmp/mxrx-$$.sock"
@@ -163,15 +185,10 @@ Describe 'mux shim — Rex backend'
       : > "$RX_STATE/init.lua"
       # Born "inside tmux", as a server started from a tmux pane is (see the
       # layer example below).
-      TMUX=/tmp/mxrx-fake,1,0 TMUX_PANE=%9 \
-        command rex server run --listen "$RX_SERVER" --state-dir "$RX_STATE/state" \
-        --config "$RX_STATE/init.lua" --restore=false >"$RX_STATE/server.log" 2>&1 &
-      RX_PID=$!
-      local i
-      for i in {1..50}; do
-        rx whoami >/dev/null 2>&1 && break
-        sleep 0.1
-      done
+      serve_ready "$RX_STATE/server.log" env TMUX=/tmp/mxrx-fake,1,0 TMUX_PANE=%9 \
+        rex server run --listen "$RX_SERVER" --state-dir "$RX_STATE/state" \
+        --config "$RX_STATE/init.lua" --restore=false || return 1
+      RX_PID=$SERVE_PID
       RX_SID=$(rx new spec-main --window first -c /tmp --shell none --json -- /bin/zsh -f |
         jq -r '.session_id')
       RX_BID=$(rx block ls -s "$RX_SID" --json | jq -r '.blocks[0].block_id')
@@ -237,10 +254,16 @@ Describe 'mux shim — Rex backend'
     End
 
     It 'sends text and reads it back from the screen'
+      # The pane's shell says when the line has run AND is on the screen:
+      # after the marker it asks the terminal where the cursor is, which Rex
+      # answers only once everything printed before the question is drawn,
+      # and then it opens a FIFO this blocks on.
       send_and_dump() {
-        mux::send_text 'echo rx-$((40+2))-marker'
+        local drawn="$RX_STATE/drawn"
+        mkfifo "$drawn"
+        mux::send_text 'echo rx-$((40+2))-marker; printf "\e[6n"; read -rs -d R; : >'"$drawn"
         mux::send_key enter
-        sleep 0.5
+        : <"$drawn"
         mux::dump_screen
       }
       When call send_and_dump
@@ -278,11 +301,13 @@ Describe 'mux shim — Rex backend'
     # If this fails after a Rex update, the wrapper has become necessary.
     It 'runs a layer command without the tmux variables the server was born with'
       layer_env() {
-        local f="$RX_STATE/layer-env" i
+        # The layer reports on a FIFO: reading it blocks until the command
+        # has run, and ends when it has said its line. It then stays open.
+        local f="$RX_STATE/layer-env"
         unset COLORTERM
+        mkfifo "$f"
         mux::popup 50% 50% --title spec-env -- /bin/sh -c \
-          'echo "tmux=${TMUX-unset} pane=${TMUX_PANE-unset} color=${COLORTERM-unset}" >"$1"; sleep 30' sh "$f" || return 1
-        for i in {1..50}; do [[ -s "$f" ]] && break; sleep 0.1; done
+          'echo "tmux=${TMUX-unset} pane=${TMUX_PANE-unset} color=${COLORTERM-unset}" >"$1"; exec cat' sh "$f" || return 1
         cat "$f"
       }
       When call layer_env

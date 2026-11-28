@@ -210,3 +210,198 @@ not exceed its line, and when you remove a wait you must lower the line (the
 lint says which). Regenerate with `zsh tests/no-real-waits.sh >
 tests/no-real-waits.baseline` after converting. When the file is empty, delete
 it: the rule is then "none, anywhere".
+
+## The two suites
+
+| | `make test` (FAST) | `make test-all` (COMPLETE) |
+| --- | --- | --- |
+| Runs | every example not marked complete-only | every example |
+| Suite budget (wall time, `--jobs $(JOBS)`) | 60 s | 180 s |
+| Per-example budget | 0.1 s | none |
+| `SPEC_SUITE` | `fast` | `complete` |
+
+Both run every spec FILE. Membership is per EXAMPLE, and there is no list of
+slow files: an example is in the fast suite unless it says otherwise.
+`make test-one SPEC=…` and `make test-changed` set no suite: they run every
+example of the specs they pick, with no budget. (`test-mux` is gone: the lane
+was a hand-kept file list for the tmux migration; `make test-all` covers it.)
+
+### Marking an example complete-only
+
+An example that costs more than ~0.1 s (it needs a real scratch server, a real
+daemon, real restic/git/hdiutil work, a nested shellspec, a cargo build…) says
+so with one line, the reason starting with `complete-only:`:
+
+```sh
+It 'mounts the scratch volume'
+  Skip if 'complete-only: real hdiutil mount' spec_complete_only
+  When call mount_it
+  The status should be success
+End
+
+Describe 'against a scratch rex server'
+  Skip if 'complete-only: starts a real rex server' spec_complete_only
+  BeforeAll 'start_server'     # not run in the fast suite
+  AfterAll 'stop_server'
+  It '…'
+End
+```
+
+`spec_complete_only` (in `tests/spec_suite.sh`, loaded for every spec by
+`.shellspec`) is true only under `SPEC_SUITE=fast`. Where the line goes
+matters:
+
+- in a `Describe`/`Context`, the group's examples are skipped AND none of its
+  `BeforeAll`/`BeforeEach`/`AfterEach`/`AfterAll` hooks run (≈1 ms per example);
+- in an `It`, the hooks around that example still run: shellspec evaluates a
+  `Skip` inside the example, after `BeforeEach`. So when the cost is in the
+  setup, give the example a `Context` of its own that carries the line. The
+  fast run tells you: a skipped example that still shows up over budget is
+  paying for its hooks.
+
+One slow example does not take its file out of the fast suite; the rest of the
+file still runs. The fast lane passes `--skip-message quiet`, so the skips are
+counted in the summary but not listed. `grep -rn spec_complete_only tests/`
+is the whole complete-only list.
+
+Why not shellspec tags (`It 'x' slow` + `--tag`)? 0.28.1 has no negative
+filter (`--tag '!slow'` selects nothing), so every FAST example would need the
+tag; and a filtered-out group still runs its `BeforeAll`, which is where a
+scratch server starts.
+
+### Budgets
+
+`tests/run-shellspec.sh` measures every run. After shellspec's report and its
+own summary line it prints, on stderr, what was over:
+
+```
+run-shellspec: fast suite took 72 s, budget 60 s
+run-shellspec: 2 examples over the fast budget of 0.1 s each (1.70 s in total), slowest first:
+    1.250 s  tests/b_spec.sh:7  b runs restic
+    0.450 s  tests/a_spec.sh:40  a starts a server
+run-shellspec: OVER BUDGET (suite 72 s > 60 s; 2 slow examples); not failing the run (SPEC_BUDGET=warn)
+```
+
+| Variable | Default | |
+| --- | --- | --- |
+| `SPEC_BUDGET` | `warn` (set in the Makefile) | `fail`: a blown budget exits 103 when the run was otherwise green. `off`: no budgets. |
+| `SPEC_SUITE_BUDGET` | 60 (`fast`), 180 (`complete`) | seconds of wall time for the run |
+| `SPEC_EXAMPLE_BUDGET` | 0.1 (`fast`), none (`complete`) | seconds for one example |
+| `SPEC_BUDGET_LIST` | 30 | how many offenders to print |
+
+The end-of-run toast carries the same verdict (`— OVER BUDGET (…)`).
+`make test SPEC_BUDGET=fail` tries the strict mode; the default flips in the
+Makefile (`SPEC_BUDGET ?= warn`) once the examples over 0.1 s are marked.
+An example's time is wall time under `--jobs`, so one sitting just under the
+budget will cross it on a loaded machine: between two identical runs about
+100 of 3,800 examples changed sides of 0.1 s, 5 went from under 0.1 s to over
+0.15 s, 1 to over 0.2 s (2026-11-27, `--jobs 6`, other work on the machine).
+So 0.1 s is the line for MARKING; before `SPEC_BUDGET=fail` becomes the
+default, either mark with a margin or give the failing run a looser
+`SPEC_EXAMPLE_BUDGET` (0.25) than the one the report is read against.
+`tests/run-shellspec_budget_spec.sh` pins all of this against a fake shellspec
+and the virtual clock (the wrapper reads its clock from `$COMMON_CLOCK_FILE`
+when that is set), so none of those examples waits.
+
+### Profiling
+
+Every run through the wrapper times every example: `tests/spec_suite.sh`
+replaces shellspec's two profiler hooks and appends one line per example to
+`$SPEC_PROFILE_DIR/examples.tsv` (`file TAB line TAB seconds TAB
+description`). The time is the example as shellspec runs it: `BeforeEach`,
+body, `AfterEach`. `BeforeAll` and the file's start-up are in no example's
+time; `files.tsv` beside it has each file's total. shellspec's own `--profile`
+is not used: it refuses `--jobs`, and it reports shares of a busy-loop
+counter, not a clock.
+
+```sh
+make test-all                # leaves $TMPDIR/spec-profile.complete.tsv (make test: …fast.tsv)
+make test-profile            # totals, histogram, the 30 slowest  (SUITE=fast for the other)
+tests/spec-profile.sh over  "$TMPDIR/spec-profile.complete.tsv"   # every example over 0.1 s: the to-do list
+tests/spec-profile.sh files "$TMPDIR/spec-profile.complete.tsv"   # per file: seconds, examples, over budget
+tests/spec-profile.sh run -o /tmp/p.tsv tests/job_spec.sh         # profile any selection
+```
+
+## The stepped clock
+
+This replaces the last bullet of "What the virtual clock cannot do" above:
+the five examples it lists no longer wait, and `job_follow_spec.sh` and
+`job_rex_spec.sh` have no line left in the no-waits baseline.
+
+The free-running clock makes every nap instant, so nothing can happen WHILE
+the code is asleep. Stepped, each nap stops at a gate until the example lets
+it through:
+
+| Call | What it does |
+| --- | --- |
+| `spec_clock_stepped` | After `spec_clock_set`: from now on every nap stops at the gate (`common::sleep` and what is built on it, the fake `sleep`, in every process that inherits the environment). |
+| `spec_clock_held` | Blocks until a sleeper is at the gate and leaves it there. `$SPEC_CLOCK_HELD` is `<pid> <ms> <request>`. |
+| `spec_clock_step [n]` | n times: blocks until a sleeper is at the gate, advances the clock by what it asked for, lets it through. |
+| `spec_clock_release` | Back to free-running. The sleeper at the gate and those queued go on. Never blocks. |
+
+Neither side sleeps or polls. The sleeper reads a FIFO it has opened
+read-write; the example opens that FIFO write-only, and the kernel holds that
+open until the FIFO has a reader, which is "a sleeper is there".
+
+**When to use which.**
+
+- Free-running (`spec_clock_set` alone), the default: the code naps and the
+  example only needs the outcome (how many polls, how long it believes it
+  waited), or acts from a fake the code calls (`at_poll`).
+- Stepped, when the example must act while the code is INSIDE a nap or a
+  bounded wait that calls nothing (a signal, another process ending), or when
+  its point is that the code is still napping after so many naps: an absence
+  over the code's own time. Also for a signal sent from outside to a zsh with
+  trap functions: held, it lands in a blocking read, as it does in the real
+  `zselect`, not in the free-running clock's tight loop of appends.
+- A wait in the kernel (a blocking `zsystem flock`) is invisible to both. The
+  code announces it with `common::blocking <what>`, which stops at the same
+  gate (`$SPEC_CLOCK_HELD` is `<pid> - <what>`) and moves no clock;
+  `job::_rex_lock` does, on a test clock only.
+
+**A worked example.** A failed job's follower stays in its tab until the tab
+is closed. "It stays" used to be `sleep 0.5; kill -0 $FPID`. Now
+(`tests/job_follow_spec.sh`):
+
+```sh
+FOLLOW_STEPPED=1 follow_bg j1        # spec_clock_set 1000; spec_clock_stepped; follower &
+( spec_clock_step 5                  # five naps of its stay loop go by ...
+  spec_clock_held                    # ... and it is at a sixth: it stays
+  echo staying > "$JOB_SANDBOX/stayed"
+  kill -HUP "$FPID" ) &              # the tab closes while it is in that nap
+stepper=$!
+wait "$FPID"; rc=$?                  # 129
+kill "$stepper" 2>/dev/null; wait "$stepper" 2>/dev/null
+cat "$JOB_SANDBOX/stayed" 2>/dev/null || echo "gone-early rc=$rc"
+```
+
+The stepping runs beside the `wait` because `spec_clock_step` and
+`spec_clock_held` block until a sleeper comes: a follower that left instead of
+staying would never come, and this way the example fails (`gone-early`)
+instead of hanging. Step in the example's own shell when the nap is certain.
+
+**Several sleepers.** One is at the gate at a time; the others queue on the
+gate's lock, unseen, and reach the gate in no promised order. A step lets
+exactly one through. To see two things blocked at once, hold one of them with
+a fake's own FIFO and the other at the gate (`creates one session for two
+simultaneous jobs` in `job_rex_spec.sh`), and when the example must tell
+which of two events came, send both down one FIFO.
+
+**The deadlock rule: a held sleeper never outlives its example.** An example
+does nothing for this; it only `wait`s for what it started.
+
+1. After every example of the suite, `spec_clock_after_each` (registered in
+   `spec_helper_configure`) releases the gate the example set up.
+2. Before a file's tmpbase is removed, `spec_helper_drop_tmpbase` releases
+   every gate still closed under it.
+3. A sleeper that finds no FIFO at the gate (released, or gone with the
+   tmpbase) does not stop.
+4. A sleeper nobody came for gives up after `COMMON_CLOCK_STEP_BOUND` real
+   seconds (300) and takes the gate's FIFO away, so the ones queued behind it
+   pass at once. This is a dead man's switch for a run that was killed
+   outright, the only real timer in the mechanism; no passing example meets
+   it.
+
+Not stepped: whatever the free-running clock does not reach either, and the
+two local stand-ins for `common::sleep` (`_mux_sleep` in `mux-bootstrap.zsh`
+when common.zsh is not loaded, `backup-drift.zsh`), which run free.

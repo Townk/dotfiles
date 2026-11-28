@@ -30,6 +30,11 @@ for f in *_spec.sh(N) *_helper.sh(N); do
     spec_helper.sh | spec_helper_spec.sh | no_real_waits_spec.sh) continue ;;
   esac
   perl -ne '
+    # Expected output is data: a multi-line string opened on an assertion
+    # line (The … should equal "…) runs until its closing quote, and a line
+    # of it that happens to begin with `timeout 20` is not a wait.
+    if ($instr) { $instr = 0 if tr/"// % 2; next }
+    if (/^\s*The\b/) { $instr = 1 if tr/"// % 2; next }
     next if /^\s*#/;                                   # comment line
     next if /^\s*(It|Describe|Context|Specify|Example|The|Skip|Pending|Todo)\b/;
     s/(?<![\$\w])#\s.*$//;                             # trailing comment

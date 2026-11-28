@@ -1278,15 +1278,35 @@ EOF
   # push, but the loser failed a job and alarmed the operator). Same-type
   # pushes must SERIALIZE: a blocking flock, taken BEFORE the file list is
   # built, so the waiter globs post-clean staging and ships only the new.
+  #
+  # Two moments in this example, and only one of them is an event:
+  #  * "the first push is inside its transfer" IS one: its fake rsync says
+  #    `inside` on a FIFO (which the example then removes, so the second
+  #    push's rsync finds no FIFO to talk to), and the second push starts on
+  #    that line, not after a delay.
+  #  * "the second push did NOT start its own transfer meanwhile" is an
+  #    absence: a push that waits in `zsystem flock` does nothing anyone can
+  #    observe, so nothing can tell the first rsync "the other one is parked,
+  #    go on". The first rsync (only the first: the one that found the FIFO)
+  #    therefore still holds its transfer open for one REAL second (the
+  #    `sleep 1` below; no spec_clock_set in this file, so it is the real
+  #    one), the window in which a push that does not serialize
+  #    reaches its own rsync and writes the second `start`. This is the one
+  #    wait left here on the real clock (tests/README-scaffolding.md: "the
+  #    absence of something over time"). The seam that would remove it is in
+  #    rip::push_worker: try the lock without blocking first and SAY that it
+  #    is waiting (one log line) before the blocking flock; the example would
+  #    then release the first rsync on that line.
   It 'concurrent same-type pushes serialize instead of racing (rc-24 vanish)'
     export RIP_PUSH_MIN_AGE_S=0
+    export RIP_FAKE_INSIDE="$RIP_SANDBOX/inside"
     export RIP_FAKE_RSYNC_ORDER="$RIP_SANDBOX/order.log"
     : > "$RIP_FAKE_RSYNC_ORDER"
     cat > "$RIP_SANDBOX/rsync" <<'EOF'
 #!/bin/sh
 case "$*" in *-rcn*) exit 0 ;; esac
 printf 'start\n' >> "$RIP_FAKE_RSYNC_ORDER"
-sleep 1
+if [ -p "$RIP_FAKE_INSIDE" ]; then echo inside > "$RIP_FAKE_INSIDE"; sleep 1; fi
 lf=""
 for a in "$@"; do case "$a" in --files-from=*) lf="${a#--files-from=}";; esac; done
 src=""; dst=""
@@ -1306,9 +1326,11 @@ EOF
     serialize_run() {
       mkdir -p "$RIP_STAGING_ROOT/music/Art/Alpha"
       printf 'a' > "$RIP_STAGING_ROOT/music/Art/Alpha/01 One.flac"
+      mkfifo "$RIP_FAKE_INSIDE"
       zsh -c "source $RIPLIB && rip::push_worker music" >/dev/null 2>&1 &
-      local first=$!
-      sleep 0.3
+      local first=$! at
+      read -r at < "$RIP_FAKE_INSIDE"
+      rm -f "$RIP_FAKE_INSIDE"
       mkdir -p "$RIP_STAGING_ROOT/music/Art/Beta"
       printf 'b' > "$RIP_STAGING_ROOT/music/Art/Beta/01 Two.flac"
       zsh -c "source $RIPLIB && rip::push_worker music" >/dev/null 2>&1
@@ -2043,10 +2065,13 @@ EOF
     The result of function provider_call_count should equal "1"
   End
 
+  # "Not rewritten" is read off the mtime, which the example first sets to a
+  # date in 2000: a second write of any kind would bring it back to today, so
+  # no second has to pass between the two runs to tell them apart.
   It 'sidecar: re-running leaves the file byte-identical'
     mkdir -p "$RIP_SANDBOX/bk"
     printf '%s\n' '{"path":"A/B","title":"B","authors":["A"],"ids":{},"provider":"unknown","acquired_utc":"2026-08-22T15:18:03Z","format":"m4b"}' > "$RIP_SANDBOX/m.json"
-    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && mtime1=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && sleep 1 && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && mtime2=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && [ -z \"\$(find $RIP_SANDBOX/bk -name '.fleet-book.json.tmp.*' 2>/dev/null)\" ] && [ \"\$mtime1\" = \"\$mtime2\" ] && echo stable"
+    When run zsh -c "source $RIPLIB && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cp $RIP_SANDBOX/bk/.fleet-book.json $RIP_SANDBOX/first && touch -t 200001010000 $RIP_SANDBOX/bk/.fleet-book.json && mtime1=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && rip::_book_sidecar $RIP_SANDBOX/bk $RIP_SANDBOX/m.json && cmp -s $RIP_SANDBOX/first $RIP_SANDBOX/bk/.fleet-book.json && mtime2=\$(stat -f %m $RIP_SANDBOX/bk/.fleet-book.json) && [ -z \"\$(find $RIP_SANDBOX/bk -name '.fleet-book.json.tmp.*' 2>/dev/null)\" ] && [ \"\$mtime1\" = \"\$mtime2\" ] && echo stable"
     The status should equal 0
     The output should equal "stable"
   End

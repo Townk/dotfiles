@@ -196,7 +196,16 @@ case " \$* " in
       *" -b block:job "*) echo '{"child":{"pid":104},"foreground":{"name":"zsh"}}' ;;
     esac ;;
   *" block call "*" size "*) echo "{\"columns\":\${STUB_COLS:-60},\"rows\":\${STUB_ROWS:-40}}" ;;
-  *" block inspect "*) [ -e "$PR_TMP/alive" ] && exit 0; exit 3 ;;
+  *" block inspect "*)
+    # A layer closed by hand, with no time passing: when the example wrote
+    # polls-left, the layer answers that many more probes and is gone.
+    [ -e "$PR_TMP/alive" ] || exit 3
+    if [ -f "$PR_TMP/polls-left" ]; then
+      left=\$(cat "$PR_TMP/polls-left")
+      [ "\$left" -gt 0 ] || { rm -f "$PR_TMP/alive"; exit 3; }
+      echo \$((left - 1)) >"$PR_TMP/polls-left"
+    fi
+    exit 0 ;;
   *" block close "*) rm -f "$PR_TMP/alive" ;;
 esac
 exit 0
@@ -333,8 +342,11 @@ not opened"
     It 'closes a layer whose holder never reports, and fails'
       export STUB_LAYER=silent
       silent() {
-        # The holder never writes; the layer is closed by hand a moment later.
-        ( sleep 0.7; rm -f "$PR_TMP/alive" ) &
+        # The holder never writes; the layer is closed by hand a moment later:
+        # it answers the first once-a-second probe and is gone at the second.
+        # The naps between probes go to the virtual clock.
+        spec_clock_set 1000
+        echo 1 >"$PR_TMP/polls-left"
         mux::pinentry_spawn /dev/ttys002 44 12; print -r -- "rc=$?"
         ls "$PR_TMP" | grep -c 'fifo' || true
       }

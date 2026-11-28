@@ -6,7 +6,8 @@
 # uv, gh and hs are ALWAYS stubbed, so an example that finds a real bootloader drive
 # (a half left in BOOTSEL while the suite runs) still cannot write to it, and no
 # example can reach the updater of the board that is plugged into this Mac. The
-# examples that wait for a drive use --timeout 1 to keep that wait to a second.
+# examples that wait for a drive (--timeout 1) do it on the virtual clock: the
+# script's poll::until gives up after one of ITS seconds, in no time at all.
 #
 # The script's own decisions are what get asserted, not the hardware's: which
 # host it resolved from, whether it took the ssh hop at all, and whether it
@@ -37,6 +38,10 @@ Describe 'qmk-flash'
     # bridge because the suite happens to be running over ssh.
     export HS=/usr/bin/true
     unset SSH_CONNECTION SSH_CLIENT SSH_TTY NOTIFY_VIA_BRIDGE
+
+    # The waits for a bootloader drive and for the read-back are poll::until
+    # loops: on the virtual clock they run out without waiting.
+    spec_clock_set
 
     # Every external the script shells out to, recording into one log so an
     # example can assert what did NOT run as easily as what did. ssh exits 3,
@@ -127,11 +132,12 @@ case " $* " in
     trap - INT
     echo "pair SIGINT $got" >> "@CALLS@"
     # FAKE_PAIR_SIGNAL stands in for a Ctrl-C mid-update: interrupt the
-    # script (this stub's parent, the backgrounded job having exec'd it), then
-    # linger so the signal lands while the script still waits on us.
+    # script (this stub's parent, the backgrounded job having exec'd it).
+    # No lingering needed: kill returns with the signal already pending on
+    # the script, so it is taken before the SIGCHLD of our exit can be, that
+    # is, while the script still waits on us.
     if [ -n "${FAKE_PAIR_SIGNAL:-}" ]; then
       kill -INT "$PPID"
-      sleep 1
     fi
     exit "${FAKE_PAIR_RC:-0}"
     ;;

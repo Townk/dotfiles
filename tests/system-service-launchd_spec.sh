@@ -398,13 +398,18 @@ STUB
         mkdir -p "$XDG_STATE_HOME/clipboard" "$XDG_DATA_HOME"
         chmod 700 "$XDG_STATE_HOME/clipboard"
         printf "socket-test\n" > "$XDG_STATE_HOME/clipboard/self-name"
-        "$recobd" --no-public --socket "$sock" > "$root/daemon.log" 2>&1 &
+        # The daemon writes its log into a FIFO and says "recobd: wire ..."
+        # once its listener is bound: block on that line instead of polling
+        # for the socket. EOF first means it died. The FIFO stays open (fd 8)
+        # so the daemon can keep logging.
+        mkfifo "$root/daemon.out"
+        "$recobd" --no-public --socket "$sock" > "$root/daemon.out" 2>&1 &
         daemon=$!
         trap "kill $daemon 2>/dev/null || true; wait $daemon 2>/dev/null || true" EXIT
-        i=0
-        while [ ! -S "$sock" ] && [ "$i" -lt 100 ]; do
-          sleep 0.02
-          i=$((i + 1))
+        exec 8< "$root/daemon.out"
+        while IFS= read -r line <&8; do
+          printf "%s\n" "$line" >> "$root/daemon.log"
+          case $line in "recobd: wire "*) break ;; esac
         done
         [ -S "$sock" ] || { cat "$root/daemon.log" >&2; exit 9; }
         out=$(CLIPBOARD_BRIDGE_LOCAL_SOCKET="$sock" "$bridge" call host.identity) || exit 8

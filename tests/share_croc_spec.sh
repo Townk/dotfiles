@@ -448,7 +448,7 @@ SH
 #!/bin/sh
 n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
 n=$((n + 1)); printf '%s' "$n" >"$SB_TRIES"
-sleep 2                      # ran a while: an interruption, not a bad config
+spec-clock-advance 2         # ran a while: an interruption, not a bad config
 [ "$n" -ge 3 ] && { echo "Sending 'Report.pdf' (1 B)"; exit 0; }
 echo "connection lost"
 exit 1
@@ -457,7 +457,10 @@ SH
     PATH="$SB/bin:$PATH"
     SB_TRIES="$SB/tries"; export SB_TRIES
     # MIN_RUN=1 so the 2s runs count as "ran a while"; a budget of 2 would have
-    # aborted at attempt 2 if these were miscounted as instant failures.
+    # aborted at attempt 2 if these were miscounted as instant failures. The
+    # two seconds pass on the virtual clock, which share::croc_send reads
+    # (common::now): each fake croc moves it forward and returns at once.
+    spec_clock_set
     JOB_ID=fake-job SHARE_LIVE_BACKOFF_BASE=0 SHARE_LIVE_FAST_FAILS=2 SHARE_LIVE_DEADLINE=30 SHARE_LIVE_MIN_RUN=1       share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>/dev/null || :
     When call cat "$SB/tries"
     The output should equal '3'
@@ -846,7 +849,11 @@ SH
     # Review focus 1: a progress bar redrawn with CR and never LF must still
     # be read as it arrives, not only at EOF. The fake croc prints the connect
     # record and one CR-terminated transfer record from the capture, then
-    # waits (up to ~3 s) for the job's progress to show it before exiting.
+    # stays alive until the job's progress shows it: job::progress publishes
+    # with `mv`, so a test-owned mv (the real one, then one line on a FIFO
+    # once the published file reads 13 %) is the rendezvous the fake blocks
+    # on. A reader that only catches up at EOF never gets there: the fake
+    # would still be waiting, and the example does not come back.
     It 'reads CR-only redraws as they arrive'
       wait_setup
       SB_TRANSFER="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.transfer"; export SB_TRANSFER
@@ -854,15 +861,24 @@ SH
 #!/bin/sh
 sed -n 1p "$SB_TRANSFER"
 printf '%s\r' "$(grep -m1 ' 13% ' "$SB_TRANSFER")"
-i=0
-while [ "$i" -lt 30 ]; do
-  grep -q ' 13 ' "$JOB_STATE_ROOT/fake-job/progress" 2>/dev/null && break
-  sleep 0.1; i=$((i + 1))
-done
+read -r seen < "$SB_SNAP.seen"
+rm -f "$SB_SNAP.seen"
 cp "$JOB_STATE_ROOT/fake-job/progress" "$SB_SNAP.mid"
 exit 0
 SH
-      chmod +x "$SB/bin/croc"
+      cat >"$SB/bin/mv" <<'SH'
+#!/bin/sh
+/bin/mv "$@"
+rc=$?
+for last in "$@"; do :; done
+case $last in
+  */fake-job/progress)
+    if [ -p "$SB_SNAP.seen" ] && grep -q ' 13 ' "$last"; then echo 13 >"$SB_SNAP.seen"; fi ;;
+esac
+exit $rc
+SH
+      chmod +x "$SB/bin/croc" "$SB/bin/mv"
+      mkfifo "$SB_SNAP.seen"
       JOB_ID=fake-job share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>&1
       mid() { sed 's/^[0-9]* //' "$SB_SNAP.mid"; }
       When call mid

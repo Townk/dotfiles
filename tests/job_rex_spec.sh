@@ -27,9 +27,10 @@ EOS
     # FIFO it first writes a line there, so it is held until the example
     # reads it. `ls --json` prints the JOB_FAKE_REX_LS fixture. `new` exits
     # JOB_FAKE_REX_NEW_RC when set; otherwise it adds the Jobs session to the
-    # ls fixture and answers like the real CLI, after JOB_FAKE_REX_NEW_DELAY
-    # seconds when that is set (one example widens a race between two openers
-    # with it: the only real wait in this file).
+    # ls fixture and answers like the real CLI; with JOB_FAKE_REX_NEW_HOLD
+    # naming a FIFO it first writes `new` there and then stays in flight
+    # until the example writes a line to <that FIFO>.go (one example holds
+    # the first of two openers inside its create with it).
     # `block ls` prints the JOB_FAKE_REX_BLOCKS fixture and, like the real
     # CLI, exits 1 when the ls fixture has no Jobs session; `block close`
     # notes in JOB_FAKE_REX_CLOSING_SEEN whether $JOB_STATE_ROOT/.rex_closing
@@ -68,7 +69,10 @@ case "$*" in
     ;;
   *' new Jobs '*)
     [ -n "${JOB_FAKE_REX_NEW_RC:-}" ] && exit "$JOB_FAKE_REX_NEW_RC"
-    [ -n "${JOB_FAKE_REX_NEW_DELAY:-}" ] && sleep "$JOB_FAKE_REX_NEW_DELAY"
+    if [ -p "${JOB_FAKE_REX_NEW_HOLD:-}" ]; then
+      echo new > "$JOB_FAKE_REX_NEW_HOLD"
+      read -r _ < "$JOB_FAKE_REX_NEW_HOLD.go"
+    fi
     printf '%s\n' '{"sessions":[{"session_id":"session:main","label":"Main"},{"session_id":"session:jobs","label":"Jobs"}]}' \
       > "$JOB_FAKE_REX_LS"
     echo '{"session_id":"session:jobs","initial_windows":[{"window_id":"window:w1","block_ids":["block:b1"]}]}'
@@ -170,21 +174,40 @@ EOS
       The status should be success
     End
 
+    # No wait: the first opener is held INSIDE its create (the fake's `new`
+    # says it is there and stays in flight), so it has seen "no Jobs
+    # session" and holds the lock. The second is started then. Its wait for
+    # the lock is in the kernel; job::_rex_lock announces it at the stepped
+    # clock's gate (common::blocking), which is how the example knows the
+    # second opener reached a HELD lock. Both events come down one FIFO:
+    # with no lock the second would reach `new` instead, and the example
+    # would say so rather than hang.
     It 'creates one session for two simultaneous jobs'
       both() {
-        # The one real wait left: the first opener's `new` takes 0.3 s, so
-        # the second reaches the lock while it is held.
-        export JOB_FAKE_REX_NEW_DELAY=0.3
+        local p1 p2 w first second
+        export JOB_FAKE_REX_NEW_HOLD="$JOB_SANDBOX/new"
+        mkfifo "$JOB_FAKE_REX_NEW_HOLD" "$JOB_FAKE_REX_NEW_HOLD.go"
         meta j1 "One"; meta j2 "Two"
+        spec_clock_set 1000
+        spec_clock_stepped
         run_job job::_rex_open_tab j1 & p1=$!
+        read -r first < "$JOB_FAKE_REX_NEW_HOLD"
         run_job job::_rex_open_tab j2 & p2=$!
+        ( spec_clock_held; echo "waits for ${SPEC_CLOCK_HELD##* }" > "$JOB_FAKE_REX_NEW_HOLD" ) & w=$!
+        read -r second < "$JOB_FAKE_REX_NEW_HOLD"
+        kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+        # The second goes on to its blocking lock; then the first finishes.
+        spec_clock_release
+        echo go > "$JOB_FAKE_REX_NEW_HOLD.go"
         wait "$p1" "$p2"
         echo "new=$(grep -c ' new Jobs ' "$JOB_FAKE_REX_LOG")"
         echo "window=$(grep -c ' window new ' "$JOB_FAKE_REX_LOG")"
+        echo "first: $first, second: $second"
       }
       When call both
       The line 1 of output should equal "new=1"
       The line 2 of output should equal "window=1"
+      The line 3 of output should equal "first: new, second: waits for rex.lock"
     End
 
     It 'opens a tab for a 200-character, two-line title'

@@ -766,12 +766,18 @@ End
 # entry in the target, and the staging dir an untrappable SIGKILL leaves behind
 # must be swept by the next invocation.
 #
-# APFS clonefile is near-instant regardless of size — copying even a many-GB
-# file inside ONE container completes in milliseconds, which would make "kill
-# mid-copy" untestable by timing. So the source goes on its own APFS container
-# (a throwaway sparse image): per `man cp`, `-c` degrades to a real copy across
-# containers — still tier 1 code, but no longer instant — without faking any
-# binary.
+# "Mid-copy" is a point, not a moment: the engine's first copy tier runs `cp`
+# from PATH (paste_files.rs, copy_local), so for the run that is killed a
+# test-owned `cp` stands there instead. It leaves a partial item in the staging
+# dir, says `copying` on a FIFO and then stays put; the example blocks on that
+# line, kills the client, and lets the orphaned copy go. No sleep aims the
+# kill, and the copy does not have to be slow for it to land. (It used to be a
+# 4 GB file and a kill 0.2 s in.)
+#
+# The run AFTER the kill uses the real cp, and the source still sits on its own
+# APFS container (a throwaway sparse image): per `man cp`, `-c` degrades to a
+# real copy across containers, so the recovery run moves real bytes through
+# tier 1 instead of cloning them.
 Describe 'paste --files interrupt safety'
   Include tests/recob_helper.sh
 
@@ -793,10 +799,19 @@ Describe 'paste --files interrupt safety'
     seed_reset
     export CLIP="$(recob_client_bin)"
     export TARGET="$RECOB_DIR/target"; mkdir -p "$TARGET"
-    # The item under test is deliberately larger than the 200 MB default cap —
-    # a copy has to be big enough to still be running 0.2 s in. What is under
-    # test here is the interruption, not the cap, so the cap is lifted.
-    export CLIP_FILE_MAX=17179869184
+
+    # The `cp` of the killed run: a partial item where the engine asked for
+    # the copy (its last argument, inside the staging dir), one line on the
+    # FIFO, then it holds until the example releases it.
+    mkdir -p "$RECOB_DIR/held-cp"
+    mkfifo "$RECOB_DIR/copying" "$RECOB_DIR/release"
+    printf '%s\n' '#!/bin/sh' \
+      'for dst in "$@"; do :; done' \
+      'printf partial > "$dst"' \
+      "echo copying > '$RECOB_DIR/copying'" \
+      "read -r go < '$RECOB_DIR/release'" \
+      'exit 1' > "$RECOB_DIR/held-cp/cp"
+    chmod +x "$RECOB_DIR/held-cp/cp"
 
     DMG="$RECOB_DIR/xvol.sparseimage"
     hdiutil_quiet create -size 5g -fs APFS -volname PbpasteFilesTest -type SPARSE "$DMG" >/dev/null
@@ -805,7 +820,7 @@ Describe 'paste --files interrupt safety'
     export MNT
     # A genuinely dense, cross-container source, so tier 1's degraded copy has
     # real bytes to move.
-    dd if=/dev/zero of="$MNT/big.bin" bs=4m count=1024 >/dev/null 2>&1
+    dd if=/dev/zero of="$MNT/big.bin" bs=4m count=16 >/dev/null 2>&1
     seed_clip file "$RECOB_SELF_NAME" 1752200000.7 auth "$MNT/big.bin"
   }
   BeforeEach 'setup'
@@ -818,11 +833,17 @@ Describe 'paste --files interrupt safety'
 
   It 'leaves no partial entry in the target when killed mid-copy, and sweeps staging on the next run'
     killed_mid_copy() {
-      "$CLIP" paste --files "$TARGET" >/dev/null 2>&1 &
+      # fd 9 is the FIFO's write end, held by the client: a client that ends
+      # without ever reaching its copy is an EOF here (return 5), not a hang.
+      PATH="$RECOB_DIR/held-cp:$PATH" "$CLIP" paste --files "$TARGET" >/dev/null 2>&1 9>"$RECOB_DIR/copying" &
       pid=$!
-      sleep 0.2
+      at=
+      read -r at < "$RECOB_DIR/copying"
+      [ "$at" = copying ] || return 5
+      has_staging "$TARGET" || return 4
       kill -9 "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
+      : > "$RECOB_DIR/release"
       # Nothing half-copied is ever visible under the item's own name: the
       # copy happens in the staging dir and only a rename publishes it.
       [ -e "$TARGET/big.bin" ] && return 9

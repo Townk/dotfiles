@@ -190,6 +190,28 @@ Describe 'quick-launch on Rex'
     rx() { command rex --autostart=false -S "$RX_SERVER" "$@"; }
     view() { rx api call -s "$1" session.view; }
 
+    # serve_ready <log> <command…> — start a scratch server in the background
+    # and return when it is listening. No poll and no clock: the server's own log
+    # says "Rex server ready" once its socket accepts, so the log goes through a
+    # FIFO to a reader that keeps <log> as a file and reports that line (or the
+    # server ending before it) on a second FIFO, which this blocks on. Sets
+    # SERVE_PID; fails, showing the log, for a server that never got there.
+    # (rex has no readiness flag, and its --timeout does not wait for a socket
+    # that is not there yet: it fails at once.)
+    serve_ready() {
+      local log="$1" state=""
+      shift
+      mkfifo "$log.fifo" "$log.ready" || return 1
+      awk -v log_file="$log" -v ready="$log.ready" '
+        { print >> log_file; fflush(log_file) }
+        /Rex server ready/ && !up { up = 1; print "ready" > ready; close(ready) }
+        END { if (!up) { print "ended" > ready; close(ready) } }' <"$log.fifo" >/dev/null 2>&1 &
+      "$@" >"$log.fifo" 2>&1 &
+      SERVE_PID=$!
+      read -r state <"$log.ready"
+      rm -f "$log.fifo" "$log.ready"
+      [[ "$state" == ready ]] || { cat "$log" >&2; return 1; }
+    }
     start_server() {
       RX_STATE=$(mktemp -d)
       RX_SOCK="/tmp/qlrx-$$.sock"
@@ -204,11 +226,10 @@ Describe 'quick-launch on Rex'
       # and none of them touches the developer's real ~/.zshrc.
       mkdir -p "$RX_STATE/zdot"
       print -r -- ': >> "$ZDOTDIR/interactive-ran"' >"$RX_STATE/zdot/.zshrc"
-      ZDOTDIR="$RX_STATE/zdot" command rex server run --listen "$RX_SERVER" --state-dir "$RX_STATE/state" \
-        --config "$RX_STATE/init.lua" --restore=false >"$RX_STATE/server.log" 2>&1 &
-      RX_PID=$!
-      local i
-      for i in {1..50}; do rx whoami >/dev/null 2>&1 && break; sleep 0.1; done
+      serve_ready "$RX_STATE/server.log" env ZDOTDIR="$RX_STATE/zdot" \
+        rex server run --listen "$RX_SERVER" --state-dir "$RX_STATE/state" \
+        --config "$RX_STATE/init.lua" --restore=false || return 1
+      RX_PID=$SERVE_PID
       RX_SID=$(rx new here --window first -c /tmp --shell none --json -- /bin/zsh -f | jq -r '.session_id')
       RX_BID=$(rx block ls -s "$RX_SID" --json | jq -r '.blocks[0].block_id')
     }
@@ -421,11 +442,16 @@ EOS
 
     It 'asks for an interactive shell in a floating pane too'
       float_inter() {
-        local mark="$RX_STATE/zdot/interactive-ran" i
+        # The mark is a FIFO here: opening it for reading blocks until an
+        # interactive shell opens it to leave its mark. (A float started
+        # without one never does, and the example hangs instead of failing.)
+        local mark="$RX_STATE/zdot/interactive-ran"
         rm -f "$mark"
+        mkfifo "$mark"
         ql_dispatch pane pad2 >/dev/null || return 1
-        for i in {1..30}; do [[ -e "$mark" ]] && break; sleep 0.1; done
-        [[ -e "$mark" ]] && print -r -- true
+        : <"$mark"
+        rm -f "$mark"
+        print -r -- true
       }
       QL_JSON=$(jq -c '.panes += [{"id":"pad2","name":"Pad2","direction":"floating","size":"50%","action":{"type":"Run","args":["sleep 60"]}}]' <<<"$QL_JSON")
       When call float_inter

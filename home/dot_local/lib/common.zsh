@@ -315,6 +315,29 @@ fi
 # returns at once. Unset, empty, or naming no file: the real clock, always.
 # The format has two readers, this one and the awk in spec_helper.sh;
 # tests/common_spec.sh feeds both the same journal and compares.
+#
+# STEPPED. The journal alone makes every wait instant, so nothing can be
+# slipped in while the code is "asleep". When a test has also put a gate
+# beside the journal (spec_clock_stepped: the directory
+# $COMMON_CLOCK_FILE.gate, with a FIFO `go` in it), common::sleep stops there
+# instead: it takes the gate's lock (one sleeper at the gate at a time, the
+# others queue on the lock), leaves `<pid> <ms> <request>` in the gate's `at`
+# file, and reads one line from `go`, which the test writes when it lets the
+# nap through (spec_clock_step; the test advances the journal itself, before
+# it writes). Any other outcome ends the wait and the sleeper advances the
+# journal as it would have without a gate: the test stopped stepping
+# (spec_clock_release puts a plain file where the FIFO was), the gate is gone
+# (it lives in the test's tmpbase), or nothing came for
+# COMMON_CLOCK_STEP_BOUND real seconds (300; a dead man's switch for a
+# sleeper whose test was killed: it takes the FIFO away, so the sleepers
+# queued behind it do not each wait in turn). No fork, and a signal lands in
+# a blocking read, as it does in the real zselect.
+#
+# common::blocking <what>
+# Say that the caller is about to wait where the clock cannot see it: in the
+# kernel, on a lock. Under a stepped clock it stops at the gate like a nap
+# (`<pid> - <what>` in `at`), so a test can know the code got there; it moves
+# no clock. Anywhere else, one string test and nothing more.
 zmodload zsh/datetime 2>/dev/null
 # zselect times out with rc 1 and no ready fds, so module presence is probed
 # once (same guarded pattern as pick-clipboard's CLIP_PROGRESS_ZSELECT).
@@ -337,6 +360,40 @@ _common_clock_fold() {
     esac
   done < "$COMMON_CLOCK_FILE"
   REPLY=$t
+}
+
+# _common_clock_gate <ms | -> <request> — stop at the stepped clock's gate
+# (see STEPPED above). rc 0 when the test let this wait through and has
+# advanced the journal for it; rc 1 when the wait ended any other way.
+_common_clock_gate() {
+  local gate="$COMMON_CLOCK_FILE.gate" tok="" fd=""
+  local -i t0=${EPOCHSECONDS:-0} bound=${COMMON_CLOCK_STEP_BOUND:-300} cut=0
+  {
+    zmodload zsh/system && zsystem flock -f fd "$gate/lock" || fd=""
+    # Checked again under the lock: the test may have stopped stepping
+    # while this sleeper queued.
+    while [[ -p "$gate/go" ]]; do
+      print -r -- "${sysparams[pid]:-$$} $1 $2" >| "$gate/at"
+      # <>: opening a FIFO read-write never blocks, and the line the test
+      # writes stays in it until it is read here.
+      read -r -t "$bound" tok <> "$gate/go" && break
+      tok=""
+      # A read cut short (a trap that returned) is not the bound; a read
+      # that keeps failing is not a wait.
+      (( ${EPOCHSECONDS:-0} - t0 < bound && ++cut < 100 )) && continue
+      command rm -f -- "$gate/go"
+      break
+    done
+    [[ -z "$fd" ]] || zsystem flock -u "$fd" || :
+  } 2>/dev/null
+  [[ "$tok" == go ]]
+}
+
+common::blocking() {
+  [[ -n "${COMMON_CLOCK_FILE:-}" ]] || return 0
+  [[ -p "$COMMON_CLOCK_FILE.gate/go" ]] || return 0
+  _common_clock_gate - "${1:-wait}" || :
+  return 0
 }
 
 common::now() {
@@ -373,6 +430,12 @@ common::sleep() {
     local req=$(( ms / 1000 )) frac=${(l:3::0:)$(( ms % 1000 ))}
     while [[ "$frac" == *0 ]]; do frac=${frac%0}; done
     [[ -z "$frac" ]] || req+=".$frac"
+    if [[ -p "$COMMON_CLOCK_FILE.gate/go" ]]; then
+      _common_clock_gate "$ms" "$req" && return 0
+      # Let go without a step. A gate that went away with its journal (the
+      # test's tmpbase was removed) leaves nothing to advance.
+      _common_clock_virtual || return 0
+    fi
     print -r -- "+ $ms $req" >> "$COMMON_CLOCK_FILE"
     return 0
   fi

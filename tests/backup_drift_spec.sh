@@ -7,6 +7,12 @@ Describe 'backup-drift.zsh'
     export BKP_DRIFT_STATE="$FIX/state"
     export BKP_CAPTURE_CADENCE=1800
     export BKP_CATCHUP_GRACE=300
+    # A stamp's age is an offset back from spec_clock_now, never from the
+    # real clock. bkp::drift::_now reads that clock only through common::now,
+    # that is, when common.zsh is loaded (as in the workers); the examples
+    # that hand-write a past stamp load it first. Sourced alone, as the
+    # prompt does, the library reads the real clock.
+    spec_clock_set 1000000
   }
   cleanup_fix() {
     rm -rf "$FIX"
@@ -196,10 +202,11 @@ Describe 'backup-drift.zsh'
 
     It 'prints a banner when the heartbeat is stale'
       run_it() {
+        source "$LIB/common.zsh"
         source "$LIB/backup-drift.zsh"
         mkdir -p "$BKP_DRIFT_STATE"
         # hand-write a capture 5h in the past
-        print -r -- "capture $(( EPOCHSECONDS - 18000 )) 0" > "$BKP_DRIFT_STATE/heartbeat"
+        print -r -- "capture $(( $(spec_clock_now) - 18000 )) 0" > "$BKP_DRIFT_STATE/heartbeat"
         bkp::drift::banner
       }
       When run run_it
@@ -210,10 +217,11 @@ Describe 'backup-drift.zsh'
 
     It 'prints nothing when stale but a fresh catchup stamp is present'
       run_it() {
+        source "$LIB/common.zsh"
         source "$LIB/backup-drift.zsh"
         mkdir -p "$BKP_DRIFT_STATE"
-        print -r -- "capture $(( EPOCHSECONDS - 18000 )) 0
-catchup $EPOCHSECONDS 0" > "$BKP_DRIFT_STATE/heartbeat"
+        print -r -- "capture $(( $(spec_clock_now) - 18000 )) 0
+catchup $(spec_clock_now) 0" > "$BKP_DRIFT_STATE/heartbeat"
         bkp::drift::banner
       }
       When run run_it

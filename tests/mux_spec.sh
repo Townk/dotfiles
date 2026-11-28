@@ -1,11 +1,11 @@
 # Tests for home/dot_local/lib/mux.zsh and mux-bootstrap.zsh — the mux::* shim.
 #
-# Stub FIFO delivery: each stub writes the answer through an O_RDWR fd held
-# open briefly (`exec 3<>fifo; printf …>&3; sleep; exec 3>&-`) instead of a
-# blocking `> "$fifo" &` writer. The blocking-open writer could be lost before
-# it rendezvoused with the reader — leaving `cat "$fifo"` waiting forever and
-# the captured stdout/stderr pipe held open (the suite hung here). An O_RDWR
-# open never blocks, so the byte is buffered and the reader always drains it.
+# Stub FIFO delivery: the stub answers through a write-only open of the
+# capture FIFO (`exec 3>fifo; printf …>&3; exec 3>&-`), which blocks until the
+# float has opened it for reading: a rendezvous, no clock involved. The float
+# starts its reader BEFORE it runs display-popup, so the writer always finds
+# one. (It used to hold an O_RDWR fd open for half a second and hope the
+# reader had arrived by then.)
 
 # MED-1 regression: mux::confirm must FAIL CLOSED. The destructive callers
 # that gate on it read a "yes" as consent to proceed, so a confirmation dialog
@@ -154,7 +154,7 @@ Describe 'mux.zsh — tmux float backend (Phase 2)'
     TX_ARGS="$TEST_TMP/tx-args.txt"
     export TMUX=/tmp/sock,1,0
     # Stub tmux: record display-popup argv and deliver the answer through the
-    # --capture FIFO (O_RDWR trick — see the header), standing in
+    # --capture FIFO (a blocking write-only open — see the header), standing in
     # for the popup + tmux-modal + widget chain.
     stub="$TEST_TMP/tmux"
     {
@@ -163,7 +163,7 @@ Describe 'mux.zsh — tmux float backend (Phase 2)'
       echo "  echo \"\$*\" > \"$TEST_TMP/tx-args.txt\""
       echo '  fifo=""; prev=""'
       echo '  for a in "$@"; do [[ "$prev" == "--capture" ]] && fifo="$a"; prev="$a"; done'
-      echo '  [[ -n "$fifo" ]] && { { exec 3<>"$fifo"; printf "%s" "${TX_ANSWER:-yes}" >&3; sleep 0.5; exec 3>&- } &! }'
+      echo '  [[ -n "$fifo" ]] && { { exec 3>"$fifo"; printf "%s" "${TX_ANSWER:-yes}" >&3; exec 3>&- } &! }'
       echo '  exit 0'
       echo 'fi'
       echo 'exit 0'

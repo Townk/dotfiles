@@ -524,7 +524,8 @@ Describe 'system-clip paste: 6b newer-wins'
   AfterEach 'teardown'
 
   # A second, plain trusted-only daemon, following recob_start's own
-  # bind-retry and readiness-wait shape (§11.1's daemon log line) since it is
+  # bind-retry shape and its readiness rendezvous (_recob_spawn blocks on
+  # §11.1's daemon log line, or on the daemon's exit: no polling) since it is
   # standing in for a second, independent machine rather than reusing the
   # shared helper's single daemon.
   own_start() {
@@ -536,15 +537,10 @@ Describe 'system-clip paste: 6b newer-wins'
     while [ "$_attempt" -lt 8 ]; do
       _attempt=$((_attempt + 1))
       rm -f "$OWN_SOCK" "$OWN_LOG"
-      "$(recob_bin)" --no-public --socket "$OWN_SOCK" >"$OWN_LOG" 2>&1 &
-      OWN_PID=$!
-      _i=0
-      while [ "$_i" -lt 200 ]; do
-        grep -q '^recobd: wire ' "$OWN_LOG" 2>/dev/null && return 0
-        kill -0 "$OWN_PID" 2>/dev/null || break
-        sleep 0.02
-        _i=$((_i + 1))
-      done
+      _recob_spawn "$OWN_LOG" "$(recob_bin)" --no-public --socket "$OWN_SOCK"
+      _own_up=$?
+      OWN_PID=$RECOB_SPAWN_PID
+      [ "$_own_up" -ne 0 ] || return 0
       kill "$OWN_PID" 2>/dev/null
       wait "$OWN_PID" 2>/dev/null
       OWN_PID=""

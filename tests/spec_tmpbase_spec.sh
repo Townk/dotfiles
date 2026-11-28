@@ -12,6 +12,9 @@ Describe 'spec_helper: a per-file SHELLSPEC_TMPBASE'
   setup() {
     PROJ="$(mktemp -d)"
     mkdir "$PROJ/spec" "$PROJ/barrier"
+    # The barriers are FIFOs: a writer blocks until the other file reads, a
+    # reader until the other file has written. A rendezvous, no polling.
+    mkfifo "$PROJ/barrier/a" "$PROJ/barrier/b"
     printf '%s\n' '--shell zsh' '--require spec_helper' > "$PROJ/.shellspec"
     cp "$HELPER" "$PROJ/spec/spec_helper.sh"
     # Both files write the same fixed name, then read it back. The barriers
@@ -20,8 +23,8 @@ Describe 'spec_helper: a per-file SHELLSPEC_TMPBASE'
     { echo "Describe 'a'"
       echo "  It 'reads back its own fixture'"
       echo '    f() {'
-      echo '      echo a > "$SHELLSPEC_TMPBASE/shared"; : > "$BARRIER/a"'
-      echo '      i=0; while [ ! -e "$BARRIER/b" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done'
+      echo '      echo a > "$SHELLSPEC_TMPBASE/shared"; echo written > "$BARRIER/a"'
+      echo '      read -r _ < "$BARRIER/b"'
       echo '      cat "$SHELLSPEC_TMPBASE/shared"'
       echo '    }'
       echo '    When call f'
@@ -32,8 +35,8 @@ Describe 'spec_helper: a per-file SHELLSPEC_TMPBASE'
     { echo "Describe 'b'"
       echo "  It 'reads back its own fixture'"
       echo '    f() {'
-      echo '      i=0; while [ ! -e "$BARRIER/a" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done'
-      echo '      echo b > "$SHELLSPEC_TMPBASE/shared"; : > "$BARRIER/b"'
+      echo '      read -r _ < "$BARRIER/a"'
+      echo '      echo b > "$SHELLSPEC_TMPBASE/shared"; echo written > "$BARRIER/b"'
       echo '      cat "$SHELLSPEC_TMPBASE/shared"'
       echo '    }'
       echo '    When call f'

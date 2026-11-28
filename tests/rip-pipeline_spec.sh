@@ -29,11 +29,14 @@ out=""
 prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
 [ -n "${RIP_FAKE_HB_RC:-}" ] && exit "$RIP_FAKE_HB_RC"
-# slow mode: lay down a PARTIAL output, then hang — the shape a cancel
-# interrupts (a real x265 encode writes the container as it goes).
-if [ -n "${RIP_FAKE_HB_SLEEP:-}" ]; then
+# hang mode: lay down a PARTIAL output, say `started` on the FIFO the
+# cancel driver blocks on, then stay put (a FIFO nobody ever writes) — the
+# shape a cancel interrupts (a real x265 encode writes the container as it
+# goes). Only the driver's signal ends it.
+if [ -n "${RIP_FAKE_HB_HANG:-}" ]; then
   printf 'partial' > "$out"
-  sleep "$RIP_FAKE_HB_SLEEP"
+  echo started > "$RIP_FAKE_EV/started"
+  read -r hold < "$RIP_FAKE_EV/never"
   exit 0
 fi
 printf 'Encoding: task 1 of 1, 42.50 %%\r'
@@ -48,7 +51,10 @@ EOF
 #!/bin/sh
 case "$*" in
   *-rcn*) exit "${RIP_FAKE_VERIFY_RC:-0}" ;;
-  *) [ -n "${RIP_FAKE_RSYNC_SLEEP:-}" ] && sleep "$RIP_FAKE_RSYNC_SLEEP"
+  *) if [ -n "${RIP_FAKE_RSYNC_HANG:-}" ]; then
+       echo started > "$RIP_FAKE_EV/started"
+       read -r hold < "$RIP_FAKE_EV/never"
+     fi
      exit "${RIP_FAKE_RSYNC_RC:-0}" ;;
 esac
 EOF
@@ -64,11 +70,17 @@ EOF
     # TERM is the graceful path (the worker's trap runs); KILL is what plain
     # `pueue kill` actually sends on pueue 4.x — untrappable, and therefore
     # the case the .work staging design has to survive on its own.
+    #
+    # The signal is aimed by an event, not by a delay: the fake encoder (or
+    # the fake rsync) in hang mode says `started` on a FIFO once it is where
+    # the cancel must find it, and the driver blocks on that line.
+    export RIP_FAKE_EV="$RIP_SANDBOX"
+    mkfifo "$RIP_SANDBOX/started" "$RIP_SANDBOX/never"
     cat > "$RIP_SANDBOX/cancel-drive.zsh" <<'EOF'
 #!/usr/bin/env zsh
 perl -e 'use POSIX; POSIX::setsid(); exec @ARGV or die' "$@" &
 pid=$!
-sleep 2
+read -r at < "$RIP_FAKE_EV/started"
 kill -${CANCEL_SIGNAL:-TERM} -$pid 2>/dev/null
 wait $pid
 exit $?
@@ -129,7 +141,7 @@ EOF
   # server. This example covers the graceful (TERM) half: the trap also
   # cleans the temp and reports itself.
   It 'cancel mid-encode leaves nothing under movies/ and keeps the intermediate'
-    export RIP_FAKE_HB_SLEEP=30
+    export RIP_FAKE_HB_HANG=1
     When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
       zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
       --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'
@@ -148,7 +160,7 @@ EOF
   # pushes and which the next worker run clears. No exit status is asserted
   # beyond SIGKILL's own 137 — the point of this example is the filesystem.
   It 'SIGKILL mid-encode still leaves nothing pushable under movies/'
-    export RIP_FAKE_HB_SLEEP=30
+    export RIP_FAKE_HB_HANG=1
     export CANCEL_SIGNAL=KILL
     When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
       zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
@@ -165,7 +177,7 @@ EOF
   # re-encode. Guards against a future edit widening the trap's scope and
   # silently throwing away an hour of x265.
   It 'cancel mid-push keeps the finished encode and the intermediate'
-    export RIP_FAKE_RSYNC_SLEEP=30
+    export RIP_FAKE_RSYNC_HANG=1
     When run zsh "$RIP_SANDBOX/cancel-drive.zsh" \
       zsh "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_rip-pipeline" \
       --worker "$RIP_STAGING_ROOT/intermediate/DISC_t00.mkv" 'A Movie (2001)'

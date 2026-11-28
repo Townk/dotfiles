@@ -750,6 +750,29 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
       The output should equal ""
     End
 
+    # serve_ready <log> <command…> — start a scratch server in the background
+    # and return when it is listening. No poll and no clock: the server's own log
+    # says "Rex server ready" once its socket accepts, so the log goes through a
+    # FIFO to a reader that keeps <log> as a file and reports that line (or the
+    # server ending before it) on a second FIFO, which this blocks on. Sets
+    # SERVE_PID; fails, showing the log, for a server that never got there.
+    # (rex has no readiness flag, and its --timeout does not wait for a socket
+    # that is not there yet: it fails at once.)
+    serve_ready() {
+      local log="$1" state=""
+      shift
+      mkfifo "$log.fifo" "$log.ready" || return 1
+      awk -v log_file="$log" -v ready="$log.ready" '
+        { print >> log_file; fflush(log_file) }
+        /Rex server ready/ && !up { up = 1; print "ready" > ready; close(ready) }
+        END { if (!up) { print "ended" > ready; close(ready) } }' <"$log.fifo" >/dev/null 2>&1 &
+      "$@" >"$log.fifo" 2>&1 &
+      SERVE_PID=$!
+      read -r state <"$log.ready"
+      rm -f "$log.fifo" "$log.ready"
+      [[ "$state" == ready ]] || { cat "$log" >&2; return 1; }
+    }
+
     Describe 'the probe, run by Rex'
       rex_missing() { ! command -v rex >/dev/null 2>&1; }
       Skip if 'rex is not installed' rex_missing
@@ -760,11 +783,9 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
         CK_SOCK="/tmp/ckrx-$$.sock"
         CK_SERVER="unix://$CK_SOCK"
         : > "$CK_STATE/init.lua"
-        command rex server run --listen "$CK_SERVER" --state-dir "$CK_STATE/state" \
-          --config "$CK_STATE/init.lua" --restore=false >"$CK_STATE/server.log" 2>&1 &
-        CK_PID=$!
-        local i
-        for i in {1..50}; do rx whoami >/dev/null 2>&1 && break; sleep 0.1; done
+        serve_ready "$CK_STATE/server.log" rex server run --listen "$CK_SERVER" --state-dir "$CK_STATE/state" \
+          --config "$CK_STATE/init.lua" --restore=false || return 1
+        CK_PID=$SERVE_PID
         # The helpers exactly as shipped, cut out of the rendered config, with
         # a tail that reports what they decide for the pane the script runs
         # against.
@@ -781,6 +802,18 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
         mkdir -p "$CK_STATE/bin"
         ln -s /bin/sleep "$CK_STATE/bin/nvim"
         ln -s /bin/sleep "$CK_STATE/bin/fzf"
+        # then-exec <command…> — become that command, and let the spec know
+        # the moment it has: perl opens the FIFO close-on-exec, so whoever
+        # reads $CK_UP gets its end of file exactly when the exec happens (the
+        # open itself waits for that reader). The probe reads `ps` for the
+        # pane's tty, and must not look before the program is there.
+        CK_UP="$CK_STATE/up"
+        CK_RUN="$CK_STATE/bin/then-exec"
+        mkfifo "$CK_UP"
+        print -r -- '#!/usr/bin/perl' >"$CK_RUN"
+        print -r -- "open(my \$up, '>', '$CK_UP') or die \"then-exec: \$!\";" >>"$CK_RUN"
+        print -r -- 'exec { $ARGV[0] } @ARGV or die "then-exec: $!";' >>"$CK_RUN"
+        chmod +x "$CK_RUN"
       }
       stop_server() {
         rx server stop >/dev/null 2>&1
@@ -791,12 +824,16 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
       AfterAll 'stop_server'
 
       # probe <command...> — start a pane running that command and ask the
-      # shipped helpers about it.
+      # shipped helpers about it, once the command is running: it is started
+      # through then-exec, and reading $CK_UP returns when it has been
+      # exec'd. A command that starts the program of interest itself names
+      # $CK_RUN where that program starts, and is left as it is.
       probe() {
         local sid bid
+        [[ "$*" == *"$CK_RUN"* ]] || set -- "$CK_RUN" "$@"
         sid=$(rx new "p-$RANDOM" --shell none --json -- "$@" | jq -r '.session_id')
         bid=$(rx block ls -s "$sid" --json | jq -r '.blocks[0].block_id')
-        sleep 0.3
+        cat "$CK_UP"
         rx do -s "$sid" "$CK_STATE/probe.lua" "block=$bid" | jq -c "$PROBE_FILTER"
       }
 
@@ -822,7 +859,7 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
       # inside the SHELL's process group, as fzf does from a zsh widget.
       It 'sees a program started inside the shell'"'"'s own process group'
         PROBE_FILTER='{nav}'
-        When call probe /bin/zsh -fc "$CK_STATE/bin/fzf 30; true"
+        When call probe /bin/zsh -fc "$CK_RUN $CK_STATE/bin/fzf 30; true"
         The output should equal '{"nav":true}'
       End
 
@@ -863,11 +900,9 @@ pick Could not check for a running job. Close anyway? [Close it, cancelling any 
           print -r -- 'local TERMINAL = "com.superlogical.terminal"'
           awk '/^local RESIZE_STEP = /,/^-- The key side is an ACTION/' "$RK_LUA" | sed '$d'
         } >"$RZ_STATE/init.lua"
-        command rex server run --listen "$RZ_SERVER" --state-dir "$RZ_STATE/state" \
-          --config "$RZ_STATE/init.lua" --restore=false >"$RZ_STATE/server.log" 2>&1 &
-        RZ_PID=$!
-        local i
-        for i in {1..50}; do rx whoami >/dev/null 2>&1 && break; sleep 0.1; done
+        serve_ready "$RZ_STATE/server.log" rex server run --listen "$RZ_SERVER" --state-dir "$RZ_STATE/state" \
+          --config "$RZ_STATE/init.lua" --restore=false || return 1
+        RZ_PID=$SERVE_PID
       }
       stop_server() {
         rx server stop >/dev/null 2>&1
