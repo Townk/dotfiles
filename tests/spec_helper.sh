@@ -40,13 +40,23 @@ export BKP_TM_SCRUB_DEBOUNCE=0
 # which carries this box's background wash). Overriding THEME_PALETTE_FILE here
 # keeps the suite hermetic regardless of the invoking shell's environment.
 _palette_tpl="custom-builds/theme/templates/palette.zsh.tmpl"
+_palette_src="home/.chezmoidata/theme.yaml"
 if command -v chezmoi >/dev/null 2>&1 && [ -f "$_palette_tpl" ]; then
-  _palette_tmp="$(mktemp 2>/dev/null)"
-  if [ -n "${_palette_tmp:-}" ] \
-    && chezmoi execute-template <"$_palette_tpl" >"$_palette_tmp" 2>/dev/null \
-    && [ -s "$_palette_tmp" ]; then
-    export THEME_PALETTE_FILE="$_palette_tmp"
+  # Rendered once and kept: the file is named after the two inputs' mtimes
+  # and sizes, so every spec file of every run shares it until either input
+  # changes. (It was rendered again for each spec file, 27 ms a time, into a
+  # mktemp nobody removed: 200 files left in $TMPDIR per run.)
+  _palette_key=$(stat -f '%m.%z' "$_palette_tpl" "$_palette_src" 2>/dev/null | tr '\n' '-')
+  _palette_tmp="${SPEC_REAL_TMPDIR:-${TMPDIR:-/tmp}}/spec-palette.$(id -u).${_palette_key:-none}zsh"
+  if [ -z "$_palette_key" ] || [ ! -s "$_palette_tmp" ]; then
+    _palette_new="$_palette_tmp.$$"
+    if chezmoi execute-template <"$_palette_tpl" >"$_palette_new" 2>/dev/null && [ -s "$_palette_new" ]; then
+      mv -f "$_palette_new" "$_palette_tmp"
+    else
+      rm -f "$_palette_new"
+    fi
   fi
+  [ -s "$_palette_tmp" ] && export THEME_PALETTE_FILE="$_palette_tmp"
 fi
 
 # A $SHELLSPEC_TMPBASE of each spec file's own. shellspec gives the whole run
@@ -73,6 +83,18 @@ spec_helper_configure() {
 spec_helper_own_tmpbase() {
   SPEC_HELPER_TMPBASE=$(mktemp -d "${TMPDIR:-/tmp}/spec.XXXXXX") || return 1
   SHELLSPEC_TMPBASE=$SPEC_HELPER_TMPBASE
+  # Everything the examples and the code under test `mktemp` goes INSIDE the
+  # tmpbase, which is removed when the file ends. Left at the user's $TMPDIR,
+  # a day of runs strewed some 25,000 tmp.* entries and thousands of picker
+  # scratch files there: whatever an example forgot, or code that cleans up
+  # in an EXIT trap a killed stand-in never ran. What must outlive the run
+  # (the exec pool, the guard cache) is addressed through SPEC_REAL_TMPDIR.
+  # Short on purpose (`t`): Unix socket paths are capped at 103 bytes.
+  SPEC_REAL_TMPDIR=${SPEC_REAL_TMPDIR:-${TMPDIR:-/tmp}}
+  if [ "${SPEC_OWN_TMPDIR:-1}" != 0 ] && mkdir "$SPEC_HELPER_TMPBASE/t"; then
+    TMPDIR=$SPEC_HELPER_TMPBASE/t/
+  fi
+  export TMPDIR SPEC_REAL_TMPDIR
   spec_helper_clipboard_guard
   spec_helper_desktop_guard
   # pick-clipboard reads the alias map while it loads (host::sql_case), so no
@@ -189,7 +211,7 @@ spec_helper_desktop_guard() {
   # exec'd, and a fresh set per file made the first example to reach one pay
   # that. A cached stub is written once, by rename, and never changed in
   # place; a stale one (this text edited) is replaced the same way.
-  _dg_cache="${TMPDIR:-/tmp}/spec-guard-cache.$(id -u)"
+  _dg_cache="${SPEC_REAL_TMPDIR:-${TMPDIR:-/tmp}}/spec-guard-cache.$(id -u)"
   command mkdir -p "$_dg_cache" 2>/dev/null
   for _dg_tool in hs osascript afplay say terminal-notifier open notify-tmux pueue; do
     _dg_rc=0
@@ -310,7 +332,7 @@ _spec_exec_pool() {
   # then answers for /usr/bin/stat in every example that checks a mode.
   zmodload zsh/system 2>/dev/null && zmodload -F zsh/stat b:zstat 2>/dev/null || return 0
   zmodload -F zsh/files b:zf_ln b:zf_rm b:zf_chmod b:zf_mkdir 2>/dev/null || return 0
-  local pool=${SPEC_EXEC_POOL_DIR:-${TMPDIR:-/tmp}/spec-exec-pool.$UID/${${SHELLSPEC_SPECFILE:-${SPEC_HELPER_TMPBASE:t}}:t}}
+  local pool=${SPEC_EXEC_POOL_DIR:-${SPEC_REAL_TMPDIR:-${TMPDIR:-/tmp}}/spec-exec-pool.$UID/${${SHELLSPEC_SPECFILE:-${SPEC_HELPER_TMPBASE:t}}:t}}
   local f head slot in out claim owner
   local -i n
   local -a st

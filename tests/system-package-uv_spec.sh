@@ -102,7 +102,7 @@ SH
   BeforeEach 'setup'
 
   run_sync() {   # run_sync <tool whose install fails> <upgrade rc> <uninstall rc>
-    env -i HOME="$STAGE/home" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
+    env -i HOME="$STAGE/home" TMPDIR="$TMPDIR" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
       PATH="$STAGE/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       PKG_DIR="$STAGE/packages" \
       STUB_STATE="$STAGE/state" STUB_LOG="$STAGE/uv.log" \

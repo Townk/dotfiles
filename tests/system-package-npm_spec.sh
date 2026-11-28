@@ -57,7 +57,7 @@ SH
   BeforeEach 'setup'
 
   run_sync() {   # run_sync <package whose install fails> <update rc> <uninstall rc>
-    env -i HOME="$STAGE/home" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
+    env -i HOME="$STAGE/home" TMPDIR="$TMPDIR" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
       PATH="$STAGE/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       PKG_DIR="$STAGE/packages" \
       STUB_STATE="$STAGE/state.json" STUB_LOG="$STAGE/npm.log" STUB_ROOT="$STAGE/root" \

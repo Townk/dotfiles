@@ -58,7 +58,7 @@ SH
   run_sync() {
     # env -i: the spec process itself runs under a mise-activated shell whose
     # GOROOT/MISE_* must not leak in — GOROOT below is the variable under test.
-    env -i HOME="$STAGE/home" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
+    env -i HOME="$STAGE/home" TMPDIR="$TMPDIR" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
       PATH="$STAGE/shimbin:/usr/bin:/bin:/usr/sbin:/sbin" \
       PKG_DIR="$STAGE/packages" \
       STUB_GOROOT="$STAGE/goroot" STUB_GOPATH="$STAGE/gopath" \
@@ -141,7 +141,7 @@ SH
   }
 
   run_sync() {   # run_sync <non-empty to make every `go install` fail>
-    env -i HOME="$STAGE/home" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
+    env -i HOME="$STAGE/home" TMPDIR="$TMPDIR" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
       PATH="$STAGE/shimbin:/usr/bin:/bin:/usr/sbin:/sbin" \
       PKG_DIR="$STAGE/packages" \
       STUB_GOROOT="$STAGE/goroot" STUB_GOPATH="$STAGE/gopath" \
