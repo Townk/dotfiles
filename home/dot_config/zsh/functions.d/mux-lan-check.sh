@@ -36,6 +36,11 @@ mux_lan_check() {
   local -a recent=( "$stamp"(Nmh-${MUX_LAN_WARN_HOURS:-4}) )
   (( $#recent )) && return 0
   : >| "$stamp"
+  # A stamp outlives its server otherwise: drop those whose server is gone.
+  local old
+  for old in "${TMPDIR:-/tmp}"/mux-lan-orphan.<->(N); do
+    [[ "$old" == "$stamp" ]] || kill -0 "${old##*.}" 2>/dev/null || rm -f -- "$old"
+  done
 
   print -P -- "%F{yellow}⚠ This tmux server (pid $server) outlived the terminal app that started it.%f"
   print -r -- "  macOS now blocks LAN connections from non-Apple tools here (python, adb: \"No route to host\")."

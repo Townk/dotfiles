@@ -58,6 +58,21 @@ Describe 'mux_lan_check'
     The output should include "pid 2458"
   End
 
+  # One stamp per server, and servers come and go: nothing removed the
+  # stamps of the ones that are gone, so they collected in $TMPDIR for ever
+  # (176 of them after a day of test runs, each starting scratch servers).
+  It 'removes the stamps of servers that are gone when it writes a new one'
+    pruned() {
+      : >"$FIX/mux-lan-orphan.99999999"          # no such process
+      : >"$FIX/mux-lan-orphan.$$"                # a live one: this shell
+      : >"$FIX/mux-lan-orphan.notapid"           # not ours to judge
+      check "/tmp/tmux-501/default,2458,0" 2458 >/dev/null
+      ls "$FIX" | sed "s/\\.$$\$/.LIVE/" | sort | tr '\n' ' '
+    }
+    When call pruned
+    The output should equal "mux-lan-orphan.2458 mux-lan-orphan.LIVE mux-lan-orphan.notapid "
+  End
+
   It 'is silent outside tmux'
     When call check "" 2458
     The status should be success
