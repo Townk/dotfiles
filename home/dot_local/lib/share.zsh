@@ -146,10 +146,10 @@ def claims($tag):
 # empty/partial output.
 #
 # Returns 2 when yq read the manifest but jq could not merge it with the
-# built-in — in practice a manifest with no table in it (empty, or all
-# comments), which yq renders as `null`. jq says why on stderr, nothing is
-# cached, and only the default_for claims are left behind, for
+# built-in (a top-level value that is not a table). jq says why on stderr,
+# nothing is cached, and only the default_for claims are left behind, for
 # share::default_endpoint: it never needed the merge and still answers.
+# (A manifest with no table at all is not that case: it is an empty one.)
 share::manifest_load() {
   local text='' present=0
   if [[ -f "$SHARE_ENDPOINTS_FILE" ]]; then
@@ -168,6 +168,11 @@ share::manifest_load() {
       log_error "share: cannot parse $SHARE_ENDPOINTS_FILE"
       return 1
     }
+    # A file with no table in it (empty, blank, only comments - a template
+    # kept for later) is rendered as `null` or as nothing. It declares no
+    # endpoint, which is what `{}` says; `null` could not be merged with the
+    # built-in, and every lookup on such a machine failed.
+    [[ -z "${json//[[:space:]]/}" || "${json//[[:space:]]/}" == null ]] && json='{}'
   fi
   local blob
   blob="$(manifest="$json" jq -nj --argjson builtin "$SHARE_BUILTIN_JSON" "$SHARE_MANIFEST_JQ")"

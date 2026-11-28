@@ -391,4 +391,41 @@ SH
     When call check
     The status should be success
   End
+
+  # A settings file with no table in it - empty, blank, or only comments, as a
+  # template left for later is - says "no endpoints of my own". yq renders it
+  # as null, the merge with the built-in then failed, and every lookup failed
+  # with it: a machine that had only ever created the file could not share.
+  Describe 'a manifest with nothing in it'
+    Parameters
+      'an empty file'       ''
+      'only blank lines'    $'\n\n'
+      'only comments'       $'# my endpoints go here\n#[drop]\n# store = "https://x"\n'
+    End
+
+    lookups() {
+      print -rn -- "$1" >"$SHARE_ENDPOINTS_FILE"
+      print -r -- "names=$(share::endpoint_names | tr '\n' ' ')rc=$?"
+      print -r -- "default=$(share::default_endpoint) rc=$?"
+      share::allowed public && print "public allowed"
+      print -r -- "kind=$(share::field public backend none) rc=$?"
+      share::endpoints_json | jq -c 'keys'
+    }
+
+    It "answers as if there were no file: $1"
+      expected() {
+        rm -f "$SHARE_ENDPOINTS_FILE"
+        print -r -- "names=$(share::endpoint_names | tr '\n' ' ')rc=$?"
+        print -r -- "default=$(share::default_endpoint) rc=$?"
+        share::allowed public && print "public allowed"
+        print -r -- "kind=$(share::field public backend none) rc=$?"
+        share::endpoints_json | jq -c 'keys'
+      }
+      When call lookups "$2"
+      The output should equal "$(expected 2>&1)"
+      The error should equal ""
+      The status should be success
+    End
+  End
+
 End
