@@ -1,0 +1,62 @@
+{{- /*
+  ql-thumb — rebuild the Quick Look thumbnailer when its source changes.
+
+  The preview script thumbnails office documents through Quick Look. It used
+  `qlmanage -t`, which leaves a bouncing qlmanage icon in the Dock after every
+  run (the source carries the measurement). This hook builds the replacement.
+
+  Soft, like the other Swift hooks: a missing toolchain or a compile error must
+  not fail the apply. Without the binary the preview falls back to qlmanage, so
+  the worst outcome is the Dock icon this exists to remove.
+
+  Darwin only: Quick Look is a macOS framework.
+*/ -}}
+{{- $wt := .chezmoi.workingTree -}}
+#!/usr/bin/env bash
+# ql-thumb — rebuild-on-change hook.
+{{- if eq .chezmoi.os "darwin" }}
+#   ql-thumb.swift : {{ include "../custom-builds/ql-thumb/ql-thumb.swift" | sha256sum }}
+#
+# To rebuild manually:
+#   /usr/bin/swiftc -O -o ~/.local/libexec/ql-thumb \
+#     ~/.local/share/chezmoi/custom-builds/ql-thumb/ql-thumb.swift
+{{- end }}
+
+set -euo pipefail
+
+{{- if ne .chezmoi.os "darwin" }}
+# No Quick Look off a Mac.
+exit 0
+{{- end }}
+
+SRC="{{ $wt }}/custom-builds/ql-thumb/ql-thumb.swift"
+OUT="$HOME/.local/libexec/ql-thumb"
+
+if [ ! -f "$SRC" ]; then
+  echo "[ql-thumb] source missing at $SRC — skipping." >&2
+  exit 0
+fi
+
+# `--version` rather than a -x test: /usr/bin/swiftc is a stub that exists even
+# with no Xcode or Command Line Tools behind it, and only fails when run.
+if ! /usr/bin/swiftc --version >/dev/null 2>&1; then
+  echo "[ql-thumb] no Swift toolchain — skipping. Office previews fall back to" >&2
+  echo "[ql-thumb] qlmanage (and its Dock icon); install the Xcode CLT to enable." >&2
+  exit 0
+fi
+
+mkdir -p "$HOME/.local/libexec"
+echo "[ql-thumb] building → $OUT"
+# Built aside and moved into place: a preview may run this binary at any moment,
+# and a half-written file at that path would pass the `-x` test and then fail
+# to exec. The move is atomic within one filesystem.
+tmp="$(mktemp "${TMPDIR:-/tmp}/ql-thumb.XXXXXX")"
+if /usr/bin/swiftc -O -o "$tmp" "$SRC" 2>&1; then
+  chmod 0755 "$tmp"
+  mv -f "$tmp" "$OUT"
+else
+  rm -f "$tmp"
+  echo "[ql-thumb] build failed; leaving any installed binary alone" >&2
+fi
+
+# vim:ft=sh

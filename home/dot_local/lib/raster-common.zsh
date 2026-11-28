@@ -111,15 +111,24 @@ raster::office_container() {
   [[ $magic == 504b0304 || $magic == d0cf11e0 ]]
 }
 
+# The thumbnailer is ql-thumb (custom-builds/ql-thumb), not `qlmanage -t`:
+# qlmanage registers as a foreground app on every run and leaves an icon
+# bouncing in the Dock until it is clicked. qlmanage remains the fallback for a
+# machine where ql-thumb was never built (no Swift toolchain).
 raster::office() {
-  command -v qlmanage >/dev/null 2>&1 || return 1
+  local thumb=${RASTER_QL_THUMB_BIN:-$HOME/.local/libexec/ql-thumb}
+  [[ -x $thumb ]] || command -v qlmanage >/dev/null 2>&1 || return 1
   raster::office_container "$1" || return 1
   local tmpd
   tmpd=$(mktemp -d) || return 1
   {
     # A genuine container can still stall the generator, on corrupt innards or
     # network-backed cloud storage.
-    raster::bounded 10 qlmanage -t -s 1600 -o "$tmpd" "$1" >/dev/null 2>&1
+    if [[ -x $thumb ]]; then
+      raster::bounded 10 "$thumb" 1600 "$1" "$tmpd/thumb.png" >/dev/null 2>&1
+    else
+      raster::bounded 10 qlmanage -t -s 1600 -o "$tmpd" "$1" >/dev/null 2>&1
+    fi
     local -a made=("$tmpd"/*.png(N))
     ((${#made})) || return 1
     mv -f "${made[1]}" "$RASTER_OUT"

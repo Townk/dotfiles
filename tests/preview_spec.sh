@@ -425,7 +425,10 @@ Describe 'preview: office + iwork'
   BeforeEach 'setup'
 
   It 'renders a docx first page via Quick Look into the cache'
-    command -v qlmanage >/dev/null || skip "qlmanage not available (macOS only)"
+    # Only through ql-thumb: the qlmanage fallback leaves an icon bouncing in
+    # the Dock on every run, so a test never reaches it. The stand-in checks
+    # of both paths are in raster_office_spec.sh.
+    [ -x "${RASTER_QL_THUMB_BIN:-$HOME/.local/libexec/ql-thumb}" ] || skip "ql-thumb not built (chezmoi apply builds it on macOS)"
     command -v pandoc >/dev/null || skip "pandoc not installed"
     When run zsh -f -c "line=\$(zsh -f '$SCRIPT' --pixels '$DOCX' | head -1)
       [[ \$line == \$XDG_CACHE_HOME/preview/*.png && -s \$line ]] && print ok"
