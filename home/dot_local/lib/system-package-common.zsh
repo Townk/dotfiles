@@ -81,14 +81,18 @@ pkg::main() {
         usage_list
         exit 0
       }
-      do_list "$@"
+      do_list "$@" || exit $?
       ;;
     sync)
       args_contain_help "$@" && {
         usage_sync
         exit 0
       }
-      do_sync "$@"
+      # `|| exit`, not a bare call: every worker runs under `set -e`, and a
+      # script that errexit ends does NOT run its EXIT trap in zsh. That trap
+      # removes the sync's scratch files (and common.zsh's scratch dir): a
+      # sync that failed left all of them behind, every time.
+      do_sync "$@" || exit $?
       ;;
     *)
       usage >&2
@@ -206,7 +210,9 @@ fi
 pkg::tmpset() {
   local __pkg_tmpset_name __pkg_tmpset_path
   for __pkg_tmpset_name in "$@"; do
-    __pkg_tmpset_path=$(mktemp) || return 1
+    # With a template: macOS's bare `mktemp` ignores $TMPDIR and answers
+    # with the per-user temp directory whatever it says.
+    __pkg_tmpset_path=$(mktemp "${TMPDIR:-/tmp}/pkg.XXXXXXXX") || return 1
     : ${(P)__pkg_tmpset_name::=$__pkg_tmpset_path}
     _pkg_tmpset_files+=("$__pkg_tmpset_path")
   done

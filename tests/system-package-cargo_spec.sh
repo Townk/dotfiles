@@ -110,6 +110,40 @@ SH
     The path "$STAGE/packages/.state/cargo.manifest" should not be exist
   End
 
+  # A script that `set -e` ends does not run its EXIT trap in zsh, and that
+  # trap is what removes the sync's scratch files: a failed install used to
+  # leave all five behind, on every failing sync.
+  It 'leaves no scratch file behind when the sync fails'
+    printf 'missing\npresent\n' >"$STAGE/packages/Cargofile"
+    failed_sync() {
+      mkdir -p "$STAGE/tmp"
+      TMPDIR="$STAGE/tmp" run_sync missing >/dev/null 2>&1
+      print -r -- "rc=$? made-here=$(( $(ls "$STAGE/tmp" | wc -l) )) $(ls "$STAGE/tmp" | head -3 | tr '\n' ' ')"
+    }
+    When call failed_sync
+    The output should equal "rc=1 made-here=0 "
+  End
+
+  It 'keeps its scratch files in $TMPDIR while it runs'
+    printf 'present\n' >"$STAGE/packages/Cargofile"
+    during() {
+      mkdir -p "$STAGE/tmp"
+      # The cargo stand-in looks while the sync is running.
+      printf '%s\n' '#!/bin/sh' 'ls "$TMPDIR" | sed -e "s/[.][A-Za-z0-9]*$//" -e "s/-[0-9]*$//" | sort -u | tr "\\n" " " >"$STUB_SEEN"' "exec '$STAGE/bin/cargo.real' \"\$@\"" >"$STAGE/bin/cargo.new"
+      mv "$STAGE/bin/cargo" "$STAGE/bin/cargo.real"; mv "$STAGE/bin/cargo.new" "$STAGE/bin/cargo"; command chmod +x "$STAGE/bin/cargo"
+      STUB_SEEN="$STAGE/seen" TMPDIR="$STAGE/tmp" run_sync_seen
+      cat "$STAGE/seen"
+    }
+    run_sync_seen() {
+      env -i HOME="$STAGE/home" TMPDIR="$TMPDIR" STUB_SEEN="$STUB_SEEN" COMMON_CLOCK_FILE="$COMMON_CLOCK_FILE" \
+        PATH="$STAGE/bin:/usr/bin:/bin:/usr/sbin:/sbin" PKG_DIR="$STAGE/packages" \
+        STUB_STATE="$STAGE/state" STUB_LOG="$STAGE/cargo.log" STUB_FAIL="" \
+        zsh -f "$WORKER" sync >/dev/null 2>&1
+    }
+    When call during
+    The output should equal "pkg zsh-common "
+  End
+
   It 'succeeds when the missing crate installs'
     printf 'missing\npresent\n' >"$STAGE/packages/Cargofile"
     When call run_sync ""
