@@ -1,0 +1,21 @@
+{{- /* rex-bin.sh.tmpl — "find rex, or leave quietly", for the POSIX-sh apply
+       hooks that talk to a Rex server (59-reload-rex, 60-rex-main-session,
+       61-rex-settings). They run before, or without, the zsh libs, so this is
+       shared by inclusion rather than by sourcing; the zsh side's lookup is
+       _mux_rx_bin (dot_local/lib/mux/rex.zsh).
+       Usage: {{ includeTemplate "rex-bin.sh.tmpl" . }}
+       Leaves $rex set to an executable, or ends the hook with exit 0: an
+       apply on a machine without Rex is a no-op, never a failure. */ -}}
+# The Mac app keeps the CLI inside its server bundle and only puts it on PATH
+# in the panes it starts, so an apply from any other shell needs the path.
+# $MUX_REX_BIN is the test seam.
+rex="${MUX_REX_BIN:-}"
+if [ -z "$rex" ]; then
+  rex="$(command -v rex 2>/dev/null || true)"
+fi
+if [ -z "$rex" ]; then
+  app="$HOME/{{ .rexAppCli }}"
+  [ -x "$app" ] && rex="$app"
+fi
+[ -n "$rex" ] && [ -x "$rex" ] || exit 0
+{{- /* the including line ends this one */ -}}

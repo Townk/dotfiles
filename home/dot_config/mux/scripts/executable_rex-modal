@@ -67,13 +67,6 @@ unset TMUX TMUX_PANE ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
 rex_bin="$(_mux_rx_bin 2>/dev/null)" || rex_bin=""
 
-# tty_rows — the pane's height in rows, or nothing.
-tty_rows() {
-  local sz
-  sz="$(stty size </dev/tty 2>/dev/null)" || return 1
-  [[ "${sz%% *}" == <-> ]] || return 1
-  print -r -- "${sz%% *}"
-}
 
 # snap_to_rows — trim the layer to a whole number of rows.
 #
@@ -97,20 +90,13 @@ snap_to_rows() {
 
   # A new layer's pty starts at a default size and is resized when the app
   # lays it out. Wait for two equal reads before trusting the size.
-  local size="" prev="" i
-  for i in {1..20}; do
-    size="$(stty size </dev/tty 2>/dev/null)" || return 0
-    [[ -n "$prev" && "$size" == "$prev" ]] && break
-    prev="$size"
-    sleep 0.03
-  done
+  local size="" i
+  size="$(mux::await_tty_size --stable 20 0.03)" || return 0
   local rows="${size%% *}" cols="${size##* }"
   [[ "$rows" == <-> && "$cols" == <-> ]] && (( rows > 2 )) || return 0
 
   local layer
-  layer="$("$rex_bin" --autostart=false api call -s "$REX_BLOCK" session.view 2>/dev/null | jq -r --arg b "$REX_BLOCK" '
-    .windows[]?.layers[]? | select(.kind != "tiled") | select([.blocks[]?.block_id] | index($b))
-    | "\(.layer_id) \(.bounds[0]) \(.bounds[1]) \(.bounds[2]) \(.bounds[3])"' 2>/dev/null)" || return 0
+  layer="$(_mux_rx_float_of "$REX_BLOCK" "$REX_BLOCK")" || return 0
   local -a l=(${=layer})
   (( ${#l} == 5 )) || return 0
   local id="${l[1]}"
@@ -119,20 +105,15 @@ snap_to_rows() {
 
   # set_h <height> — resize around the same centre, then report the rows.
   set_h() {
-    "$rex_bin" --autostart=false api call -s "$REX_BLOCK" session.resize_layer \
+    _mux_rx_run api call -s "$REX_BLOCK" session.resize_layer \
       "$(printf '{"layer_id":"%s","bounds":[%.5f,%.5f,%.5f,%.5f]}' "$id" "$x" $(( y + (h - $1) / 2 )) "$w" "$1")" \
       >/dev/null 2>&1 || return 1
     # The new size reaches the pty in 20-100 ms, not at a fixed delay: wait
     # for two equal reads rather than trusting the first.
-    local a="" b="" n
+    local now
     sleep 0.08
-    for n in 1 2 3 4 5; do
-      b="$(tty_rows)" || return 1
-      [[ "$b" == "$a" ]] && break
-      a="$b"
-      sleep 0.04
-    done
-    print -r -- "$b"
+    now="$(mux::await_tty_size --stable 5 0.04)" || return 1
+    print -r -- "${now%% *}"
   }
 
   # The row count to end on: the one the caller sized the float for in cells
@@ -267,4 +248,4 @@ result="${result%$'\n'}"
 
 # A block id is accepted wherever Rex takes a session, so the origin names
 # both the session and the block.
-"$rex_bin" --autostart=false send -s "$origin" -b "$origin" -- "$result"
+_mux_rx_run send -s "$origin" -b "$origin" -- "$result"

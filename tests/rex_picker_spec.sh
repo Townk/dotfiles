@@ -39,33 +39,33 @@ EOS
     run() { picker glyph; cmdline; bounds; }
     When call run
     The output should equal "rc=0
-env COLORTERM=truecolor PICK_GLYPH_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Glyph Picker --inject --no-chrome -- /home/u/.local/libexec/pick-glyph
+env PICK_GLYPH_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Glyph Picker --inject --no-chrome -- /home/u/.local/libexec/pick-glyph
 [15,20,70,60]"
   End
 
   It 'resumes the glyph picker'
     run() { picker glyph --resume >/dev/null; cmdline; }
     When call run
-    The output should equal "env COLORTERM=truecolor PICK_GLYPH_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Glyph Picker (resumed) --inject --no-chrome -- /home/u/.local/libexec/pick-glyph --resume"
+    The output should equal "env PICK_GLYPH_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Glyph Picker (resumed) --inject --no-chrome -- /home/u/.local/libexec/pick-glyph --resume"
   End
 
   It 'opens the gitmoji picker'
     run() { picker gitmoji >/dev/null; cmdline; }
     When call run
-    The output should equal "env COLORTERM=truecolor PICK_GITMOJI_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Gitmoji Picker --inject --no-chrome -- /home/u/.local/libexec/pick-gitmoji"
+    The output should equal "env PICK_GITMOJI_PADDING=0,2,0,2 /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Gitmoji Picker --inject --no-chrome -- /home/u/.local/libexec/pick-gitmoji"
   End
 
   It 'opens the clipboard history taller'
     run() { picker clipboard >/dev/null; cmdline; bounds; }
     When call run
-    The output should equal "env COLORTERM=truecolor /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Clipboard history --inject --no-chrome -- /home/u/.local/libexec/pick-clipboard
+    The output should equal "/home/u/.config/mux/scripts/rex-modal --origin block:origin --title Clipboard history --inject --no-chrome -- /home/u/.local/libexec/pick-clipboard
 [15,13,70,75]"
   End
 
   It 'opens the notification history WITHOUT injecting'
     run() { picker notifications >/dev/null; cmdline; }
     When call run
-    The output should equal "env COLORTERM=truecolor /home/u/.config/mux/scripts/rex-modal --origin block:origin --title Notifications --no-chrome -- /home/u/.local/libexec/pick-notifications"
+    The output should equal "/home/u/.config/mux/scripts/rex-modal --origin block:origin --title Notifications --no-chrome -- /home/u/.local/libexec/pick-notifications"
   End
 
   It 'never calls rex without --autostart=false'

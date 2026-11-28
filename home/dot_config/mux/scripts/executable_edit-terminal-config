@@ -8,6 +8,8 @@ NVIM=${commands[nvim]:-${commands[vim]:-vi}}
 # The dependency-free mux layer: the canonical remote-detection pair lives
 # here.
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+# $REX_SESSION, not mux::in_rex ($REX_BLOCK): everything below acts on the
+# session, and the Rex key action that runs this can name one with no block.
 _on_rex=0
 [[ -z "${TMUX:-}" && -n "${REX_SESSION:-}" ]] && _on_rex=1
 
@@ -81,8 +83,7 @@ esac
 if [[ "$ENV_TYPE" == REX ]]; then
   # Focus the config tab if it is already open, else open it. Windows are
   # found by label, the same identity quick-launch uses on Rex.
-  _win="$(_mux_rx_view "$REX_SESSION" |
-    jq -r --arg n "$TAB_NAME" '[.windows[]? | select(.label == $n) | .window_id] | first // empty')"
+  _win="$(_mux_rx_window_by_label "$TAB_NAME" "$REX_SESSION" | head -n 1)"
   if [[ -n "$_win" ]]; then
     _mux_rx_run window focus -s "$REX_SESSION" "$_win" >/dev/null
   else

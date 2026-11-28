@@ -56,9 +56,11 @@ EOS
       chmod +x "$TEST_TMP/rex"
       print -r -- '{"clients":[{"client_id":"client:ipad","info":{"kind":"app"},"connection_state":"connected","principal":{"transport":"tailscale"},"session_ids":["session:a"]},{"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","principal":{"transport":"unix"},"session_ids":["session:a","session:b"]}]}' >"$TEST_TMP/clients.json"
       export MUX_REX_BIN="$TEST_TMP/rex"
+      # The Rex arm takes its lookup and its client filter from the shim.
+      export MUX_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib"
     }
     BeforeEach rex_stub
-    AfterEach 'unset MUX_REX_BIN STUB_REX_DO MUX_TERMINAL'
+    AfterEach 'unset MUX_REX_BIN MUX_LIB STUB_REX_DO MUX_TERMINAL'
     toggled() { zsh home/dot_config/mux/scripts/executable_terminal-toggle-fullscreen 2>&1; print -r -- "rc=$?"; grep 'fullscreen' "$TEST_TMP/rex.log" 2>/dev/null || true; }
 
     It 'runs the app action on the local app, never starting a server'

@@ -63,9 +63,8 @@ done
 # the focused block's id in $REX_BLOCK. Ask Rex for that block's foreground
 # process — which also makes this the cwd of what is RUNNING in the pane, not
 # of the shell underneath it.
-if [[ -z "$pid" && -n "${REX_BLOCK:-}" && -z "${TMUX:-}" ]]; then
-  source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh" 2>/dev/null &&
-    pid="$(_mux_rx_block_call "$REX_BLOCK" process | jq -r '.foreground.pid // empty' 2>/dev/null)" || pid=""
+if [[ -z "$pid" ]] && source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh" 2>/dev/null && mux::in_rex; then
+  pid="$(_mux_rx_block_call "$REX_BLOCK" process | jq -r '.foreground.pid // empty' 2>/dev/null)" || pid=""
 fi
 
 [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] || {

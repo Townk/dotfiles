@@ -60,8 +60,7 @@
 # ql_rx_session_id <label> — the id of the session with that exact label,
 # empty when there is none.
 ql_rx_session_id() {
-  _mux_rx_run ls --json 2>/dev/null |
-    jq -r --arg l "$1" '[.sessions[]? | select(.label == $l) | .session_id] | first // empty'
+  _mux_rx_session_id "$1"
 }
 
 # ql_rx_block_by_label <session> <label> — first block of that label in the
@@ -87,8 +86,7 @@ ql_rx_show() {
 
 # ql_rx_window_of <session> <block> — the window a block sits in.
 ql_rx_window_of() {
-  _mux_rx_view "$1" | jq -r --arg b "$2" '
-    [.windows[]? | select([.layers[]?.blocks[]?.block_id] | index($b)) | .window_id] | first // empty'
+  _mux_rx_window_of "$2" "$1"
 }
 
 # ql_rx_argv <cmd> — sets `reply` to the argv that runs a quick-launch
@@ -220,8 +218,7 @@ ql_rx_open_tab() {
     session="${REX_SESSION:-}"
     [[ -n "$session" ]] || { echo "quick-launch: not in a Rex session" >&2; return 1; }
     local existing
-    existing="$(_mux_rx_view "$session" |
-      jq -r --arg n "$name" '[.windows[]? | select(.label == $n) | .window_id] | first // empty')"
+    existing="$(_mux_rx_window_by_label "$name" "$session" | head -n 1)"
     if [[ -n "$existing" ]]; then
       if _mux_rx_run window focus -s "$session" "$existing" >/dev/null 2>&1; then
         ql_rx_show "$session" "$existing"

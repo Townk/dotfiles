@@ -886,7 +886,7 @@ do
   local f = io.open(HOME .. "/.config/rex/tailscale", "r")
   if f then
     f:close()
-    local bundled = HOME .. "/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+    local bundled = HOME .. "/{{ .rexAppCli }}"
     -- A moment later: at start the server is still reading this file.
     local h, err = rex.exec.start(
       { "/bin/sh", "-c", 'sleep 3; rex="$1"; [ -x "$rex" ] || rex=rex; exec "$rex" --autostart=false server tailscale on', "rex-tailscale", bundled },

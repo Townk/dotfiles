@@ -1,16 +1,20 @@
-# Tests for home/.chezmoiscripts/run_after_60-rex-main-session.sh — the apply
+# Tests for home/.chezmoiscripts/run_after_60-rex-main-session.sh.tmpl — the apply
 # step that names Rex's default session "Main".
 #
 # Rex names the session it creates at first launch itself (wandering-glade),
 # and shows the current session's label in the tab bar once there is a second
 # session. The step renames the OLDEST session with such a generated-looking
-# label to "Main" when no session has that name. It is run for real against a
-# stub `rex` that logs its argv and answers `ls --json` from a fixture.
+# label to "Main" when no session has that name. It is run for real, rendered
+# (its "find rex" preamble is the shared .chezmoitemplates/rex-bin.sh.tmpl),
+# against a stub `rex` that logs its argv and answers `ls --json` from a
+# fixture.
 Describe 'Rex Main session hook'
-  HOOK="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_after_60-rex-main-session.sh"
+  HOOK_TMPL="$SHELLSPEC_PROJECT_ROOT/home/.chezmoiscripts/run_after_60-rex-main-session.sh.tmpl"
 
   setup() {
     MS_TMP=$(mktemp -d)
+    HOOK="$MS_TMP/hook.sh"
+    chezmoi -S "$SHELLSPEC_PROJECT_ROOT" execute-template <"$HOOK_TMPL" >"$HOOK" 2>"$MS_TMP/render.err"
     MS_HOME="$MS_TMP/home"
     mkdir -p "$MS_HOME/.config/mux/quick-launch"
     cat >"$MS_TMP/rex" <<EOS
@@ -51,6 +55,12 @@ EOS
   }
   renames() { grep 'session rename' "$MS_TMP/rex.log" 2>/dev/null || true; }
   calls_without_guard() { grep -v -c -- '--autostart=false' "$MS_TMP/rex.log" 2>/dev/null || true; }
+
+  It 'renders'
+    When call cat "$MS_TMP/render.err"
+    The output should equal ""
+    The contents of file "$HOOK" should include 'rex="${MUX_REX_BIN:-}"'
+  End
 
   It 'renames the oldest generated-looking session to Main'
     run() { sessions wandering-glade quiet-river; hook; renames; }

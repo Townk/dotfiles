@@ -39,7 +39,7 @@ _tm_rex() {  # _tm_rex <rex args…> — never starts a server, never hangs a ve
 }
 
 tm_stamp() {  # tm_stamp <ctx> [session-dir]
-  if [[ -z "${TMUX:-}" && -n "${REX_BLOCK:-}" ]]; then
+  if mux::in_rex; then
     _tm_rex do -s "$REX_BLOCK" tm_ctx "block=$REX_BLOCK" "ctx=$1" "session=${2:-}" >/dev/null 2>&1 || :
     return 0
   fi
@@ -51,7 +51,8 @@ tm_stamp() {  # tm_stamp <ctx> [session-dir]
 
 # tl_focused — 1 when this pane is the focused one, else 0. (Outside any
 # mux, always 1.) Cheap enough to poll once per loop tick: one query per
-# backend, no shim sourcing on this hot path.
+# backend (on Rex, one view, read by the shim's _mux_rx_focused_block), no
+# shim sourcing on this hot path.
 tl_focused() {
   if [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
     # Both halves matter: a pane can be its window's active pane while the
@@ -63,8 +64,7 @@ tl_focused() {
   if [[ -n "${REX_BLOCK:-}" ]]; then
     # The focused pane of the session's active window, as on tmux.
     local f
-    f=$(_tm_rex api call -s "$REX_BLOCK" session.view 2>/dev/null | jq -r '
-      .active_window_id as $a | .windows[]? | select(.window_id == $a) | .focused_block_id // empty' 2>/dev/null)
+    f=$(_mux_rx_focused_block "$REX_BLOCK" "$(_mux_rx_view --timeout 3s "$REX_BLOCK")")
     if [[ -z "$f" || "$f" == "$REX_BLOCK" ]]; then print 1; else print 0; fi
     return
   fi

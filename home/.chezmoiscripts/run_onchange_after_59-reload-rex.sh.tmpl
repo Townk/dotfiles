@@ -27,18 +27,7 @@ set -eu
 
 conf="$HOME/.config/rex/init.lua"
 
-# The Mac app keeps the CLI inside its server bundle and only puts it on PATH
-# in the panes it starts, so an apply from any other shell needs the path.
-rex="${MUX_REX_BIN:-}"
-if [ -z "$rex" ]; then
-  rex="$(command -v rex 2>/dev/null || true)"
-fi
-if [ -z "$rex" ]; then
-  app="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
-  [ -x "$app" ] && rex="$app"
-fi
-
-[ -n "$rex" ] || exit 0
+{{ includeTemplate "rex-bin.sh.tmpl" . }}
 [ -f "$conf" ] || exit 0
 
 # No server, nothing to reload.

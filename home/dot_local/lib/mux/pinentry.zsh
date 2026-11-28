@@ -269,7 +269,7 @@ mux::pinentry_rex_panes() {
 
   local s label view rows block widx pa wa proc pid name tty comm state c
   while IFS=$'\t' read -r s label; do
-    view="$(_mux_rx_run --timeout 3s api call -s "$s" session.view 2>/dev/null)" || continue
+    view="$(_mux_rx_view --timeout 3s "$s")" || continue
     rows="$(print -r -- "$view" | jq -r '
       .active_window_id as $aw
       | .windows // [] | to_entries[] | .key as $i | .value as $w
@@ -332,7 +332,7 @@ _mux::pinentry_spawn_rex() {
   local -i cw="${cells%% *}" ch="${cells##* }"
   (( w + MUX_PINENTRY_MARGIN <= cw && h + MUX_PINENTRY_MARGIN <= ch )) || return 1
 
-  local fifo out reader_pid layer line="" rc
+  local fifo out reader_pid layer line=""
   source "$_MUX_PE_LIB/common.zsh" 2>/dev/null || return 1
   out="$(common::tmpfile)" || return 1
   fifo="${out}.fifo"
@@ -355,10 +355,10 @@ _mux::pinentry_spawn_rex() {
         line="$(<"$out")"
         [[ "$line" == *' '* ]] && break
       fi
-      if (( i % 5 == 4 )); then          # once a second: is the layer still there?
-        rc=0
-        _mux_rx_run --timeout 3s block inspect -s "$layer" "$layer" >/dev/null 2>&1 </dev/null || rc=$?
-        (( rc == 3 || rc == 4 )) && break
+      # Once a second: is the layer still there? Only "gone" ends the wait
+      # early; an unanswered probe is left to the ceiling.
+      if (( i % 5 == 4 )); then
+        _mux_rx_block_gone "$layer" </dev/null && break
       fi
       sleep 0.1
       (( i++ ))

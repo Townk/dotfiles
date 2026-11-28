@@ -11,7 +11,8 @@
 # action, which exports the focused session) with no tmux in between. Spelled
 # out here rather than read from mux::backend because the entry branches
 # below are spelled the same way, and they must agree on precedence: an inner
-# tmux started inside Rex wins.
+# tmux started inside Rex wins. NOT mux::in_rex: that asks for a PANE
+# ($REX_BLOCK), and the Lua action can hand us a session with no block.
 ql_on_rex() {
   [[ -z "${TMUX:-}" && -n "${REX_SESSION:-}" ]]
 }

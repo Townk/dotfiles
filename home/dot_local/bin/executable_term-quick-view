@@ -62,9 +62,7 @@ if [[ "$_mode" == view ]]; then
     # second call replaces the float instead of stacking another.
     local _s="${MUX_SESSION:-}" _old
     [[ -n "$_s" ]] || _s="$(_mux_rx_session)" || exit 1
-    for _old in "${(@f)$(_mux_rx_view "$_s" | jq -r --arg n "$TERM_QUICK_VIEW_NAME" '
-        .windows[]?.layers[]? | select(.kind != "tiled") | .blocks[]?
-        | select(.label == $n) | .block_id' 2>/dev/null)}"; do
+    for _old in "${(@f)$(_mux_rx_floats_by_label "$TERM_QUICK_VIEW_NAME" "$_s")}"; do
       [[ -n "$_old" ]] && _mux_rx_close_block "$_old"
     done
     # Kitty graphics named outright: the layer's command starts from the
@@ -194,12 +192,11 @@ fi
 # a second later (measured 2026-11-27: the picture was centred for 80 columns
 # in a 130-column tab). So wait for the size to move off 80x24, for at most
 # a little over a second — a tab that really is 80x24 just pays that once.
-if [[ -z "${TMUX:-}" && -n "${REX_BLOCK:-}" ]]; then
-  for _i in {1..12}; do
-    _geo="$(stty size </dev/tty 2>/dev/null)"
-    [[ "$_geo" == "24 80" ]] || break
-    sleep 0.1
-  done
+# The renderer has no lib yet (only the launcher loads the shim); the cheap
+# half has the pane test and the wait.
+source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
+if mux::in_rex; then
+  _geo="$(mux::await_tty_size --not 24x80 12 0.1)" || _geo=""
   # Read from the tty itself: `tput` below answers from $COLUMNS/$LINES when
   # the environment carries them, and those are the birth size too.
   [[ "$_geo" == <->" "<-> ]] && { _rows="${_geo%% *}"; _cols="${_geo##* }" }

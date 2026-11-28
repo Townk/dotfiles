@@ -22,15 +22,7 @@ set -eu
 #
 # settings: {{ .rexSettings | toJson | sha256sum }}
 
-rex="${MUX_REX_BIN:-}"
-if [ -z "$rex" ]; then
-  rex="$(command -v rex 2>/dev/null || true)"
-fi
-if [ -z "$rex" ]; then
-  app="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
-  [ -x "$app" ] && rex="$app"
-fi
-[ -n "$rex" ] && [ -x "$rex" ] || exit 0
+{{ includeTemplate "rex-bin.sh.tmpl" . }}
 command -v jq >/dev/null 2>&1 || exit 0
 
 clients="$("$rex" --autostart=false client ls --json 2>/dev/null)" || exit 0
@@ -38,7 +30,7 @@ clients="$("$rex" --autostart=false client ls --json 2>/dev/null)" || exit 0
 # "<client id> <a session it shows>" per local, connected Mac app. `rex do`
 # needs a session to act in once there is more than one.
 targets="$(printf '%s' "$clients" | jq -r '
-  (.clients // .)[]?
+  (.clients? // .)[]?
   | select(.info.kind? == "app" and .info.platform? == "macos"
            and .connection_state? == "connected" and .principal.transport? == "unix")
   | select((.session_ids // []) | length > 0)

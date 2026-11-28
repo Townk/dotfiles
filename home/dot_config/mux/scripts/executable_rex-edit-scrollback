@@ -18,12 +18,11 @@ set -eu
 }
 
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
-rex_bin="$(_mux_rx_bin 2>/dev/null)" || rex_bin=""
-[[ -n "$rex_bin" ]] || { print -ru2 -- "rex-edit-scrollback: no rex binary"; exit 1; }
+_mux_rx_bin >/dev/null 2>&1 || { print -ru2 -- "rex-edit-scrollback: no rex binary"; exit 1; }
 
 file="$(mktemp "${TMPDIR:-/tmp}/rex-scrollback.XXXXXX")"
 # A block id is accepted wherever Rex takes a session.
-if ! "$rex_bin" --autostart=false capture -s "$REX_BLOCK" -b "$REX_BLOCK" --trim --unwrap >"$file" 2>/dev/null ||
+if ! _mux_rx_run capture -s "$REX_BLOCK" -b "$REX_BLOCK" --trim --unwrap >"$file" 2>/dev/null ||
   [[ ! -s "$file" ]]; then
   rm -f -- "$file"
   print -ru2 -- "rex-edit-scrollback: could not capture the pane"
@@ -44,7 +43,7 @@ cwd="$(_mux_rx_pane_cwd 2>/dev/null)" || cwd=""
 typeset -a where=()
 [[ -d "$cwd" ]] && where=(-c "$cwd")
 
-if ! out="$("$rex_bin" --autostart=false window new -s "$REX_BLOCK" --json "${where[@]}" scrollback -- \
+if ! out="$(_mux_rx_run window new -s "$REX_BLOCK" --json "${where[@]}" scrollback -- \
   zsh -c "$runner" rex-edit-scrollback "$file" 2>/dev/null)"; then
   rm -f -- "$file"
   print -ru2 -- "rex-edit-scrollback: could not open a tab"

@@ -46,16 +46,16 @@ EOS
     }
     When call run
     The output should equal "rc=0
-env COLORTERM=truecolor /home/u/.config/mux/scripts/rex-modal --origin block:origin --no-chrome --title Jobs --capture /tmp/f -- troupe jobs --width 57
+/home/u/.config/mux/scripts/rex-modal --origin block:origin --no-chrome --title Jobs --capture /tmp/f -- troupe jobs --width 57
 [25,30,50,40]
 cwd-ok
 Jobs"
   End
 
   It 'tells rex-modal the exact row count of a height given in cells'
-    run() { modal --width 57 --height 15 -- true; cmdline | cut -d' ' -f1-4; }
+    run() { modal --width 57 --height 15 -- true; cmdline | cut -d' ' -f1-3; }
     When call run
-    The output should equal "env COLORTERM=truecolor MUX_REX_MODAL_ROWS=15 /home/u/.config/mux/scripts/rex-modal"
+    The output should equal "env MUX_REX_MODAL_ROWS=15 /home/u/.config/mux/scripts/rex-modal"
   End
 
   It 'does not return while the layer is open'

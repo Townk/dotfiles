@@ -123,6 +123,16 @@ muxHiddenProcs:
   - pi
   - pi-coding-agent
 
+# Where the Rex Mac app keeps its CLI, relative to $HOME. The app puts `rex`
+# on PATH only in the panes it starts, so everything that runs elsewhere (an
+# apply hook, a launchd job, the server's own `rex.exec`) falls back to this
+# path. Feeds the templates: .chezmoitemplates/rex-bin.sh.tmpl (hooks 59-61)
+# and dot_config/rex/init.lua.tmpl. The zsh libs are not templates and carry
+# the same string as a literal — dot_local/lib/mux/rex.zsh (_mux_rx_bin) and
+# dot_local/lib/job/rex.zsh (job::_rex); tests/mux_rex_helpers_spec.sh pins
+# them to this value.
+rexAppCli: "Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+
 # Rex app settings. The Rex app keeps its settings (fonts, pane chrome) in its
 # own preferences, not in a file, so they are listed here and pushed by the
 # `settings_apply` action in ~/.config/rex/init.lua: `chezmoi apply` runs it on

@@ -20,17 +20,7 @@
 #     text. Should any id have another shape, the listing order is kept.
 #   * A session called Main in any case (main, MAIN) is the Main session.
 
-# The Mac app keeps the CLI inside its server bundle and only puts it on PATH
-# in the panes it starts, so an apply from any other shell needs the path.
-rex="${MUX_REX_BIN:-}"
-if [ -z "$rex" ]; then
-  rex="$(command -v rex 2>/dev/null || true)"
-fi
-if [ -z "$rex" ]; then
-  app="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
-  [ -x "$app" ] && rex="$app"
-fi
-[ -n "$rex" ] && [ -x "$rex" ] || exit 0
+{{ includeTemplate "rex-bin.sh.tmpl" . }}
 command -v jq >/dev/null 2>&1 || exit 0
 
 listing="$("$rex" --autostart=false ls --json 2>/dev/null)" || exit 0
@@ -73,3 +63,5 @@ printf '%s\n' "$sessions" | while IFS="$(printf '\t')" read -r id label; do
 done
 
 exit 0
+
+# vim:ft=sh

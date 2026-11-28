@@ -40,7 +40,9 @@ _mux_rx_bin() {
   c="$(command -v rex 2>/dev/null)" && [[ -n "$c" ]] && { print -r -- "$c"; return 0; }
   # The Mac app ships the CLI inside its server bundle and only puts it on
   # PATH in the panes it starts — a script run by `rex.exec`, a launchd job
-  # or a chezmoi hook finds it at this path or not at all.
+  # or a chezmoi hook finds it at this path or not at all. The path is
+  # `rexAppCli` in .chezmoidata/mux.yaml for the files that are templates;
+  # this one is not, and tests/mux_rex_helpers_spec.sh pins the two together.
   local app="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
   for c in "${REX_BIN_DIR:+$REX_BIN_DIR/rex}" "$app" /opt/homebrew/bin/rex \
            /usr/local/bin/rex "$HOME/.local/bin/rex"; do
@@ -49,13 +51,25 @@ _mux_rx_bin() {
   return 1
 }
 
-# _mux_rx_run <args...> — one rex call that can never START a server. A
-# query from a shell with a stale $REX_SERVER must fail, not quietly spawn a
-# second, empty server and answer for that one.
+# _mux_rx_run [--timeout D] <args...> — THE way zsh code calls rex. Two
+# things hold for every call made through it:
+#   * it can never START a server (--autostart=false). A query from a shell
+#     with a stale $REX_SERVER must fail, not quietly spawn a second, empty
+#     server and answer for that one.
+#   * it waits at most D (`3s`, rex's own --timeout) when the caller says
+#     so. A call made where nobody can press Ctrl+C — a key binding, a hook,
+#     gpg-agent, a polling loop — names one; an interactive verb may not.
+# The timeout is spelled FIRST so it is this function's, not an argument of
+# the rex subcommand.
 _mux_rx_run() {
   local bin
+  local -a pre=(--autostart=false)
+  if [[ "${1:-}" == --timeout ]] && (( $# >= 2 )); then
+    pre+=(--timeout "$2")
+    shift 2
+  fi
   bin="$(_mux_rx_bin)" || return 1
-  "$bin" --autostart=false "$@"
+  "$bin" "${pre[@]}" "$@"
 }
 
 _mux_rx_available() {
@@ -70,13 +84,108 @@ _mux_rx_session() {
   print -r -- "$REX_SESSION"
 }
 
-# _mux_rx_view [session] — the session's full layout as JSON (windows →
-# layers → blocks). The one read every tab/pane question below is answered
-# from, so each verb costs exactly one round trip.
+# _mux_rx_view [--timeout D] [session] — the session's full layout as JSON
+# (windows → layers → blocks). The one read every tab/pane question below is
+# answered from, so each verb costs exactly one round trip.
 _mux_rx_view() {
+  local -a t=()
+  if [[ "${1:-}" == --timeout ]] && (( $# >= 2 )); then
+    t=(--timeout "$2")
+    shift 2
+  fi
   local s="${1:-}"
   [[ -n "$s" ]] || s="$(_mux_rx_session)" || return 1
-  _mux_rx_run api call -s "$s" session.view 2>/dev/null
+  _mux_rx_run "${t[@]}" api call -s "$s" session.view 2>/dev/null
+}
+
+# --- readers of the view ----------------------------------------------------
+# The questions scripts ask of `session.view`, named once. Each takes the
+# session last (default: ours) and, after it, optionally the view JSON itself
+# — for a caller that already holds it, or that fetched it under its own
+# timeout (`… "$s" "$(_mux_rx_view --timeout 3s "$s")"`). A view that was
+# passed is used even when it is empty: a failed fetch is not asked again.
+
+# _mux_rx_view_jq <filter> <value> [session [view-json]] — run <filter> over
+# the view with $v bound to <value>.
+_mux_rx_view_jq() {
+  local filter="$1" v="$2"
+  shift 2
+  if (( $# >= 2 )); then print -r -- "$2"; else _mux_rx_view "${1:-}"; fi |
+    jq -r --arg v "$v" "$filter" 2>/dev/null
+}
+
+# _mux_rx_window_by_label <label> [session [view]] — the id of every window
+# with that label, in tab order. The caller takes the first or all of them.
+_mux_rx_window_by_label() {
+  _mux_rx_view_jq '.windows[]? | select(.label == $v) | .window_id' "$@"
+}
+
+# _mux_rx_window_of <block> [session [view]] — the id of the window a block
+# sits in, in whatever layer.
+_mux_rx_window_of() {
+  _mux_rx_view_jq '
+    [.windows[]? | select([.layers[]?.blocks[]?.block_id] | index($v)) | .window_id] | first // empty' "$@"
+}
+
+# _mux_rx_float_of <block> [session [view]] — the floating layer holding the
+# block, as "<layer id> <x> <y> <w> <h>" (bounds are fractions of the
+# window). Nothing for a tiled block: that is also the test for "is this
+# block a float".
+_mux_rx_float_of() {
+  _mux_rx_view_jq '
+    .windows[]?.layers[]? | select(.kind != "tiled") | select([.blocks[]?.block_id] | index($v))
+    | "\(.layer_id) \(.bounds[0]) \(.bounds[1]) \(.bounds[2]) \(.bounds[3])"' "$@"
+}
+
+# _mux_rx_floats_by_label <label> [session [view]] — the id of every block of
+# that label sitting in a floating layer.
+_mux_rx_floats_by_label() {
+  _mux_rx_view_jq '
+    .windows[]?.layers[]? | select(.kind != "tiled") | .blocks[]?
+    | select(.label == $v) | .block_id' "$@"
+}
+
+# _mux_rx_focused_block [session [view]] — the focused block of the session's
+# ACTIVE window: what tmux means by "the active pane of the active window".
+_mux_rx_focused_block() {
+  _mux_rx_view_jq '
+    .active_window_id as $a | .windows[]? | select(.window_id == $a) | .focused_block_id // empty' "" "$@"
+}
+
+# _mux_rx_session_id <label> — the id of the session with that exact label,
+# empty when there is none. From `ls`, not the view: a view needs a session.
+_mux_rx_session_id() {
+  _mux_rx_run ls --json 2>/dev/null |
+    jq -r --arg l "$1" '[.sessions[]? | select(.label == $l) | .session_id] | first // empty'
+}
+
+# _mux_rx_app_clients [--local] [--session SID] — the Rex APPS the server is
+# talking to right now, one "<client id> <session id>" per line. Only a
+# CONNECTED app counts: the CLI's own short-lived connections are clients
+# too, and an app that lost its connection stays listed for a while. The
+# session is the one asked for (apps not showing it are left out), otherwise
+# the first one the app shows — `rex do` needs a session to act in — and an
+# app showing none is left out. --local keeps the apps on this machine's
+# socket: an iPad on the tailnet has its own screen and its own settings.
+# Carries a timeout and needs no $REX_SESSION, so it also serves a caller
+# with no pane of its own (the bridge daemon).
+_mux_rx_app_clients() {
+  local here=false sid=""
+  while (($#)); do
+    case "$1" in
+      --local) here=true; shift ;;
+      --session) sid="${2-}"; (( $# >= 2 )) && shift 2 || shift ;;
+      *) shift ;;
+    esac
+  done
+  _mux_rx_run --timeout 3s client ls --json 2>/dev/null |
+    jq -r --arg s "$sid" --argjson here "$here" '
+      (.clients? // .)[]?
+      | select(.info.kind? == "app" and .connection_state? == "connected")
+      | select(($here | not) or .principal.transport? == "unix")
+      | (.session_ids // []) as $ids
+      | if $s != "" then select($ids | index($s)) | "\(.client_id) \($s)"
+        else select(($ids | length) > 0) | "\(.client_id) \($ids[0])" end' 2>/dev/null
 }
 
 # _mux_rx_block_call <block> <method> — a terminal block method (process,
@@ -122,6 +231,8 @@ _mux_rx_rename_session() {
 # short-lived connections are clients too, and an app that lost its
 # connection stays listed for a while. Both calls carry a timeout and neither
 # needs $REX_SESSION, because this also runs under gpg-agent (mux/pinentry.zsh).
+# Not built on _mux_rx_app_clients: that names ONE session per app, and this
+# wants every session of every app.
 # --flat is for a caller that puts the label in a `|`-separated line: `|`, tab
 # and newline become spaces.
 _mux_rx_attached_sessions() {
@@ -317,10 +428,12 @@ _mux_rx_modal_layer() {
   local modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
   # A height in cells is a promise to the target: it drew, or will draw, for
   # exactly that many rows. rex-modal makes the layer keep it.
+  # No COLORTERM here: the server gives a layer's command truecolor itself
+  # (pinned in tests/mux_rex_spec.sh), so `env` is only for the row count.
   local -a rows=()
-  [[ "$h" == <-> ]] && rows=("MUX_REX_MODAL_ROWS=$h")
+  [[ "$h" == <-> ]] && rows=(env "MUX_REX_MODAL_ROWS=$h")
   _mux_rx_layer "$w" "$h" "$title" "$PWD" "" -- \
-    env "COLORTERM=${COLORTERM:-truecolor}" "${rows[@]}" "$modal" --origin "${REX_BLOCK:-}" "$@"
+    "${rows[@]}" "$modal" --origin "${REX_BLOCK:-}" "$@"
 }
 
 # _mux_rx_close_block <block> — close a layer we opened; quiet either way.
@@ -337,38 +450,63 @@ _mux_rx_close_block() {
 # path, temp files removed, with 130. Without it the float outlived its
 # caller, and answering that orphan found nobody listening.
 
-# _mux_rx_await_modal <layer block> <reader pid> — wait for the reader to
-# finish (the modal answered). Returns 1 after abandoning it because nobody
-# will ever write the answer. The wait is BOUNDED whatever the server says:
-#   * `block inspect` exits 3 for a block the server no longer knows — the
-#     layer is gone — and 4 when no server is running, which takes every
-#     layer with it. Either ends the wait at once.
-#   * any other failure (a timeout, a hiccup) is not proof, so it is counted,
-#     and a run of them — $_MUX_RX_AWAIT_MISSES, default 25 polls, about 5 s —
-#     ends the wait too. A check that succeeds resets the count: a float that
-#     is simply taking its time is never abandoned.
-_mux_rx_await_modal() {
-  local block="$1" reader="$2" rc=0 misses=0
-  local limit="${_MUX_RX_AWAIT_MISSES:-25}"
-  while kill -0 "$reader" 2>/dev/null; do
+# _mux_rx_block_gone <block> — ONE probe, three answers:
+#   0  gone: `block inspect` exits 3 for a block the server no longer knows,
+#      and 4 when no server is running, which takes every block with it;
+#   1  alive: the server answered for it;
+#   2  unknown: any other failure (a timeout, a hiccup) is not proof.
+# What "unknown" means is the caller's to decide — and they decide
+# differently, which is why this returns it instead of rounding it.
+_mux_rx_block_gone() {
+  local rc=0
+  _mux_rx_run --timeout 3s block inspect -s "$1" "$1" >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    3 | 4) return 0 ;;
+    0) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# _mux_rx_wait_block_gone <block> [misses] [pid] — poll (every 0.2 s) until
+# the block is gone. The wait is BOUNDED whatever the server says: a run of
+# <misses> "unknown" answers in a row (default $_MUX_RX_AWAIT_MISSES, else 25
+# polls, about 5 s) ends it too, as gone. An "alive" answer resets the count:
+# a float that is simply taking its time is never abandoned.
+# With <pid>, the wait is only worth it while that process lives: returns 1
+# as soon as it has exited, 0 otherwise.
+_mux_rx_wait_block_gone() {
+  local block="$1" limit="${2:-${_MUX_RX_AWAIT_MISSES:-25}}" pid="${3:-}"
+  local -i misses=0 rc
+  while [[ -z "$pid" ]] || kill -0 "$pid" 2>/dev/null; do
     rc=0
-    _mux_rx_run --timeout 3s block inspect -s "$block" "$block" >/dev/null 2>&1 || rc=$?
+    _mux_rx_block_gone "$block" || rc=$?
     case "$rc" in
-      0) misses=0 ;;
-      3 | 4) misses=$limit ;;
+      0) return 0 ;;
+      1) misses=0 ;;
       *) (( misses += 1 )) ;;
     esac
-    if (( misses >= limit )); then
-      # The modal writes its answer as it exits, so give a reader that is
-      # mid-read a moment before calling it abandoned.
-      sleep 0.3
-      kill -0 "$reader" 2>/dev/null || break
+    (( misses >= limit )) && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+# _mux_rx_await_modal <layer block> <reader pid> — wait for the reader to
+# finish (the modal answered). Returns 1 after abandoning it because nobody
+# will ever write the answer: the layer went away (_mux_rx_wait_block_gone,
+# bounded by $_MUX_RX_AWAIT_MISSES) while the reader was still waiting.
+_mux_rx_await_modal() {
+  local block="$1" reader="$2"
+  if _mux_rx_wait_block_gone "$block" "${_MUX_RX_AWAIT_MISSES:-25}" "$reader"; then
+    # The modal writes its answer as it exits, so give a reader that is
+    # mid-read a moment before calling it abandoned.
+    sleep 0.3
+    if kill -0 "$reader" 2>/dev/null; then
       kill "$reader" 2>/dev/null
       wait "$reader" 2>/dev/null
       return 1
     fi
-    sleep 0.2
-  done
+  fi
   wait "$reader" 2>/dev/null
   return 0
 }
@@ -533,15 +671,13 @@ _mux_rx_show_window() {
   if [[ -n "${REX_CLIENT:-}" ]]; then
     clients="$REX_CLIENT"
   else
-    clients="$(_mux_rx_run --timeout 3s client ls --json 2>/dev/null | jq -r --arg s "$sid" '
-      (.clients // .)[]?
-      | select(.info.kind? == "app" and .connection_state? == "connected")
-      | select((.session_ids // []) | index($s))
-      | .client_id' 2>/dev/null)"
+    # Every connected app showing the session, remote ones too — NOT
+    # --local: an iPad looking at this session should follow as well.
+    clients="$(_mux_rx_app_clients --session "$sid")"
   fi
   [[ -n "$clients" ]] || return 1
   for c in ${(f)clients}; do
-    _mux_rx_run --timeout 3s -C "$c" do -s "$sid" session.select \
+    _mux_rx_run --timeout 3s -C "${c%% *}" do -s "$sid" session.select \
       "session_id=$sid" "window_id=$window" >/dev/null 2>&1 || :
   done
   return 0
@@ -568,8 +704,7 @@ _mux_rx_new_tab() {
   [[ -n "$session" ]] || session="$(_mux_rx_session)" || return 1
   if (( singleton )) && [[ -n "$name" ]]; then
     local old
-    for old in "${(@f)$(_mux_rx_view "$session" |
-        jq -r --arg n "$name" '.windows[]? | select(.label == $n) | .window_id')}"; do
+    for old in "${(@f)$(_mux_rx_window_by_label "$name" "$session")}"; do
       [[ -n "$old" ]] && _mux_rx_run window close -s "$session" "$old" >/dev/null 2>&1
     done
   fi

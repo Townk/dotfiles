@@ -92,19 +92,22 @@ APPLESCRIPT
 # the app is found by asking the server: a connected app on the local socket
 # (an iPad on the tailnet has its own screen). Never starts a server; the
 # app must allow remote control.
+#
+# The lookup, the never-autostart call and the "local app" filter are the
+# shim's (mux/rex.zsh). It is sourced HERE, not at the top: only this arm
+# needs it, and the other arms keep running with no lib at all. The daemon's
+# bare environment is enough for it — it defines functions and reads $HOME,
+# which this arm needed already.
 toggle_rex_fullscreen() {
-  local rex="${MUX_REX_BIN:-}"
-  [[ -n "$rex" ]] || rex="${commands[rex]:-}"
-  [[ -n "$rex" ]] || rex="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+  source "${MUX_LIB:-${MUX_LIB_DIR:-$HOME/.local/lib}}/mux-bootstrap.zsh" 2>/dev/null ||
+    fail "no mux library; cannot reach the Rex app"
+  local rex target
+  rex="$(_mux_rx_bin 2>/dev/null)" || rex=""
   [[ -x "$rex" ]] || fail "no rex binary; cannot reach the Rex app"
-  local target
-  target="$("$rex" --autostart=false --timeout 3s client ls --json 2>/dev/null | jq -r '
-    [(.clients // .)[]?
-     | select(.info.kind? == "app" and .connection_state? == "connected" and .principal.transport? == "unix")
-     | select((.session_ids // []) | length > 0)] | first
-    | if . then "\(.client_id) \(.session_ids[0])" else empty end' 2>/dev/null)" || target=""
+  target="$(_mux_rx_app_clients --local 2>/dev/null)" || target=""
+  target="${target%%$'\n'*}"            # the first one
   [[ -n "$target" ]] || fail "no Rex app is connected on this machine"
-  "$rex" --autostart=false --timeout 5s -C "${target%% *}" do -s "${target##* }" \
+  _mux_rx_run --timeout 5s -C "${target%% *}" do -s "${target##* }" \
     client.window.fullscreen.toggle >/dev/null 2>&1 ||
     fail "the Rex app refused the fullscreen toggle (is remote control on?)"
 }

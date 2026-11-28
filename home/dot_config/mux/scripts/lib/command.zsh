@@ -156,8 +156,11 @@ ql_is_floating_direction() {
 }
 
 # "<cols> <rows>" of the controlling tty — what a float is centred against.
+# The shim's own reading of the tty (mux::terminal_size outside a
+# multiplexer); NOT mux::terminal_size itself, which inside one answers for
+# the multiplexer's window.
 ql_terminal_size() {
-  { stty size </dev/tty 2>/dev/null || printf '24 80\n'; } | awk '{ print $2, $1 }'
+  _mux::tty_terminal_size
 }
 
 ql_trim() {

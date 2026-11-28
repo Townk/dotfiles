@@ -99,6 +99,17 @@ mux::available() {
 # a multiplexer at all. This asks only the question the env vars can answer.
 mux::in_session() { [[ -n "${TMUX:-}" ]]; }
 
+# mux::in_rex — true when this shell is in a Rex pane and NOT inside a tmux
+# started there (the inner multiplexer wins, as in mux::backend). The one
+# spelling of a test that scripts make before deciding anything else, so it
+# is pure environment: no fork, and no $MUX_BACKEND — like mux::in_session it
+# asks where we ARE, not what the caller wants driven.
+# $REX_BLOCK on purpose, not $REX_SESSION: the block is what the server
+# exports into a pane (the session variable is restored from it above, and a
+# Rex Lua action can name a session with no pane at all — callers that mean
+# "a session to drive", quick-launch's ql_on_rex, test that themselves).
+mux::in_rex() { [[ -z "${TMUX:-}" && -n "${REX_BLOCK:-}" ]]; }
+
 # Knob (§2): the default backend for OUTSIDE-a-session launches, in priority
 # order — the loose, untracked per-machine file (theme-override pattern), then
 # the caller's baked default, then tmux. Runtime detection always beats this
@@ -573,12 +584,68 @@ mux::pane_cwd() {
   esac
 }
 
+# --- the pane's own tty ------------------------------------------------------
+
+# mux::tty_size — "<rows> <cols>" of the controlling tty, as `stty size`
+# orders them; non-zero when there is no tty to ask. The tty is the truth for
+# THIS pane on every backend, and it is ahead of $LINES/$COLUMNS and `tput`,
+# which answer with the size the process was born with.
+mux::tty_size() {
+  local sz
+  sz="$(stty size </dev/tty 2>/dev/null)" || return 1
+  [[ "$sz" == <->" "<-> ]] || return 1
+  print -r -- "$sz"
+}
+
+# mux::await_tty_size [--stable | --not ROWSxCOLS] [tries] [interval] — wait
+# for a NEW pane's pty to reach its real size, then print it ("<rows>
+# <cols>"). A pane is born at a default size and resized when the multiplexer
+# lays it out, a fraction of a second later; a program that draws for the
+# birth size draws wrong. Two ways to know it has settled:
+#   --stable (default)  two reads in a row agree — for a pane whose final
+#                       size could be anything (a float, a resized layer);
+#   --not ROWSxCOLS     it moved off the birth size (`--not 24x80`) — for a
+#                       pane that is slow to get its first layout, where two
+#                       equal reads would just be the birth size twice.
+# Reads at most <tries> times (default 20), <interval> seconds apart (0.05).
+# When the tries run out it prints the last size it read: the caller wanted a
+# size, and a pane that really is 24x80 has one. Non-zero only when the tty
+# cannot be read at all.
+mux::await_tty_size() {
+  local not="" size="" prev=""
+  case "${1:-}" in
+    --stable) shift ;;
+    --not) not="${${2-}/x/ }"; shift; (($#)) && shift ;;
+  esac
+  local -i tries="${1:-20}" i
+  local interval="${2:-0.05}"
+  for (( i = 0; i < tries; i++ )); do
+    size="$(mux::tty_size)" || return 1
+    if [[ -n "$not" ]]; then
+      [[ "$size" == "$not" ]] || break
+    else
+      [[ -n "$prev" && "$size" == "$prev" ]] && break
+      prev="$size"
+    fi
+    sleep "$interval"
+  done
+  [[ -n "$size" ]] || return 1
+  print -r -- "$size"
+}
+
+# _mux::tty_terminal_size — "<cols> <rows>" of the controlling tty, 80x24
+# when there is none. What a float is centred against outside a multiplexer,
+# and what quick-launch (ql_terminal_size) measures its own floats with.
+_mux::tty_terminal_size() {
+  { mux::tty_size || print -r -- '24 80'; } | awk '{ print $2, $1 }'
+}
+
 # mux::terminal_size — "<cols> <rows>" usable by a new pane/float.
 mux::terminal_size() {
   case "$(mux::backend)" in
     tmux) _mux_tx_terminal_size ;;
     rex) _mux_rx_terminal_size ;;
-    none) { stty size </dev/tty 2>/dev/null || printf '24 80\n'; } | awk '{ print $2, $1 }' ;;   # the controlling tty
+    none) _mux::tty_terminal_size ;;   # the controlling tty
     *) _mux::unknown_backend terminal_size ;;
   esac
 }
