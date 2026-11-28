@@ -2,6 +2,5 @@ mux_click_spec.sh 2 0
 mux_copy_pwd_spec.sh 6 0
 mux_select_spec.sh 3 0
 mux_stack_spec.sh 13 1
-rip-push_spec.sh 1 0
 tmux_status_right_spec.sh 0 2
 tmux_window_title_spec.sh 5 0

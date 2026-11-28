@@ -170,7 +170,15 @@ rip::push_worker() {
   # sweepWork age-gate protection.
   touch "$push_lock" 2>/dev/null
   if zmodload -e zsh/system; then
-    zsystem flock -f push_lock_fd "$push_lock" 2>/dev/null
+    # Under a test clock only: say "about to wait for the lock" first, so a
+    # test can see a push parked behind another one (a process blocked in
+    # flock does nothing observable). Costs one string test otherwise.
+    if [[ -n "${COMMON_CLOCK_FILE:-}" ]] &&
+      ! zsystem flock -t 0 -f push_lock_fd "$push_lock" 2>/dev/null; then
+      common::blocking rip.push.lock
+      push_lock_fd=
+    fi
+    [[ -n "$push_lock_fd" ]] || zsystem flock -f push_lock_fd "$push_lock" 2>/dev/null
   fi
 
   # INSIDE the lock, and still BEFORE the listfile is built — both halves of

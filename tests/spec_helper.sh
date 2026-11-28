@@ -507,7 +507,11 @@ spec_clock_guard() {
 spec_clock_guard_off() {
   [ -n "${SPEC_CLOCK_GUARD:-}" ] || return 0
   kill "$SPEC_CLOCK_GUARD" 2>/dev/null
-  wait "$SPEC_CLOCK_GUARD" "$SPEC_CLOCK_GUARD_SUB" 2>/dev/null
+  # One wait each: zsh's `wait A B` returns once A (killed just above) is
+  # reaped and never waits for B, which left the subshell - and its FIFO -
+  # alive behind a guard that claimed to be stood down.
+  wait "$SPEC_CLOCK_GUARD" 2>/dev/null
+  wait "$SPEC_CLOCK_GUARD_SUB" 2>/dev/null
   SPEC_CLOCK_GUARD=
   return 0
 }
