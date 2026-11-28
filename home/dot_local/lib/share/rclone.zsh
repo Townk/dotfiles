@@ -49,6 +49,7 @@ share::rclone_pct() {
 
 share::rclone_link_argv() {
   local endpoint="$1" dest="$2" scope type
+  share::_manifest_prime
   scope="$(share::field "$endpoint" link_scope organization)" || return 1
   type="$(share::field "$endpoint" link_type view)"
   printf '%s\n' rclone link \
@@ -88,6 +89,7 @@ share::rclone_send() {
     esac
   done
   local endpoint="$1"; shift
+  share::_manifest_prime
   local label; label="$(share::label "$@")" || return 1
 
   # One share = one remote directory, so a multi-file send stays revocable as a

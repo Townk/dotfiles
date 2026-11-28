@@ -118,6 +118,7 @@ share::blurb() {
   # already knows the endpoint, and threading a relay argument through each of
   # them for one template's benefit would be the same mistake %size would have
   # been (see below).
+  share::_manifest_prime
   local relay=""
   [[ "$kind" == live ]] && relay="$(share::relay_address "$endpoint")"
 

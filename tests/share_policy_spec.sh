@@ -5,13 +5,14 @@
 
 Describe 'share:: policy fence'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-policy"
-    rm -rf "$SB"; mkdir -p "$SB"
+    share_fresh "$SB"
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [onedrive]
 backend = "rclone"
 remote = "onedrive:Shared/drop"
@@ -121,6 +122,39 @@ TOML
     When run share::destination_host bare
     The status should be failure
     The stderr should include 'no host'
+  End
+
+  It 'allows an endpoint that lists the profile among several'
+    SHARE_PROFILE=work
+    printf '[both]\nstore = "https://both.example.com"\nprofiles = ["personal", "work"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    When call share::allowed both
+    The status should be success
+    The stderr should equal ''
+  End
+
+  It 'denies a profile that is only a substring of an allowed one, without a message of its own'
+    SHARE_PROFILE=work
+    printf '[near]\nstore = "https://near.example.com"\nprofiles = ["workshop", "homework"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    When call share::allowed near
+    The status should be failure
+    The stderr should equal ''
+  End
+
+  It 'names an unknown endpoint when asked whether it is allowed'
+    SHARE_PROFILE=work
+    When call share::allowed nope
+    The status should be failure
+    The stderr should equal 'error: share: unknown endpoint: nope'
+  End
+
+  It 'does not let a default_for claim on another profile decide the default'
+    SHARE_PROFILE=personal
+    printf '[w]\nstore = "https://w.example.com"\nprofiles = ["work"]\ndefault_for = ["work"]\n[second]\nstore = "https://s.example.com"\nprofiles = ["personal"]\ndefault_for = ["work", "personal"]\n[third]\nstore = "https://t.example.com"\nprofiles = ["personal"]\ndefault_for = ["personal"]\n' \
+      >"$SHARE_ENDPOINTS_FILE"
+    When call share::default_endpoint
+    The output should equal 'second'
   End
 
   It 'reports a parse failure, not "unknown endpoint", when the manifest is malformed'

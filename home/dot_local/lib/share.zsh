@@ -54,43 +54,188 @@ share::profile() {
   printf '%s\n' "$SHARE_PROFILE"
 }
 
-# share::endpoints_json — every endpoint as one JSON object. Manifest entries
-# win over the built-in, so `public` can be redefined locally.
-# `yq -p toml -o json` is the house TOML idiom (cf. svc::toml_json).
+# --- the manifest, parsed ONCE ----------------------------------------------
+# Every lookup below (share::field, share::allowed, share::resolve, the default,
+# the names) used to run yq and three to five jq of its own; a send made forty
+# of them and spent a quarter of a second doing it. Now the manifest is
+# converted (one yq) and flattened (one jq) once per process by
+# share::manifest_load, into the shell variables declared here, and a lookup
+# is a hash read.
+#
+# STALENESS. The cache is keyed by the manifest's path AND ITS TEXT (plus the
+# built-in JSON): share::manifest_load re-reads the file on every call, which
+# zsh does itself with no process, and only goes back to yq/jq when the text
+# differs. So a manifest edited between two commands of one shell, a second
+# manifest named by SHARE_ENDPOINTS_FILE, or a manifest that appears or
+# disappears, is never answered from old data — no mtime granularity to trust.
+# A failed parse is never cached.
+#
+# SUBSHELLS. Most lookups run inside `$(…)`, where a cache filled by the
+# lookup itself dies with the subshell. A function that makes several lookups
+# therefore calls share::_manifest_prime first, in ITS shell; the `$(…)`
+# children inherit the parsed manifest. Priming is silent and never fails the
+# caller: a malformed manifest is still reported by the lookup that needs it,
+# at the place and with the message it always was.
+typeset -g  __SHARE_MANIFEST_JSON='{}'   # the manifest as JSON (yq's output)
+typeset -ga __SHARE_EP_NAMES=()          # every endpoint name, sorted (jq `keys`)
+typeset -gA __SHARE_EP_KIND=()           # name → o (a table) | s (a stray scalar) | x (false)
+typeset -gA __SHARE_EP_ALLOW=()          # name → unknown | none | empty | list
+typeset -gA __SHARE_EP_MEMBERS=()        # name → its `profiles`, one per line
+typeset -gA __SHARE_EP_FIELD=()          # "<len(name)>:<name><key>" → the field's text
+typeset -ga __SHARE_EP_CLAIMS=()         # default_for claims: (M|B, name, a|s, value)…
+typeset -g  __SHARE_EP_CLAIM_ERR=''      # holds B when the built-in's claims are unreadable
+
+# The flattening. One record is four tokens — tag, name, and two values — and
+# every token ends in a NUL, so a value may hold spaces, quotes, newlines or
+# anything else and still arrive whole: nothing is ever `eval`ed or word-split.
+# A NUL inside a value (TOML allows "\u0000") would end its token early, so NUL
+# travels as \u0001 0 and \u0001 itself as \u0001 1 (def tok), undone by
+# share::manifest_load.
+#
+#   E name kind allow     one per endpoint, in `keys` order
+#   P name members ""     its `profiles` as lines (what `jq -r ".profiles[]"` printed)
+#   F name key text       one per non-null field, already rendered as share::field
+#                         prints it: an array joined by newlines, anything else
+#                         `tostring`, trailing newlines dropped as `$(…)` drops them
+#   M|B name a|s value    a default_for claim of the Manifest or the Built-in, in
+#                         document order: `a` an array element, `s` a string
+#                         (jq's `index` is a substring search on a string)
+#   X M|B "" ""           that source's claims cannot be read at all
+#
+# The claims are printed BEFORE the merge is attempted, on purpose: see status 2
+# of share::manifest_load.
+#
+# The manifest reaches jq through its ENVIRONMENT (`$ENV.manifest`), never
+# `--argjson manifest`: a literal (non-`@secret:`) endpoint password is a
+# documented, supported configuration, and argv is world-readable in `ps`.
+# SHARE_BUILTIN_JSON carries nothing secret, so it stays a plain --argjson.
+SHARE_MANIFEST_JQ='
+def nl: sub("\n+$"; "");
+def tok: tostring | split("\u0001") | join("\u00011") | split("\u0000") | join("\u00010") | . + "\u0000";
+def rec($a; $b; $c; $d): ($a | tok) + ($b | tok) + ($c | tok) + ($d | tok);
+def claims($tag):
+  try ([ to_entries[] | (.key | nl) as $k | (.value.default_for // []) as $d
+         | if ($d | type) == "array" then $d[] | select(type == "string") | rec($tag; $k; "a"; .)
+           elif ($d | type) == "string" then rec($tag; $k; "s"; $d)
+           else error("default_for") end ] | add // "")
+  catch rec("X"; $tag; ""; "");
+($ENV.manifest | fromjson) as $m
+| ($m | claims("M")), ($builtin | claims("B")),
+  ($builtin * $m | keys[] as $n | .[$n] as $e
+   | (if ($e == null or $e == false) then "x" elif ($e | type) == "object" then "o" else "s" end) as $kind
+   | (if $kind == "x" then ["unknown", ""]
+      elif (try ($e | has("profiles")) catch false) != true then ["none", ""]
+      elif (try ((($e.profiles // []) | length) == 0) catch false) then ["empty", ""]
+      else ["list", (try ([$e.profiles[] | if type == "string" then . else tojson end] | join("\n")) catch "")]
+      end) as $a
+   | rec("E"; $n; $kind; $a[0]), rec("P"; $n; $a[1]; ""),
+     (if $kind == "o" then
+        $e | to_entries[] | select(.value != null) | .key as $k
+        | (.value | try (if type == "array" then join("\n") else tostring end) catch "" | nl) as $v
+        | select($v != "\u0000") | rec("F"; $n; $k; $v)
+      else empty end))
+'
+
+# share::manifest_load — make the variables above describe the manifest
+# SHARE_ENDPOINTS_FILE names right now. Free when nothing changed; one yq and
+# one jq otherwise.
 #
 # Returns 1 (after logging) on a malformed manifest rather than calling `die`:
-# every call site here runs inside a pipe or `$(...)`, both subshells in zsh,
-# so `exit 1` would only kill the subshell and the caller would see success
-# with empty/partial output. Callers must capture into a variable and check
-# the status before piping onward — see share::endpoint_names and
-# share::field below.
+# most callers run inside a pipe or `$(...)`, both subshells in zsh, so
+# `exit 1` would only kill the subshell and the caller would see success with
+# empty/partial output.
 #
-# The manifest travels through jq's ENVIRONMENT (`manifest="$manifest" jq …
-# $ENV.manifest`), never `--argjson manifest "$manifest"`: a literal
-# (non-`@secret:`) endpoint password is a documented, supported
-# configuration, and this function runs on every single field lookup —
-# `share list`, `share endpoints`, `share revoke`, every send — not just
-# during a transfer. `--argjson` would have put that password on jq's own
-# argv on every one of those calls, far more often than the two send-path
-# sites already fixed for the same reason (share/ledger.zsh,
-# share/croc.zsh). SHARE_BUILTIN_JSON carries nothing secret, so it stays a
-# plain --argjson.
-share::endpoints_json() {
-  local manifest='{}'
+# Returns 2 when yq read the manifest but jq could not merge it with the
+# built-in — in practice a manifest with no table in it (empty, or all
+# comments), which yq renders as `null`. jq says why on stderr, nothing is
+# cached, and only the default_for claims are left behind, for
+# share::default_endpoint: it never needed the merge and still answers.
+share::manifest_load() {
+  local text='' present=0
   if [[ -f "$SHARE_ENDPOINTS_FILE" ]]; then
-    manifest="$(yq -p toml -o json '.' "$SHARE_ENDPOINTS_FILE" 2>/dev/null)" || {
+    present=1
+    # `$(<file)` is read by zsh itself. An unreadable file keys as empty and
+    # then fails in yq below, as it always did.
+    [[ -r "$SHARE_ENDPOINTS_FILE" ]] && { text="$(<"$SHARE_ENDPOINTS_FILE")" } 2>/dev/null
+  fi
+  local key="$present"$'\0'"$SHARE_ENDPOINTS_FILE"$'\0'"$SHARE_BUILTIN_JSON"$'\0'"$text"
+  [[ "$key" == "${__SHARE_MANIFEST_KEY-}" ]] && return 0
+
+  local json='{}'
+  if (( present )); then
+    # `yq -p toml -o json` is the house TOML idiom (cf. svc::toml_json).
+    json="$(yq -p toml -o json '.' "$SHARE_ENDPOINTS_FILE" 2>/dev/null)" || {
       log_error "share: cannot parse $SHARE_ENDPOINTS_FILE"
       return 1
     }
   fi
-  manifest="$manifest" jq -n --argjson builtin "$SHARE_BUILTIN_JSON" \
+  local blob
+  blob="$(manifest="$json" jq -nj --argjson builtin "$SHARE_BUILTIN_JSON" "$SHARE_MANIFEST_JQ")"
+  local -i merged=$(( $? == 0 ))
+
+  local -a t=("${(@0)blob}")
+  # Undo def tok's escaping — only when something was escaped at all.
+  local nul=$'\0' soh=$'\1'
+  if [[ "$blob" == *"$soh"* ]]; then
+    t=("${(@)t//${soh}0/$nul}")
+    t=("${(@)t//${soh}1/$soh}")
+  fi
+
+  # Collected as flat key/value lists and assigned whole: `hash[$name]=…` would
+  # have zsh parse the subscript, and an endpoint may be named anything.
+  local -a names=() kind=() allow=() members=() field=() claims=()
+  local claim_err='' a b c
+  local -i i
+  for (( i = 1; i + 3 <= ${#t}; i += 4 )); do
+    a="${t[i+1]}" b="${t[i+2]}" c="${t[i+3]}"
+    case "${t[i]}" in
+      E)   names+=("$a"); kind+=("$a" "$b"); allow+=("$a" "$c") ;;
+      P)   members+=("$a" "$b") ;;
+      F)   field+=("${#a}:$a$b" "$c") ;;
+      M|B) claims+=("${t[i]}" "$a" "$b" "$c") ;;
+      X)   claim_err+="$a" ;;
+    esac
+  done
+
+  __SHARE_EP_CLAIMS=("${claims[@]}")
+  __SHARE_EP_CLAIM_ERR="$claim_err"
+  if (( ! merged )); then
+    # The rest describes some earlier manifest, if anything: forget its key so
+    # that manifest is parsed again should it come back.
+    unset __SHARE_MANIFEST_KEY
+    return 2
+  fi
+  __SHARE_MANIFEST_JSON="$json"
+  __SHARE_EP_NAMES=("${names[@]}")
+  __SHARE_EP_KIND=("${kind[@]}")
+  __SHARE_EP_ALLOW=("${allow[@]}")
+  __SHARE_EP_MEMBERS=("${members[@]}")
+  __SHARE_EP_FIELD=("${field[@]}")
+  typeset -g __SHARE_MANIFEST_KEY="$key"
+}
+
+# share::_manifest_prime — share::manifest_load for a function about to make
+# several lookups (see SUBSHELLS above). Silent, and never the caller's
+# failure: the lookup itself reports a manifest that cannot be parsed.
+share::_manifest_prime() {
+  share::manifest_load 2>/dev/null
+  return 0
+}
+
+# share::endpoints_json — every endpoint as one JSON object. Manifest entries
+# win over the built-in, so `public` can be redefined locally. Nothing in this
+# library reads it any more (the lookups read the variables above); it stays
+# for a caller that wants the merged document, and costs one jq.
+share::endpoints_json() {
+  share::manifest_load || return 1
+  manifest="$__SHARE_MANIFEST_JSON" jq -n --argjson builtin "$SHARE_BUILTIN_JSON" \
     '$builtin * ($ENV.manifest | fromjson)'
 }
 
 share::endpoint_names() {
-  local json
-  json="$(share::endpoints_json)" || return 1
-  printf '%s' "$json" | jq -r 'keys[]'
+  share::manifest_load || return 1
+  (( ${#__SHARE_EP_NAMES} )) && print -rl -- "${__SHARE_EP_NAMES[@]}"
+  return 0
 }
 
 # share::_progress <pct> <msg> — progress reporting that is safe everywhere.
@@ -134,23 +279,19 @@ share::field() {
   local name="${1:?share::field: endpoint required}"
   local key="${2:?share::field: key required}"
   local fallback="${3-}"
-  local endpoints
-  endpoints="$(share::endpoints_json)" || return 1
-  local json
-  json="$(printf '%s' "$endpoints" | jq -e --arg n "$name" '.[$n]' 2>/dev/null)" || {
-    log_error "share: unknown endpoint: $name"
-    return 1
-  }
-  local value
-  value="$(printf '%s' "$json" | jq -r --arg k "$key" '
-    if (.[$k] == null) then "\u0000"
-    elif (.[$k] | type) == "array" then (.[$k] | join("\n"))
-    else (.[$k] | tostring) end')"
-  if [[ "$value" == $'\0' ]]; then
+  share::manifest_load || return 1
+  case "${__SHARE_EP_KIND[$name]-x}" in
+    x) log_error "share: unknown endpoint: $name"; return 1 ;;
+    # A stray top-level scalar (`name = 5`) is not a table: it has no fields,
+    # and that has always read as empty rather than as the default.
+    s) printf '\n'; return 0 ;;
+  esac
+  local slot="${#name}:$name$key"
+  if (( ${+__SHARE_EP_FIELD[$slot]} )); then
+    printf '%s\n' "${__SHARE_EP_FIELD[$slot]}"
+  else
     printf '%s\n' "$fallback"
-    return 0
   fi
-  printf '%s\n' "$value"
 }
 
 # --- endpoint resolution + the policy fence ---------------------------------
@@ -168,29 +309,43 @@ share::field() {
 # precisely the "endpoint is never implicit" failure the policy fence exists to
 # prevent, so the manifest is scanned first and the built-in is the fallback.
 share::default_endpoint() {
-  local profile match
-  profile="$(share::profile)"
+  share::manifest_load
+  (( $? == 1 )) && return 1
+  share::profile >/dev/null
+  share::_default_endpoint "$SHARE_PROFILE"
+  printf '%s\n' "$REPLY"
+}
 
-  local manifest='{}'
-  if [[ -f "$SHARE_ENDPOINTS_FILE" ]]; then
-    manifest="$(yq -p toml -o json '.' "$SHARE_ENDPOINTS_FILE" 2>/dev/null)" || {
-      log_error "share: cannot parse $SHARE_ENDPOINTS_FILE"
-      return 1
-    }
+# share::_default_endpoint <profile> → REPLY. The scan itself, over the claims
+# share::manifest_load recorded in document order: the first manifest endpoint
+# claiming <profile>, else the first built-in one, else `public`. An array
+# claims by element, a string by substring (jq's `index`, which is what this
+# replaced).
+share::_default_endpoint() {
+  local profile="$1" src name
+  local first_m='' first_b=''
+  local -i i m_found=0 b_found=0
+  for (( i = 1; i + 3 <= ${#__SHARE_EP_CLAIMS}; i += 4 )); do
+    src="${__SHARE_EP_CLAIMS[i]}" name="${__SHARE_EP_CLAIMS[i+1]}"
+    if [[ "${__SHARE_EP_CLAIMS[i+2]}" == a ]]; then
+      [[ "${__SHARE_EP_CLAIMS[i+3]}" == "$profile" ]] || continue
+    else
+      [[ "${__SHARE_EP_CLAIMS[i+3]}" == *"$profile"* ]] || continue
+    fi
+    case "$src" in
+      M) (( m_found )) || { m_found=1; first_m="$name"; } ;;
+      B) (( b_found )) || { b_found=1; first_b="$name"; } ;;
+    esac
+  done
+  if [[ -n "$first_m" ]]; then
+    REPLY="$first_m"
+  elif [[ "$__SHARE_EP_CLAIM_ERR" == *B* ]]; then
+    REPLY=''
+  elif (( b_found )); then
+    REPLY="$first_b"
+  else
+    REPLY=public
   fi
-  match="$(jq -rn --argjson m "$manifest" --arg p "$profile" '
-    $m | to_entries
-    | map(select(((.value.default_for // []) | index($p)) != null))
-    | if length > 0 then .[0].key else "" end')"
-  if [[ -n "$match" ]]; then
-    printf '%s\n' "$match"
-    return 0
-  fi
-
-  printf '%s\n' "$(jq -rn --argjson b "$SHARE_BUILTIN_JSON" --arg p "$profile" '
-    $b | to_entries
-    | map(select(((.value.default_for // []) | index($p)) != null))
-    | if length > 0 then .[0].key else "public" end')"
 }
 
 # share::allowed <endpoint> — fail CLOSED. A `profiles` key that is absent or
@@ -198,39 +353,46 @@ share::default_endpoint() {
 # `profiles` at all is a manifest that forgot to declare an allowlist, while
 # `profiles = []` is (deliberately or accidentally) "nobody". Neither may be
 # read as "open" — this repo's culture is fail-closed (cf.
-# .chezmoitemplates/profile-traits.tmpl). Reads the endpoint's own JSON
-# directly instead of going through share::field, because share::field's
-# uniform missing-key fallback renders an empty declared array identically to
-# a missing key.
+# .chezmoitemplates/profile-traits.tmpl). Decided from the endpoint's own
+# `profiles` as share::manifest_load recorded it, not through share::field,
+# because share::field's uniform missing-key fallback renders an empty
+# declared array identically to a missing key.
 share::allowed() {
-  local name="${1:?share::allowed: endpoint required}" profile
-  profile="$(share::profile)"
-  local endpoints
-  endpoints="$(share::endpoints_json)" || return 1
-  local entry
-  entry="$(printf '%s' "$endpoints" | jq -e --arg n "$name" '.[$n]' 2>/dev/null)" || {
-    log_error "share: unknown endpoint: $name"
-    return 1
-  }
-  if [[ "$(printf '%s' "$entry" | jq -r 'has("profiles")')" != "true" ]]; then
-    log_error "share: endpoint $name declares no profiles allowlist — add profiles = [...] to endpoints.toml"
-    return 1
-  fi
-  if (( $(printf '%s' "$entry" | jq -r '(.profiles // []) | length') == 0 )); then
-    log_error "share: endpoint $name has an empty profiles allowlist — nobody is allowed"
-    return 1
-  fi
-  printf '%s' "$entry" | jq -r '.profiles[]' | grep -qxF "$profile"
+  local name="${1:?share::allowed: endpoint required}"
+  share::profile >/dev/null
+  share::manifest_load || return 1
+  share::_allowed "$name" "$SHARE_PROFILE" && return 0
+  case "$REPLY" in
+    unknown) log_error "share: unknown endpoint: $name" ;;
+    none)    log_error "share: endpoint $name declares no profiles allowlist — add profiles = [...] to endpoints.toml" ;;
+    empty)   log_error "share: endpoint $name has an empty profiles allowlist — nobody is allowed" ;;
+  esac
+  return 1
+}
+
+# share::_allowed <endpoint> <profile> — the verdict, silently, from the
+# loaded manifest: status 0 when <profile> is on the allowlist; otherwise 1
+# with REPLY naming why (unknown | none | empty | deny).
+share::_allowed() {
+  REPLY="${__SHARE_EP_ALLOW[$1]-unknown}"
+  [[ "$REPLY" == list ]] || return 1
+  local -a members=("${(@f)__SHARE_EP_MEMBERS[$1]}")
+  (( ${members[(Ie)$2]} )) && return 0
+  REPLY=deny
+  return 1
 }
 
 # share::resolve [<name>] — the one place an endpoint name is decided.
 share::resolve() {
   local name="${1-}" profile
-  profile="$(share::profile)"
-  [[ -n "$name" ]] || { name="$(share::default_endpoint)" || return 1; }
-  local endpoints
-  endpoints="$(share::endpoints_json)" || return 1
-  printf '%s' "$endpoints" | jq -e --arg n "$name" 'has($n)' >/dev/null 2>&1 || {
+  share::profile >/dev/null
+  profile="$SHARE_PROFILE"
+  share::manifest_load || return 1
+  if [[ -z "$name" ]]; then
+    share::_default_endpoint "$profile"
+    name="$REPLY"
+  fi
+  (( ${+__SHARE_EP_KIND[$name]} )) || {
     log_error "share: unknown endpoint: $name"
     return 1
   }
@@ -250,6 +412,7 @@ share::resolve() {
 # the store origin, or the rclone remote when there is no origin.
 share::destination_host() {
   local name="${1:?share::destination_host: endpoint required}" store remote host
+  share::_manifest_prime
 
   # An ssh endpoint speaks only to its target: check that BEFORE looking at
   # store/remote below, so a misconfigured ssh endpoint that also sets one of
@@ -307,13 +470,13 @@ share::destination_host() {
 # manifest-validity seam other callers rely on); this is the profile-scoped
 # view the CLI actually needs.
 share::endpoints_for_profile() {
-  local profile default name
-  profile="$(share::profile)"
-  default="$(share::default_endpoint)" || return 1
-  local -a names
-  names=("${(@f)$(share::endpoint_names)}") || return 1
-  for name in "${names[@]}"; do
-    share::allowed "$name" 2>/dev/null || continue
+  local default name
+  share::profile >/dev/null
+  share::manifest_load || return 1
+  share::_default_endpoint "$SHARE_PROFILE"
+  default="$REPLY"
+  for name in "${__SHARE_EP_NAMES[@]}"; do
+    share::_allowed "$name" "$SHARE_PROFILE" || continue
     if [[ "$name" == "$default" ]]; then
       printf '%s (default)\n' "$name"
     else
@@ -368,6 +531,7 @@ share::relay_address() {
 # impossible rather than merely unlikely.
 share::live_capable() {
   local name="${1:?share::live_capable: endpoint required}" v
+  share::_manifest_prime
   [[ "$(share::field "$name" backend croc)" == croc ]] || return 1
   v="$(share::field "$name" live)"
   [[ "$v" == true  ]] && return 0
@@ -585,6 +749,11 @@ share::send() {
 
   local -i to_given=0
   [[ -n "$endpoint" ]] && to_given=1
+  # The profile and the manifest are settled HERE, in this shell, so that
+  # share::resolve and every lookup after it — each in a `$(…)` of its own —
+  # inherit them instead of working them out again.
+  share::profile >/dev/null
+  share::_manifest_prime
   endpoint="$(share::resolve "$endpoint")" || return 1
 
   # The croc default lives at the CALL SITE, not inside share::field: a
@@ -923,6 +1092,7 @@ share::classify() {
 share::relay_pass_for() {
   local addr="${1-}" name
   [[ -n "$addr" ]] || return 0
+  share::_manifest_prime
   local -a names
   names=("${(@f)$(share::endpoint_names 2>/dev/null)}") || return 0
   for name in "${names[@]}"; do
@@ -1185,6 +1355,7 @@ share::croc_default_relay() {
 # describe a transfer that never happens.
 share::_status_row() {
   local name="$1" backend relay store remote code
+  share::_manifest_prime
   backend="$(share::field "$name" backend croc)"
 
   if [[ "$backend" == ssh ]]; then
@@ -1272,6 +1443,8 @@ share::status() {
   # and every share::field lookup logged "unknown endpoint". Parsing one's own
   # display format is the bug; not doing it is the fix.
   local -a names
+  share::profile >/dev/null
+  share::_manifest_prime
   if (( $# )); then
     names=("$@")
   else
@@ -1445,6 +1618,8 @@ share::send_background() {
   # than inside the job as a failure toast minutes later — share::send runs
   # the same preflight again when the job executes. It also has no live mode,
   # so the live block below must not warn about downgrading it.
+  share::profile >/dev/null
+  share::_manifest_prime
   if (( ${#paths} )); then
     local sep="$to"
     [[ -n "$sep" ]] || sep="$(share::default_endpoint 2>/dev/null)" || sep=""

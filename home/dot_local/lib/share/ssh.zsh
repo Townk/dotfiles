@@ -62,6 +62,7 @@ share::_ssh_run() {
 share::ssh_reject_store_remote() {
   local ep="$1" store remote
   local -a bad=()
+  share::_manifest_prime
   store="$(share::field "$ep" store)" || return 1
   remote="$(share::field "$ep" remote)" || return 1
   [[ -n "$store" ]] && bad+=(store)
@@ -89,6 +90,7 @@ share::ssh_target() {
 # share::ssh_check_endpoint <endpoint> — the config an ssh endpoint needs.
 share::ssh_check_endpoint() {
   local ep="$1" target dir
+  share::_manifest_prime
   share::ssh_reject_store_remote "$ep" || return 1
   target="$(share::ssh_target "$ep")" || return 1
   # A leading `-` would be read by ssh as an option (-oProxyCommand=… runs a
@@ -193,6 +195,7 @@ share::ssh_send() {
   setopt localoptions pipefail
   local endpoint="$1"; shift
   local target label rdir
+  share::_manifest_prime
   target="$(share::field "$endpoint" target)" || return 1
   label="$(share::label "$@")" || return 1
   rdir="$(share::ssh_remote_dir "$endpoint")" || return 1
@@ -273,6 +276,7 @@ share::ssh_revoke() {
 # prompt, or a second factor, just to print a table.
 share::ssh_status_row() {
   local name="$1" target dir cfg host port
+  share::_manifest_prime
   target="$(share::field "$name" target)"
   dir="$(share::field "$name" dir)"
   cfg="$(ssh -G -- "$target" 2>/dev/null)"

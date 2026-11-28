@@ -206,6 +206,7 @@ share::croc_argv() {
   local endpoint="$1" mode="$2" expiration="$3" downloads="$4"
   shift 4
   local store relay
+  share::_manifest_prime
   store="$(share::field "$endpoint" store)" || return 1
   # Through the one resolver, so what croc dials is the same string the
   # recipient is told to use (and a retired @self entry is refused here).
@@ -409,6 +410,7 @@ share::croc_send() {
   done
   local endpoint="$1" mode="$2" expiration="$3" downloads="$4"
   shift 4
+  share::_manifest_prime
 
   # Same `cmd`-not-`argv` naming as share::croc_argv, and for the identical
   # reason: this function's own "$@" (the paths) is still needed below for

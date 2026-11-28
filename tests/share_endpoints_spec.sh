@@ -7,10 +7,11 @@
 
 Describe 'share:: manifest parsing'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-endpoints"
-    rm -rf "$SB"; mkdir -p "$SB"
+    share_fresh "$SB"
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
     SHARE_PROFILE=personal
@@ -18,7 +19,7 @@ Describe 'share:: manifest parsing'
   BeforeEach 'setup'
 
   write_manifest() {
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [drop]
 description = "Home store"
 store = "https://drop.example.com"
@@ -144,6 +145,219 @@ TOML
     The output should not include 'onedrive'
   End
 
+  # --- one parse per command ---------------------------------------------
+  # The manifest is converted (yq) and flattened (jq) ONCE per process and
+  # every lookup then reads shell variables. What a cache could break is
+  # pinned here: staleness, two manifests in one process, odd values, the
+  # exact output for a missing field, and the malformed-manifest failure.
+  Describe 'the parsed-manifest cache'
+    two_lookups() {
+      printf '[drop]\nstore = "https://one.example.com"\nprofiles = ["personal"]\n' >"$SHARE_ENDPOINTS_FILE"
+      share::field drop store
+      # Same path, same size, same second: only the content differs.
+      printf '[drop]\nstore = "https://two.example.com"\nprofiles = ["personal"]\n' >"$SHARE_ENDPOINTS_FILE"
+      share::field drop store
+    }
+
+    It 're-reads a manifest that changed between two lookups in one process'
+      When call two_lookups
+      The line 1 of output should equal 'https://one.example.com'
+      The line 2 of output should equal 'https://two.example.com'
+    End
+
+    two_manifests() {
+      printf '[a]\nstore = "https://a.example.com"\nprofiles = ["personal"]\n' >"$SB/a.toml"
+      printf '[b]\nstore = "https://b.example.com"\nprofiles = ["personal"]\n' >"$SB/b.toml"
+      SHARE_ENDPOINTS_FILE="$SB/a.toml"
+      share::endpoint_names | tr '\n' ' '
+      SHARE_ENDPOINTS_FILE="$SB/b.toml"
+      share::endpoint_names | tr '\n' ' '
+      share::field a store 2>&1
+      return 0
+    }
+
+    It 'does not mix two manifests used in one process'
+      When call two_manifests
+      The output should equal 'a public b public error: share: unknown endpoint: a'
+    End
+
+    appears_and_goes() {
+      share::endpoint_names | tr '\n' ' '
+      printf '[late]\nstore = "https://late.example.com"\nprofiles = ["personal"]\n' >"$SHARE_ENDPOINTS_FILE"
+      share::endpoint_names | tr '\n' ' '
+      rm -f "$SHARE_ENDPOINTS_FILE"
+      share::endpoint_names | tr '\n' ' '
+    }
+
+    It 'sees a manifest appear and disappear'
+      When call appears_and_goes
+      The output should equal 'public late public public '
+    End
+
+    bad_then_good() {
+      write_manifest
+      share::field drop store
+      write_malformed_manifest
+      share::field drop store; print -r -- "status=$?"
+      share::resolve drop; print -r -- "status=$?"
+      write_manifest
+      share::field drop store
+    }
+
+    It 'fails on a manifest that turned malformed, and recovers once it is fixed'
+      When call bad_then_good
+      The line 1 of output should equal 'https://drop.example.com'
+      The line 2 of output should equal 'status=1'
+      The line 3 of output should equal 'status=1'
+      The line 4 of output should equal 'https://drop.example.com'
+      The stderr should equal "error: share: cannot parse $SHARE_ENDPOINTS_FILE
+error: share: cannot parse $SHARE_ENDPOINTS_FILE"
+    End
+
+    write_odd_manifest() {
+      share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
+[odd]
+spaced = "  two  words  "
+quoted = "it's \"quoted\" $HOME `id` \\ back * ?"
+unicode = "café 日本 →"
+multiline = "line1\nline2\n\n"
+empty = ""
+port = 9009
+ratio = 1.50
+off = false
+on = true
+word_null = "null"
+list = ["a b", "c", 3, true]
+profiles = ["personal"]
+
+[odd.table]
+k = "v"
+
+["we ird]\"name"]
+store = "https://weird.example.com"
+profiles = ["personal"]
+TOML
+    }
+    BeforeEach 'write_odd_manifest'
+
+    Describe 'a scalar'
+      Parameters
+        spaced    '  two  words  '
+        quoted    "it's \"quoted\" \$HOME \`id\` \\ back * ?"
+        unicode   'café 日本 →'
+        port      '9009'
+        ratio     '1.50'
+        off       'false'
+        on        'true'
+        word_null 'null'
+        table     '{"k":"v"}'
+      End
+
+      It "returns the value of $1 exactly"
+        When call share::field odd "$1" DEFAULT
+        The output should equal "$2"
+        The status should be success
+      End
+    End
+
+    It 'keeps the inner newline of a multi-line value and drops the trailing ones'
+      When call share::field odd multiline DEFAULT
+      The output should equal 'line1
+line2'
+    End
+
+    It 'returns an empty string as empty, not as the default'
+      When call share::field odd empty DEFAULT
+      The output should equal ''
+      The status should be success
+    End
+
+    It 'joins an array with newlines, one element per line'
+      When call share::field odd list DEFAULT
+      The output should equal 'a b
+c
+3
+true'
+    End
+
+    It 'prints one empty line for a missing field when no default is given'
+      missing() { [[ "$(share::field odd nope; print -r -- end)" == $'\nend' ]]; }
+      When call missing
+      The status should be success
+    End
+
+    # The parsed manifest crosses from jq to the shell as NUL-terminated
+    # tokens, so a NUL inside a value (TOML allows "\u0000") is the one byte
+    # that has to be escaped on the way — with \u0001, which then needs it too.
+    It 'carries a NUL and a control character inside a value'
+      control() {
+        printf '[c]\nv = "a\\u0000b\\u0001c\\u00010d\\u00011"\nafter = "intact"\n' >"$SHARE_ENDPOINTS_FILE"
+        local v; v="$(share::field c v)"
+        print -r -- "${#v} ${(qqqq)v} $(share::field c after)"
+      }
+      When call control
+      The output should equal "10 \$'a\\0b\\001c\\0010d\\0011' intact"
+    End
+
+    It 'reads an endpoint whose name has spaces, a bracket and a quote'
+      When call share::field 'we ird]"name' store
+      The output should equal 'https://weird.example.com'
+    End
+
+    It 'lists that endpoint by its exact name'
+      When call share::endpoint_names
+      The line 1 of output should equal 'odd'
+      The line 2 of output should equal 'public'
+      The line 3 of output should equal 'we ird]"name'
+    End
+
+    # The budget itself. yq and jq are wrapped by counters; a command path
+    # that loads the manifest first pays for ONE of each, however many
+    # fields it then reads — also through $(…), where a cache filled in the
+    # subshell would be lost.
+    count_tools() {
+      mkdir -p "$SB/bin"
+      local tool
+      for tool in yq jq; do
+        share_write "$SB/bin/$tool" <<SH
+#!/bin/sh
+echo $tool >>"\$SHARE_TOOL_LOG"
+exec "${commands[$tool]}" "\$@"
+SH
+        chmod +x "$SB/bin/$tool"
+      done
+      SHARE_TOOL_LOG="$SB/tools.log"; export SHARE_TOOL_LOG
+      : >"$SHARE_TOOL_LOG"
+      PATH="$SB/bin:$PATH"
+    }
+    tool_calls() { sort "$SHARE_TOOL_LOG" | uniq -c | tr -s ' \n' ' '; }
+
+    It 'parses the manifest once for any number of lookups after a load'
+      many() {
+        count_tools
+        share::manifest_load || return 1
+        local a b c
+        a="$(share::field odd port)" b="$(share::field odd unicode)" c="$(share::field public store)"
+        share::allowed odd && share::resolve odd >/dev/null && share::endpoint_names >/dev/null
+        share::default_endpoint >/dev/null
+        print -r -- "$a $c$(tool_calls)"
+      }
+      When call many
+      The output should equal '9009 https://getcroc.com 1 jq 1 yq '
+    End
+
+    It 'resolves a destination host with one yq and one jq'
+      one_host() {
+        count_tools
+        share::destination_host odd 2>&1
+        tool_calls
+      }
+      When call one_host
+      The line 1 of output should include 'no store, remote or relay'
+      The line 2 of output should equal ' 1 jq 1 yq '
+    End
+  End
+
   # F5 residual, folded in on re-review: share::endpoints_json used to pass
   # the WHOLE manifest to jq as `--argjson manifest "$manifest"`. A literal
   # (non-`@secret:`) endpoint password is documented, supported
@@ -156,8 +370,8 @@ TOML
   # ledger test in share_ledger_spec.sh.
   It 'never puts a literal manifest password on the jq invocation that merges endpoints'
     mkdir -p "$SB/bin"
-    real_jq="$(command -v jq)"
-    cat >"$SB/bin/jq" <<SH
+    real_jq="${commands[jq]}"
+    share_write "$SB/bin/jq" <<SH
 #!/bin/sh
 printf '%s\n' "\$*" >>"\$SHARE_JQ_ARGV_LOG"
 exec "$real_jq" "\$@"
