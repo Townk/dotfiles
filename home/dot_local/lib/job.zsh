@@ -214,8 +214,13 @@ job::progress() {
   local pct="${1:--1}"
   (($#)) && shift
   local tmp="$dir/.progress.tmp"
-  print -r -- "$EPOCHSECONDS $pct $*" > "$tmp" && mv -f -- "$tmp" "$dir/progress" || return 1
-  rm -f -- "$dir/phase"
+  # Builtins, not mv and rm: a task reports progress hundreds of times, and
+  # two forks per report were most of what a report cost (3,000 reports took
+  # 13 s). zf_mv is the same rename(2), so the write stays atomic.
+  zmodload -F zsh/files b:zf_mv b:zf_rm 2>/dev/null
+  print -r -- "$EPOCHSECONDS $pct $*" > "$tmp" && zf_mv -f -- "$tmp" "$dir/progress" || return 1
+  [[ -e "$dir/phase" ]] && zf_rm -f -- "$dir/phase"
+  return 0
 }
 
 # job::waiting [message…] — the task is legitimately WAITING on something
@@ -230,8 +235,9 @@ job::waiting() {
   local dir="$JOB_STATE_ROOT/$JOB_ID"
   [ -d "$dir" ] || return 1
   local tmp="$dir/.progress.tmp" ptmp="$dir/.phase.tmp"
-  print -r -- "$EPOCHSECONDS -1 $*" > "$tmp" && mv -f -- "$tmp" "$dir/progress" || return 1
-  print -r -- waiting > "$ptmp" && mv -f -- "$ptmp" "$dir/phase"
+  zmodload -F zsh/files b:zf_mv 2>/dev/null
+  print -r -- "$EPOCHSECONDS -1 $*" > "$tmp" && zf_mv -f -- "$tmp" "$dir/progress" || return 1
+  print -r -- waiting > "$ptmp" && zf_mv -f -- "$ptmp" "$dir/phase"
 }
 
 # job::_result_write <dir> <result> [exit code] — record a job's result as

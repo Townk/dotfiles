@@ -541,7 +541,7 @@ new"
       contend() {
         lock::hold "$LKDIR/a.lock" || return 1
         print first
-        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"' && print oops || print blocked
+        zsh -f -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"' && print oops || print blocked
       }
       When run contend
       The line 1 should equal "first"
@@ -550,7 +550,7 @@ new"
 
     It 'the lock dies with its holder'
       afterlife() {
-        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"'   # exits, releasing
+        zsh -f -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"'   # exits, releasing
         lock::hold "$LKDIR/a.lock" && print free
       }
       When run afterlife
@@ -558,18 +558,18 @@ new"
     End
 
     It 'a positive timeout waits for the holder to finish, then acquires'
-      # STAYS ON THE REAL CLOCK (about 1 s): the wait is `zsystem flock -t`,
-      # which retries inside zsh once a second and knows no clock seam. The
-      # example itself no longer naps: the holder says "held" on a FIFO once
+      # On the real clock, but short: the wait is `zsystem flock -t`, which
+      # knows no clock seam; lock::hold has it retry every 0.05 s (zsh's own
+      # default is once a second). The example itself does not nap: the holder says "held" on a FIFO once
       # it has the lock and keeps it until told to release; a non-blocking
       # acquire then fails (the lock IS held), and the release is sent from
       # the background while the 3s-timeout acquire is under way.
       waits() {
         mkfifo "$LKDIR/held" "$LKDIR/release"
-        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"; echo held >"'"$LKDIR"'/held"; read -r _ <"'"$LKDIR"'/release"' &
+        zsh -f -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"; echo held >"'"$LKDIR"'/held"; read -r _ <"'"$LKDIR"'/release"' &
         local bg=$!
         read -r _ <"$LKDIR/held"
-        zsh -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"' && print not-held || print held
+        zsh -f -c 'source "'"$LIB"'"; lock::hold "'"$LKDIR"'/a.lock"' && print not-held || print held
         ( echo release >"$LKDIR/release" ) &
         lock::hold "$LKDIR/a.lock" 3 && print acquired || print timedout
         wait "$bg" 2>/dev/null
@@ -590,7 +590,7 @@ acquired"
         local lk="$LKDIR/hz.lock"; : >> "$lk"
         zsystem flock -t 0 "$lk"   # hold via this call's fd
         : >> "$lk"                 # unconditional touch: opens+closes another fd → drops it
-        zsh -c 'zmodload zsh/system; zsystem flock -t 0 "'"$lk"'"' && print DROPPED || print HELD
+        zsh -f -c 'zmodload zsh/system; zsystem flock -t 0 "'"$lk"'"' && print DROPPED || print HELD
       }
       When run hazard
       The output should equal "DROPPED"
@@ -607,7 +607,7 @@ acquired"
         local lk="$LKDIR/re.lock"; : >> "$lk"
         zsystem flock -t 0 "$lk"    # outer hold (ensure)
         lock::hold "$lk"            # inner re-lock (teardown) — must not orphan the hold
-        zsh -c 'zmodload zsh/system; zsystem flock -t 0 "'"$lk"'" 2>/dev/null' && print LOST || print HELD
+        zsh -f -c 'zmodload zsh/system; zsystem flock -t 0 "'"$lk"'" 2>/dev/null' && print LOST || print HELD
       }
       When run survives
       The output should equal "HELD"
@@ -755,7 +755,8 @@ End
 # silently (bit system-service-launchd's synchronous bootout drain).
 Describe 'poll::until under a bare set -e call'
   It 'survives errexit when called outside a condition context'
-    When run zsh -c '
+    Skip if 'complete-only: two real 0.1 s naps (the subject is the exit status of the real zselect under errexit, which the virtual clock replaces)' spec_complete_only
+    When run zsh -f -c '
       set -eu -o pipefail
       source home/dot_local/lib/common.zsh
       n=0

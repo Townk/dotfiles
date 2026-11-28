@@ -9,15 +9,16 @@
 
 Describe 'share:: croc backend'
   Include home/dot_local/lib/share.zsh
+  Include tests/share_helper.sh
 
   setup() {
     SB="$SHELLSPEC_TMPBASE/share-croc"
-    rm -rf "$SB"; mkdir -p "$SB/bin"
+    share_fresh "$SB" bin
     SHARE_CONFIG_DIR="$SB"
     SHARE_ENDPOINTS_FILE="$SB/endpoints.toml"
     SHARE_STATE_DIR="$SB/state"
     SHARE_PROFILE=personal
-    cat >"$SHARE_ENDPOINTS_FILE" <<'TOML'
+    share_write "$SHARE_ENDPOINTS_FILE" <<'TOML'
 [drop]
 store = "https://drop.example.com"
 web = true
@@ -151,7 +152,7 @@ TOML
   End
 
   It 'revokes through croc --revoke'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_CROC_CALLS"
 SH
@@ -171,7 +172,7 @@ SH
   # lived in.
 
   It 'sends via the store path end-to-end and records a receipt'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 echo "uploading..." >&2
 printf 'https://drop.example.com/s/e2e01#v1.KEYE2E\ncroc-store-v1.b64.e2e01.KEYE2E\n'
@@ -185,7 +186,7 @@ SH
   End
 
   It 'fails closed when croc exits non-zero on the store path'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 echo "boom" >&2
 exit 9
@@ -204,7 +205,7 @@ SH
   # fixture (pass = "hunter2") and inspects both what the fake croc SAW on
   # its argv and what landed in its environment.
   It 'passes the relay password to croc via CROC_PASS, never on argv, end to end'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >"$SHARE_CROC_ARGV_LOG"
 printf '%s\n' "$CROC_PASS" >"$SHARE_CROC_ENV_LOG"
@@ -240,7 +241,7 @@ SH
   # `:-` treats both the same, which is exactly the distinction this
   # regression hinges on.
   It 'never sets CROC_PASS at all when the endpoint has no configured password'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf '%s\n' "${CROC_PASS-UNSET}" >"$SHARE_CROC_ENV_LOG"
 printf 'https://drop.example.com/s/nopass#v1.KEY\ncroc-store-v1.b64.nopass.KEY\n'
@@ -264,7 +265,7 @@ SH
   # never out of croc's prose. These two examples pin that down.
 
   It 'carries the phrase in CROC_SECRET, never on argv, and blurbs that same phrase'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$SHARE_CROC_CALLS"
 printf '%s' "${CROC_SECRET-}" >"$(dirname "$SHARE_CROC_CALLS")/secret"
@@ -298,7 +299,7 @@ SH
     sf="$(share::croc_secret_file lab)"
     # 0600 from creation (umask inside the subshell), never 0644-then-chmod:
     # this file carries the PAKE shared secret and the relay password.
-    When call zsh -c 'zmodload zsh/stat; zstat -H s -- "$1"; print -r -- ${s[mode]}' _ "$sf"
+    When call zsh -f -c 'zmodload zsh/stat; zstat -H s -- "$1"; print -r -- ${s[mode]}' _ "$sf"
     The output should equal '33152'
   End
 
@@ -312,7 +313,7 @@ SH
   # and kept pointed at the same observable, because the failure it describes
   # is one a future "just parse the output" shortcut would reintroduce.
   It 'never mistakes --relay in croc'"'"'s own instruction line for the code phrase'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 echo "Sending 'Report.pdf' (1 B)"
 echo "Code is: croc --relay lab.example.com:9009 --pass hunter2 8878-salary-courage-roger"
@@ -361,7 +362,7 @@ SH
   # watching who can simply run it again.
 
   It 'retries a failed live transfer and succeeds on a later attempt'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
 n=$((n + 1)); printf '%s' "$n" >"$SB_TRIES"
@@ -381,7 +382,7 @@ SH
   # turning a clear error into a silent one. Verified croc 11.1.1 wording:
   # "could not connect to <relay>: bad response: bad password".
   It 'does not retry a failure retrying cannot fix'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
 printf '%s' "$((n + 1))" >"$SB_TRIES"
@@ -407,7 +408,7 @@ SH
   # second, we slept 5s, and repeated — measured at 3 attempts in 20s, doing
   # nothing each time, until the deadline a day later.
   It 'stops after a few INSTANT failures instead of retrying for a day'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
 printf '%s' "$((n + 1))" >"$SB_TRIES"
@@ -423,7 +424,7 @@ SH
   End
 
   It 'says the relay is unreachable rather than failing silently'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 echo "could not connect to relay: connection refused"
 exit 1
@@ -444,7 +445,7 @@ SH
   # so it must not consume the fast-failure budget. Without this the fix would
   # trade a 24-hour storm for giving up on the case the retry exists for.
   It 'does not count a failure that ran for a while against the budget'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
 n=$((n + 1)); printf '%s' "$n" >"$SB_TRIES"
@@ -467,7 +468,7 @@ SH
   End
 
   It 'does not retry outside a job — a foreground send has a human watching'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
 printf '%s' "$((n + 1))" >"$SB_TRIES"
@@ -483,7 +484,7 @@ SH
   End
 
   It 'gives up once the deadline has passed, rather than looping forever'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 n=$(cat "$SB_TRIES" 2>/dev/null || echo 0)
 printf '%s' "$((n + 1))" >"$SB_TRIES"
@@ -530,7 +531,7 @@ SH
   # "croc-live" is what lets share::revoke (share.zsh) refuse it up front
   # with a clear message instead.
   It 'tags a live share with the croc-live backend, not croc'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 echo "Sending 'Report.pdf' (1 B)"
 SH
@@ -542,7 +543,7 @@ SH
   End
 
   It 'records no expires for a live share even when an expiration was passed'
-    cat >"$SB/bin/croc" <<'SH'
+    share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 echo "Sending 'Report.pdf' (1 B)"
 SH
@@ -754,7 +755,7 @@ stderr identical'
 
     It 'declares waiting before the first live attempt'
       wait_setup
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 cp "$JOB_STATE_ROOT/fake-job/phase" "$SB_SNAP.phase" 2>/dev/null
 cp "$JOB_STATE_ROOT/fake-job/progress" "$SB_SNAP.progress" 2>/dev/null
@@ -770,7 +771,7 @@ SH
 
     It 'names the attempt about to run when it re-arms after a failure'
       wait_setup
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 n=$(cat "$SB_SNAP.n" 2>/dev/null || echo 0); n=$((n + 1)); printf '%s' "$n" >"$SB_SNAP.n"
 if [ "$n" -ge 2 ]; then
@@ -791,7 +792,7 @@ SH
     # Review focus 5: a STORED send is an upload, not a wait.
     It 'never declares waiting for a stored send'
       wait_setup
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 echo "https://drop.example.com/s/abc#v1.KEY"
 echo "croc-store-v1.b64.abc.KEY"
@@ -812,7 +813,7 @@ SH
     It 'switches to real progress once croc starts transferring'
       wait_setup
       SB_FIX="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.raw"; export SB_FIX
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 cat "$SB_FIX"
 exit 0
@@ -831,7 +832,7 @@ SH
     It 'stays waiting through croc'"'"'s pre-connect output'
       wait_setup
       SB_FIX="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.pre"; export SB_FIX
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 cat "$SB_FIX"
 exit 0
@@ -849,15 +850,14 @@ SH
     # Review focus 1: a progress bar redrawn with CR and never LF must still
     # be read as it arrives, not only at EOF. The fake croc prints the connect
     # record and one CR-terminated transfer record from the capture, then
-    # stays alive until the job's progress shows it: job::progress publishes
-    # with `mv`, so a test-owned mv (the real one, then one line on a FIFO
-    # once the published file reads 13 %) is the rendezvous the fake blocks
-    # on. A reader that only catches up at EOF never gets there: the fake
+    # stays alive until the job's progress shows it: job::progress is wrapped
+    # here (the real one, then one line on a FIFO once the published file
+    # reads 13 %), and that line is the rendezvous the fake blocks on. A reader that only catches up at EOF never gets there: the fake
     # would still be waiting, and the example does not come back.
     It 'reads CR-only redraws as they arrive'
       wait_setup
       SB_TRANSFER="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.transfer"; export SB_TRANSFER
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 sed -n 1p "$SB_TRANSFER"
 printf '%s\r' "$(grep -m1 ' 13% ' "$SB_TRANSFER")"
@@ -866,19 +866,14 @@ rm -f "$SB_SNAP.seen"
 cp "$JOB_STATE_ROOT/fake-job/progress" "$SB_SNAP.mid"
 exit 0
 SH
-      cat >"$SB/bin/mv" <<'SH'
-#!/bin/sh
-/bin/mv "$@"
-rc=$?
-for last in "$@"; do :; done
-case $last in
-  */fake-job/progress)
-    if [ -p "$SB_SNAP.seen" ] && grep -q ' 13 ' "$last"; then echo 13 >"$SB_SNAP.seen"; fi ;;
-esac
-exit $rc
-SH
-      chmod +x "$SB/bin/croc" "$SB/bin/mv"
+      chmod +x "$SB/bin/croc"
       mkfifo "$SB_SNAP.seen"
+      functions -c job::progress real_job_progress
+      job::progress() {
+        real_job_progress "$@"; local rc=$?
+        [[ -p "$SB_SNAP.seen" ]] && grep -q ' 13 ' "$JOB_STATE_ROOT/$JOB_ID/progress" && echo 13 >"$SB_SNAP.seen"
+        return $rc
+      }
       JOB_ID=fake-job share::croc_send lab live '' '' "$SB/Report.pdf" >/dev/null 2>&1
       mid() { sed 's/^[0-9]* //' "$SB_SNAP.mid"; }
       When call mid
@@ -890,7 +885,7 @@ SH
     It 'does not turn a stored upload into sending progress'
       wait_setup
       SB_FIX="$SHELLSPEC_PROJECT_ROOT/tests/fixtures/croc/live-sender-11.2.1.raw"; export SB_FIX
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 cat "$SB_FIX"
 echo "https://drop.example.com/s/abc#v1.KEY"
@@ -905,7 +900,7 @@ SH
 
     It 'still mirrors croc output to stderr and keeps croc'"'"'s exit status'
       wait_setup
-      cat >"$SB/bin/croc" <<'SH'
+      share_write "$SB/bin/croc" <<'SH'
 #!/bin/sh
 echo "could not connect to lab.example.com:9009: bad response: bad password"
 exit 1

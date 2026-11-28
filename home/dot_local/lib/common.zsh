@@ -164,8 +164,10 @@ have_tty() { [ -t 0 ] || { : </dev/tty; } 2>/dev/null; }
 _common_tmpdir() { print -r -- "${TMPDIR:-/tmp}/zsh-common-$$" }
 
 _common_tmpdir_cleanup() {
-  local dir
-  dir=$(_common_tmpdir)
+  # Spelled out, not $(_common_tmpdir): this runs at the exit of every script
+  # that sources the file, and the subshell was a fork each time. The rm runs
+  # only for the few that made a scratch dir.
+  local dir="${TMPDIR:-/tmp}/zsh-common-$$"
   [[ -d "$dir" ]] && rm -rf -- "$dir"
   return 0
 }
@@ -883,7 +885,14 @@ lock::hold() {
   local lockfile="$1" timeout="${2:-0}"
   zmodload zsh/system 2>/dev/null
   [[ -e "$lockfile" ]] || : >> "$lockfile" 2>/dev/null
-  zsystem flock -t "$timeout" "$lockfile" 2>/dev/null
+  # -i: zsh retries a busy lock once a SECOND by default, so a waiter noticed
+  # a lock released 10 ms later only after a full second. 0.05 s keeps a
+  # contended caller responsive at a negligible cost while it waits.
+  if [[ "$timeout" == (0|0.0|) ]]; then
+    zsystem flock -t 0 "$lockfile" 2>/dev/null
+  else
+    zsystem flock -t "$timeout" -i 0.05 "$lockfile" 2>/dev/null
+  fi
 }
 
 # --- notifications ----------------------------------------------------------
