@@ -978,7 +978,7 @@ bkp::tm::lens_cmd() {
       [[ -x "$BKP_TM_PTYFRAME_BIN" ]] && framecmd=("$BKP_TM_PTYFRAME_BIN")
     else
       local _troupe
-      _troupe="$(command -v troupe 2>/dev/null)"         || { [[ -x "$HOME/.local/share/go/bin/troupe" ]] && _troupe="$HOME/.local/share/go/bin/troupe"; }         || { [[ -x "$HOME/go/bin/troupe" ]] && _troupe="$HOME/go/bin/troupe"; }
+      _troupe="$(troupe::bin)" || _troupe=""
       if [[ -n "${_troupe:-}" ]]; then
         framecmd=("$_troupe" frame)
       elif [[ -x "$HOME/.local/libexec/pty-frame" ]]; then

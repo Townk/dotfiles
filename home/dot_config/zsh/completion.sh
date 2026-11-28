@@ -85,6 +85,9 @@ export FZF_DEFAULT_COMMAND="fd --type f"
 # (the ones containing spaces) are preserved as single arguments.
 # fzf colors come from the single-source palette (generated from theme.yaml).
 source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-system.zsh}"
+# The bindings shared with fzf-tab (below) and the pickers (pick-common.zsh)
+# are spelled once, in fzf-bindings.zsh: FZF_BIND_*. Constants only — cheap.
+source "${FZF_BINDINGS_LIB:-$HOME/.local/lib/fzf-bindings.zsh}"
 export FZF_DEFAULT_OPTS="
 --color=bg:${C_ROLE_UI_BG} --color=bg+:${C_ROLE_UI_SURFACE}
 --color=fg:${C_ROLE_UI_FG} --color=fg+:regular:${C_ROLE_UI_FG}
@@ -97,13 +100,10 @@ export FZF_DEFAULT_OPTS="
 --prompt '    ' --pointer ➔ --marker ✔
 --preview-window=right:60%,border-line,noinfo
 --preview 'preview {}'
---bind 'ctrl-space:execute-silent(\$HOME/.local/libexec/preview-wipe-images)+toggle-preview'
---bind 'ctrl-o:execute-silent(\$HOME/.local/libexec/fzf-tab-preview-open {})'
+--bind '${FZF_BIND_PREVIEW_TOGGLE}'
+--bind '${FZF_BIND_OPEN_KEY}:execute-silent(${FZF_BIND_OPEN_CMD} {})'
 --bind ctrl-j:down --bind ctrl-k:up
---bind shift-up:preview-up --bind shift-down:preview-down
---bind alt-up:preview-page-up --bind alt-down:preview-page-down
---bind alt-page-up:preview-page-up --bind alt-page-down:preview-page-down
---bind alt-home:preview-top --bind alt-end:preview-bottom
+--bind ${(j:,:)FZF_BIND_PREVIEW_SCROLL}
 --bind 'ctrl-f:change-preview(FZF_PREVIEW_FULL=1 preview {})'
 --bind 'ctrl-alt-f:change-preview(preview {})'
 "
@@ -114,17 +114,17 @@ export FZF_DEFAULT_OPTS="
 # picture previewed stayed over the prompt. Every fzf started from this
 # shell — completion, Ctrl+T, a bare `fzf` — ends by removing the images
 # when, and only when, a preview flagged one for this terminal.
-if [[ "${TERM_PROGRAM:-}" == rex || "${TERM_PROGRAM:l}" == ghostty ]]; then
-  fzf() {
-    command fzf "$@"
-    local rc=$? flag="${TMPDIR:-/tmp}/preview-kitty.${TTY:t}"
-    if [[ -z "${TMUX:-}" && -e "$flag" ]]; then
-      printf '\e_Ga=d,d=A\e\\' >"$TTY" 2>/dev/null
-      rm -f -- "$flag"
-    fi
-    return $rc
-  }
-fi
+#
+# The flag and the delete sequence are preview-wipe-images' business; this
+# only says when. No terminal allow-list: the flag existing already says a
+# picture was drawn here (and a list is one more thing to forget Kitty in).
+# Nothing inside tmux, where the picture is cells that go with the pane.
+fzf() {
+  command fzf "$@"
+  local rc=$?
+  [[ -n "${TMUX:-}" ]] || "$HOME/.local/libexec/preview-wipe-images" --forget 2>/dev/null
+  return $rc
+}
 
 # fzf shell integration: completion (the `**<TAB>` fuzzy trigger) + key
 # bindings (Ctrl+T paste files, Alt+C cd). `command` bypasses any `fzf` alias.
@@ -227,9 +227,10 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   #                  collapsed while keeping the inherited right:60% geometry.
   #                  ctrl-space reveals it on demand. Scoped to the TAB menu only
   #                  — Ctrl-T/Ctrl-R/Alt-C keep their preview on by default.
-  # No spaces inside a flag: fzf-tab splits these on them.
+  # No spaces inside a flag: fzf-tab splits these on them. The binding is the
+  # shared one (fzf-bindings.zsh), the same string FZF_DEFAULT_OPTS carries.
   zstyle ':fzf-tab:*' fzf-flags --height=~40% --preview-window=hidden \
-    '--bind=ctrl-space:execute-silent($HOME/.local/libexec/preview-wipe-images)+toggle-preview'
+    "--bind=$FZF_BIND_PREVIEW_TOGGLE"
 
   # TAB descends into the highlighted directory and re-opens the menu — the
   # equivalent of z4h's `tab:repeat` (fzf-tab's continuous-trigger, default '/').
@@ -251,7 +252,7 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
   # waits for a key) and --close-on-exit reaps the pane. `execute-silent` keeps
   # the menu open and never tears fzf down, so there's no Sixel-teardown to fight.
   zstyle ':fzf-tab:*' fzf-bindings \
-    'ctrl-o:execute-silent($HOME/.local/libexec/fzf-tab-preview-open --fzf-tab-desc {2})'
+    "${FZF_BIND_OPEN_KEY}:execute-silent(${FZF_BIND_OPEN_CMD} --fzf-tab-desc {2})"
 
   # Make the `tab` continuous-trigger descend-only (z4h `tab:repeat` semantics).
   # Out of the box, continuous-trigger means "accept then re-complete" with no
@@ -271,6 +272,10 @@ if [[ -r "$plugin_dir/fzf-tab/fzf-tab.plugin.zsh" ]]; then
     -ftb-apply-orig "$@"
     local r=$?
     if (( _ftb_continue )) && (( $#_ftb_choices == 1 )); then
+      # The compcap record (key, \2, NUL-separated k/v) is parsed a second time
+      # in libexec/fzf-tab-preview-open (resolve_fzf_tab_desc): that one reads
+      # fzf-tab's compcap FILES from a detached process, this one the live
+      # array — two readers of one format, kept in step by hand.
       local bs=$'\2' choice=$_ftb_choices[1]
       local match=${_ftb_compcap[(r)${(b)choice}$bs*]}
       [[ -z $match ]] && match=${_ftb_compcap[(r)${(b)${(q)choice}}$bs*]}

@@ -247,5 +247,7 @@ result="${result%$'\n'}"
 [[ -n "$result" && -n "$origin" && -n "$rex_bin" ]] || exit 0
 
 # A block id is accepted wherever Rex takes a session, so the origin names
-# both the session and the block.
+# both the session and the block. The same `send` as pick::inject's Rex
+# branch (pick-common.zsh), written here because this script stays light and
+# never loads that library — change the two together.
 _mux_rx_run send -s "$origin" -b "$origin" -- "$result"

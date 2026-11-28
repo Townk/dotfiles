@@ -305,6 +305,26 @@ raster::video_pct() {
 
 # --- the dispatch -----------------------------------------------------------
 
+# raster::mime_for <path> — the type the dispatch goes by, one line.
+# Extension beats MIME for the formats where `file` is unhelpful (office
+# containers all look like zip; fonts and Adobe files vary by build), so for
+# those `file` is not even asked. THE one copy of that table: for_file,
+# rasterisable and preview's --pixels path all route on this answer.
+# (preview's main() keeps its own extension arms: on a handler failure it
+# falls back by the file's REAL type, which this deliberately hides.)
+raster::mime_for() {
+  case "${1:l}" in
+    *.ttf | *.otf | *.woff | *.woff2 | *.ttc) print -r -- "font/generic" ;;
+    *.psd | *.ai | *.eps) print -r -- "image/vnd.adobe.photoshop" ;;
+    *.docx | *.xlsx | *.pptx | *.doc | *.xls | *.ppt | *.odt | *.ods | *.odp)
+      print -r -- "application/msword" ;;
+    *.pages) print -r -- "application/vnd.apple.pages" ;;
+    *.numbers) print -r -- "application/vnd.apple.numbers" ;;
+    *.key) print -r -- "application/vnd.apple.keynote" ;;
+    *) file --mime-type --brief --dereference "$1" 2>/dev/null ;;
+  esac
+}
+
 # raster::rasterisable <path> — true when raster::for_file would produce
 # something, WITHOUT doing the conversion. Callers that route a file
 # somewhere (WezTerm's CMD+click deciding viewer-vs-editor) need the answer
@@ -312,12 +332,8 @@ raster::video_pct() {
 raster::rasterisable() {
   local f="$1" mime
   [[ -n "$f" && -r "$f" ]] || return 1
-  case "${f:l}" in
-    *.ttf|*.otf|*.woff|*.woff2|*.ttc|*.psd|*.ai|*.eps) return 0 ;;
-    *.docx|*.xlsx|*.pptx|*.doc|*.xls|*.ppt|*.odt|*.ods|*.odp) return 0 ;;
-    *.pages|*.numbers|*.key) return 0 ;;
-  esac
-  mime=$(file --mime-type --brief --dereference "$f" 2>/dev/null)
+  # The extension-typed formats answer without running `file` (mime_for).
+  mime=$(raster::mime_for "$f")
   case "$mime" in
     image/*|video/*|audio/*|application/pdf) return 0 ;;
     font/*|application/vnd.ms-opentype|application/postscript) return 0 ;;
@@ -334,22 +350,10 @@ raster::rasterisable() {
 #
 # <variant> is the page/seek selector: a PDF page offset or a video seek step.
 # It keys the cache, so page 3 and page 1 are separate entries.
-#
-# Extension beats MIME for the formats where `file` is unhelpful (office
-# containers all look like zip; fonts and Adobe files vary by build).
 raster::for_file() {
   local target="$1" variant="${2:-0}" mime
   [[ -n "$target" && -r "$target" ]] || return 1
-  mime=$(file --mime-type --brief --dereference "$target" 2>/dev/null)
-  case "${target:l}" in
-    *.ttf | *.otf | *.woff | *.woff2 | *.ttc) mime="font/generic" ;;
-    *.psd | *.ai | *.eps) mime="image/vnd.adobe.photoshop" ;;
-    *.docx | *.xlsx | *.pptx | *.doc | *.xls | *.ppt | *.odt | *.ods | *.odp)
-      mime="application/msword" ;;
-    *.pages) mime="application/vnd.apple.pages" ;;
-    *.numbers) mime="application/vnd.apple.numbers" ;;
-    *.key) mime="application/vnd.apple.keynote" ;;
-  esac
+  mime=$(raster::mime_for "$target")
   raster::by_mime "$target" "$mime" "$variant"
 }
 

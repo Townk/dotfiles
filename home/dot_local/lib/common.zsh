@@ -112,6 +112,20 @@ require_cmd() {
   ((${#missing[@]} == 0)) || die "missing required tool(s): ${missing[*]}"
 }
 
+# troupe::bin — print the troupe binary's path; non-zero when there is none.
+# PATH first, then the two Go install dirs: a pane the mux server spawned
+# carries the SERVER's PATH, without the interactive profile's go-bin, so a
+# bare `command -v` fails exactly where the dialogs and dashboards run.
+# Callers keep their own test seams and fallbacks in front of / behind this.
+troupe::bin() {
+  local p
+  p="$(command -v troupe 2>/dev/null)" && [[ -n "$p" ]] && { print -r -- "$p"; return 0; }
+  for p in "$HOME/.local/share/go/bin/troupe" "$HOME/go/bin/troupe"; do
+    [[ -x "$p" ]] && { print -r -- "$p"; return 0; }
+  done
+  return 1
+}
+
 # --- terminal --------------------------------------------------------------
 # have_tty: true when we can reach a controlling terminal for interaction —
 # stdin is a tty, or /dev/tty is openable even when stdin is a pipe. Used by

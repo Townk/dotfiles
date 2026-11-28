@@ -33,6 +33,44 @@ _tqv_humanize_size() {
   fi
 }
 
+# _tqv_chafa_args -> the chafa graphics arguments on stdout; nothing = leave
+# it to chafa's auto-detection. Needs image-protocol-support.zsh loaded.
+#
+# The answer is get_chafa_format_args' — the one `preview` draws with — taken
+# only when it is Kitty graphics. Ghostty does not support sixel and never
+# will (a stated decision by its maintainer, not a gap waiting to be filled);
+# Rex is the same renderer (libghostty) under another name, which chafa does
+# not know and would draw as character art. Asking for Kitty outright matters
+# most through tmux, where auto-detection lands on sixel (tmux advertises it)
+# and Ghostty renders nothing at all. Every other terminal is left to chafa,
+# as this viewer always has — the shared answer there is explicit (sixel,
+# iterm, symbols) and adopting it would be a change to what is on screen.
+_tqv_chafa_args() {
+  local fmt outer
+  fmt="$(get_chafa_format_args)"
+  if [[ "$fmt" != "-f kitty"* ]]; then
+    # Ghostty known by its terminal NAME alone: the program name the shared
+    # answer goes by is not always carried (SSH; a tmux session without it).
+    # The outer terminal, not $TERM: inside a pane $TERM is tmux's own
+    # (tmux-256color); tmux knows the attached client's as #{client_termname}.
+    outer="${TERM:-}"
+    [[ -n "${TMUX:-}" ]] && outer="$(tmux display -p '#{client_termname}' 2>/dev/null)"
+    [[ "$outer" == *ghostty* ]] || return 0
+    fmt="$(get_chafa_format_args ghostty)"
+  fi
+  # `--probe off` is preview's addition for tmux; this viewer has never
+  # passed it, and it is a newer chafa option than the guard below checks.
+  fmt="${fmt% --probe off}"
+  # --passthrough tmux wraps the APC payload so the server forwards it
+  # (tmux.conf sets `allow-passthrough on`, the other half). Chafa added it in
+  # 1.14: a stale system Chafa must not turn an otherwise usable preview into
+  # a blank pane.
+  if [[ "$fmt" == *--passthrough* ]] && ! chafa --help 2>&1 | command grep -q -- '--passthrough'; then
+    fmt="-f symbols"
+  fi
+  print -r -- "$fmt"
+}
+
 # Sourcing seam: the spec loads this file with TERM_QUICK_VIEW_LIB set to pull
 # in the helpers above without running the viewer. `return` works only in a
 # sourced file, so the guard variable (set by the test alone) keeps normal
@@ -65,11 +103,15 @@ if [[ "$_mode" == view ]]; then
     for _old in "${(@f)$(_mux_rx_floats_by_label "$TERM_QUICK_VIEW_NAME" "$_s")}"; do
       [[ -n "$_old" ]] && _mux_rx_close_block "$_old"
     done
-    # Kitty graphics named outright: the layer's command starts from the
-    # server's environment, and chafa does not know Rex by name anyway.
+    # The graphics arguments are named outright: the layer's command starts
+    # from the server's environment, and chafa does not know Rex by name
+    # anyway. Asked of the shared answer FOR a Rex pane (never through tmux:
+    # the layer is Rex's own), since this process may be neither.
+    source "${0:A:h}/../lib/image-protocol-support.zsh" 2>/dev/null ||
+      source "$HOME/.local/lib/image-protocol-support.zsh"
     [[ -n "$(_mux_rx_layer "${TERM_QUICK_VIEW_FLOAT_W:-80%}" "${TERM_QUICK_VIEW_FLOAT_H:-80%}" \
       "$TERM_QUICK_VIEW_NAME" "" "$_s" -- \
-      env "TERM_QUICK_VIEW_ARGS=${TERM_QUICK_VIEW_ARGS:--f kitty}" "$_self" --render "$file")" ]]
+      env "TERM_QUICK_VIEW_ARGS=${TERM_QUICK_VIEW_ARGS:-$(TMUX= get_chafa_format_args rex)}" "$_self" --render "$file")" ]]
     exit $?
   fi
   if mux::available; then
@@ -90,65 +132,29 @@ if [[ "$_mode" == view ]]; then
   exec "$_self" --render "$file"
 fi
 
-# A sixel image is ONE DCS string and tmux discards any string sequence
-# larger than its `input-buffer-size` (a SERVER option, default 1 MiB —
-# measured: 1,032,961 bytes rendered, 1,174,685 did not). Our tmux.conf
-# raises it, so ASK the server rather than hard-coding: the shrink below is
-# then a safety net for a machine whose config has not been applied, not a
-# quality ceiling. 5% margin covers the clear/cursor bytes around it.
-#
-# The cap is TMUX'S, and only tmux's. Zellij has no equivalent DCS limit, so
-# applying one there is pure loss: a 2.2MB stream got shrunk to 70% and the
-# picture came out visibly small inside a correctly-sized frame (zellij pass,
-# 2026-07-27 — the debug log said `SHRINKING: 2285652 > 1000000` while
-# `pane=` and `box=` were both right, which is what separated this from the
-# sizing bug it looked like). 0 means no ceiling.
-_max="${TERM_QUICK_VIEW_MAX_BYTES:-}"
-if [[ -z "$_max" ]]; then
-  _max=0
-  if [[ -n "${TMUX:-}" ]]; then
-    _max=1000000
-    _lim="$(tmux show -sv input-buffer-size 2>/dev/null)"
-    [[ "$_lim" == <-> ]] && (( _lim > 1000 )) && _max=$(( _lim * 95 / 100 ))
-  fi
-fi
+# The terminal's side of a picture — which chafa arguments, how many bytes —
+# is image-protocol-support.zsh's, shared with `preview`. Resolved next to
+# this script: bin/ and lib/ sit side by side in the repo and deployed alike.
+_lib="${TERM_QUICK_VIEW_LIB:-${0:A:h}/../lib}"
+[[ -r "$_lib/raster-common.zsh" ]] || _lib="$HOME/.local/lib"
+source "$_lib/image-protocol-support.zsh"
 
-# Graphics protocol. Left to chafa's auto-detection everywhere EXCEPT Ghostty,
-# which does not support sixel and never will — that is a stated decision by
-# its maintainer, not a gap waiting to be filled. Its Kitty graphics support
-# is excellent, so ask for that explicitly; auto-detection through tmux lands
-# on sixel (tmux advertises it) and Ghostty renders nothing at all.
-#
-# The outer terminal, not $TERM: inside a pane $TERM is tmux's own
-# (tmux-256color), which says nothing about what will finally draw the pixels.
-# tmux knows the attached client's terminal as #{client_termname}.
-#
-# --passthrough tmux wraps the APC payload so the server forwards it instead
-# of eating it; tmux.conf already sets `allow-passthrough on`, which is the
-# other half of that. Outside tmux there is nothing to pass through.
-#
-# TERM_QUICK_VIEW_ARGS stays a caller override — only defaulted when unset.
+# The byte cap is TMUX'S, and only tmux's (get_image_max_bytes): it discards
+# an image stream larger than its input buffer. Zellij has no equivalent DCS
+# limit, so applying one there is pure loss: a 2.2MB stream got shrunk to 70%
+# and the picture came out visibly small inside a correctly-sized frame
+# (zellij pass, 2026-07-27 — the debug log said `SHRINKING: 2285652 >
+# 1000000` while `pane=` and `box=` were both right, which is what separated
+# this from the sizing bug it looked like). With our tmux.conf raising the
+# buffer the shrink below is a safety net for a machine whose config has not
+# been applied, not a quality ceiling. 0 means no ceiling.
+_max="${TERM_QUICK_VIEW_MAX_BYTES:-}"
+[[ -n "$_max" ]] || _max="$(get_image_max_bytes)"
+
+# Graphics protocol: _tqv_chafa_args (top of this file). TERM_QUICK_VIEW_ARGS
+# stays a caller override — only defaulted when unset.
 if [[ -z "${TERM_QUICK_VIEW_ARGS:-}" ]]; then
-  _outer="${TERM:-}"
-  [[ -n "${TMUX:-}" ]] && _outer="$(tmux display -p '#{client_termname}' 2>/dev/null)"
-  # Rex is the same renderer (libghostty) under another name, and says so in
-  # $TERM_PROGRAM, not $TERM: Kitty graphics, no sixel. chafa does not know
-  # the name and would fall back to character art.
-  _prog="${TERM_PROGRAM:-}"
-  [[ -n "${TMUX:-}" ]] && _prog="${$(tmux show-environment TERM_PROGRAM 2>/dev/null)#TERM_PROGRAM=}"
-  if [[ "$_outer" == *ghostty* || "$_prog" == rex ]]; then
-    if [[ -n "${TMUX:-}" ]]; then
-      # Chafa added tmux passthrough in 1.14. A stale system Chafa must not
-      # turn an otherwise usable preview into a blank pane.
-      if chafa --help 2>&1 | command grep -q -- '--passthrough'; then
-        TERM_QUICK_VIEW_ARGS="-f kitty --passthrough tmux"
-      else
-        TERM_QUICK_VIEW_ARGS="-f symbols"
-      fi
-    else
-      TERM_QUICK_VIEW_ARGS="-f kitty"
-    fi
-  fi
+  TERM_QUICK_VIEW_ARGS="$(_tqv_chafa_args)"
 fi
 # Name the tab and give it its own glyph. The window pill prefixes a
 # manually-named window with a generic tab icon, so the glyph goes in
@@ -216,10 +222,7 @@ _box_h=$(( _rows - _chrome_v )); (( _box_h < 4 )) && _box_h=4
 # `preview` uses — so this script never learns a converter, and a format
 # taught there shows up here for free.
 #
-# Resolved next to this script: bin/ and lib/ sit side by side in the repo
-# and deployed alike.
-_lib="${TERM_QUICK_VIEW_LIB:-${0:A:h}/../lib}"
-[[ -r "$_lib/raster-common.zsh" ]] || _lib="$HOME/.local/lib"
+# $_lib was resolved above, next to this script.
 source "$_lib/raster-common.zsh"
 
 _raster="$(raster::for_file "$file" "${TERM_QUICK_VIEW_PAGE:-0}" 2>/dev/null)" || _raster=""

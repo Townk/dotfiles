@@ -61,10 +61,12 @@ cd-back()    { _dir_ring_go $(( _dir_ring_pos - 1 )) }   # Shift+Left
 cd-forward() { _dir_ring_go $(( _dir_ring_pos + 1 )) }   # Shift+Right
 cd-up()      { \builtin cd -- .. 2>/dev/null; zle reset-prompt }  # Shift+Up
 cd-down() {                                              # Shift+Down
-  # Pick an immediate subdirectory with fzf.
+  # Pick an immediate subdirectory with fzf. No flags of its own: size,
+  # layout and prompt are FZF_DEFAULT_OPTS' (completion.sh), so it looks like
+  # every other fzf this shell opens.
   local d
   d=$(fd --type d --max-depth 1 --hidden --exclude .git . 2>/dev/null \
-        | fzf --height=40% --reverse --prompt='cd > ') || { zle -R; return; }
+        | fzf) || { zle -R; return; }
   [[ -n $d ]] || { zle -R; return; }
   \builtin cd -- "$d" 2>/dev/null
   zle reset-prompt

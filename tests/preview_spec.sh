@@ -618,7 +618,8 @@ Describe 'preview: Kitty images in an fzf pane'
     shift
     env -u TMUX -u FZF_PREVIEW_LINES -u ITERM_SESSION_ID -u LC_TERMINAL TERM_PROGRAM=rex \
       TMPDIR="$KP_TMP" PREVIEW_TTY="$KP_TMP/tty" PREVIEW_TTY_NAME=ttys042 PREVIEW_NO_RUN=1 \
-      PREVIEW_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" "${envs[@]}" \
+      PREVIEW_LIB="$SHELLSPEC_PROJECT_ROOT/home/dot_local/lib" \
+      PREVIEW_WIPE_IMAGES="$SHELLSPEC_PROJECT_ROOT/home/dot_local/libexec/executable_preview-wipe-images" "${envs[@]}" \
       zsh -c "source '$SCRIPT'; $1"
   }
   sent() {

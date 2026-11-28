@@ -1702,17 +1702,13 @@ clip::materialize_live_files() {
   return 0
 }
 
-# Inject a clip's text into the originating Rex pane (embed mode), else
-# fall back to copy. Mirrors pick::background_sink's inject path.
+# Inject a clip's text into the originating pane (embed mode), else fall
+# back to copy. The typing is pick::inject's — this used to be a copy of it
+# with only the Rex branch, so over a tmux pane it copied instead of typing.
 clip::inject_by_id() {
   local id=$1 text
   text="$(clip::text_by_id "$id")"
-  if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_REX:-}" ]]; then
-    # Rex twin (rex-modal): one binary path, never word-split.
-    "$PICK_INJECT_REX" --autostart=false send -s "$PICK_INJECT_PANE" -b "$PICK_INJECT_PANE" -- "$text"
-  elif command -v pbcopy >/dev/null 2>&1; then
-    printf '%s' "$text" | pbcopy
-  fi
+  pick::inject "$text"
 }
 
 # --- markdown alternate (Alt-Enter, --key-output field:2) -------------------

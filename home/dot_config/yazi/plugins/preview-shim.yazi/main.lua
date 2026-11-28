@@ -101,6 +101,10 @@ local function draw_tty_sixel(raster, rect)
   -- hundred-KB DCS in small chunks straight at the pty races yazi's own
   -- renderer writes, and a yazi chunk landing mid-DCS corrupts the image
   -- (verified: the same draws work under script(1)'s serializing relay).
+  -- chafa's arguments (`-f sixel --passthrough none --probe off`) are
+  -- get_chafa_format_args' tmux-sixel answer (~/.local/lib/
+  -- image-protocol-support.zsh), spelled here because Lua cannot source it.
+  -- tests/image_protocol_support_spec.sh fails when the two diverge.
   local row0, col0 = rect.y + 1, rect.x + 1
   local script = string.format(
     [[t=$(mktemp) || exit 1; { printf '\0337'; i=0; while [ "$i" -lt %d ]; do printf '\033[%%d;%dH\033[%dX' $((%d + i)); i=$((i+1)); done; printf '\033[%d;%dH'; chafa -f sixel --passthrough none --probe off -s %dx%d "$1" 2>/dev/null; printf '\0338'; } >"$t"; dd if="$t" of=/dev/tty bs=4m 2>/dev/null; rm -f "$t"]],

@@ -133,9 +133,7 @@ tm_timeline() {
       [[ -x "$BKP_TM_TIMELINE_BIN" ]] && tlcmd=("$BKP_TM_TIMELINE_BIN")
     else
       local _troupe
-      _troupe="$(command -v troupe 2>/dev/null)" \
-        || { [[ -x "$HOME/.local/share/go/bin/troupe" ]] && _troupe="$HOME/.local/share/go/bin/troupe"; } \
-        || { [[ -x "$HOME/go/bin/troupe" ]] && _troupe="$HOME/go/bin/troupe"; }
+      _troupe="$(troupe::bin)" || _troupe=""
       if [[ -n "${_troupe:-}" ]]; then
         tlcmd=("$_troupe" timeline)
       elif [[ -x "$HOME/.local/libexec/tm-timeline" ]]; then
@@ -487,18 +485,20 @@ tm_apply() {
       log_warn "bkp: this rung shows no changes — nothing to apply"
       return 0
     fi
+    # One picker, floating or inline. Explicit hints: the defaults prepend
+    # open/cancel/clear, which blows past the float's width — the
+    # multi-select trio (pick-common's own) is the part that matters here.
+    local -a pick_opts=(--multi --hints "$(pick::hints "${PICK_HINTS_MULTI[@]}")"
+      --header "Restore from snapshot")
     if mux::available; then
       # Floating picker: apply fires from the timeline pane's ctl, which
       # has no tty of its own — an inline fzf would die silently there.
-      # Explicit hints: the defaults prepend open/cancel/clear, which
-      # blows past the pane width — the multi-select trio is the part
-      # that matters here.
       picked=("${(@f)$(print -rl -- "${cands[@]}" | PICK_NAME=tm-apply mux::pick \
-        --pane-width 75 --pane-height 16 --multi \
-        --hints "$(pick::hints "󰘴 󱁐" select ⭾ select-and-next "󰘴 A" select-all)" \
-        --header "Restore from snapshot")}") || return 0
+        --pane-width 75 --pane-height 16 "${pick_opts[@]}")}") || return 0
     else
-      picked=("${(@f)$(print -rl -- "${cands[@]}" | fzf --multi --prompt='apply> ')}") || return 0
+      # No mux: the same picker inline, through the engine (it used to be a
+      # bare `fzf --multi` with a prompt of its own).
+      picked=("${(@f)$(print -rl -- "${cands[@]}" | PICK_NAME=tm-apply pick::start "${pick_opts[@]}")}") || return 0
     fi
     (( ${#picked} )) && [[ -n "${picked[1]}" ]] || return 0
     live+=("${picked[@]}")

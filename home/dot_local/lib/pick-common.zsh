@@ -100,7 +100,8 @@
 #   #   --padding SPEC, --input-border LABEL, --no-border, --no-hints
 #   #   --preview CMD, --preview-window SPEC (ctrl-space toggles the preview
 #   #     whenever --preview is set and --multi is not, so a `…,hidden` window
-#   #     can be revealed on demand)
+#   #     can be revealed on demand; the shell fzf's preview-scroll keys —
+#   #     shift/alt-up/down, alt-page-up/down, alt-home/end — come with it)
 #   #   --selector, --selector-shortcuts, --selector-nav,
 #   #   --selector-hints TEXT, --search-hints TEXT,
 #   #   --selector-search-key KEY, --selector-back-key KEY
@@ -123,6 +124,8 @@ _pick_common_self="${(%):-%x}"
 source "$(dirname "$_pick_common_self")/common.zsh"
 # theme::sgr_fg (the canonical hex→SGR helper pick::colorize_hints uses).
 source "$(dirname "$_pick_common_self")/theme-common.zsh"
+# FZF_BIND_*: the bindings shared with the shell's fzf (zsh/completion.sh).
+source "$(dirname "$_pick_common_self")/fzf-bindings.zsh"
 unset _pick_common_self
 
 require_cmd fzf
@@ -327,6 +330,11 @@ pick::add_selector_mode_binds() {
 
 # --- hint assembly + colorizing -----------------------------------
 
+# The --multi keys as pick::hints pairs: what pick::start's default hint line
+# appends under --multi, and what a picker too narrow for the whole default
+# line shows alone (system-backup-tm's restore picker).
+typeset -ga PICK_HINTS_MULTI=( "󰘴 󱁐" select ⭾ select-and-next "󰘴 A" select-all )
+
 # pick::hints KEY LABEL [KEY LABEL ...] — assemble a keybind-hint line from
 # key/label PAIRS in the canonical "KEY label" shape, joined by the narrow
 # " · " separator. This is THE single place dialog hints are formatted, so every
@@ -435,7 +443,7 @@ pick::build_fzf_args() {
     pick_frame_cmd=(${=PICK_FRAME_CMD})
   else
     local _troupe
-    _troupe="$(command -v troupe 2>/dev/null)"       || { [[ -x "$HOME/.local/share/go/bin/troupe" ]] && _troupe="$HOME/.local/share/go/bin/troupe"; }       || { [[ -x "$HOME/go/bin/troupe" ]] && _troupe="$HOME/go/bin/troupe"; }
+    _troupe="$(troupe::bin)" || _troupe=""
     if [[ -n "${_troupe:-}" ]]; then
       pick_frame_cmd=("$_troupe" frame)
     elif [[ -x "$HOME/.local/libexec/pty-frame" ]]; then
@@ -593,9 +601,9 @@ pick::build_fzf_args() {
     # fzf draws the header inside the border and aligns it with the list (past
     # the pointer/gutter), so the usable width is well under the pane width;
     # keep the rule a few cells short so fzf doesn't truncate it with "··".
-    local _rw=$(( _cols - 8 )); (( _rw < 1 )) && _rw=1
-    local _fill=""
-    local _rule="${(l:_rw::━:)_fill}"
+    # theme::rule insets by 4 (the modal's own 2 cells a side); the other 4
+    # are fzf's, so it is handed a width that much narrower: _cols - 8 of ━.
+    local _rule="$(theme::rule $(( _cols - 4 )))"
     # Outer box = the focus border (blue), like the old active modal frame.
     # Header block (--header-first): a blank line, the accented ▓▓▓ title, the
     # rule. Hints stay in the footer (fzf's one header is spent on the title).
@@ -632,7 +640,17 @@ pick::build_fzf_args() {
     # clears that variable. Without this a `--preview-window=…,hidden` picker
     # would have no key to reveal its preview at all. Skipped under --multi,
     # where ctrl-space is already the select-marker toggle.
-    (( ${pick_ui[multi]:-0} )) || fzf_args+=( --bind 'ctrl-space:execute-silent($HOME/.local/libexec/preview-wipe-images)+toggle-preview' )
+    # The binding itself is the shared one (fzf-bindings.zsh).
+    (( ${pick_ui[multi]:-0} )) || fzf_args+=( --bind "$FZF_BIND_PREVIEW_TOGGLE" )
+    # The preview-scroll keys of the shell's fzf, for the same reason: a
+    # picker never sees FZF_DEFAULT_OPTS. A key the picker accepts on
+    # (--expect) keeps the picker's meaning; its other binds (--key-background,
+    # --key-reload, selector mode) are appended after this and fzf honours the
+    # last, so those win without a check.
+    local _sb
+    for _sb in "${FZF_BIND_PREVIEW_SCROLL[@]}"; do
+      [[ ",${pick_ui[expect]:-}," == *",${_sb%%:*},"* ]] || fzf_args+=( --bind "$_sb" )
+    done
   fi
   # --preview-window SPEC: fzf preview-window geometry (e.g. "right:40%").
   # Additive; callers that don't pass it get fzf's default.
@@ -804,9 +822,11 @@ pick::start_add_key_output() {
 # formats the line with pick::start_format_line and calls the hook — all while
 # fzf stays open. Globals pick_background_fifo / pick_background_broker drive teardown.
 
-# Default sink when --on-key-background is omitted: inject the formatted text
-# into the originating mux pane (embed mode) or, failing that, the clipboard.
-pick::background_sink() {
+# pick::inject <text> — type a picker's result into the pane the picker was
+# opened over, or copy it when there is no such pane. THE one implementation
+# (the default background sink below, pick-clipboard's insert-and-stay); the
+# modal that opened the picker names the pane in the PICK_INJECT_* environment.
+pick::inject() {
   local text=$1
   # tmux (mux migration Phase 2): tmux-modal exports PICK_INJECT_TMUX
   # beside PICK_INJECT_PANE (a tmux %pane id); send-keys -l writes the text
@@ -814,12 +834,15 @@ pick::background_sink() {
   if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_TMUX:-}" ]]; then
     # Strip VS16: zsh counts a VS16 emoji as 1 cell, tmux renders 2, and the
     # width drift corrupts the ZLE line (see tmux-modal, same strip there).
+    # tmux only — Rex's grid is libghostty's and agrees with zsh.
     ${(z)PICK_INJECT_TMUX} send-keys -t "$PICK_INJECT_PANE" -l -- "${text//$'\uFE0F'/}"
     return 0
   fi
   # Rex twin: rex-modal exports PICK_INJECT_REX (the rex binary, ONE path —
   # it lives under "Application Support", so it is never word-split) beside
   # PICK_INJECT_PANE (the origin block id, which also names its session).
+  # rex-modal types the FINAL selection itself with the same `send` (it does
+  # not load this library — it stays light).
   if [[ -n "${PICK_INJECT_PANE:-}" && -n "${PICK_INJECT_REX:-}" ]]; then
     "$PICK_INJECT_REX" --autostart=false send -s "$PICK_INJECT_PANE" -b "$PICK_INJECT_PANE" -- "$text"
     return 0
@@ -827,6 +850,12 @@ pick::background_sink() {
   local clip; clip="$(pick::detect_clip)"
   [[ -n "$clip" ]] && printf '%s' "$text" | ${(z)clip}
   return 0
+}
+
+# Default sink when --on-key-background is omitted: inject the formatted text
+# into the originating mux pane (embed mode) or, failing that, the clipboard.
+pick::background_sink() {
+  pick::inject "$1"
 }
 
 # Stand up the FIFO + reader broker and append one execute-silent bind per
@@ -1167,7 +1196,7 @@ pick::start() {
   # pick::hints, so spacing/separators are identical across every dialog.
   if [[ -z "${pick_ui[hints]:-}" ]]; then
     local -a hb=( 󰌑 open 󱊷 cancel "󰘴 U" clear )
-    (( ${pick_ui[multi]:-0} )) && hb+=( "󰘴 󱁐" select ⭾ select-and-next "󰘴 A" select-all )
+    (( ${pick_ui[multi]:-0} )) && hb+=( "${PICK_HINTS_MULTI[@]}" )
     pick_ui[hints]="$(pick::hints "${hb[@]}")"
   fi
   if [[ -z "${pick_ui[selector_hints]:-}" ]]; then

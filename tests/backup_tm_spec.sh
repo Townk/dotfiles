@@ -930,16 +930,24 @@ EOF
           print -r -- '+new'
         } > "$S/current.patch"
         # stub fzf: select everything piped to it (stands in for the user
-        # multi-picking every changed file)
-        printf '#!/bin/sh\ncat\n' > "$STUB/fzf"
+        # multi-picking every changed file). The pick goes through the
+        # picker engine (pick::start), so the stub answers in its
+        # --print-query/--expect shape: query, key, then the rows.
+        printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/fzf.args"\nprintf "\\nenter\\n"\ncat\n' "$FIX" > "$STUB/fzf"
         chmod +x "$STUB/fzf"
-        zsh "$BIN" apply "$S" >/dev/null
+        # MUX_LIB: the repo's libraries, not the deployed ones.
+        env -u TMUX -u REX_SESSION -u REX_BLOCK MUX_LIB="$BKP_LIB" zsh "$BIN" apply "$S" >/dev/null
         cat "$S/apply.list"
+        # the same picker the float shows: multi-select, titled, no bare prompt
+        grep -c -e '^--multi$' -e 'Restore from snapshot' "$FIX/fzf.args"
+        grep -c 'apply> ' "$FIX/fzf.args" || true
       }
       When run run_it
       The line 1 should equal "/live/dir/deleted one.txt"
       The line 2 should equal "/live/dir/file one.txt"
-      The lines of output should equal 2
+      The line 3 should equal 2
+      The line 4 should equal 0
+      The lines of output should equal 4
     End
   End
 

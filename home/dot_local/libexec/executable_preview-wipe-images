@@ -1,17 +1,26 @@
 #!/bin/sh
-# preview-wipe-images [--forget] — take down the Kitty images `preview` drew in
-# this terminal's fzf.
+# preview-wipe-images [--forget | --mark | --flag-path] — the Kitty images
+# `preview` draws in this terminal's fzf: the ONE place that knows the delete
+# sequence, the flag's path, and how the tty is named.
 #
 # Outside tmux a Kitty image sits on the terminal itself, not in fzf's preview
 # pane, so nothing fzf does to the pane removes it — hiding the preview
-# (Ctrl+Space) left the picture floating over the list. `preview` flags a
-# picture it draws (see "Kitty images in an fzf preview pane" there); this is
-# the other half, small enough to run from a key binding: when the flag for
-# this terminal exists, tell the terminal to delete its images.
+# (Ctrl+Space) left the picture floating over the list. A picture drawn there
+# is flagged per terminal (see "Kitty images in an fzf preview pane" in
+# `preview`), and the flag is what makes a later delete safe: a terminal that
+# never previewed a picture is never told to delete the ones a user printed.
 #
-# The flag is LEFT in place: this is the preview toggle's helper, and showing
-# the pane again may put the picture back without a new `preview` run to flag
-# it — the flag is what lets fzf's exit clean up. --forget removes it too.
+#   (no argument)  flag exists → tell the terminal to delete its images. The
+#                  flag is LEFT in place: this is the preview toggle's key
+#                  binding, and showing the pane again may put the picture
+#                  back without a new `preview` run to flag it — the flag is
+#                  what lets fzf's exit clean up.
+#   --forget       the same, and remove the flag (the next preview; fzf's exit).
+#   --mark         create the flag. WHEN a picture counts as one of these is
+#                  the caller's decision (`preview` knows what it drew and
+#                  where); this script only knows where the flag lives.
+#   --flag-path    print the flag's path, so a caller on a hot path can test
+#                  for it without running this again.
 #
 # No argument in the common case on purpose: fzf-tab splits its fzf-flags on
 # spaces, so a binding that needs one arrives at fzf cut in two (measured
@@ -19,9 +28,16 @@
 # reached fzf as two arguments, and the toggle did nothing useful).
 #
 # POSIX sh and no sourcing on purpose: it runs on a keypress.
+
+# Inside tmux the picture is unicode placeholders — plain cells that clear
+# with the pane — so there is nothing to flag or delete, in any mode.
 [ -n "${TMUX:-}" ] && exit 0
 tty="${PREVIEW_TTY_NAME:-$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')}"
 flag="${TMPDIR:-/tmp}/preview-kitty.${tty##*/}"
+case "${1:-}" in
+  --flag-path) printf '%s\n' "$flag"; exit 0 ;;
+  --mark) true 2>/dev/null >"$flag"; exit 0 ;;
+esac
 [ -e "$flag" ] || exit 0
 printf '\033_Ga=d,d=A\033\\' >"${PREVIEW_TTY:-/dev/tty}" 2>/dev/null
 [ "${1:-}" = --forget ] && rm -f -- "$flag"

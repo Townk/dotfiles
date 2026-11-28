@@ -21,12 +21,14 @@ unset _input_self
 _input::bin() {
   local p name
   [[ -n "${AI_PLAYBOOK_INPUT_BIN:-}" ]] && { print -r -- "$AI_PLAYBOOK_INPUT_BIN"; return 0; }
-  for name in troupe ai-playbook; do
-    p="$(command -v "$name" 2>/dev/null)"
-    [[ -n "$p" ]] && { print -r -- "$p"; return 0; }
-    for p in "$HOME/.local/share/go/bin/$name" "$HOME/go/bin/$name"; do
-      [[ -x "$p" ]] && { print -r -- "$p"; return 0; }
-    done
+  # troupe's lookup is common.zsh's (troupe::bin); the ai-playbook fallback
+  # behind it is this function's alone and walks the same places.
+  troupe::bin && return 0
+  name=ai-playbook
+  p="$(command -v "$name" 2>/dev/null)"
+  [[ -n "$p" ]] && { print -r -- "$p"; return 0; }
+  for p in "$HOME/.local/share/go/bin/$name" "$HOME/go/bin/$name"; do
+    [[ -x "$p" ]] && { print -r -- "$p"; return 0; }
   done
   print -r -- "troupe"
 }

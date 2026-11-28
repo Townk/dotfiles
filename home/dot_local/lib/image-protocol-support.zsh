@@ -1,15 +1,25 @@
 #!/usr/bin/env zsh
-# image-protocol-support.zsh — detect the terminal's usable image protocol.
-# SOURCED, never executed: defines get_terminal_image_protocol(), called by the
-# `preview` script to choose a renderer (Kitty / iTerm2 / Sixel). Dual-shell
-# (bash + zsh); no zsh-only runtime syntax.
+# image-protocol-support.zsh — what the terminal that will finally draw the
+# pixels can take. SOURCED, never executed. Dual-shell (bash + zsh); no
+# zsh-only runtime syntax.
+#
+#   get_terminal_image_protocol [outer]  its image protocols (Kitty / iTerm2 /
+#                                        Sixel), rc 1 when it has none
+#   get_chafa_format_args [outer]        the chafa arguments for it — THE one
+#                                        answer (`preview`, term-quick-view)
+#   get_image_max_bytes                  the largest single image stream it
+#                                        takes; 0 = no cap
+#
+# [outer] names the outer terminal (a $TERM_PROGRAM value) for a caller that
+# knows it by other means; without it the environment (tmux's, inside tmux)
+# says.
 
 get_terminal_image_protocol() {
   local host_support=()
   local final_capability=()
 
   # Safe expansion wraps to prevent 'parameter not set' errors
-  local term_prog="${TERM_PROGRAM:-}"
+  local term_prog="${1:-${TERM_PROGRAM:-}}"
   local iterm_sess="${ITERM_SESSION_ID:-}"
   local lc_term="${LC_TERMINAL:-}"
   local tmux_env="${TMUX:-}"
@@ -44,8 +54,8 @@ get_terminal_image_protocol() {
   # Unknown outer (e.g. detached, or over SSH without the env) → no image
   # protocol; consumers fall back to character art.
   if [ -n "$tmux_env" ]; then
-    local tmux_outer
-    tmux_outer=$(tmux show-environment TERM_PROGRAM 2>/dev/null)
+    local tmux_outer="${1:-}"
+    [ -n "$tmux_outer" ] || tmux_outer=$(tmux show-environment TERM_PROGRAM 2>/dev/null)
     case "${tmux_outer#TERM_PROGRAM=}" in
       WezTerm) final_capability+=("Sixel") ;;
       Ghostty | ghostty | rex) final_capability+=("Kitty") ;;
@@ -62,4 +72,64 @@ get_terminal_image_protocol() {
   else
     return 1
   fi
+}
+
+# get_chafa_format_args [outer] — the chafa arguments that draw a picture on
+# this terminal, one line. The yazi shim (yazi/plugins/preview-shim.yazi/
+# main.lua, draw_tty_sixel) carries the tmux-sixel line as a Lua literal — it
+# cannot source this; tests/image_protocol_support_spec.sh keeps the two equal.
+get_chafa_format_args() {
+  local protocols
+
+  # Inside tmux, chafa's defaults sabotage both viable tiers (chafa 1.18):
+  # `--passthrough auto` wraps sixel in the passthrough envelope, handing the
+  # image to the OUTER terminal as an overlay tmux wipes on its next repaint —
+  # native (unwrapped) sixel is what tmux ingests, owns, and redraws. And the
+  # active terminal probe can't complete through the mux, leaking query text
+  # (`]10;?`) into captured output. Pin passthrough explicitly per tier and
+  # disable probing whenever tmux is in the loop.
+  #   Sixel (WezTerm outer) → --passthrough none: tmux-native placement.
+  #   Kitty (Ghostty outer) → --passthrough tmux: unicode placeholders ARE
+  #   plain cells to tmux, but the image transmission needs the envelope.
+  if protocols=$(get_terminal_image_protocol "${1:-}" 2>/dev/null); then
+    if [[ " $protocols " == *" Sixel "* ]]; then
+      if [[ -n "${TMUX:-}" ]]; then
+        echo "-f sixel --passthrough none --probe off"
+      else
+        echo "-f sixel"
+      fi
+    elif [[ " $protocols " == *" iTerm2 "* ]]; then
+      echo "-f iterm"
+    elif [[ " $protocols " == *" Kitty "* ]]; then
+      if [[ -n "${TMUX:-}" ]]; then
+        echo "-f kitty --passthrough tmux --probe off"
+      else
+        echo "-f kitty"
+      fi
+    else
+      echo "-f symbols"
+    fi
+  else
+    echo "-f symbols"
+  fi
+}
+
+# get_image_max_bytes — the largest single image stream this terminal takes;
+# 0 = no cap. A sixel image reaches tmux as ONE DCS string and tmux DISCARDS a
+# string sequence past its `input-buffer-size` (a SERVER option, default
+# 1 MiB — measured: 1,032,961 bytes rendered, 1,174,685 did not), so ASK the
+# server; our tmux.conf raises it. 5% margin for the bytes around the image.
+# The cap is tmux's, and only tmux's: elsewhere shrinking to fit it only makes
+# the picture small.
+get_image_max_bytes() {
+  local max=0 lim
+  if [ -n "${TMUX:-}" ]; then
+    max=1000000
+    lim="$(tmux show -sv input-buffer-size 2>/dev/null)"
+    case "$lim" in
+      '' | *[!0-9]*) ;;
+      *) [ "$lim" -gt 1000 ] && max=$((lim * 95 / 100)) ;;
+    esac
+  fi
+  echo "$max"
 }

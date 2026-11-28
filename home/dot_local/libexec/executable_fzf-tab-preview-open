@@ -18,6 +18,10 @@ debug_log() {
   print -r -- "$*" >>"$log_dir/fzf-tab-preview-open.log"
 }
 
+# The compcap record (key, \2, NUL-separated k/v) is parsed a second time in
+# zsh/completion.sh (`_fzf-tab-apply`): that one reads the live array in the
+# shell, this one fzf-tab's compcap FILES from a detached process — two
+# readers of one format, kept in step by hand.
 resolve_fzf_tab_desc() {
   local desc="$1"
   local tmp_dir="${TMPPREFIX:-/tmp/zsh}-fzf-tab-$USER"
