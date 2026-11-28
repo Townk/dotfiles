@@ -27,10 +27,15 @@ source "${BKP_LIB:-$HOME/.local/lib}/backup-tm.zsh"
 # Rex has no pane options. Its config keeps the same two values in a table
 # keyed by block id, set through the `tm_ctx` action (init.lua, "Time Machine
 # keys"), and its key functions read that table instead of a format string.
+#
+# The rex binary comes from the shim's one lookup (_mux_rx_bin): `route` is
+# started by the Rex config with a PATH that has no rex in it, and only that
+# lookup knows the app bundle. mux-bootstrap.zsh is the cheap half of the shim
+# (function definitions, a few ms), so it is sourced once per process here,
+# not per tick — unlike mux.zsh, which the verbs below still source late.
+source "${MUX_LIB:-${BKP_LIB:-$HOME/.local/lib}}/mux-bootstrap.zsh"
 _tm_rex() {  # _tm_rex <rex args…> — never starts a server, never hangs a verb
-  local bin="${MUX_REX_BIN:-}"
-  [[ -n "$bin" ]] || bin="$(command -v rex 2>/dev/null)" || return 1
-  "$bin" --autostart=false --timeout 3s "$@"
+  _mux_rx_run --timeout 3s "$@"
 }
 
 tm_stamp() {  # tm_stamp <ctx> [session-dir]

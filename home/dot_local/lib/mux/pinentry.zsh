@@ -303,17 +303,10 @@ mux::pinentry_rex_panes() {
 }
 
 # mux::pinentry_rex_attached — the sessions a connected Rex app is showing,
-# by the same label mux::pinentry_rex_panes prints, one per line.
+# by the same label mux::pinentry_rex_panes prints, one per line. The query is
+# the shim's own; --flat keeps the label safe inside the `|`-separated lines.
 mux::pinentry_rex_attached() {
-  local sessions clients
-  sessions="$(_mux_rx_run --timeout 3s ls --json 2>/dev/null)" || return 1
-  clients="$(_mux_rx_run --timeout 3s client ls --json 2>/dev/null)" || return 1
-  jq -r -n --argjson s "$sessions" --argjson c "$clients" '
-    [ ($c.clients // $c)[]?
-      | select(.info.kind? == "app" and .connection_state? == "connected")
-      | .session_ids[]? ] as $ids
-    | $s.sessions[]? | select(.session_id as $id | $ids | index($id))
-    | (.label // "" | gsub("[|\\t\\n]"; " "))' 2>/dev/null
+  _mux_rx_attached_sessions --flat
 }
 
 # _mux::pinentry_spawn_rex <caller_tty> <w> <h> [requester] — as

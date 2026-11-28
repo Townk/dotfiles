@@ -72,7 +72,7 @@ EOS
       print -r -- '_zsh_should_autoattach_mux() { return 0 }'
       # A login over SSH emits a clear-screen escape ahead of the exec; unset
       # so it does not glue itself onto the captured line.
-      print -r -- 'SSH_CONNECTION='
+      print -r -- 'SSH_CONNECTION= SSH_CLIENT= SSH_TTY='
       print -r -- "XDG_CACHE_HOME=$AS_TMP/cache"
       print -r -- "XDG_CONFIG_HOME=$AS_TMP/cfg"
       # The backend resolves its binary through this seam, so the block
@@ -90,6 +90,40 @@ EOS
     fi
   }
   seeded() { cat "$AS_TMP/seeded"; }
+
+  # "Remote" is mux::is_remote's triple everywhere in this file: the gate
+  # above admits a login that only SSH_TTY or SSH_CLIENT marks, so what
+  # follows the gate must not ask SSH_CONNECTION alone.
+  Describe 'remote detection'
+    wipes() {
+      {
+        print -r -- '_zsh_should_autoattach_mux() { return 0 }'
+        print -r -- "SSH_CONNECTION= SSH_CLIENT= SSH_TTY=${1-}"
+        print -r -- "XDG_CACHE_HOME=$AS_TMP/cache"
+        print -r -- "XDG_CONFIG_HOME=$AS_TMP/cfg"
+        print -r -- "MUX_TMUX_BIN=$AS_TMP/mux"
+        print -r -- "source $PWD/home/dot_local/lib/mux-bootstrap.zsh"
+        awk '/^if _zsh_should_autoattach_mux; then$/,/^unset -f _zsh_should_autoattach_mux/' "$AS_TMP/zshrc"
+      } >"$AS_TMP/wipe-case.zsh"
+      CASE=none zsh "$AS_TMP/wipe-case.zsh" 2>/dev/null | grep -c "$(printf '\033\[H\033\[2J')" || true
+    }
+    bare_tests() { grep -v '^[[:space:]]*#' "$AS_TMP/zshrc" | grep -c 'SSH_CONNECTION' || true; }
+
+    It 'wipes the MOTD before the attach for a login only SSH_TTY marks as remote'
+      When call wipes /dev/pts/3
+      The output should equal "1"
+    End
+
+    It 'leaves a local start untouched'
+      When call wipes ""
+      The output should equal "0"
+    End
+
+    It 'tests SSH_CONNECTION by itself nowhere'
+      When call bare_tests
+      The output should equal "0"
+    End
+  End
 
   # The gate, not the launch: a Rex pane must never autostart tmux.
   # Rex is itself the multiplexer, so nesting one only doubles the chrome and

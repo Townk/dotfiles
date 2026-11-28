@@ -293,6 +293,17 @@ Describe 'quick-launch on Rex'
       The output should equal "1"
     End
 
+    It 'opens a tab whose name starts with a dash, then focuses it on the second ask'
+      dash_tab_twice() {
+        ql_dispatch tab dash >/dev/null || return 1
+        ql_dispatch tab dash >/dev/null || return 1
+        view "$RX_SID" | jq -c '[.windows[] | .label | select(test("dashed"))]'
+      }
+      QL_JSON=$(jq -c '.tabs += [{"id":"dash","name":"-dashed","action":{"type":"Run","args":["sleep 60"]}}]' <<<"$QL_JSON")
+      When call dash_tab_twice
+      The output should equal '["-dashed"]'
+    End
+
     # Found live: the server made the new window active and the app stayed on
     # the old tab. Only a client action moves the app, so the script has to
     # say which window to show — on create AND on focus.

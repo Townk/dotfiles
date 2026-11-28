@@ -117,15 +117,24 @@ _mux_rx_rename_session() {
   _mux_rx_run session rename "$target" "$new_name" >/dev/null 2>&1
 }
 
-# Sessions some Rex APP currently shows — the CLI's own short-lived
-# connections are clients too, and must not count as "attached".
+# _mux_rx_attached_sessions [--flat] — the labels of the sessions some Rex APP
+# currently shows, one per line. Only a CONNECTED app counts: the CLI's own
+# short-lived connections are clients too, and an app that lost its
+# connection stays listed for a while. Both calls carry a timeout and neither
+# needs $REX_SESSION, because this also runs under gpg-agent (mux/pinentry.zsh).
+# --flat is for a caller that puts the label in a `|`-separated line: `|`, tab
+# and newline become spaces.
 _mux_rx_attached_sessions() {
-  local sessions clients
-  sessions="$(_mux_rx_run ls --json 2>/dev/null)" || return 1
-  clients="$(_mux_rx_run client ls --json 2>/dev/null)" || return 1
-  jq -rn --argjson s "$sessions" --argjson c "$clients" '
-    ([$c.clients[]? | select(.info.kind == "app") | .session_ids[]?] | unique) as $ids
-    | $s.sessions[]? | select(.session_id as $i | $ids | index($i)) | .label // empty'
+  local flat=false sessions clients
+  [[ "${1:-}" == --flat ]] && flat=true
+  sessions="$(_mux_rx_run --timeout 3s ls --json 2>/dev/null)" || return 1
+  clients="$(_mux_rx_run --timeout 3s client ls --json 2>/dev/null)" || return 1
+  jq -rn --argjson s "$sessions" --argjson c "$clients" --argjson flat "$flat" '
+    [ ($c.clients // $c)[]?
+      | select(.info.kind? == "app" and .connection_state? == "connected")
+      | .session_ids[]? ] as $ids
+    | $s.sessions[]? | select(.session_id as $i | $ids | index($i))
+    | if $flat then (.label // "" | gsub("[|\\t\\n]"; " ")) else (.label // empty) end' 2>/dev/null
 }
 
 # The WezTerm-pane ↔ session join has no meaning here: Rex is its own
@@ -538,6 +547,14 @@ _mux_rx_show_window() {
   return 0
 }
 
+# _mux_rx_label_arg <label> — the label as `rex window new` can take it. The
+# label is positional there (no --label flag, and `--` already starts the
+# command), so one that starts with a dash would be read as flags: `-logs` is
+# `-l -o -g -s`. A leading space keeps it a label.
+_mux_rx_label_arg() {
+  if [[ "$1" == -* ]]; then print -r -- " $1"; else print -r -- "$1"; fi
+}
+
 # _mux_rx_new_tab <session> <name> <cwd> <singleton> -- <cmd...>
 # The new tab is shown (_mux_rx_show_window), as tmux's new-window does.
 # Singleton: an existing window of that label is closed and re-created, the
@@ -560,7 +577,7 @@ _mux_rx_new_tab() {
   local -a flags=(-s "$session" --json)
   [[ -n "$cwd" ]] && flags+=(-c "$cwd")
   local -a label=()
-  [[ -n "$name" ]] && label=("$name")
+  [[ -n "$name" ]] && label=("$(_mux_rx_label_arg "$name")")
   local out
   if (($#)); then
     out="$(_mux_rx_run window new "${flags[@]}" "${label[@]}" -- "$@" 2>/dev/null)" || return 1

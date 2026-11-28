@@ -256,7 +256,7 @@ ql_rx_open_tab() {
   [[ -n "$cwd" ]] && flags+=(-c "$cwd")
   ql_rx_argv "$cmd"
   local out first
-  out="$(_mux_rx_run window new "${flags[@]}" "$name" "${reply[@]}" 2>/dev/null)" || {
+  out="$(_mux_rx_run window new "${flags[@]}" "$(_mux_rx_label_arg "$name")" "${reply[@]}" 2>/dev/null)" || {
     echo "quick-launch: failed to create tab '$name'" >&2
     return 1
   }

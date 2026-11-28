@@ -92,8 +92,8 @@ source "${THEME_PALETTE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/theme/chezmoi-sy
 # default: a tmux pane has $ZELLIJ unset, so it passed, and the Reconnect
 # branch's bare `exit 0` would have closed that PANE instead of the connection.
 _gpgfwd_marker="${XDG_STATE_HOME:-$HOME/.local/state}/ssh/new-socket"
-if [[ -o interactive ]] && ! mux::in_session &&
-   [[ -n "${SSH_CONNECTION:-}" && -t 2 && -f "$_gpgfwd_marker" ]]; then
+if [[ -o interactive ]] && ! mux::in_session && mux::is_remote &&
+   [[ -t 2 && -f "$_gpgfwd_marker" ]]; then
   rm -f "$_gpgfwd_marker"
   _gpgfwd_msg='gpg-agent socket moved since this box was provisioned — reconnect to refresh the gpg forward.'
   if command -v gum >/dev/null 2>&1; then
@@ -143,7 +143,7 @@ if _zsh_should_autoattach_mux; then
   # alternate screen. Wipe the primary buffer + scrollback first so it doesn't
   # flash on attach, nor reappear when the mux restores the primary buffer on
   # exit. SSH-scoped so local startup is untouched.
-  [[ -n "$SSH_CONNECTION" ]] && printf '\e[H\e[2J\e[3J'
+  mux::is_remote && printf '\e[H\e[2J\e[3J'
   # Record "Main" as the most-recently-used workspace in the quick-launch
   # picker's recency cache, so after switching to another workspace you can
   # flip straight back to Main (it sorts to the top of the picker). This boot

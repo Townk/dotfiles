@@ -172,7 +172,7 @@ Describe 'mux/pinentry.zsh — on Rex'
 #!/bin/sh
 printf '%s\n' "\$*" >>"$PR_TMP/rex.log"
 case " \$* " in
-  *" client ls "*) echo '{"clients":[{"info":{"kind":"app"},"connection_state":"connected","session_ids":["session:a"]},{"info":{"kind":"cli"},"connection_state":"connected","session_ids":["session:b"]},{"info":{"kind":"app"},"connection_state":"lost","session_ids":["session:b"]}]}' ;;
+  *" client ls "*) echo '{"clients":[{"info":{"kind":"app"},"connection_state":"connected","session_ids":["session:a"]},{"info":{"kind":"cli"},"connection_state":"connected","session_ids":["session:b"]},{"info":{"kind":"app"},"connection_state":"'"\${STUB_B_STATE:-lost}"'","session_ids":["session:b"]}]}' ;;
   *" ls --json "*) echo '{"sessions":[{"session_id":"session:a","label":"Main"},{"session_id":"session:b","label":"Jobs | x"}]}' ;;
   *" session.new_layer "*)
     cat >"$PR_TMP/req.json"
@@ -215,10 +215,10 @@ EOS
     chmod +x "$PR_TMP/rex" "$PR_TMP/ps"
     printf '%s\n' '# agents' agent cursor-agent claude >"$PR_TMP/agents"
     export MUX_REX_BIN="$PR_TMP/rex" MUX_PE_PS_BIN="$PR_TMP/ps" MUX_PE_AGENT_PROCS="$PR_TMP/agents" TMPDIR="$PR_TMP"
-    unset TMUX MUX_TMUX_BIN REX_BLOCK REX_SESSION STUB_LAYER STUB_COLS STUB_ROWS
+    unset TMUX MUX_TMUX_BIN MUX_BACKEND REX_BLOCK REX_SESSION STUB_LAYER STUB_COLS STUB_ROWS STUB_B_STATE
     mux::pinentry_alert() { print -r -- "$*" >"$PR_TMP/alert"; }
   }
-  cleanup() { rm -rf "$PR_TMP"; unset PR_TMP MUX_REX_BIN MUX_PE_PS_BIN MUX_PE_AGENT_PROCS TMPDIR STUB_LAYER STUB_COLS STUB_ROWS; }
+  cleanup() { rm -rf "$PR_TMP"; unset PR_TMP MUX_REX_BIN MUX_PE_PS_BIN MUX_PE_AGENT_PROCS TMPDIR MUX_BACKEND STUB_LAYER STUB_COLS STUB_ROWS STUB_B_STATE; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -253,6 +253,33 @@ EOS
     It 'prints the sessions a connected app shows, by label, separator-safe'
       When call mux::pinentry_rex_attached
       The output should equal "Main"
+    End
+
+    It 'flattens the separators of a label it prints'
+      export STUB_B_STATE=connected
+      When call mux::pinentry_rex_attached
+      The output should equal "Main
+Jobs   x"
+    End
+
+    # One implementation (mux/rex.zsh) answers the shim's question too.
+    It 'gives the shim the same sessions: an app that lost its connection shows nothing'
+      export MUX_BACKEND=rex
+      When call mux::attached_sessions
+      The output should equal "Main"
+    End
+
+    It 'gives the shim the label as it is'
+      export MUX_BACKEND=rex STUB_B_STATE=connected
+      When call mux::attached_sessions
+      The output should equal "Main
+Jobs | x"
+    End
+
+    It 'bounds every call the shim'"'"'s query makes, and starts no server'
+      bounded() { MUX_BACKEND=rex mux::attached_sessions >/dev/null; grep -c -v -- '^--autostart=false --timeout 3s ' "$PR_TMP/rex.log" || true; }
+      When call bounded
+      The output should equal "0"
     End
   End
 

@@ -218,10 +218,14 @@ function preview-raster() {
   # 1,174,685 does not. Render to a file, and if it overruns, ask for fewer
   # cells (chafa scales the pixels with them) until it fits. Only oversized
   # images pay the retry; everything else pays one temp write.
+  #
+  # The cap is tmux's, and only tmux's (term-quick-view has the same rule):
+  # elsewhere shrinking to fit it only makes the picture small. 0 = no cap.
   local out max="${PREVIEW_IMAGE_MAX_BYTES:-}" pct lim
   if [[ -z "$max" ]]; then
-    max=1000000
+    max=0
     if [[ -n "${TMUX:-}" ]]; then
+      max=1000000
       lim="$(tmux show -sv input-buffer-size 2>/dev/null)"
       [[ "$lim" == <-> ]] && ((lim > 1000)) && max=$(( lim * 95 / 100 ))
     fi
@@ -234,7 +238,7 @@ function preview-raster() {
   trap 'rm -f -- "$out"' INT TERM
   {
     chafa "${chafa_format[@]}" "${align[@]}" -s "${w:-80}x${h:-24}" "$1" >"$out" 2>/dev/null
-    if [[ "$(wc -c <"$out" | tr -d ' ')" -gt "$max" ]]; then
+    if (( max > 0 )) && [[ "$(wc -c <"$out" | tr -d ' ')" -gt "$max" ]]; then
       for pct in 70 50 35 25; do
         chafa "${chafa_format[@]}" "${align[@]}" \
           -s "$(( ${w:-80} * pct / 100 ))x$(( ${h:-24} * pct / 100 ))" "$1" >"$out" 2>/dev/null

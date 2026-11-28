@@ -476,6 +476,48 @@ Describe 'preview: image alignment knob'
   End
 End
 
+# The ~1 MB ceiling on one sixel image is tmux's input buffer, and only
+# tmux's: elsewhere (Rex, a bare terminal) shrinking to fit it only makes the
+# picture small. term-quick-view has the same rule.
+Describe 'preview: sixel byte cap'
+  setup() {
+    T=$(mktemp -d); mkdir -p "$T/bin"
+    # chafa: log the call, emit 1.2 MB. tmux: no answer for the buffer size.
+    printf '#!/bin/sh\necho "chafa $*" >> %s/chafa.calls\nhead -c 1200000 /dev/zero\n' "$T" > "$T/bin/chafa"
+    printf '#!/bin/sh\nexit 0\n' > "$T/bin/tmux"
+    chmod +x "$T/bin/chafa" "$T/bin/tmux"
+    printf 'x' > "$T/img.png"
+  }
+  cleanup() { rm -rf "$T"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  renders() {
+    env -u PREVIEW_IMAGE_MAX_BYTES "$@" PATH="$T/bin:$PATH" \
+      zsh -c 'w=100 h=25; source "$1"; preview-raster "$2"' _ \
+      "$SHELLSPEC_PROJECT_ROOT/home/dot_local/bin/executable_preview" "$T/img.png" >/dev/null 2>&1 || true
+    grep -c -- ' -s ' "$T/chafa.calls"
+    tail -n 1 "$T/chafa.calls" | grep -o -- '-s [0-9x]*'
+  }
+
+  It 'renders an oversized image once, at full size, outside tmux'
+    When call renders -u TMUX
+    The line 1 of output should equal "1"
+    The line 2 of output should equal "-s 100x25"
+  End
+
+  It 'still walks the shrink ladder inside tmux'
+    When call renders TMUX=/tmp/s,1,0
+    The line 1 of output should equal "5"
+    The line 2 of output should equal "-s 25x6"
+  End
+
+  It 'honours an explicit ceiling anywhere'
+    When call renders -u TMUX PREVIEW_IMAGE_MAX_BYTES=1000
+    The line 1 of output should equal "5"
+  End
+End
+
 # MED-16: fzf terminates the preview process on every selection change. The
 # raster path renders through a temp file (pvraster.XXXXXX); without
 # signal-scoped cleanup each kill strands one temp — raster::prune only reaps

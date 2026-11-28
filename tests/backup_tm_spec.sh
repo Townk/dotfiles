@@ -806,6 +806,25 @@ EOF
       The contents of file "$FIX/rx.calls" should include 'block call -s block:7 -b block:7 write {"data":"J"}'
     End
 
+    # The Rex config starts the route through rex.exec with a fixed PATH that
+    # has no rex in it: the Mac app keeps the CLI inside its server bundle.
+    It 'finds the rex of the app bundle when PATH has none (run by rex.exec)'
+      route_dead_rex_bundle() {
+        local app="$FIX/home/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS"
+        rex_stub
+        mkdir -p "$app" "$FIX/bin"
+        mv "$FIX/rex" "$app/rex"
+        ln -s "$(command -v jq)" "$FIX/bin/jq"
+        env -u TMUX -u MUX_REX_BIN -u REX_BIN_DIR HOME="$FIX/home" PATH="$FIX/bin:/usr/bin:/bin" \
+          "$(command -v zsh)" "$BIN" route \
+          --session "$FIX/sessions/s.gone" --pane block:7 --send J shift+down
+      }
+      When run route_dead_rex_bundle
+      The status should be success
+      The contents of file "$FIX/rx.calls" should include "--autostart=false --timeout 3s do -s block:7 tm_ctx block=block:7 ctx= session="
+      The contents of file "$FIX/rx.calls" should include 'block call -s block:7 -b block:7 write {"data":"J"}'
+    End
+
     It 'writes a stale Shift+Up on Rex as the bytes a terminal sends'
       route_dead_rex_up() {
         rex_stub

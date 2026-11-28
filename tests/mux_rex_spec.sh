@@ -157,7 +157,10 @@ Describe 'mux shim — Rex backend'
       RX_SOCK="/tmp/mxrx-$$.sock"
       RX_SERVER="unix://$RX_SOCK"
       : > "$RX_STATE/init.lua"
-      command rex server run --listen "$RX_SERVER" --state-dir "$RX_STATE/state" \
+      # Born "inside tmux", as a server started from a tmux pane is (see the
+      # layer example below).
+      TMUX=/tmp/mxrx-fake,1,0 TMUX_PANE=%9 \
+        command rex server run --listen "$RX_SERVER" --state-dir "$RX_STATE/state" \
         --config "$RX_STATE/init.lua" --restore=false >"$RX_STATE/server.log" 2>&1 &
       RX_PID=$!
       local i
@@ -264,6 +267,24 @@ Describe 'mux shim — Rex backend'
       The output should equal "spec-pop"
     End
 
+    # A layer's command starts from the SERVER's environment, and one that
+    # took an inherited $TMUX at its word would act as a tmux pane. The server
+    # itself leaves TMUX/TMUX_PANE out and sets COLORTERM (0.1.0-preview.25),
+    # which is why _mux_rx_layer does not wrap its command in `env -u …`.
+    # If this fails after a Rex update, the wrapper has become necessary.
+    It 'runs a layer command without the tmux variables the server was born with'
+      layer_env() {
+        local f="$RX_STATE/layer-env" i
+        unset COLORTERM
+        mux::popup 50% 50% --title spec-env -- /bin/sh -c \
+          'echo "tmux=${TMUX-unset} pane=${TMUX_PANE-unset} color=${COLORTERM-unset}" >"$1"; sleep 30' sh "$f" || return 1
+        for i in {1..50}; do [[ -s "$f" ]] && break; sleep 0.1; done
+        cat "$f"
+      }
+      When call layer_env
+      The output should equal "tmux=unset pane=unset color=truecolor"
+    End
+
     It 'reports floats as available and creates one sized in cells'
       float_one() {
         mux::has_float_pane || return 1
@@ -282,6 +303,19 @@ Describe 'mux shim — Rex backend'
       }
       When call tabs
       The output should equal "1"
+    End
+
+    # The label is positional for `rex window new`, so one that starts with
+    # a dash would be read as flags (`-spec…` is `-s pec…`: another session).
+    It 'opens a tab whose name starts with a dash, and replaces it as a singleton'
+      dash_tabs() {
+        mux::new_tab --name -spec-dash -- /bin/sh -c 'sleep 30' || return 1
+        mux::new_tab --name -spec-dash --singleton -- /bin/sh -c 'sleep 30' || return 1
+        rx api call -s "$RX_SID" session.view |
+          jq -c '[.windows[] | .label | select(test("spec-dash"))]'
+      }
+      When call dash_tabs
+      The output should equal '["-spec-dash"]'
     End
 
     It 'renames another session and then kills it'
