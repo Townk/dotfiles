@@ -305,6 +305,19 @@ Describe 'mux shim — Rex backend'
       The output should equal "1"
     End
 
+    It 'focuses a named tab instead of opening a second when asked to'
+      one_tab() {
+        mux::new_tab --name spec-focus -- /bin/sh -c 'sleep 30' || return 1
+        mux::new_tab --name other-tab -- /bin/sh -c 'sleep 30' || return 1
+        mux::new_tab --name spec-focus --focus-existing -- /bin/sh -c 'sleep 30' || return 1
+        rx api call -s "$RX_SID" session.view |
+          jq -r '([.windows[] | select(.label == "spec-focus")] | length) as $n
+            | (.active_window_id as $a | .windows[] | select(.window_id == $a) | .label) as $l | "\($n) \($l)"'
+      }
+      When call one_tab
+      The output should equal "1 spec-focus"
+    End
+
     # The label is positional for `rex window new`, so one that starts with
     # a dash would be read as flags (`-spec…` is `-s pec…`: another session).
     It 'opens a tab whose name starts with a dash, and replaces it as a singleton'

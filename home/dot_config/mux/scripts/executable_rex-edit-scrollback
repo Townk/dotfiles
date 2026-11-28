@@ -40,14 +40,13 @@ esac
 rm -f -- "$1"'
 
 cwd="$(_mux_rx_pane_cwd 2>/dev/null)" || cwd=""
-typeset -a where=()
-[[ -d "$cwd" ]] && where=(-c "$cwd")
+[[ -d "$cwd" ]] || cwd=""
 
-if ! out="$(_mux_rx_run window new -s "$REX_BLOCK" --json "${where[@]}" scrollback -- \
-  zsh -c "$runner" rex-edit-scrollback "$file" 2>/dev/null)"; then
+# A second scrollback tab is a second tab (reuse 0). The shim's verb also
+# tells the app to show it, which stays on the tab it was showing otherwise.
+if ! _mux_rx_new_tab "$REX_BLOCK" scrollback "$cwd" 0 -- \
+  zsh -c "$runner" rex-edit-scrollback "$file"; then
   rm -f -- "$file"
   print -ru2 -- "rex-edit-scrollback: could not open a tab"
   exit 1
 fi
-# The app stays on the tab it was showing unless it is told to move.
-_mux_rx_show_window "$REX_BLOCK" "$(print -r -- "$out" | jq -r '.window_id // empty' 2>/dev/null)" || :

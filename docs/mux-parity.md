@@ -541,6 +541,7 @@ Rex floating **layer**.
 | `mux::popup` | `display-popup` via `run-shell -b` | `session.new_layer`, centered | 🟡 | fire-and-forget on both. NOT modal on Rex: the layer is a real floating pane and focus can leave it |
 | `mux::float_pane` / `has_float_pane` | `new-pane` (version-gated) | `session.new_layer` (always) | ✅ | cells are converted to window fractions |
 | `mux::new_tab --singleton` | `respawn-window -k` | close the labelled window, create a new one | 🟡 | the window id changes; the label does not |
+| `mux::new_tab --focus-existing` | ignored: a second tab opens | first window of that label is focused and shown; the command is not run | 🟡 | Rex only (tmux is being retired); `edit-terminal-config` uses it |
 | `mux::send_text` / `send_key` | `send-keys` | `rex send` / `rex send-key` | ✅ | shift+arrows are spelled `shift+up` |
 | current tab / name / focus | `window_index`, `window_name` | position and label of the window holding `$REX_BLOCK` | ✅ | 1-based position; our OWN window, not the session's active one |
 | `mux::pane_cwd` / `focused_command` | pane format | block `process` method (`foreground.cwd` / `.name`) | ✅ | Rex tracks the foreground process natively — no shell stamp needed |

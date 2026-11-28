@@ -70,16 +70,11 @@ if mux::in_rex; then
     (( i += 1 ))
   done
 
-  modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
   block=""
   trap '_mux_rx_close_block "$block"' INT TERM
-  # A height in cells is exact for the target; rex-modal makes the layer
-  # keep it (a fraction of the window can land a row either side). `env` only
-  # for that: the server gives a layer's command COLORTERM=truecolor itself.
-  typeset -a rows=()
-  [[ "$height" == <-> ]] && rows=(env "MUX_REX_MODAL_ROWS=$height")
-  block="$(_mux_rx_layer "$width" "$height" "$title" "$PWD" "" -- \
-    "${rows[@]}" "$modal" --origin "$REX_BLOCK" "${rargs[@]}")" || block=""
+  # The shim's one launcher of a rex-modal layer: our block, our directory,
+  # and the row count of a height given in cells.
+  block="$(_mux_rx_modal_layer "$width" "$height" "$title" -- "${rargs[@]}")" || block=""
   [[ -n "$block" ]] || {
     echo "mux-modal: could not open a floating layer" >&2
     exit 1

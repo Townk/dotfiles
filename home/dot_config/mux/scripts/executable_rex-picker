@@ -23,13 +23,13 @@ typeset -a env_args=() cmd=() modal_args=()
 case "$name" in
   glyph)
     w=70% h=60% title="Glyph Picker"
-    env_args=(PICK_GLYPH_PADDING=0,2,0,2)
+    env_args=(--env PICK_GLYPH_PADDING=0,2,0,2)
     cmd=("$libexec/pick-glyph")
     modal_args=(--inject)
     ;;
   gitmoji)
     w=70% h=60% title="Gitmoji Picker"
-    env_args=(PICK_GITMOJI_PADDING=0,2,0,2)
+    env_args=(--env PICK_GITMOJI_PADDING=0,2,0,2)
     cmd=("$libexec/pick-gitmoji")
     modal_args=(--inject)
     ;;
@@ -61,7 +61,6 @@ fi
 }
 
 source "${MUX_LIB:-$HOME/.local/lib}/mux-bootstrap.zsh"
-modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
 
 # A second press of a picker key lands in the first picker's float, and a
 # float opened over THAT would type its result into the picker. A key pressed
@@ -74,13 +73,10 @@ in_float="$(_mux_rx_float_of "$REX_BLOCK" 2>/dev/null)" || in_float=""
 cwd="$(_mux_rx_pane_cwd 2>/dev/null)" || cwd=""
 [[ -d "$cwd" ]] || cwd=""
 
-# `env` only for a picker with variables of its own: the server gives a
-# layer's command COLORTERM=truecolor itself (pinned in tests/mux_rex_spec.sh).
-typeset -a with_env=()
-(( ${#env_args} )) && with_env=(env "${env_args[@]}")
-block="$(_mux_rx_layer "$w" "$h" "$title" "$cwd" "" -- \
-  "${with_env[@]}" "$modal" --origin "$REX_BLOCK" --title "$title" \
-  "${modal_args[@]}" --no-chrome -- "${cmd[@]}")"
+# The shim's one launcher of a rex-modal layer, told the pane's directory
+# (not ours) and the picker's own variables, when it has any.
+block="$(_mux_rx_modal_layer --cwd "$cwd" "${env_args[@]}" "$w" "$h" "$title" -- \
+  --title "$title" "${modal_args[@]}" --no-chrome -- "${cmd[@]}")"
 [[ -n "$block" ]] || {
   print -ru2 -- "rex-picker: could not open a floating layer for $name"
   exit 1

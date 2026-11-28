@@ -417,23 +417,41 @@ _mux_rx_popup() {
 # block forever. So the reader runs in the background and is abandoned once
 # the layer's block is gone.
 
-# _mux_rx_modal_layer <w> <h> <title> -- <rex-modal args and target…> — open
-# the layer over OUR block, in OUR directory (a layer's command otherwise
-# starts in the server's, and a picker's preview of a relative path misses).
-# Prints the layer's block id; empty on failure.
+# _mux_rx_modal_layer [--cwd DIR] [--env NAME=VALUE]… <w> <h> <title> --
+#   <rex-modal args and target…> — THE way a layer running rex-modal is
+# opened (the floats below, mux-modal, rex-picker): over OUR block, in OUR
+# directory (a layer's command otherwise starts in the server's, and a
+# picker's preview of a relative path misses). Prints the layer's block id;
+# empty on failure.
+#   --cwd DIR   another directory, for a caller whose own is not the pane's
+#               (a key action runs from the server's). Empty: the server's.
+#   --env N=V   a variable for the target; repeatable.
+# $MUX_REX_MODAL replaces rex-modal's path (tests).
 _mux_rx_modal_layer() {
+  local cwd="$PWD"
+  local -a vars=()
+  while (($#)); do
+    case "$1" in
+      --cwd) cwd="${2-}"; shift 2 ;;
+      --env) vars+=("${2-}"); shift 2 ;;
+      *) break ;;
+    esac
+  done
   local w="$1" h="$2" title="$3"
   shift 3
   [[ "${1-}" == "--" ]] && shift
   local modal="${MUX_REX_MODAL:-$HOME/.config/mux/scripts/rex-modal}"
   # A height in cells is a promise to the target: it drew, or will draw, for
-  # exactly that many rows. rex-modal makes the layer keep it.
+  # exactly that many rows. rex-modal makes the layer keep it (a fraction of
+  # the window can land a row either side).
+  [[ "$h" == <-> ]] && vars=("MUX_REX_MODAL_ROWS=$h" "${vars[@]}")
   # No COLORTERM here: the server gives a layer's command truecolor itself
-  # (pinned in tests/mux_rex_spec.sh), so `env` is only for the row count.
-  local -a rows=()
-  [[ "$h" == <-> ]] && rows=(env "MUX_REX_MODAL_ROWS=$h")
-  _mux_rx_layer "$w" "$h" "$title" "$PWD" "" -- \
-    "${rows[@]}" "$modal" --origin "${REX_BLOCK:-}" "$@"
+  # (pinned in tests/mux_rex_spec.sh), so `env` is only for the variables
+  # above, and absent without any.
+  local -a pre=()
+  (( ${#vars} )) && pre=(env "${vars[@]}")
+  _mux_rx_layer "$w" "$h" "$title" "$cwd" "" -- \
+    "${pre[@]}" "$modal" --origin "${REX_BLOCK:-}" "$@"
 }
 
 # _mux_rx_close_block <block> — close a layer we opened; quiet either way.
@@ -511,6 +529,52 @@ _mux_rx_await_modal() {
   return 0
 }
 
+# --- capturing a float's answer ---------------------------------------------
+# The scaffold both floats below stand on. They run inside `$(…)`, where an
+# EXIT trap fires too late, so every return path removes the temps itself —
+# through one of the two helpers that end a capture. zsh scopes dynamically:
+# the helpers read and set variables their CALLER declared `local`, named on
+# each. The caller keeps `setopt localoptions localtraps` and the INT/TERM
+# trap (a trap set in a helper would end with the helper), and sets both
+# BEFORE opening the capture, so no signal can leave a reader behind.
+
+# _mux_rx_capture_open <prefix> — the FIFO the modal answers on, the file the
+# answer lands in, and the background reader between them: the reader exists
+# before any writer can. Temps are named <prefix>-fifo.* / <prefix>-out.*.
+# SETS the caller's: fifo, out, reader_pid. Non-zero, nothing left behind,
+# when either temp cannot be made.
+_mux_rx_capture_open() {
+  fifo=$(mktemp -u "${TMPDIR:-/tmp}/$1-fifo.XXXXXX")
+  mkfifo -m 600 "$fifo" 2>/dev/null || return 1
+  out=$(mktemp "${TMPDIR:-/tmp}/$1-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
+  cat "$fifo" >"$out" 2>/dev/null &
+  reader_pid=$!
+}
+
+# _mux_rx_capture_abort — end a capture no layer was opened for: no writer
+# will ever come, so unblock and reap the reader and remove the temps.
+# READS the caller's: fifo, out, reader_pid.
+_mux_rx_capture_abort() {
+  kill "$reader_pid" 2>/dev/null
+  wait "$reader_pid" 2>/dev/null
+  rm -f -- "$fifo" "$out"
+}
+
+# _mux_rx_capture_finish <layer block> — wait for the answer, read it and
+# remove the temps. Returns 130 when there is none: cancelled, closed by
+# hand, or the caller was interrupted (the layer is closed here for a signal
+# that landed before it existed).
+# READS the caller's: fifo, out, reader_pid, interrupted. SETS: result.
+# No local here may be called `block` or `interrupted`: the caller's trap can
+# fire while this runs, and must find the caller's.
+_mux_rx_capture_finish() {
+  (( interrupted )) && _mux_rx_close_block "$1"
+  result=""
+  _mux_rx_await_modal "$1" "$reader_pid" && result=$(cat "$out")
+  rm -f -- "$fifo" "$out"
+  [[ -n "$result" ]] || return 130
+}
+
 # _mux_rx_pick_float <pane_w> <pane_h> <header> <pick::start args…>  (rows on stdin)
 _mux_rx_pick_float() {
   local pane_w="$1" pane_h="$2" header="$3"
@@ -518,51 +582,32 @@ _mux_rx_pick_float() {
   local -a pick_args=("$@")
   local picklist="$HOME/.local/libexec/pick-list"
 
-  local tmp fifo out
+  local tmp
   tmp=$(mktemp "${TMPDIR:-/tmp}/rxpick.XXXXXX") || return 1
-  fifo=$(mktemp -u "${TMPDIR:-/tmp}/rxpick-fifo.XXXXXX")
-  if ! mkfifo -m 600 "$fifo" 2>/dev/null; then
-    rm -f -- "$tmp"
-    return 1
-  fi
-  out=$(mktemp "${TMPDIR:-/tmp}/rxpick-out.XXXXXX") || { rm -f -- "$tmp" "$fifo"; return 1; }
-  # As in the tmux twin: these helpers run inside `$(…)`, where an EXIT trap
-  # fires too late, so every return path removes the temps itself.
   setopt localoptions localtraps
-  local block="" interrupted=0
+  local block="" interrupted=0 fifo out reader_pid result rc=0
   trap 'interrupted=1; _mux_rx_close_block "$block"' INT TERM
+  _mux_rx_capture_open rxpick || { rm -f -- "$tmp"; return 1; }
 
   # Stage rows to a file: the layer's command cannot read our stdin pipe.
   cat >"$tmp"
-
-  cat "$fifo" >"$out" 2>/dev/null &
-  local reader_pid=$!
 
   block="$(_mux_rx_modal_layer "$pane_w" "$pane_h" "$header" -- \
     --title "$header" --no-chrome --capture "$fifo" \
     -- "$picklist" "${pick_args[@]}" --no-border --height -1 --margin 0,0,0,0 --padding 0,2,0,2 -- "$tmp")"
   if [[ -z "$block" ]]; then
-    # No layer: no writer will ever come, so unblock and reap the reader,
-    # then pick inline — the picker the caller asked for, without the float.
-    kill "$reader_pid" 2>/dev/null
-    wait "$reader_pid" 2>/dev/null
-    rm -f -- "$fifo" "$out"
-    local rc=0
+    # No layer: pick inline — the picker the caller asked for, without the
+    # float — and return ITS status.
+    _mux_rx_capture_abort
     (( interrupted )) && rc=130
     (( rc )) || pick::start "${pick_args[@]}" <"$tmp" || rc=$?
     rm -f -- "$tmp"
     return $rc
   fi
-  (( interrupted )) && _mux_rx_close_block "$block"
 
-  local answered=0
-  _mux_rx_await_modal "$block" "$reader_pid" && answered=1
-
-  local result=""
-  (( answered )) && result=$(cat "$out")
-  rm -f -- "$fifo" "$tmp" "$out"
-
-  [[ -n "$result" ]] || return 130
+  _mux_rx_capture_finish "$block" || rc=$?
+  rm -f -- "$tmp"
+  (( rc )) && return $rc
   print -r -- "$result"
 }
 
@@ -589,13 +634,10 @@ _mux_rx_float() {
 
   local widget="$HOME/.local/libexec/input-widget"
 
-  local fifo out
-  fifo=$(mktemp -u "${TMPDIR:-/tmp}/rxinput-fifo.XXXXXX")
-  mkfifo -m 600 "$fifo" 2>/dev/null || return 1
-  out=$(mktemp "${TMPDIR:-/tmp}/rxinput-out.XXXXXX") || { rm -f -- "$fifo"; return 1; }
   setopt localoptions localtraps
-  local block="" interrupted=0
+  local block="" interrupted=0 fifo out reader_pid result
   trap 'interrupted=1; _mux_rx_close_block "$block"' INT TERM
+  _mux_rx_capture_open rxinput || return 1
 
   # Same measured-height contract as the other floats (input-common's
   # --measure); fall back to the per-type defaults.
@@ -626,29 +668,17 @@ _mux_rx_float() {
   # widget's own. The title still labels the layer.
   local -a modal_args=(--no-chrome --capture "$fifo")
 
-  cat "$fifo" >"$out" 2>/dev/null &
-  local reader_pid=$!
-
   block="$(_mux_rx_modal_layer "$pane_w" "$_measured_h" "$title" -- \
     "${modal_args[@]}" -- "$widget" --type "$type" -- "${wargs[@]}")"
   if [[ -z "$block" ]]; then
-    # No layer: ask inline, as outside a multiplexer.
-    kill "$reader_pid" 2>/dev/null
-    wait "$reader_pid" 2>/dev/null
-    rm -f -- "$fifo" "$out"
+    # No layer: ask inline, as outside a multiplexer, and return ITS status.
+    _mux_rx_capture_abort
     (( interrupted )) && return 130
     input::"$type" "${wargs[@]}"
     return
   fi
-  (( interrupted )) && _mux_rx_close_block "$block"
 
-  local answered=0
-  _mux_rx_await_modal "$block" "$reader_pid" && answered=1
-
-  local result=""
-  (( answered )) && result=$(cat "$out")
-  rm -f -- "$fifo" "$out"
-  [[ -n "$result" ]] || return 130
+  _mux_rx_capture_finish "$block" || return
   print -rn -- "$result"
 }
 
@@ -691,18 +721,33 @@ _mux_rx_label_arg() {
   if [[ "$1" == -* ]]; then print -r -- " $1"; else print -r -- "$1"; fi
 }
 
-# _mux_rx_new_tab <session> <name> <cwd> <singleton> -- <cmd...>
+# _mux_rx_new_tab <session> <name> <cwd> <reuse> -- <cmd...>
 # The new tab is shown (_mux_rx_show_window), as tmux's new-window does.
-# Singleton: an existing window of that label is closed and re-created, the
-# equivalent of tmux's `respawn-window -k` (a stale `tm` tab is replaced, not
-# stacked). Rex has no respawn, so the window id changes; the label does not.
+# Non-zero when no tab could be opened; nothing on stdout.
+# <reuse> says what a tab of that label, already open, means:
+#   0      nothing — a second one is opened;
+#   1      singleton: it is closed and re-created, the equivalent of tmux's
+#          `respawn-window -k` (a stale `tm` tab is replaced, not stacked).
+#          Rex has no respawn, so the window id changes; the label does not;
+#   focus  it is focused and shown as it is (the first, in tab order), and
+#          <cmd> does not run. Non-zero when it cannot be focused.
 _mux_rx_new_tab() {
-  local session="$1" name="$2" cwd="$3" singleton="${4:-0}"
+  local session="$1" name="$2" cwd="$3" reuse="${4:-0}"
   shift 4
   [[ "${1-}" == "--" ]] && shift
 
   [[ -n "$session" ]] || session="$(_mux_rx_session)" || return 1
-  if (( singleton )) && [[ -n "$name" ]]; then
+  if [[ "$reuse" == focus && -n "$name" ]]; then
+    local win
+    win="$(_mux_rx_window_by_label "$name" "$session" | head -n 1)"
+    if [[ -n "$win" ]]; then
+      _mux_rx_run window focus -s "$session" "$win" >/dev/null 2>&1 || return 1
+      # And the app, which does not follow the server's active window.
+      _mux_rx_show_window "$session" "$win" || :
+      return 0
+    fi
+  fi
+  if [[ "$reuse" == 1 && -n "$name" ]]; then
     local old
     for old in "${(@f)$(_mux_rx_window_by_label "$name" "$session")}"; do
       [[ -n "$old" ]] && _mux_rx_run window close -s "$session" "$old" >/dev/null 2>&1

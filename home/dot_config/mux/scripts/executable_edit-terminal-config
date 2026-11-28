@@ -81,18 +81,11 @@ esac
 # (mux migration Phase 1: dual-path; the shared logic collapses onto
 # mux::* calls when the Panes group lands in Phase 6).
 if [[ "$ENV_TYPE" == REX ]]; then
-  # Focus the config tab if it is already open, else open it. Windows are
-  # found by label, the same identity quick-launch uses on Rex.
-  _win="$(_mux_rx_window_by_label "$TAB_NAME" "$REX_SESSION" | head -n 1)"
-  if [[ -n "$_win" ]]; then
-    _mux_rx_run window focus -s "$REX_SESSION" "$_win" >/dev/null
-  else
-    _win="$(_mux_rx_run window new -s "$REX_SESSION" --json "$TAB_NAME" -- "$NVIM" "$TARGET_FILE" |
-      jq -r '.window_id // empty')"
-  fi
-  # Either way the app has to be told: it does not follow the server's
-  # active window.
-  _mux_rx_show_window "$REX_SESSION" "$_win" || :
+  # Focus the config tab if it is already open, else open it; either way the
+  # app is told to show it. Windows are found by label, the same identity
+  # quick-launch uses on Rex. The Rex verb itself, not mux::new_tab: this
+  # branch is chosen by $REX_SESSION alone, and must not follow $MUX_BACKEND.
+  _mux_rx_new_tab "$REX_SESSION" "$TAB_NAME" "" focus -- "$NVIM" "$TARGET_FILE"
 elif [[ -n "${TMUX:-}" ]]; then
   TMUX_BIN=${commands[tmux]:-tmux}
   if "$TMUX_BIN" list-windows -F '#{window_name}' 2>/dev/null | grep -Fxq "$TAB_NAME"; then

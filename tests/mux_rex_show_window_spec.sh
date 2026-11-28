@@ -12,7 +12,8 @@ Describe 'showing a tab in the Rex app'
 printf '%s\n' "\$*" >>"$SW_TMP/rex.log"
 case " \$* " in
   *" client ls "*) cat "$SW_TMP/clients.json" ;;
-  *" session.view "*) echo '{"session_id":"session:main","windows":[{"window_id":"window:one"},{"window_id":"window:two"}]}' ;;
+  *" session.view "*) echo '{"session_id":"session:main","windows":[{"window_id":"window:one"},{"window_id":"window:two","label":"config"},{"window_id":"window:three","label":"config"}]}' ;;
+  *" window focus "*) [ "\${STUB_FOCUS:-ok}" = ok ] || exit 1 ;;
   *" window new "*) [ "\${STUB_NEW:-ok}" = ok ] || exit 1; echo '{"window_id":"window:new","block_ids":["block:new"]}' ;;
 esac
 exit 0
@@ -27,9 +28,9 @@ EOS
  {"client_id":"client:cli","info":{"kind":"cli"},"connection_state":"connected"}]}
 EOS
     export MUX_REX_BIN="$SW_TMP/rex" REX_SESSION=session:main REX_BLOCK=block:here
-    unset TMUX REX_CLIENT STUB_NEW
+    unset TMUX REX_CLIENT STUB_NEW STUB_FOCUS
   }
-  cleanup() { rm -rf "$SW_TMP"; unset MUX_REX_BIN REX_SESSION REX_BLOCK REX_CLIENT STUB_NEW; }
+  cleanup() { rm -rf "$SW_TMP"; unset MUX_REX_BIN REX_SESSION REX_BLOCK REX_CLIENT STUB_NEW STUB_FOCUS; }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -81,6 +82,49 @@ rc=1
     When call failed
     The output should equal "rc=1
 0"
+  End
+
+  # --focus-existing: the tab of that name, as it is — the first in tab order
+  # when there are several — instead of a second one.
+  Describe 'mux::new_tab --focus-existing'
+    windows() { grep -E ' window (new|focus|close) ' "$SW_TMP/rex.log" 2>/dev/null | sed 's/^--autostart=false //' || true; }
+
+    It 'focuses and shows a tab of that name instead of opening another'
+      reused() { mux::new_tab --name config --focus-existing -- /bin/cat; print -r -- "rc=$?"; windows; selects | grep -c 'window_id=window:two'; }
+      When call reused
+      The output should equal "rc=0
+window focus -s session:main window:two
+2"
+    End
+
+    It 'opens the tab, and shows it, when none has that name'
+      fresh() { mux::new_tab --name notes --cwd /tmp --focus-existing -- /bin/cat; print -r -- "rc=$?"; windows; selects | grep -c 'window_id=window:new'; }
+      When call fresh
+      The output should equal "rc=0
+window new -s session:main --json -c /tmp notes -- /bin/cat
+2"
+    End
+
+    It 'wins over --singleton: the tab is kept, not closed and re-created'
+      both() { mux::new_tab --name config --singleton --focus-existing -- /bin/cat; windows; }
+      When call both
+      The output should equal "window focus -s session:main window:two"
+    End
+
+    It 'fails, opening and showing nothing, when the tab cannot be focused'
+      export STUB_FOCUS=fail
+      stuck() { mux::new_tab --name config --focus-existing -- /bin/cat; print -r -- "rc=$?"; windows | grep -c ' new ' || true; selects | wc -l | tr -d ' '; }
+      When call stuck
+      The output should equal "rc=1
+0
+0"
+    End
+
+    It 'still stacks a second tab without the flag'
+      stacked() { mux::new_tab --name config -- /bin/cat; windows; }
+      When call stacked
+      The output should equal "window new -s session:main --json config -- /bin/cat"
+    End
   End
 
   It 'shows the tab mux::focus_tab focuses, by its position'

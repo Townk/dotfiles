@@ -15,6 +15,7 @@ case " \$* " in
   *" client ls "*) cat "$RH_TMP/clients.json" ;;
   *" session.view "*) [ "\${STUB_VIEW:-ok}" = ok ] || exit 1; cat "$RH_TMP/view.json" ;;
   *" ls --json "*) echo '{"sessions":[{"session_id":"session:1","label":"Main"},{"session_id":"session:2","label":"Jobs"},{"session_id":"session:3","label":"Jobs"}]}' ;;
+  *" session.new_layer "*) cat >"$RH_TMP/req.json"; echo '{"block_ids":["block:layer"]}' ;;
   *" block inspect "*)
     n=\$(cat "$RH_TMP/inspects" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\$n" >"$RH_TMP/inspects"
     # STUB_INSPECT: one exit status per call, the last one repeating.
@@ -52,6 +53,42 @@ EOS
 
   calls() { cat "$RH_TMP/rex.log" 2>/dev/null || true; }
   inspects() { cat "$RH_TMP/inspects" 2>/dev/null || print 0; }
+
+  # The one launcher of a layer running rex-modal: the floats, mux-modal and
+  # rex-picker all go through it, so the command line is pinned here once.
+  Describe '_mux_rx_modal_layer'
+    layer() { ( cd "$RH_TMP" && HOME=/home/u _mux_rx_modal_layer "$@" ); }
+    cmdline() { jq -r '.layout.block.options.command | join(" ")' "$RH_TMP/req.json"; }
+    req_cwd() { jq -r '.layout.block.options.cwd // "none"' "$RH_TMP/req.json"; }
+
+    It 'runs rex-modal over our block, in our directory, and prints the block'
+      plain() { layer 70% 60% Pick -- --no-chrome -- /bin/true a; cmdline; [[ "$(req_cwd)" == "$RH_TMP" ]] && print cwd-ours; jq -r '.layout.block.label' "$RH_TMP/req.json"; }
+      When call plain
+      The output should equal "block:layer
+/home/u/.config/mux/scripts/rex-modal --origin block:b1 --no-chrome -- /bin/true a
+cwd-ours
+Pick"
+    End
+
+    It 'promises a height in cells to the target, ahead of the caller'"'"'s variables'
+      rows() { layer --env A=1 --env B=2 57 15 "" -- -- /bin/true >/dev/null; cmdline; }
+      When call rows
+      The output should equal "env MUX_REX_MODAL_ROWS=15 A=1 B=2 /home/u/.config/mux/scripts/rex-modal --origin block:b1 -- /bin/true"
+    End
+
+    It 'takes another directory, or none, from the caller'
+      dirs() { layer --cwd /tmp 70% 60% "" -- -- /bin/true >/dev/null; req_cwd; layer --cwd "" 70% 60% "" -- -- /bin/true >/dev/null; req_cwd; }
+      When call dirs
+      The output should equal "/tmp
+none"
+    End
+
+    It 'runs the modal named by $MUX_REX_MODAL'
+      other() { MUX_REX_MODAL=/opt/modal layer --env A=1 70% 60% "" -- -- /bin/true >/dev/null; cmdline; }
+      When call other
+      The output should equal "env A=1 /opt/modal --origin block:b1 -- /bin/true"
+    End
+  End
 
   Describe '_mux_rx_run'
     It 'never lets a call start a server'

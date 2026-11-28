@@ -456,21 +456,29 @@ mux::popup() {
 #   --singleton reuses a tab of the same NAME when one is already open,
 #   instead of stacking a second. tmux respawns the command in place (the tab
 #   keeps its index).
+#   --focus-existing shows a tab of that NAME when one is already open, as it
+#   is — its command keeps running and <cmd> is not started; it wins over
+#   --singleton. Rex only: the tmux arm ignores it (mux/tmux.zsh is frozen
+#   until tmux is retired), so there a second tab is opened.
 mux::new_tab() {
-  local session="" name="" cwd="" singleton=0
+  local session="" name="" cwd="" singleton=0 focus=0
   while (($#)); do
     case "$1" in
       --session) session="${2-}"; shift 2 ;;
       --name) name="${2-}"; shift 2 ;;
       --cwd) cwd="${2-}"; shift 2 ;;
       --singleton) singleton=1; shift ;;
+      --focus-existing) focus=1; shift ;;
       --) shift; break ;;
       *) break ;;
     esac
   done
+  # Rex takes one "reuse" word where tmux takes the singleton flag.
+  local rx_reuse="$singleton"
+  (( focus )) && rx_reuse=focus
   case "$(mux::backend)" in
     tmux)   _mux_tx_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
-    rex)    _mux_rx_new_tab "$session" "$name" "$cwd" "$singleton" -- "$@" ;;
+    rex)    _mux_rx_new_tab "$session" "$name" "$cwd" "$rx_reuse" -- "$@" ;;
     *) _mux::unknown_backend new_tab ;;
   esac
 }

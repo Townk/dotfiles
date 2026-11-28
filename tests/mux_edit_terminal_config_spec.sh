@@ -86,3 +86,59 @@ EOS
     The status should be success
   End
 End
+
+# The Rex branch: the config tab is focused when it is open, opened otherwise,
+# and shown either way — one call to the shim's tab verb. Hermetic: `rex` is a
+# stub that logs its argv.
+Describe 'edit-terminal-config on Rex'
+  SCRIPT="home/dot_config/mux/scripts/executable_edit-terminal-config"
+
+  setup() {
+    TEST_TMP=$(mktemp -d)
+    cat >"$TEST_TMP/rex" <<EOS
+#!/bin/sh
+printf '%s\n' "\$*" >>"$TEST_TMP/rex.log"
+case " \$* " in
+  *" session.view "*) echo "{\"session_id\":\"session:s\",\"windows\":[{\"window_id\":\"window:one\",\"label\":\"\${STUB_LABEL:-shell}\"}]}" ;;
+  *" client ls "*) echo '{"clients":[{"client_id":"client:mac","info":{"kind":"app"},"connection_state":"connected","session_ids":["session:s"]}]}' ;;
+  *" window new "*) [ "\${STUB_NEW:-ok}" = ok ] || exit 1; echo '{"window_id":"window:new"}' ;;
+esac
+exit 0
+EOS
+    printf '%s\n' '#!/bin/sh' 'exit 0' >"$TEST_TMP/nvim"
+    chmod +x "$TEST_TMP/rex" "$TEST_TMP/nvim"
+  }
+  cleanup() { rm -rf "$TEST_TMP"; unset STUB_LABEL STUB_NEW; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  edit() {
+    env -u TMUX -u MUX_BACKEND -u REX_CLIENT -u REX_BLOCK HOME=/home/u PATH="$TEST_TMP:$PATH" \
+      REX_SESSION=session:s MUX_REX_BIN="$TEST_TMP/rex" MUX_LIB="$PWD/home/dot_local/lib" zsh "$SCRIPT" 2>/dev/null
+    print -r -- "rc=$?"
+  }
+  calls() { grep -E ' window | session\.select ' "$TEST_TMP/rex.log" | sed -e 's/^--autostart=false //' -e 's/^--timeout 3s //'; }
+
+  It 'opens the Rex config in a tab named for it, and shows the tab'
+    run() { edit; calls; }
+    When call run
+    The output should equal "rc=0
+window new -s session:s --json Rex Config -- $TEST_TMP/nvim /home/u/.config/rex/init.lua
+-C client:mac do -s session:s session.select session_id=session:s window_id=window:new"
+  End
+
+  It 'focuses and shows the config tab that is already open instead of a second'
+    export STUB_LABEL="Rex Config"
+    run() { edit; calls; }
+    When call run
+    The output should equal "rc=0
+window focus -s session:s window:one
+-C client:mac do -s session:s session.select session_id=session:s window_id=window:one"
+  End
+
+  It 'fails when the tab cannot be opened'
+    export STUB_NEW=fail
+    When call edit
+    The output should equal "rc=1"
+  End
+End
